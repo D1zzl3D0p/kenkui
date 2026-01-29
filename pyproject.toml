@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kenkui"
+version = "0.1.0"
+description = "Convert Ebooks to Audiobooks with [custom] voice samples"
+readme = "README.md"
+authors = [{ name = "Sumner MacArthur", email = "spn1kolat3sla@gmail.com" }]
+license = { file = "LICENSE" }
+requires-python = ">=3.7" # See 'How to determine' section below
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: GPL License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "beautifulsoup4>=4.14.0",
+  "EbookLib>=0.20",
+  "rich>=14.2.0",
+  "scipy>=1.17.0",
+  "huggingface_hub>=1.3.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/D1zzl3D0p/kenkui"
+"Bug Tracker" = "https://github.com/D1zzl3D0p/kenkui/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"my_converter.samples" = ["*.wav"]
