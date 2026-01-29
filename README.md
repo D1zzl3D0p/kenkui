@@ -1,5 +1,9 @@
 # Kenkui
 
+Kenkui is basically a fancy wrapper for Kyutai's pocket-tts, with support for
+ebook parsing. It is multithreaded, and runs faster than any other tool I've
+used, so I figured I'd start a project to make it easier to use.
+
 ## Quick Start
 
 ```bash
