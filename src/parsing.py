@@ -1,5 +1,3 @@
-import os
-import argparse
 import multiprocessing
 import re
 import shutil
