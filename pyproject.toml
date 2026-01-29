@@ -15,6 +15,7 @@ classifiers = [
   "License :: OSI Approved :: GPL License",
   "Operating System :: OS Independent",
 ]
+
 dependencies = [
   "beautifulsoup4>=4.14.0",
   "EbookLib>=0.20",
@@ -22,6 +23,8 @@ dependencies = [
   "scipy>=1.17.0",
   "huggingface_hub>=1.3.0",
 ]
+
+scripts = { kenkui = "kenkui.__main__:main" }
 
 [project.urls]
 "Homepage" = "https://github.com/D1zzl3D0p/kenkui"
@@ -31,4 +34,5 @@ dependencies = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"my_converter.samples" = ["*.wav"]
+"src.samples" = ["*.epub"]
+"src.voices" = ["*.wav"]
