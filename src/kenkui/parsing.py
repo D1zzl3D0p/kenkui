@@ -29,8 +29,8 @@ from rich.layout import Layout
 from rich import box
 
 # import other files
-from helpers import Chapter, AudioResult, Config, interactive_select
-from workers import worker_process_chapter
+from .helpers import Chapter, AudioResult, Config, interactive_select
+from .workers import worker_process_chapter
 
 
 class EpubReader:

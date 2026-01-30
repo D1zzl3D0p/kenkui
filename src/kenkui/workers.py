@@ -8,7 +8,7 @@ from typing import Optional
 from pydub import AudioSegment
 import scipy.io.wavfile
 
-from helpers import Chapter, AudioResult
+from .helpers import Chapter, AudioResult
 
 
 def worker_process_chapter(

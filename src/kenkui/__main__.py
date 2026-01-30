@@ -19,8 +19,8 @@ from rich.console import Console
 
 # Local imports
 # Note: When installed as a package, these imports work relative to the package
-from parsing import AudioBuilder
-from helpers import (
+from .parsing import AudioBuilder
+from .helpers import (
     Config,
     check_huggingface_access,
     interactive_select,
