@@ -1,6 +1,6 @@
 # Kenkui
 
-Kenkui is basically a fancy wrapper for Kyutai's pocket-tts, with support for
+Kenkui is basically a fancy wrapper for [Kyutai's pocket-tts](https://github.com/kyutai-labs/pocket-tts), with support for
 ebook parsing. It is multithreaded, and runs faster than any other tool I've
 used, so I figured I'd start a project to make it easier to use.
 
@@ -87,3 +87,9 @@ provider. It's the smallest, fastest, and most feature complete at the moment.
 
 Thank you to the Guttenberg Project for providing some books included in
 kenkui!
+
+## Roadmap
+
+- Add other models?
+- Make the debug menu useful
+- make --select chapters and select-books look as nice as list-voices
