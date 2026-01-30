@@ -2,6 +2,7 @@ import io
 import os
 import multiprocessing
 import sys
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,8 @@ def worker_process_chapter(
         queue.put(("DONE", pid))
         return AudioResult(chapter.index, chapter.title, filename, len(full_audio))
 
-    except Exception:
+    except Exception as e:
+        error_text = traceback.format_exc()
+        queue.put(("ERROR", pid, chapter.title, str(e), error_text))
         queue.put(("DONE", pid))
         return None

@@ -252,6 +252,7 @@ class AudioBuilder:
         manager = multiprocessing.Manager()
         queue = manager.Queue()
         worker_state = {}
+        worker_errors = []
 
         layout = Layout()
         layout.split(Layout(name="upper", size=3), Layout(name="lower"))
@@ -295,10 +296,22 @@ class AudioBuilder:
                             elif event == "DONE":
                                 if pid in worker_state:
                                     del worker_state[pid]
+                            elif event == "ERROR":
+                                worker_errors.append(
+                                    {
+                                        "pid": pid,
+                                        "chapter": msg[2],
+                                        "message": msg[3],
+                                        "traceback": msg[4],
+                                    }
+                                )
                         except Exception:
                             break
 
+                    all_done = all(f.done() for f in futures)
                     if overall_progress.tasks[0].finished:
+                        break
+                    if all_done and not worker_state and queue.empty():
                         break
 
                     layout["upper"].update(
@@ -352,6 +365,15 @@ class AudioBuilder:
                 res = future.result()
                 if res:
                     results.append(res)
+
+        if worker_errors:
+            self.console.print("[red]Worker errors encountered:[/red]")
+            for err in worker_errors:
+                self.console.print(
+                    f"[red]- PID {err['pid']} {err['chapter']}: {err['message']}[/red]"
+                )
+                if self.cfg.debug_html:
+                    self.console.print(f"[dim]{err['traceback']}[/dim]")
 
         return sorted(results, key=lambda x: x.chapter_index)
 

@@ -10,8 +10,11 @@ from rich import box
 from rich.prompt import Prompt
 from rich.panel import Panel
 
-from huggingface_hub import login, hf_hub_download
-from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+from huggingface_hub import HfApi, login
+from huggingface_hub.errors import (
+    GatedRepoError,
+    RepositoryNotFoundError,
+)
 
 # Helper Classes
 
@@ -124,19 +127,27 @@ def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
     Ensures the user is logged in and has accepted the ToS for the gated model.
     """
     console = Console()
+    api = HfApi()
 
     try:
-        # Check if we can access the config without downloading the whole thing
-        hf_hub_download(
-            model_id,
-            filename="config.json",
-            force_download=False,
-            local_files_only=False,
-        )
+        # Check repo access without downloading model files
+        api.model_info(model_id)
         # If successful, return silently
         return
+    except RepositoryNotFoundError as e:
+        if not isinstance(e, GatedRepoError):
+            console.rule("[bold red]Model Not Found")
+            console.print(
+                f"[yellow]The model '{model_id}' could not be found on Hugging Face.[/yellow]"
+            )
+            console.print(
+                "Check the model ID or update the project to use an available model."
+            )
+            console.print(
+                f"[blue underline]https://huggingface.co/{model_id}[/blue underline]"
+            )
+            sys.exit(1)
 
-    except (GatedRepoError, RepositoryNotFoundError, Exception) as e:
         # If it failed, it might be auth or gate issues.
         console.rule("[bold red]Authentication Required")
         console.print(
@@ -149,10 +160,23 @@ def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
 
         # 2. Re-check for Gate Acceptance
         try:
-            hf_hub_download(model_id, filename="config.json", force_download=False)
+            api.model_info(model_id)
             console.print("[green]Authentication successful![/green]")
             return
-        except GatedRepoError:
+        except RepositoryNotFoundError as inner_error:
+            if not isinstance(inner_error, GatedRepoError):
+                console.rule("[bold red]Model Not Found")
+                console.print(
+                    f"[yellow]The model '{model_id}' could not be found on Hugging Face.[/yellow]"
+                )
+                console.print(
+                    "Check the model ID or update the project to use an available model."
+                )
+                console.print(
+                    f"[blue underline]https://huggingface.co/{model_id}[/blue underline]"
+                )
+                sys.exit(1)
+
             console.print("\n" + "!" * 60, style="bold red")
             console.print(
                 f"[bold red]ACCESS DENIED: TERMS OF USE NOT ACCEPTED[/bold red]"
@@ -173,13 +197,19 @@ def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
 
             # Final Check
             try:
-                hf_hub_download(model_id, filename="config.json", force_download=False)
+                api.model_info(model_id)
                 console.print("[green]Success! Proceeding...[/green]")
             except Exception:
                 console.print(
                     "[bold red]Still unable to access model. Exiting.[/bold red]"
                 )
                 sys.exit(1)
+    except Exception as e:
+        console.rule("[bold red]Model Access Error")
+        console.print(f"[yellow]Unable to access the model '{model_id}'.[/yellow]")
+        console.print("Check your network connection and Hugging Face status.")
+        console.print(f"[dim]{e}[/dim]")
+        sys.exit(1)
 
 
 def get_bundled_voices():
