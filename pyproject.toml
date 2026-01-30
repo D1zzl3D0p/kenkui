@@ -23,6 +23,7 @@ dependencies = [
   "scipy>=1.17.0",
   "huggingface_hub>=1.3.0",
   "pydub>=0.25.0",
+  "pocket-tts",
 ]
 
 scripts = { kenkui = "kenkui.__main__:main" }

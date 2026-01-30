@@ -31,7 +31,22 @@ warnings.filterwarnings("ignore")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Batch EPUB to Audiobook Converter")
+    parser = argparse.ArgumentParser(
+        description="Batch EPUB to Audiobook Converter",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  kenkui book.epub\n"
+            "  kenkui library/ --select-books --voice alba\n"
+            "  kenkui book.epub -o output/ -j 4\n"
+            "\n"
+            "Notes:\n"
+            "  - Use --list-voices to see available voices.\n"
+            "  - ffmpeg is required and must be on PATH.\n"
+            "  - --select-books only applies when input is a directory.\n"
+            "  - --select-chapters runs for each processed book."
+        ),
+    )
 
     # Arguments
     parser.add_argument(
@@ -39,33 +54,57 @@ def main():
         nargs="?",
         type=Path,
         default=None,
-        help="Input file or Directory containing EPUBs",
+        help="Input EPUB file or directory containing EPUBs",
     )
-    parser.add_argument("--voice", default="alba", help="Voice to use for TTS")
     parser.add_argument(
-        "-o", "--output", type=Path, default=None, help="Output folder (optional)"
+        "--voice",
+        default="alba",
+        help="TTS voice name (see --list-voices)",
     )
-    parser.add_argument("-j", "--workers", type=int, default=os.cpu_count())
-    parser.add_argument("--keep", action="store_true")
-    parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Output directory or full output file path (default: input file directory)"
+        ),
+    )
+    parser.add_argument(
+        "-j",
+        "--workers",
+        type=int,
+        default=os.cpu_count(),
+        help="Parallel workers (default: CPU count)",
+    )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep temporary files after conversion",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print detailed errors and debug output",
+    )
 
     # Selection Flags
     parser.add_argument(
         "--select-books",
         action="store_true",
-        help="Interactively select which books to process from directory",
+        help="Pick books interactively when input is a directory",
     )
     parser.add_argument(
         "--select-chapters",
         action="store_true",
-        help="Interactively select chapters for each book",
+        help="Pick chapters interactively for each selected book",
     )
 
     # New Flag: List Voices
     parser.add_argument(
         "--list-voices",
         action="store_true",
-        help="List all available built-in and custom voices",
+        help="List built-in and custom voice names",
     )
 
     args = parser.parse_args()
