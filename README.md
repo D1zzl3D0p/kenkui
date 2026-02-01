@@ -93,3 +93,6 @@ kenkui!
 - Add other models?
 - Make the debug menu useful
 - make --select chapters and select-books look as nice as list-voices
+- Add support for other pocket-tts features
+  - temperature (expressiveness)
+  - quality

@@ -134,21 +134,8 @@ def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
         api.model_info(model_id)
         # If successful, return silently
         return
-    except RepositoryNotFoundError as e:
-        if not isinstance(e, GatedRepoError):
-            console.rule("[bold red]Model Not Found")
-            console.print(
-                f"[yellow]The model '{model_id}' could not be found on Hugging Face.[/yellow]"
-            )
-            console.print(
-                "Check the model ID or update the project to use an available model."
-            )
-            console.print(
-                f"[blue underline]https://huggingface.co/{model_id}[/blue underline]"
-            )
-            sys.exit(1)
-
-        # If it failed, it might be auth or gate issues.
+    except GatedRepoError:
+        # Handle gated repository - requires authentication and terms acceptance
         console.rule("[bold red]Authentication Required")
         console.print(
             f"[yellow]The model '{model_id}' requires Hugging Face authentication.[/yellow]"
@@ -163,52 +150,33 @@ def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
             api.model_info(model_id)
             console.print("[green]Authentication successful![/green]")
             return
-        except RepositoryNotFoundError as inner_error:
-            if not isinstance(inner_error, GatedRepoError):
-                console.rule("[bold red]Model Not Found")
-                console.print(
-                    f"[yellow]The model '{model_id}' could not be found on Hugging Face.[/yellow]"
-                )
-                console.print(
-                    "Check the model ID or update the project to use an available model."
-                )
-                console.print(
-                    f"[blue underline]https://huggingface.co/{model_id}[/blue underline]"
-                )
-                sys.exit(1)
-
+        except GatedRepoError:
             console.print("\n" + "!" * 60, style="bold red")
             console.print(
                 f"[bold red]ACCESS DENIED: TERMS OF USE NOT ACCEPTED[/bold red]"
             )
-            console.print("!" * 60)
             console.print(
-                f"\nThis model ({model_id}) requires you to agree to a license"
+                f"The model '{model_id}' is gated and requires you to accept the terms on Hugging Face."
             )
-            console.print("specifically regarding voice cloning and safety.")
             console.print(
-                f"\n[blue underline]https://huggingface.co/{model_id}[/blue underline]\n"
+                f"Please visit [blue underline]https://huggingface.co/{model_id}[/blue underline]"
             )
-            console.print("1. Log in to the website.")
-            console.print("2. Click 'Agree' on the model card.")
-            console.print("3. Return here and press Enter.")
-
-            input("\nPress Enter once you have accepted the terms...")
-
-            # Final Check
-            try:
-                api.model_info(model_id)
-                console.print("[green]Success! Proceeding...[/green]")
-            except Exception:
-                console.print(
-                    "[bold red]Still unable to access model. Exiting.[/bold red]"
-                )
-                sys.exit(1)
-    except Exception as e:
-        console.rule("[bold red]Model Access Error")
-        console.print(f"[yellow]Unable to access the model '{model_id}'.[/yellow]")
-        console.print("Check your network connection and Hugging Face status.")
-        console.print(f"[dim]{e}[/dim]")
+            console.print("Read the license and click 'Agree and access repository'.")
+            console.print("After accepting, run this command again.\n")
+            console.print("!" * 60, style="bold red")
+            sys.exit(1)
+    except RepositoryNotFoundError:
+        # Handle repository not found (not gated)
+        console.rule("[bold red]Model Not Found")
+        console.print(
+            f"[yellow]The model '{model_id}' could not be found on Hugging Face.[/yellow]"
+        )
+        console.print(
+            "Check the model ID or update the project to use an available model."
+        )
+        console.print(
+            f"[blue underline]https://huggingface.co/{model_id}[/blue underline]"
+        )
         sys.exit(1)
 
 
