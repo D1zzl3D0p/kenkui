@@ -31,6 +31,7 @@ class Config:
     keep_temp: bool
     debug_html: bool
     interactive_chapters: bool  # New flag
+    verbose: bool = False
 
 
 @dataclass

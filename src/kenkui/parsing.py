@@ -99,7 +99,15 @@ class EpubReader:
         ]
         lines = [x for x in lines if x]
         for i, line in enumerate(lines[:5]):
-            if re.match(r"^(chapter|prologue|epilogue)\s*(\d+|[ivxlc]+)?$", line, re.I):
+            if re.match(
+                r"^(chapter|prologue|epilogue)\s*([ivxlcdm]+\d*|\d+)\s*[-—:]\s*.+$",
+                line,
+                re.I,
+            ):
+                return line
+            elif re.match(
+                r"^(chapter|prologue|epilogue)\s*([ivxlcdm]+\d*|\d+)?$", line, re.I
+            ):
                 if i + 1 < len(lines):
                     return f"{line}: {lines[i + 1]}"
                 return line
@@ -119,7 +127,7 @@ class EpubReader:
                 continue
             if title_filter and (text.lower() in title_filter.lower()):
                 continue
-            if re.match(r"^CHAPTER\s*\d+$", text, re.I):
+            if re.match(r"^CHAPTER\s*([ivxlcdm]+\d*|\d+)\s*([-—:]\s*.+)?$", text, re.I):
                 continue
             texts.append(text)
         return texts
@@ -150,6 +158,7 @@ class EpubReader:
             return True
         if any(x in content[:300] for x in skip):
             return True
+        return False
         return False
 
     @staticmethod
@@ -247,15 +256,30 @@ class AudioBuilder:
             "voice": self.cfg.voice,
             "pause_line_ms": self.cfg.pause_line_ms,
             "pause_chapter_ms": self.cfg.pause_chapter_ms,
+            "verbose": self.cfg.verbose,
         }
 
         manager = multiprocessing.Manager()
         queue = manager.Queue()
         worker_state = {}
         worker_errors = []
+        worker_logs = []  # Store log messages for verbose mode
 
         layout = Layout()
-        layout.split(Layout(name="upper", size=3), Layout(name="lower"))
+        if self.cfg.verbose:
+            # In verbose mode, split into 3 sections: progress, logs, workers
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="middle"),
+                Layout(name="footer", size=self.cfg.workers + 4),
+            )
+            layout["middle"].split_row(Layout(name="logs", ratio=1))
+        else:
+            # Normal mode: just progress and workers
+            worker_size = max(4, self.cfg.workers + 4)
+            layout.split(
+                Layout(name="upper", size=3), Layout(name="lower", size=worker_size)
+            )
 
         overall_progress = Progress(
             SpinnerColumn(),
@@ -269,111 +293,145 @@ class AudioBuilder:
             "[bold cyan]Total Progress", total=total_blocks
         )
 
-        with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
-            futures = {}
-            for ch in chapters:
-                fut = pool.submit(
-                    worker_process_chapter, ch, cfg_dict, self.temp_dir, queue
-                )
-                futures[fut] = ch
+        try:
+            with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
+                futures = {}
+                for ch in chapters:
+                    fut = pool.submit(
+                        worker_process_chapter, ch, cfg_dict, self.temp_dir, queue
+                    )
+                    futures[fut] = ch
 
-            with Live(layout, refresh_per_second=8, console=self.console) as live:
-                while True:
-                    while not queue.empty():
-                        try:
-                            msg = queue.get_nowait()
-                            event, pid = msg[0], msg[1]
-                            if event == "START":
-                                worker_state[pid] = {
-                                    "title": msg[2],
-                                    "total": msg[3],
-                                    "current": 0,
-                                }
-                            elif event == "UPDATE":
-                                overall_progress.advance(overall_task, msg[2])
-                                if pid in worker_state:
-                                    worker_state[pid]["current"] += msg[2]
-                            elif event == "DONE":
-                                if pid in worker_state:
-                                    del worker_state[pid]
-                            elif event == "ERROR":
-                                worker_errors.append(
-                                    {
-                                        "pid": pid,
-                                        "chapter": msg[2],
-                                        "message": msg[3],
-                                        "traceback": msg[4],
+                with Live(layout, refresh_per_second=8, console=self.console) as live:
+                    while True:
+                        while not queue.empty():
+                            try:
+                                msg = queue.get_nowait()
+                                event, pid = msg[0], msg[1]
+                                if event == "START":
+                                    worker_state[pid] = {
+                                        "title": msg[2],
+                                        "total": msg[3],
+                                        "current": 0,
                                     }
-                                )
-                        except Exception:
+                                elif event == "UPDATE":
+                                    overall_progress.advance(overall_task, msg[2])
+                                    if pid in worker_state:
+                                        worker_state[pid]["current"] += msg[2]
+                                elif event == "DONE":
+                                    if pid in worker_state:
+                                        del worker_state[pid]
+                                elif event == "ERROR":
+                                    worker_errors.append(
+                                        {
+                                            "pid": pid,
+                                            "chapter": msg[2],
+                                            "message": msg[3],
+                                            "traceback": msg[4],
+                                        }
+                                    )
+                                elif event == "LOG":
+                                    # Handle log messages from workers
+                                    worker_logs.append(f"[{pid}] {msg[2]}")
+                                    # Keep only last 20 log messages to avoid memory issues
+                                    if len(worker_logs) > 20:
+                                        worker_logs.pop(0)
+                            except Exception:
+                                break
+
+                        all_done = all(f.done() for f in futures)
+                        if overall_progress.tasks[0].finished:
+                            break
+                        if all_done and not worker_state and queue.empty():
                             break
 
-                    all_done = all(f.done() for f in futures)
-                    if overall_progress.tasks[0].finished:
-                        break
-                    if all_done and not worker_state and queue.empty():
-                        break
+                        # Update log panel in verbose mode
+                        if self.cfg.verbose:
+                            if worker_logs:
+                                log_text = "\n".join(
+                                    worker_logs[-10:]
+                                )  # Show last 10 logs
+                            else:
+                                log_text = "[dim]Waiting for worker logs...[/dim]"
+                            logs_panel = Panel(
+                                log_text,
+                                title="Worker Logs",
+                                border_style="green",
+                            )
+                            layout["logs"].update(logs_panel)
 
-                    layout["upper"].update(
-                        Panel(
+                        # Update progress panel (different layout in verbose mode)
+                        progress_panel = Panel(
                             overall_progress,
                             title="Overall Progress",
                             border_style="blue",
                         )
-                    )
+                        if self.cfg.verbose:
+                            layout["header"].update(progress_panel)
+                        else:
+                            layout["upper"].update(progress_panel)
 
-                    worker_table = Table(
-                        box=box.SIMPLE,
-                        show_header=True,
-                        header_style="bold magenta",
-                        expand=True,
-                    )
-                    worker_table.add_column("PID", width=6)
-                    worker_table.add_column("Chapter", ratio=2)
-                    worker_table.add_column("Progress", ratio=1)
-
-                    for pid in sorted(worker_state.keys()):
-                        state = worker_state[pid]
-                        pct = (
-                            (state["current"] / state["total"]) * 100
-                            if state["total"] > 0
-                            else 0
+                        worker_table = Table(
+                            box=box.SIMPLE,
+                            show_header=True,
+                            header_style="bold magenta",
+                            expand=True,
                         )
-                        bar_len = 20
-                        filled = int((pct / 100) * bar_len)
-                        bar_str = "█" * filled + "░" * (bar_len - filled)
-                        worker_table.add_row(
-                            str(pid),
-                            state["title"][:40],
-                            f"[green]{bar_str}[/green] {pct:.0f}%",
-                        )
+                        worker_table.add_column("PID", width=6)
+                        worker_table.add_column("Chapter", ratio=2)
+                        worker_table.add_column("Progress", ratio=1)
 
-                    active_count = len(worker_state)
-                    if active_count < self.cfg.workers:
-                        for _ in range(self.cfg.workers - active_count):
-                            worker_table.add_row("-", "[dim]Idle[/dim]", "")
+                        for pid in sorted(worker_state.keys()):
+                            state = worker_state[pid]
+                            pct = (
+                                (state["current"] / state["total"]) * 100
+                                if state["total"] > 0
+                                else 0
+                            )
+                            bar_len = 20
+                            filled = int((pct / 100) * bar_len)
+                            bar_str = "█" * filled + "░" * (bar_len - filled)
+                            worker_table.add_row(
+                                str(pid),
+                                state["title"][:40],
+                                f"[green]{bar_str}[/green] {pct:.0f}%",
+                            )
 
-                    layout["lower"].update(
-                        Panel(
+                        active_count = len(worker_state)
+                        if active_count < self.cfg.workers:
+                            for _ in range(self.cfg.workers - active_count):
+                                worker_table.add_row("-", "[dim]Idle[/dim]", "")
+
+                        # Update worker panel (different layout in verbose mode)
+                        worker_panel = Panel(
                             worker_table,
                             title=f"Worker Threads ({self.cfg.workers})",
                             border_style="grey50",
                         )
+                        if self.cfg.verbose:
+                            layout["footer"].update(worker_panel)
+                        else:
+                            layout["lower"].update(worker_panel)
+
+                for future in as_completed(futures):
+                    res = future.result()
+                    if res:
+                        results.append(res)
+
+        except KeyboardInterrupt:
+            self.console.print(
+                "\n[yellow]Interrupted by user. Shutting down workers...[/yellow]"
+            )
+            return []
+        finally:
+            if worker_errors:
+                self.console.print("[red]Worker errors encountered:[/red]")
+                for err in worker_errors:
+                    self.console.print(
+                        f"[red]- PID {err['pid']} {err['chapter']}: {err['message']}[/red]"
                     )
-
-            for future in as_completed(futures):
-                res = future.result()
-                if res:
-                    results.append(res)
-
-        if worker_errors:
-            self.console.print("[red]Worker errors encountered:[/red]")
-            for err in worker_errors:
-                self.console.print(
-                    f"[red]- PID {err['pid']} {err['chapter']}: {err['message']}[/red]"
-                )
-                if self.cfg.debug_html:
-                    self.console.print(f"[dim]{err['traceback']}[/dim]")
+                    if self.cfg.debug_html:
+                        self.console.print(f"[dim]{err['traceback']}[/dim]")
 
         return sorted(results, key=lambda x: x.chapter_index)
 

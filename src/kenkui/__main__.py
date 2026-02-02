@@ -87,6 +87,11 @@ def main():
         action="store_true",
         help="Print detailed errors and debug output",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show all worker logs and TTS output (not sent to /dev/null)",
+    )
 
     # Selection Flags
     parser.add_argument(
@@ -168,6 +173,7 @@ def main():
             keep_temp=args.keep,
             debug_html=args.debug,
             interactive_chapters=args.select_chapters,
+            verbose=args.verbose,
         )
 
         builder = AudioBuilder(cfg)
