@@ -28,6 +28,12 @@ dependencies = [
 
 scripts = { kenkui = "kenkui.__main__:main" }
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/D1zzl3D0p/kenkui"
 "Bug Tracker" = "https://github.com/D1zzl3D0p/kenkui/issues"

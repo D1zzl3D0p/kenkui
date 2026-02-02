@@ -2,19 +2,33 @@ import sys
 import importlib.resources
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Any
+from typing import Callable, Any
 
 from rich.console import Console
 from rich.table import Table
 from rich import box
 from rich.prompt import Prompt
 from rich.panel import Panel
+from rich.markup import escape
 
 from huggingface_hub import HfApi, login
 from huggingface_hub.errors import (
     GatedRepoError,
     RepositoryNotFoundError,
 )
+
+# --- CONSTANTS ---
+
+DEFAULT_VOICES = [
+    "alba",
+    "marius",
+    "javert",
+    "jean",
+    "fantine",
+    "cosette",
+    "eponine",
+    "azelma",
+]
 
 # Helper Classes
 
@@ -32,13 +46,19 @@ class Config:
     debug_html: bool
     interactive_chapters: bool  # New flag
     verbose: bool = False
+    # TTS configuration attributes (voice field supports: built-in name, local path, or hf:// URL)
+    tts_model: str = "kyutai/pocket-tts"
+    tts_provider: str = "huggingface"
+    model_name: str = "pocket-tts"
+    elevenlabs_key: str = ""
+    elevenlabs_turbo: bool = False
 
 
 @dataclass
 class Chapter:
     index: int
     title: str
-    paragraphs: List[str]
+    paragraphs: list[str]
 
 
 @dataclass
@@ -52,7 +72,7 @@ class AudioResult:
 # --- HELPER: SELECTION LOGIC ---
 
 
-def parse_range_string(selection_str: str, max_val: int) -> List[int]:
+def parse_range_string(selection_str: str, max_val: int) -> list[int]:
     """Parses '1, 2, 4-6' into [0, 1, 3, 4, 5]. Returns 0-based indices."""
     selection_str = selection_str.strip()
     if not selection_str or selection_str.lower() == "all":
@@ -85,38 +105,78 @@ def parse_range_string(selection_str: str, max_val: int) -> List[int]:
     return sorted(list(selected_indices))
 
 
-def interactive_select(
-    items: List[Any], title: str, console: Console, item_formatter=str
-) -> List[Any]:
-    """Generic TUI selection menu."""
+def interactive_select[T](
+    items: list[T],
+    title: str,
+    console: Console,
+    item_formatter: Callable[[T], str] = str,
+) -> list[T]:
+    """Generic TUI selection menu using Rich components."""
     if not items:
         return []
 
-    # Display Table
+    # Create styled table matching --list-voices format
     table = Table(
-        title=title, show_header=True, header_style="bold magenta", box=box.SIMPLE
+        title=f"[bold magenta]{title}[/bold magenta]",
+        show_header=True,
+        header_style="bold magenta",
+        box=box.ROUNDED,
+        expand=True,
     )
-    table.add_column("#", style="cyan", width=4, justify="right")
-    table.add_column("Item", style="white")
+    table.add_column("#", style="cyan", width=6, justify="center")
+    table.add_column("Item", style="white", overflow="fold")
 
     for i, item in enumerate(items, 1):
-        table.add_row(str(i), item_formatter(item))
+        # Escape Rich markup to prevent parsing errors from special characters
+        item_text = escape(item_formatter(item))
+        table.add_row(f"{i}", item_text)
 
+    console.print()
     console.print(table)
-    console.print("[dim]Enter numbers (e.g. '1,3,5-10') or press Enter for ALL[/dim]")
+    console.print()
+    console.print(
+        Panel(
+            "[dim]Enter chapter numbers to convert (e.g., '1,3,5-10')[/dim]\n"
+            "[dim]Press Enter to select ALL chapters[/dim]",
+            title="Selection Options",
+            border_style="blue",
+        )
+    )
 
     while True:
-        selection = Prompt.ask("Select")
+        selection = Prompt.ask("[bold cyan]Select chapters[/bold cyan]")
         indices = parse_range_string(selection, len(items))
 
         if not indices:
             console.print(
-                "[yellow]No items selected. Try again or type 'all'.[/yellow]"
+                "[yellow]No items selected. Try again or type 'all' to select all.[/yellow]"
             )
             continue
 
         selected_items = [items[i] for i in indices]
-        console.print(f"[green]Selected {len(selected_items)} items.[/green]")
+
+        # Show selected chapters summary
+        summary_table = Table(
+            title=f"[green]Selected {len(selected_items)} of {len(items)} chapters[/green]",
+            show_header=True,
+            header_style="bold green",
+            box=box.SIMPLE,
+        )
+        summary_table.add_column("#", style="cyan", width=6)
+        summary_table.add_column("Chapter Title", style="white")
+
+        for i, item in enumerate(selected_items[:10], 1):  # Show first 10
+            summary_table.add_row(f"{i}", escape(item_formatter(item)))
+
+        if len(selected_items) > 10:
+            summary_table.add_row(
+                "...", f"[dim]and {len(selected_items) - 10} more[/dim]"
+            )
+
+        console.print()
+        console.print(summary_table)
+        console.print()
+
         return selected_items
 
 
@@ -273,14 +333,27 @@ def print_available_voices(console: Console):
             # Strip extension for display if you want, or keep it to be precise
             clean_name = Path(filename).stem
             table.add_row("Custom/Local", clean_name, f"File: {filename}")
-    else:
-        # Optional: Add a row indicating no custom voices were found
-        pass
+
+    # Add Remote Voices section (hf:// URLs)
+    table.add_section()
+    table.add_row(
+        "Remote/HF",
+        "hf://user/repo/voice.wav",
+        "HuggingFace Hub voice file",
+    )
+    table.add_row(
+        "Remote/HF",
+        "/path/to/local.wav",
+        "Local voice file path",
+    )
 
     console.print(table)
     console.print(
         Panel(
-            "[dim]To use a voice, run:[/dim]\n[green]kenkui input.epub --voice [bold]voice_name[/bold][/green]",
+            "[dim]To use a voice, run:[/dim]\n"
+            "[green]kenkui input.epub --voice [bold]voice_name[/bold][/green]\n"
+            "[green]kenkui input.epub --voice [bold]hf://user/repo/voice.wav[/bold][/green]\n"
+            "[green]kenkui input.epub --voice [bold]/path/to/custom.wav[/bold][/green]",
             title="Usage Hint",
             expand=False,
         )

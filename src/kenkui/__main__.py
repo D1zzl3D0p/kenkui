@@ -15,10 +15,10 @@ import shutil
 import sys
 import warnings
 from pathlib import Path
+from contextlib import contextmanager
 from rich.console import Console
 
 # Local imports
-# Note: When installed as a package, these imports work relative to the package
 from .parsing import AudioBuilder
 from .helpers import (
     Config,
@@ -30,32 +30,27 @@ from .helpers import (
 warnings.filterwarnings("ignore")
 
 
+@contextmanager
+def suppress_c_stderr():
+    """Context manager to suppress C-level stderr output (e.g., from lxml/libxml2)."""
+    # Save original stderr file descriptor
+    original_stderr_fd = os.dup(2)
+    try:
+        # Redirect stderr to /dev/null at OS level
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), 2)
+        yield
+    finally:
+        # Restore original stderr
+        os.dup2(original_stderr_fd, 2)
+        os.close(original_stderr_fd)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch EPUB to Audiobook Converter",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog=(
-            "Examples:\n"
-            "  kenkui book.epub\n"
-            "  kenkui library/ --select-books --voice alba\n"
-            "  kenkui book.epub -o output/ -j 4\n"
-            "\n"
-            "Notes:\n"
-            "  - Use --list-voices to see available voices.\n"
-            "  - ffmpeg is required and must be on PATH.\n"
-            "  - --select-books only applies when input is a directory.\n"
-            "  - --select-chapters runs for each processed book."
-        ),
+        description="Convert EPUB files to audiobooks with custom voice support."
     )
-
-    # Arguments
-    parser.add_argument(
-        "input",
-        nargs="?",
-        type=Path,
-        default=None,
-        help="Input EPUB file or directory containing EPUBs",
-    )
+    parser.add_argument("input", type=Path, help="EPUB file or directory")
     parser.add_argument(
         "--voice",
         default="alba",
@@ -66,104 +61,85 @@ def main():
         "--output",
         type=Path,
         default=None,
-        help=(
-            "Output directory or full output file path (default: input file directory)"
-        ),
+        help="Output directory (default: same as input)",
     )
     parser.add_argument(
-        "-j",
+        "-w",
         "--workers",
         type=int,
-        default=os.cpu_count(),
-        help="Parallel workers (default: CPU count)",
-    )
-    parser.add_argument(
-        "--keep",
-        action="store_true",
-        help="Keep temporary files after conversion",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Print detailed errors and debug output",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Show all worker logs and TTS output (not sent to /dev/null)",
-    )
-
-    # Selection Flags
-    parser.add_argument(
-        "--select-books",
-        action="store_true",
-        help="Pick books interactively when input is a directory",
+        default=4,
+        help="Number of parallel workers",
     )
     parser.add_argument(
         "--select-chapters",
         action="store_true",
-        help="Pick chapters interactively for each selected book",
+        help="Pick chapters interactively",
     )
-
-    # New Flag: List Voices
     parser.add_argument(
         "--list-voices",
         action="store_true",
-        help="List built-in and custom voice names",
+        help="Display all available voices",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show all worker logs and TTS output (not sent to /dev/null)",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Show full exception tracebacks",
+    )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep temporary files (for debugging)",
     )
 
     args = parser.parse_args()
     console = Console()
 
-    # --- 0. Handle Voice Listing ---
+    # Handle --list-voices
     if args.list_voices:
         print_available_voices(console)
-        sys.exit(0)
+        return
 
-    # --- Validation: Input is required if not listing voices ---
-    if not args.input:
-        parser.print_help()
-        console.print(
-            "\n[red]Error: input argument is required unless listing voices.[/red]"
-        )
+    # Validate input
+    if not args.input.exists():
+        console.print(f"[red]Error: Path '{args.input}' does not exist.[/red]")
         sys.exit(1)
 
-    if not shutil.which("ffmpeg"):
-        console.print("[red]Error: ffmpeg not found.[/red]")
-        sys.exit(1)
-
-    # 1. Build Queue
-    queue_files = []
-
-    if args.input.is_file():
-        if args.input.suffix.lower() == ".epub":
-            queue_files.append(args.input)
-    elif args.input.is_dir():
-        console.print(f"[blue]Scanning directory: {args.input}[/blue]")
-        queue_files = sorted(list(args.input.rglob("*.epub")))
+    # Build queue
+    if args.input.is_dir():
+        queue_files = sorted(args.input.glob("*.epub"))
+    else:
+        queue_files = [args.input]
 
     if not queue_files:
-        console.print("[red]No EPUB files found![/red]")
+        console.print("[red]No EPUB files found in input path.[/red]")
         sys.exit(1)
-
-    # 2. Interactive Book Selection
-    if args.select_books and len(queue_files) > 1:
-        queue_files = interactive_select(
-            queue_files, "Detected Books", console, lambda f: f.name
-        )
-        if not queue_files:
-            sys.exit(0)
 
     console.print(f"[bold green]Queue:[/bold green] {len(queue_files)} books.")
 
     check_huggingface_access()
 
-    # 3. Process Queue
+    # Process Queue
     for idx, epub_file in enumerate(queue_files, 1):
         console.rule(f"[bold magenta]Processing Book {idx}/{len(queue_files)}")
 
+        # Validate voice parameter
+        voice = args.voice.strip() if args.voice else "alba"
+        if not voice or voice.lower() == "voice":
+            console.print(
+                "[red]Error: Invalid voice name. Please specify a valid voice using --voice[/red]"
+            )
+            console.print("[dim]Use --list-voices to see available options[/dim]")
+            sys.exit(1)
+
         cfg = Config(
-            voice=args.voice,
+            voice=voice,
             epub_path=epub_file,
             output_path=args.output,
             pause_line_ms=400,
@@ -178,17 +154,26 @@ def main():
 
         builder = AudioBuilder(cfg)
         try:
-            builder.run()
+            # Suppress C-level stderr unless in verbose mode
+            if not args.verbose:
+                with suppress_c_stderr():
+                    builder.run()
+            else:
+                builder.run()
         except KeyboardInterrupt:
             console.print("\n[bold red]Batch Cancelled.[/bold red]")
             sys.exit(130)
         except Exception as e:
-            console.print(f"[red]Error processing {epub_file.name}: {e}[/red]")
-            # Optional: Print traceback if debug is on
+            # Sanitize error message to prevent Rich markup errors
+            error_msg = str(e)
+            error_msg = error_msg.encode("utf-8", errors="replace").decode("utf-8")
+            # Escape Rich markup characters to prevent parsing errors
+            error_msg = error_msg.replace("[", "\\[").replace("]", "\\]")
+            console.print(f"[red]Error processing {epub_file.name}: {error_msg}[/red]")
             if args.debug:
                 import traceback
 
-                traceback.print_exc()
+                console.print(traceback.format_exc())
 
 
 if __name__ == "__main__":
