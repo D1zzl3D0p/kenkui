@@ -119,6 +119,11 @@ def worker_process_chapter(
         voice_state = model.get_state_for_audio_prompt(voice)
         log_message(f"[Worker {pid}] Voice state initialized")
 
+        # Get TTS parameters from config
+        temperature = config_dict.get("temperature", 0.7)
+        eos_threshold = config_dict.get("eos_threshold", -4.0)
+        lsd_decode_steps = config_dict.get("lsd_decode_steps", 1)
+
         # Batch paragraphs into ~1000 char chunks for processing
         batches = _batch_text(chapter.paragraphs, max_chars=1000)
         total_batches = len(batches)
@@ -140,7 +145,13 @@ def worker_process_chapter(
                         f"Processing batch {batch_idx + 1}/{total_batches}: {batch[:100]}..."
                     )
 
-                    audio_tensor = model.generate_audio(voice_state, batch)
+                    audio_tensor = model.generate_audio(
+                        voice_state,
+                        batch,
+                        temperature=temperature,
+                        eos_threshold=eos_threshold,
+                        lsd_decode_steps=lsd_decode_steps,
+                    )
 
                     # Log initial tensor shape
                     if audio_tensor is not None:

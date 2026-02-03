@@ -566,6 +566,9 @@ class AudioBuilder:
             with self.console.status("[bold green]Stitching audio..."):
                 self._stitch_files(results, output_file)
 
+            # Embed cover from EPUB into the audiobook
+            self._embed_cover(output_file)
+
             self.console.print(
                 f"[bold green]✓ Audiobook created:[/bold green] {output_file}"
             )
@@ -594,6 +597,9 @@ class AudioBuilder:
         cfg_dict["elevenlabs_turbo"] = self.cfg.elevenlabs_turbo
         cfg_dict["debug_html"] = self.cfg.debug_html
         cfg_dict["verbose"] = self.cfg.verbose
+        cfg_dict["temperature"] = self.cfg.temperature
+        cfg_dict["eos_threshold"] = self.cfg.eos_threshold
+        cfg_dict["lsd_decode_steps"] = self.cfg.lsd_decode_steps
 
         # Create a layout depending on verbose mode
         if self.cfg.verbose:
@@ -812,6 +818,139 @@ class AudioBuilder:
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(output_file))
         subprocess.run(cmd, check=True)
+
+    def _embed_cover(self, output_file: Path):
+        """
+        Embed cover image from EPUB into the M4B file.
+
+        Args:
+            output_file: Path to the M4B file
+        """
+        try:
+            from mutagen.mp4 import MP4, MP4Cover
+            import zipfile
+            import xml.etree.ElementTree as ET
+            import os
+
+            # Extract cover from EPUB
+            with zipfile.ZipFile(str(self.cfg.epub_path), "r") as epub:
+                try:
+                    container = epub.read("META-INF/container.xml")
+                    tree = ET.fromstring(container)
+
+                    # Find the OPF file path
+                    ns = {
+                        "container": "urn:oasis:names:tc:opendocument:xmlns:container"
+                    }
+                    rootfile = tree.find(".//container:rootfile", ns)
+                    opf_path = rootfile.get("full-path")
+
+                    # Parse the OPF file
+                    opf_content = epub.read(opf_path)
+                    opf_tree = ET.fromstring(opf_content)
+
+                    # Common namespaces
+                    namespaces = {
+                        "opf": "http://www.idpf.org/2007/opf",
+                        "dc": "http://purl.org/dc/elements/1.1/",
+                    }
+
+                    # Try to find cover in metadata
+                    cover_id = None
+
+                    # Method 1: Look for meta tag with name="cover"
+                    for meta in opf_tree.findall(
+                        './/opf:meta[@name="cover"]', namespaces
+                    ):
+                        cover_id = meta.get("content")
+                        break
+
+                    # Method 2: Look for item with properties="cover-image"
+                    if not cover_id:
+                        for item in opf_tree.findall(
+                            './/opf:item[@properties="cover-image"]', namespaces
+                        ):
+                            cover_id = item.get("id")
+                            break
+
+                    # Find the actual image file
+                    cover_data = None
+                    mime_type = "image/jpeg"
+
+                    if cover_id:
+                        for item in opf_tree.findall(".//opf:item", namespaces):
+                            if item.get("id") == cover_id:
+                                cover_href = item.get("href")
+                                mime_type = item.get("media-type", "")
+                                # Resolve relative path
+                                opf_dir = os.path.dirname(opf_path)
+                                cover_path = os.path.join(opf_dir, cover_href).replace(
+                                    "\\", "/"
+                                )
+
+                                # Read the cover image
+                                cover_data = epub.read(cover_path)
+
+                                # Determine MIME type from extension if not provided
+                                if not mime_type:
+                                    ext = os.path.splitext(cover_path)[1].lower()
+                                    mime_type = {
+                                        ".jpg": "image/jpeg",
+                                        ".jpeg": "image/jpeg",
+                                        ".png": "image/png",
+                                    }.get(ext, "image/jpeg")
+
+                                break
+
+                    # Fallback: Look for common cover image names
+                    if not cover_data:
+                        for name in epub.namelist():
+                            lower_name = name.lower()
+                            if "cover" in lower_name and any(
+                                lower_name.endswith(ext)
+                                for ext in [".jpg", ".jpeg", ".png"]
+                            ):
+                                cover_data = epub.read(name)
+                                ext = os.path.splitext(name)[1].lower()
+                                mime_type = {
+                                    ".jpg": "image/jpeg",
+                                    ".jpeg": "image/jpeg",
+                                    ".png": "image/png",
+                                }.get(ext, "image/jpeg")
+                                break
+
+                    # Embed cover if found
+                    if cover_data:
+                        # Determine image format
+                        if mime_type == "image/png":
+                            image_format = MP4Cover.FORMAT_PNG
+                        else:
+                            image_format = MP4Cover.FORMAT_JPEG
+
+                        # Open the M4B file
+                        audio = MP4(str(output_file))
+
+                        # Add the cover art
+                        audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
+
+                        # Save the file
+                        audio.save()
+
+                        self.console.print(
+                            f"[bold green]✓ Cover embedded successfully[/bold green]"
+                        )
+
+                except Exception as e:
+                    self.console.print(
+                        f"[yellow]Warning: Could not extract cover from EPUB: {e}[/yellow]"
+                    )
+
+        except ImportError:
+            self.console.print(
+                "[yellow]Warning: mutagen library not found. Cover not embedded.[/yellow]"
+            )
+        except Exception as e:
+            self.console.print(f"[yellow]Warning: Could not embed cover: {e}[/yellow]")
 
     def run(self):
         """Main entry point for audiobook creation"""

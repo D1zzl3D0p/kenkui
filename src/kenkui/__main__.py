@@ -50,7 +50,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Convert EPUB files to audiobooks with custom voice support."
     )
-    parser.add_argument("input", type=Path, help="EPUB file or directory")
+    parser.add_argument(
+        "input",
+        type=Path,
+        nargs="?",  # Make input optional for --fix-audiobook mode
+        default=None,
+        help="EPUB file or directory",
+    )
     parser.add_argument(
         "--voice",
         default="alba",
@@ -69,6 +75,12 @@ def main():
         type=int,
         default=4,
         help="Number of parallel workers",
+    )
+    parser.add_argument(
+        "--fix-audiobook",
+        nargs=2,  # Require 2 arguments for --fix-audiobook
+        metavar=("EBOOK", "AUDIOBOOK"),
+        help="Fix audiobook metadata and missing chapters (requires: ebook_path audiobook_path)",
     )
     parser.add_argument(
         "--select-chapters",
@@ -93,6 +105,24 @@ def main():
         help="Show full exception tracebacks",
     )
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="Adjust TTS model expressiveness (0.1-2.0, default: 0.7)",
+    )
+    parser.add_argument(
+        "--eos-threshold",
+        type=float,
+        default=-4.0,
+        help="Adjust when TTS finishes (default: -4.0, smaller = earlier)",
+    )
+    parser.add_argument(
+        "--lsd-decode-steps",
+        type=int,
+        default=1,
+        help="Increase TTS quality by running more generations (default: 1)",
+    )
+    parser.add_argument(
         "--keep",
         action="store_true",
         help="Keep temporary files (for debugging)",
@@ -100,6 +130,44 @@ def main():
 
     args = parser.parse_args()
     console = Console()
+
+    # Handle --fix-audiobook
+    if args.fix_audiobook:
+        ebook_path = Path(args.fix_audiobook[0])
+        audiobook_path = Path(args.fix_audiobook[1])
+
+        if not ebook_path.exists():
+            console.print(f"[red]Error: EPUB file not found: {ebook_path}[/red]")
+            sys.exit(1)
+
+        if not audiobook_path.exists():
+            console.print(
+                f"[red]Error: Audiobook file not found: {audiobook_path}[/red]"
+            )
+            sys.exit(1)
+
+        # Import fix_audiobook module
+        from .fix_audiobook import fix_audiobook
+
+        cfg = Config(
+            voice=args.voice,
+            epub_path=ebook_path,
+            output_path=audiobook_path.parent,
+            pause_line_ms=400,
+            pause_chapter_ms=2000,
+            workers=args.workers,
+            m4b_bitrate="64k",
+            keep_temp=args.keep,
+            debug_html=args.debug,
+            interactive_chapters=args.select_chapters,
+            verbose=args.verbose,
+            temperature=args.temperature,
+            eos_threshold=args.eos_threshold,
+            lsd_decode_steps=args.lsd_decode_steps,
+        )
+
+        success = fix_audiobook(ebook_path, audiobook_path, cfg, console)
+        sys.exit(0 if success else 1)
 
     # Handle --list-voices
     if args.list_voices:
@@ -150,6 +218,9 @@ def main():
             debug_html=args.debug,
             interactive_chapters=args.select_chapters,
             verbose=args.verbose,
+            temperature=args.temperature,
+            eos_threshold=args.eos_threshold,
+            lsd_decode_steps=args.lsd_decode_steps,
         )
 
         builder = AudioBuilder(cfg)

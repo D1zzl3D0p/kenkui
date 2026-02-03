@@ -50,6 +50,9 @@ class Config:
     tts_model: str = "kyutai/pocket-tts"
     tts_provider: str = "huggingface"
     model_name: str = "pocket-tts"
+    temperature: float = 0.7
+    eos_threshold: float = -4.0
+    lsd_decode_steps: int = 1
     elevenlabs_key: str = ""
     elevenlabs_turbo: bool = False
 
