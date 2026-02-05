@@ -68,21 +68,58 @@ def _load_voice(voice: str, verbose: bool = False) -> str:
 
 
 def _batch_text(paragraphs: list[str], max_chars: int = 1000) -> list[str]:
-    """Batch paragraphs into ~max_chars character chunks."""
-    batched, current, curr_len = [], [], 0
+    """Batch paragraphs into ~max_chars character chunks, splitting long paragraphs at sentence boundaries."""
+    batched = []
+
     for p in paragraphs:
-        if current and (curr_len + len(p) > max_chars):
-            batched.append(" ".join(current))
-            current, curr_len = [], 0
-        current.append(p)
-        curr_len += len(p)
-    if current:
-        batched.append(" ".join(current))
+        # If paragraph exceeds max_chars, split it at sentence boundaries
+        if len(p) > max_chars:
+            sentences = re.split(r"(?<=[.!?])\s+", p)
+            current_chunk = []
+            current_len = 0
+
+            for sentence in sentences:
+                sent_len = len(sentence)
+                # Check if adding this sentence exceeds max_chars
+                if current_len + sent_len + (1 if current_chunk else 0) > max_chars:
+                    if current_chunk:
+                        batched.append(" ".join(current_chunk))
+                    current_chunk = [sentence]
+                    current_len = sent_len
+                else:
+                    current_chunk.append(sentence)
+                    current_len += sent_len + (1 if len(current_chunk) > 1 else 0)
+
+            if current_chunk:
+                batched.append(" ".join(current_chunk))
+        else:
+            # Normal case: paragraph fits within max_chars, add as-is
+            batched.append(p)
+
     return batched
 
 
+def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[int, int]:
+    """Pre-calculate batch count and total characters for a chapter.
+
+    Uses adaptive batch sizing: smaller batches for first chapter (better ETA),
+    larger batches for remaining chapters (better performance).
+
+    Returns:
+        tuple of (batch_count, total_characters)
+    """
+    batch_size = 250 if is_first_chapter else 800
+    batches = _batch_text(chapter.paragraphs, max_chars=batch_size)
+    total_chars = sum(len(batch) for batch in batches)
+    return len(batches), total_chars
+
+
 def worker_process_chapter(
-    chapter: Chapter, config_dict: dict, temp_dir: Path, queue: multiprocessing.Queue
+    chapter: Chapter,
+    config_dict: dict,
+    temp_dir: Path,
+    queue: multiprocessing.Queue,
+    is_first_chapter: bool = False,
 ) -> AudioResult | None:
     pid = os.getpid()
     # Only redirect output if not in verbose mode
@@ -102,7 +139,6 @@ def worker_process_chapter(
         log_message(
             f"[Worker {pid}] Voice config: {config_dict.get('voice', 'NOT SET')}"
         )
-        queue.put(("START", pid, chapter.title, len(chapter.paragraphs)))
 
         log_message(f"[Worker {pid}] Loading TTS model...")
         model = TTSModel.load_model()
@@ -119,20 +155,19 @@ def worker_process_chapter(
         voice_state = model.get_state_for_audio_prompt(voice)
         log_message(f"[Worker {pid}] Voice state initialized")
 
-        # Get TTS parameters from config
-        temperature = config_dict.get("temperature", 0.7)
-        eos_threshold = config_dict.get("eos_threshold", -4.0)
-        lsd_decode_steps = config_dict.get("lsd_decode_steps", 1)
-
-        # Batch paragraphs into ~1000 char chunks for processing
-        batches = _batch_text(chapter.paragraphs, max_chars=1000)
+        # Adaptive batching: smaller batches for first chapter (better ETA), larger for rest (performance)
+        batch_size = 250 if is_first_chapter else 800
+        batches = _batch_text(chapter.paragraphs, max_chars=batch_size)
         total_batches = len(batches)
+        total_chars = sum(len(batch) for batch in batches)
         log_message(
-            f"[Worker {pid}] Batched {len(chapter.paragraphs)} paragraphs into {total_batches} batches"
+            f"[Worker {pid}] Batched {len(chapter.paragraphs)} paragraphs into {total_batches} batches ({total_chars} chars) using {batch_size}-char batches"
         )
 
-        # Report start with batch count for progress tracking
-        queue.put(("START", pid, chapter.title, total_batches))
+        # Report start with batch count and total characters for progress tracking
+        queue.put(
+            ("START", pid, chapter.title, total_batches, total_chars, is_first_chapter)
+        )
 
         silence = AudioSegment.silent(duration=config_dict["pause_line_ms"])
         full_audio = AudioSegment.empty()
@@ -148,9 +183,6 @@ def worker_process_chapter(
                     audio_tensor = model.generate_audio(
                         voice_state,
                         batch,
-                        temperature=temperature,
-                        eos_threshold=eos_threshold,
-                        lsd_decode_steps=lsd_decode_steps,
                     )
 
                     # Log initial tensor shape
@@ -230,8 +262,8 @@ def worker_process_chapter(
                         )
                     continue
 
-            # Report progress per batch with batch index info
-            queue.put(("UPDATE", pid, 1, batch_idx + 1, total_batches))
+            # Report progress per batch with batch index info and character count
+            queue.put(("UPDATE", pid, 1, batch_idx + 1, total_batches, len(batch)))
 
         if len(full_audio) < 1000:
             log_message(f"✗ Audio too short ({len(full_audio)}ms), skipping chapter")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenkui"
-version = "0.4.1"
+version = "0.5.0"
 description = "Convert Ebooks to Audiobooks with [custom] voice samples"
 readme = "README.md"
 authors = [{ name = "Sumner MacArthur", email = "spn1kolat3sla@gmail.com" }]
@@ -27,7 +27,7 @@ dependencies = [
   "mutagen>=1.45.0",
 ]
 
-scripts = { kenkui = "kenkui.__main__:main" }
+scripts = { kenkui = "kenkui.cli:main" }
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
@@ -40,5 +40,5 @@ dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"src.samples" = ["*.epub"]
-"src.voices" = ["*.wav"]
+"kenkui.samples" = ["*.epub"]
+"kenkui.voices" = ["*.wav"]

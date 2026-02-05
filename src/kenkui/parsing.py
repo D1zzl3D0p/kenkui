@@ -2,10 +2,12 @@ import multiprocessing
 import re
 import shutil
 import subprocess
+import time
 import warnings
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -41,6 +43,62 @@ from rich import box
 # import other files
 from .helpers import Chapter, AudioResult, Config
 from .workers import worker_process_chapter
+
+
+@dataclass
+class ETATracker:
+    """Tracks TTS throughput for accurate ETA calculation."""
+
+    total_chars: int
+    start_time: float = field(default_factory=time.monotonic)
+    processed_chars: int = 0
+    chapter_rates: list[float] = field(default_factory=list)
+
+    def update(self, chars: int) -> None:
+        self.processed_chars += chars
+
+    def on_chapter_complete(self, chars: int, elapsed: float) -> None:
+        if elapsed > 0:
+            self.chapter_rates.append(chars / elapsed)
+
+    @property
+    def current_rate(self) -> float:
+        """Calculate chars/second with chapter-based refinement."""
+        elapsed = time.monotonic() - self.start_time
+        if elapsed < 1 or self.processed_chars == 0:
+            return 0.0
+
+        rate = self.processed_chars / elapsed
+
+        if self.chapter_rates:
+            avg_chapter_rate = sum(self.chapter_rates) / len(self.chapter_rates)
+            rate = 0.6 * rate + 0.4 * avg_chapter_rate
+
+        return rate
+
+    def format_eta(self) -> str:
+        rate = self.current_rate
+        if rate <= 0:
+            return "--:--:--"
+
+        remaining = (self.total_chars - self.processed_chars) / rate
+        hours = int(remaining // 3600)
+        minutes = int((remaining % 3600) // 60)
+        seconds = int(remaining % 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def format_elapsed(self) -> str:
+        elapsed = time.monotonic() - self.start_time
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        seconds = int(elapsed % 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def format_rate(self) -> str:
+        rate = self.current_rate
+        if rate <= 0:
+            return "0.0"
+        return f"{rate:,.1f}"
 
 
 class EpubReader:
@@ -550,7 +608,12 @@ class AudioBuilder:
         self.console = Console()
 
     def build(
-        self, chapters: list[Chapter], output_file: Path, total_blocks: int
+        self,
+        chapters: list[Chapter],
+        output_file: Path,
+        chapter_batch_info: dict[str, tuple[int, int]],
+        total_batches: int,
+        total_chars: int,
     ) -> bool:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -558,7 +621,9 @@ class AudioBuilder:
             self.console.print(
                 f"[bold cyan]Building audiobook:[/bold cyan] {output_file.name}"
             )
-            results = self._process_chapters(chapters, total_blocks)
+            results = self._process_chapters(
+                chapters, chapter_batch_info, total_batches, total_chars
+            )
             if not results:
                 self.console.print("[red]No results generated. Aborting.[/red]")
                 return False
@@ -575,12 +640,22 @@ class AudioBuilder:
             return True
 
     def _process_chapters(
-        self, chapters: list[Chapter], total_blocks: int
+        self,
+        chapters: list[Chapter],
+        chapter_batch_info: dict[str, tuple[int, int]],
+        total_batches: int,
+        total_chars: int,
     ) -> list[AudioResult]:
         results = []
         worker_state = {}
         worker_errors = []
         worker_logs = []
+
+        # Initialize ETA tracker for accurate time estimation
+        eta_tracker = ETATracker(total_chars)
+        chapter_start_times: dict[int, float] = {}
+        completed_chapters = 0
+        total_chapters = len(chapters)
 
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore
@@ -597,21 +672,18 @@ class AudioBuilder:
         cfg_dict["elevenlabs_turbo"] = self.cfg.elevenlabs_turbo
         cfg_dict["debug_html"] = self.cfg.debug_html
         cfg_dict["verbose"] = self.cfg.verbose
-        cfg_dict["temperature"] = self.cfg.temperature
-        cfg_dict["eos_threshold"] = self.cfg.eos_threshold
-        cfg_dict["lsd_decode_steps"] = self.cfg.lsd_decode_steps
 
         # Create a layout depending on verbose mode
         if self.cfg.verbose:
             layout = Layout()
             layout.split_column(
-                Layout(name="header", size=5),
+                Layout(name="header", size=6),
                 Layout(name="logs", size=12),
                 Layout(name="footer"),
             )
         else:
             layout = Layout()
-            layout.split_column(Layout(name="upper", size=5), Layout(name="lower"))
+            layout.split_column(Layout(name="upper", size=6), Layout(name="lower"))
 
         overall_progress = Progress(
             SpinnerColumn(),
@@ -619,23 +691,27 @@ class AudioBuilder:
             BarColumn(),
             MofNCompleteColumn(),
             TextColumn("•"),
-            TimeRemainingColumn(),
+            TextColumn("[cyan]{task.fields[eta]} remaining"),
             expand=True,
         )
         overall_task = overall_progress.add_task(
-            "[bold cyan]Total Progress", total=total_blocks
+            "[bold]Total Progress", total=total_batches, eta="--:--:--"
         )
 
         try:
             with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
                 futures = {}
-                for ch in chapters:
+                for idx, ch in enumerate(chapters):
+                    # First chapter gets smaller batches for better ETA accuracy
+                    info = chapter_batch_info.get(ch.title, (0, 0, idx == 0))
+                    is_first = bool(info[2]) if len(info) > 2 else (idx == 0)
                     fut = pool.submit(
                         worker_process_chapter,
                         ch,
                         cfg_dict,
                         self.temp_dir,
                         queue,  # type: ignore
+                        is_first,
                     )
                     futures[fut] = ch
 
@@ -646,18 +722,43 @@ class AudioBuilder:
                                 msg = queue.get_nowait()
                                 event, pid = msg[0], msg[1]
                                 if event == "START":
+                                    # msg format: ("START", pid, title, total_batches, total_chars, is_first_chapter)
                                     worker_state[pid] = {
                                         "title": msg[2],
                                         "total": msg[3],
                                         "current": 0,
+                                        "total_chars": msg[4] if len(msg) > 4 else 0,
+                                        "is_first": msg[5] if len(msg) > 5 else False,
                                     }
+                                    chapter_start_times[pid] = time.monotonic()
                                 elif event == "UPDATE":
+                                    # msg format: ("UPDATE", pid, advance, current, total, batch_chars)
+                                    chars = msg[5] if len(msg) > 5 else 1000
                                     overall_progress.advance(overall_task, msg[2])
+                                    eta_tracker.update(chars)
                                     if pid in worker_state:
                                         worker_state[pid]["current"] += msg[2]
+                                    # Update overall ETA display
+                                    overall_progress.update(
+                                        overall_task, eta=eta_tracker.format_eta()
+                                    )
                                 elif event == "DONE":
                                     if pid in worker_state:
+                                        # Record chapter completion for rate refinement
+                                        if pid in chapter_start_times:
+                                            elapsed = (
+                                                time.monotonic()
+                                                - chapter_start_times[pid]
+                                            )
+                                            chars = worker_state[pid].get(
+                                                "total_chars", 0
+                                            )
+                                            eta_tracker.on_chapter_complete(
+                                                chars, elapsed
+                                            )
+                                            del chapter_start_times[pid]
                                         del worker_state[pid]
+                                        completed_chapters += 1
                                 elif event == "ERROR":
                                     worker_errors.append(
                                         {
@@ -697,10 +798,11 @@ class AudioBuilder:
                             )
                             layout["logs"].update(logs_panel)
 
-                        # Update progress panel (different layout in verbose mode)
+                        # Update progress panel with stats
+                        stats_text = f"Elapsed: {eta_tracker.format_elapsed()} | Rate: {eta_tracker.format_rate()} chars/sec | Chapters: {completed_chapters}/{total_chapters}"
                         progress_panel = Panel(
                             overall_progress,
-                            title="Overall Progress",
+                            title=f"Overall Progress • {stats_text}",
                             border_style="blue",
                         )
                         if self.cfg.verbose:
@@ -728,10 +830,23 @@ class AudioBuilder:
                             bar_len = 20
                             filled = int((pct / 100) * bar_len)
                             bar_str = "█" * filled + "░" * (bar_len - filled)
+
+                            # Calculate chapter ETA
+                            chapter_eta = ""
+                            if pid in chapter_start_times and state["current"] > 0:
+                                elapsed = time.monotonic() - chapter_start_times[pid]
+                                rate = state["current"] / elapsed if elapsed > 0 else 0
+                                remaining_batches = state["total"] - state["current"]
+                                if rate > 0:
+                                    remaining_secs = remaining_batches / rate
+                                    mins = int(remaining_secs // 60)
+                                    secs = int(remaining_secs % 60)
+                                    chapter_eta = f" • {mins:02d}:{secs:02d} remaining"
+
                             worker_table.add_row(
                                 str(pid),
                                 state["title"][:40],
-                                f"[green]{bar_str}[/green] {pct:.0f}%",
+                                f"[green]{bar_str}[/green] {pct:.0f}%{chapter_eta}",
                             )
 
                         active_count = len(worker_state)
@@ -972,8 +1087,18 @@ class AudioBuilder:
                 self.console.print("[yellow]No chapters selected[/yellow]")
                 return False
 
-        # Calculate total blocks for progress tracking
-        total_blocks = sum(len(ch.paragraphs) for ch in chapters)
+        # Pre-calculate batch information for accurate progress tracking
+        # First chapter uses smaller batches for better ETA, rest use larger for performance
+        from .workers import get_batch_info
+
+        chapter_batch_info = {}
+        for idx, ch in enumerate(chapters):
+            is_first = idx == 0
+            batch_count, total_chars = get_batch_info(ch, is_first_chapter=is_first)
+            chapter_batch_info[ch.title] = (batch_count, total_chars, is_first)
+
+        total_batches = sum(info[0] for info in chapter_batch_info.values())
+        total_chars = sum(info[1] for info in chapter_batch_info.values())
 
         # Determine output file path
         if self.cfg.output_path and self.cfg.output_path.suffix:
@@ -987,7 +1112,9 @@ class AudioBuilder:
             )
             output_file = output_dir / f"{book_title}.m4b"
 
-        return self.build(chapters, output_file, total_blocks)
+        return self.build(
+            chapters, output_file, chapter_batch_info, total_batches, total_chars
+        )
 
     @contextmanager
     def _managed_temp_dir(self):

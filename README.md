@@ -15,7 +15,6 @@ used, so I figured I'd start a project to make it easier to use.
 - Chapter selection
 - Batch processing
 - **Automatic cover embedding** from EPUB to M4B
-- **Advanced TTS controls** (temperature, eos-threshold, decode steps)
 - **Fix existing audiobooks** (salvage chapters, add missing ones, fix metadata)
 
 ## Requirements
@@ -79,30 +78,6 @@ Use `--list-voices` to see all available voices.
 
 Use `--select-chapters` to interactively choose which chapters to convert.
 
-### Advanced TTS Controls
-
-Kenkui supports pocket-tts advanced parameters for fine-tuning audio quality:
-
-```bash
-# Adjust expressiveness (0.1-2.0, default: 0.7)
-kenkui book.epub --temperature 1.0
-
-# Control when TTS finishes (default: -4.0, smaller = earlier)
-kenkui book.epub --eos-threshold -3.0
-
-# Increase quality by running more generations (natural number, default: 1)
-kenkui book.epub --lsd-decode-steps 5
-
-# Combine all options for highest quality
-kenkui book.epub --temperature 1.0 --eos-threshold -3.0 --lsd-decode-steps 5
-```
-
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| `--temperature` | 0.1 - 2.0 | 0.7 | Adjusts model expressiveness. Higher = more expressive |
-| `--eos-threshold` | - | -4.0 | Controls when TTS ends. More negative = finishes earlier |
-| `--lsd-decode-steps` | 1+ | 1 | Increases quality by running more generations |
-
 ### Fix Audiobooks
 
 Use `--fix-audiobook` to fix existing M4B files:
@@ -114,8 +89,7 @@ kenkui --fix-audiobook book.epub book.m4b
 # With verbose output
 kenkui --fix-audiobook book.epub book.m4b --verbose
 
-# With custom TTS for any missing chapters
-kenkui --fix-audiobook book.epub book.m4b --temperature 1.0 --lsd-decode-steps 5
+
 ```
 
 What `--fix-audiobook` does:
@@ -145,9 +119,6 @@ kenkui book.epub --select-chapters --voice ~/Downloads/voice.wav
 # With output directory and workers
 kenkui book.epub -o output/ -w 4
 
-# With advanced TTS controls
-kenkui book.epub --temperature 1.0 --lsd-decode-steps 5
-
 # Fix an existing audiobook
 kenkui --fix-audiobook book.epub book.m4b --verbose
 ```
@@ -171,7 +142,6 @@ kenkui!
 ### v0.4.0
 
 - **Automatic cover embedding** - Covers from EPUB are now automatically embedded into M4B output
-- **Advanced TTS controls** - Added `--temperature`, `--eos-threshold`, and `--lsd-decode-steps` flags
 - **Fix audiobooks** - New `--fix-audiobook` command for:
   - Detecting missing chapters via fuzzy title matching
   - Salvaging existing audio from M4B files

@@ -411,10 +411,6 @@ def generate_missing_audio(
         voice = _load_voice(config.voice, verbose=config.verbose)
         voice_state = model.get_state_for_audio_prompt(voice)
 
-        temperature = getattr(config, "temperature", 0.7)
-        eos_threshold = getattr(config, "eos_threshold", -4.0)
-        lsd_decode_steps = getattr(config, "lsd_decode_steps", 1)
-
         pause_line_ms = getattr(config, "pause_line_ms", 400)
         pause_chapter_ms = getattr(config, "pause_chapter_ms", 2000)
 
@@ -445,9 +441,6 @@ def generate_missing_audio(
                     audio_tensor = model.generate_audio(
                         voice_state,
                         batch,
-                        temperature=temperature,
-                        eos_threshold=eos_threshold,
-                        lsd_decode_steps=lsd_decode_steps,
                     )
 
                     if audio_tensor is not None and audio_tensor.numel() > 0:
