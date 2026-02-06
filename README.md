@@ -1,151 +1,158 @@
 # Kenkui
 
-Kenkui is basically a fancy wrapper for [Kyutai's pocket-tts](https://github.com/kyutai-labs/pocket-tts), with support for
-ebook parsing. It is multithreaded, and runs faster than any other tool I've
-used, so I figured I'd start a project to make it easier to use.
+![Python](https://img.shields.io/badge/python-3.7+-blue)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
+![License](https://img.shields.io/github/license/yourname/kenkui)
+![PyPI](https://img.shields.io/pypi/v/kenkui)
 
-## Features
+> **Freaky fast audiobook generation from EPUBs. No GPU. No nonsense.**
+
+Kenkui turns EPUB ebooks into high-quality M4B audiobooks using state-of-the-art text-to-speech — **entirely on CPU**, and faster than anything else I’ve used.
+
+It’s built on top of [Kyutai’s pocket-tts](https://github.com/kyutai-labs/pocket-tts), with all the annoying parts handled for you: chapter parsing, batching, metadata, covers, voices, and sane defaults.
+
+If you have ebooks and want audiobooks, Kenkui is for you.
+
+---
+
+## ✨ Features
 
 - Freaky fast audiobook generation
-- No GPU needed, 100% cpu
-- Super High Quality Text-to-Speech
-- State of the Art Tools
+- No GPU needed, 100% CPU
+- Super high-quality text-to-speech
 - Multithreaded
+- EPUB-aware chapter parsing
 - Custom voices
-- Chapter selection
 - Batch processing
-- **Automatic cover embedding** from EPUB to M4B
-- **Fix existing audiobooks** (salvage chapters, add missing ones, fix metadata)
+- Automatic cover embedding (EPUB → M4B)
+- Sensible defaults, minimal configuration
 
-## Requirements
+---
 
-- python 3.7+
-- pip, pipx, or uv
-- ffmpeg
-- mutagen (installed automatically)
+## 🚀 Quick Start
 
-## Quick Start
+Kenkui is intentionally easy to install and easy to use.
 
-Dependencies:
+### Requirements
+
+- Python **3.7+**
+- `ffmpeg` (https://ffmpeg.org/download.html)
+- One Python installer:
+  - `uv` (recommended): https://docs.astral.sh/uv/getting-started/installation/
+  - or `pip`
+  - or `pipx`
+
+### Install
+
+Recommended:
 
 ```bash
 uv tool install kenkui
-kenkui <your ebook name>.epub
 ```
 
-You can also install using pip or pipx!
+Alternatives if you prefer:
 
 ```bash
 pip install kenkui
+```
 
+```bash
 pipx install kenkui
 ```
 
-## Usage
+### Run
 
-You can pass a file or directory into kenkui, and it will search directories
-recursively for .epub files and convert them to m4b files.
+```bash
+kenkui book.epub
+```
 
-### Basic Examples
+That’s it. You’ll get a `book.m4b` alongside your EPUB.
+
+You can also point Kenkui at a directory, and it will recursively convert all EPUBs it finds.
+
+---
+
+## 📚 Usage
+
+You can pass either a single EPUB file or a directory.
 
 ```bash
 # Convert a single book
 kenkui book.epub
 
-# Convert entire library directory
+# Convert an entire library
 kenkui library/
 
 # Specify output directory
 kenkui book.epub -o output/
-
-# Use specific voice
-kenkui book.epub --voice alba
 ```
 
-### Voice Selection
+### 🎙️ Voice Selection
 
-Use `--voice` to specify the voice you want to use.
+Use `--voice` to choose a voice.
 
-- accepts:
-  - the eight default voices of pocket-tts (alba, marius, javert,
-    jean, fantine, cosette, eponine, azelma)
-  - .wav files locally on computer (kenkui ships with quite a few extra)
-  - voices from Hugging Face (hf://user/repo/voice.wav)
+Accepted inputs:
 
-Use `--list-voices` to see all available voices.
+- One of pocket-tts’s default voices:
+  ```
+  alba, marius, javert, jean, fantine, cosette, eponine, azelma
+  ```
+- A local `.wav` file
+- A Hugging Face-hosted voice:
+  ```
+  hf://user/repo/voice.wav
+  ```
 
-### Chapter Selection
-
-Use `--select-chapters` to interactively choose which chapters to convert.
-
-### Fix Audiobooks
-
-Use `--fix-audiobook` to fix existing M4B files:
+To see everything Kenkui can currently use:
 
 ```bash
-# Scan audiobook for missing chapters and fix metadata
-kenkui --fix-audiobook book.epub book.m4b
-
-# With verbose output
-kenkui --fix-audiobook book.epub book.m4b --verbose
-
-
+kenkui --list-voices
 ```
 
-What `--fix-audiobook` does:
-1. **Scans for missing chapters** - Compares EPUB table of contents with M4B chapters
-2. **Salvages existing audio** - Extracts matching chapters from existing M4B (no regeneration needed)
-3. **Generates missing chapters** - Asks to generate any chapters not found in M4B
-4. **Rebuilds audiobook** - Stitches all audio in proper EPUB chapter order
-5. **Embeds cover** - Extracts cover from EPUB and embeds into fixed M4B
-6. **Creates new file** - Outputs `book_fixed.m4b` (original preserved as backup)
+### 🎭 Custom Voices
 
-### Custom voices
+To use your own voice, record a **5–10 second** clip of clean speech with minimal background noise or crosstalk.
 
-In order to use your own custom voice, make sure to record a 5-10 second
-clip of the person speaking, with minimal background noise or crosstalk.
-We highly recommend using [some sort of tool](https://podcast.adobe.com/en/enhance) to clean the audio.
+Cleaning the audio makes a noticeable difference. Tools like Adobe’s Enhance Speech work well:
+https://podcast.adobe.com/en/enhance
 
-### Examples
+---
 
-```bash
-# Basic conversion
-kenkui book.epub
+## FAQ
 
-# With voice selection
-kenkui library/ --select-books --voice alba
-kenkui book.epub --select-chapters --voice ~/Downloads/voice.wav
+**Do I need a GPU?**  
+No. Kenkui is 100% CPU-based.
 
-# With output directory and workers
-kenkui book.epub -o output/ -w 4
+**Is it actually fast?**  
+Yes. That’s the entire point of the project.
 
-# Fix an existing audiobook
-kenkui --fix-audiobook book.epub book.m4b --verbose
-```
+**What output format does it use?**  
+M4B, with chapters, metadata, and embedded covers.
 
-## Notes
+**Can it generate MP3s?**  
+No. This is intentional — M4B is a significantly better format for audiobooks.
 
-At this time we do not plan on supporting mp3, not because it's hard, but
-because m4b is a wonderful format. There is also currently not support for
-ebook formats other than epub. I'm sure it'll get added in the future.
+**Does it support formats other than EPUB?**  
+Not currently. EPUB only, for now.
 
-For similar reasons, currently only pocket-tts is supported as the tts
-provider. It's the smallest, fastest, and most feature complete at the moment.
+**Does it upload my books anywhere?**  
+No. Everything runs locally. Internet access is only needed if you pull voices from Hugging Face.
 
-## Special Thanks
+---
 
-Thank you to the Guttenberg Project for providing some books included in
-kenkui!
+## Non-Goals
 
-## Changelog
+Kenkui is deliberately opinionated. It is not meant to be:
 
-### v0.4.0
+- A general-purpose text-to-speech framework
+- A GUI application
+- An MP3 audiobook generator
+- A pluggable frontend for every TTS backend available
 
-- **Automatic cover embedding** - Covers from EPUB are now automatically embedded into M4B output
-- **Fix audiobooks** - New `--fix-audiobook` command for:
-  - Detecting missing chapters via fuzzy title matching
-  - Salvaging existing audio from M4B files
-  - Generating only missing chapters
-  - Fixing metadata and embedding covers
-- **Fuzzy chapter matching** - Smart matching between EPUB and M4B chapter titles
-- **Chapter salvage** - Reuse existing audio instead of regenerating when possible
+The focus is narrow by design: fast, high-quality audiobook generation from EPUBs, with minimal friction.
+
+---
+
+## 🙏 Special Thanks
+
+Thanks to **Project Gutenberg** for providing some of the public-domain books included with Kenkui.
