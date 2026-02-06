@@ -142,7 +142,7 @@ No. Everything runs locally. Internet access is only needed if you pull voices f
 
 ## Non-Goals
 
-Kenkui is deliberately opinionated. It is not meant to be:
+kenkui is not meant to be:
 
 - A general-purpose text-to-speech framework
 - A GUI application
