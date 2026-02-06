@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.7+-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![License](https://img.shields.io/github/license/yourname/kenkui)
+![License](https://img.shields.io/github/license/D1zzl3D0p/kenkui)
 ![PyPI](https://img.shields.io/pypi/v/kenkui)
 
 > **Freaky fast audiobook generation from EPUBs. No GPU. No nonsense.**
