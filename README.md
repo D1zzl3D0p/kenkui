@@ -1,4 +1,4 @@
-# Kenkui
+# kenkui
 
 ![Python](https://img.shields.io/badge/python-3.7+-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -7,11 +7,11 @@
 
 > **Freaky fast audiobook generation from EPUBs. No GPU. No nonsense.**
 
-Kenkui turns EPUB ebooks into high-quality M4B audiobooks using state-of-the-art text-to-speech — **entirely on CPU**, and faster than anything else I’ve used.
+kenkui turns EPUB ebooks into high-quality M4B audiobooks using state-of-the-art text-to-speech — **entirely on CPU**, and faster than anything else I’ve used.
 
 It’s built on top of [Kyutai’s pocket-tts](https://github.com/kyutai-labs/pocket-tts), with all the annoying parts handled for you: chapter parsing, batching, metadata, covers, voices, and sane defaults.
 
-If you have ebooks and want audiobooks, Kenkui is for you.
+If you have ebooks and want audiobooks, kenkui is for you.
 
 ---
 
@@ -31,7 +31,7 @@ If you have ebooks and want audiobooks, Kenkui is for you.
 
 ## 🚀 Quick Start
 
-Kenkui is intentionally easy to install and easy to use.
+kenkui is intentionally easy to install and easy to use.
 
 ### Requirements
 
@@ -121,7 +121,7 @@ https://podcast.adobe.com/en/enhance
 ## FAQ
 
 **Do I need a GPU?**  
-No. Kenkui is 100% CPU-based.
+No. kenkui is 100% CPU-based.
 
 **Is it actually fast?**  
 Yes. That’s the entire point of the project.
