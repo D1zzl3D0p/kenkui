@@ -24,6 +24,9 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 
+# Import chapter classification
+from .chapter_classifier import ChapterClassifier, ChapterTags
+
 # Rich Imports
 from rich.progress import (
     Progress,
@@ -216,8 +219,8 @@ class EpubReader:
     def _parse_toc_structure(self) -> list[dict]:
         """Parse the EPUB TOC (NCX or NAV) into a structured list of chapters.
 
-        Returns a list of dicts with keys: title, href, src, is_chapter
-        Only returns actual chapters (filters out title pages, volumes, books, etc.)
+        Returns a list of dicts with keys: title, href, src
+        Returns ALL TOC entries (no filtering - filtering happens later via ChapterClassifier)
         """
         toc_file, toc_type = self.find_toc_file()
         chapters = []
@@ -242,15 +245,12 @@ class EpubReader:
                             src = content.get("src", "")
                             href = src.split("#")[0]
 
-                            # Determine if this is an actual chapter
-                            is_chapter = self._is_chapter_title(title)
-
+                            # Return ALL entries - classification happens later
                             chapters.append(
                                 {
                                     "title": title,
                                     "href": href,
                                     "src": src,
-                                    "is_chapter": is_chapter,
                                 }
                             )
                 else:
@@ -267,13 +267,12 @@ class EpubReader:
                             href = src.split("#")[0] if src else ""
 
                             if href:
-                                is_chapter = self._is_chapter_title(title)
+                                # Return ALL entries - classification happens later
                                 chapters.append(
                                     {
                                         "title": title,
                                         "href": href,
                                         "src": src,
-                                        "is_chapter": is_chapter,
                                     }
                                 )
         except Exception:
@@ -281,52 +280,6 @@ class EpubReader:
             pass
 
         return chapters
-
-    @staticmethod
-    def _is_chapter_title(title: str | None) -> bool:
-        """Determine if a TOC entry is an actual chapter (not volume/book/title page).
-
-        Chapters typically start with "CHAPTER" or are numbered sections.
-        """
-        if title is None:
-            return False
-        title_upper = title.upper()
-
-        # Skip these types of entries
-        # Note: BOOK and VOLUME are intentionally NOT skipped - these headers
-        # should appear as separate chapters to help with landmark navigation
-        skip_patterns = [
-            "CONTENTS",
-            "PREFACE",
-            "INTRODUCTION",
-            "TITLE",
-            "COPYRIGHT",
-            "TRANSLATED",
-            "ILLUSTRATIONS",
-            "LES MISÉRABLES",  # Skip duplicate title entries
-        ]
-
-        for pattern in skip_patterns:
-            if pattern in title_upper:
-                return False
-
-        # Check if it looks like a chapter, book, or volume
-        # Patterns check for CHAPTER/BOOK/VOLUME at start OR anywhere in title
-        chapter_patterns = [
-            r"CHAPTER\s+",  # CHAPTER anywhere in title
-            r"CHAP\.\s+",
-            r"BOOK\s+(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH|\d+|I+|II+|III+|IV+|V+|VI+|VII+|VIII+|IX+|X+)",
-            r"VOLUME\s+(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH|\d+|I+|II+|III+|IV+|V+|VI+|VII+|VIII+|IX+|X+)",
-            r"^\d+[\s\.—:]+",  # Starts with number followed by punctuation
-            r"^I+[\s\.—:]+",  # Roman numerals followed by punctuation
-        ]
-
-        for pattern in chapter_patterns:
-            if re.search(pattern, title, re.IGNORECASE):
-                return True
-
-        # If we have very few chapters, be more permissive
-        return False
 
     def extract_chapters(self, min_text_len: int = 50) -> list[Chapter]:
         """Extract chapters using TOC as ground truth, falling back to regex detection."""
@@ -348,18 +301,25 @@ class EpubReader:
         """Extract chapters using TOC structure as ground truth."""
         chapters = []
 
-        # Build a map of which TOC chapter each file belongs to
-        file_to_chapter_idx: dict[str, int] = {}
+        # Build a map of file -> list of (anchor, chapter_idx) tuples
+        # This handles cases where multiple chapters share the same HTML file
+        file_to_chapters: dict[str, list[tuple[str | None, int]]] = {}
         for idx, ch in enumerate(toc_chapters):
-            href = ch["href"]
-            if href not in file_to_chapter_idx:
-                file_to_chapter_idx[href] = idx
+            # Use 'src' which contains the full path including anchor fragment
+            src = ch["src"]
+            if "#" in src:
+                file_name, anchor = src.split("#", 1)
+            else:
+                file_name, anchor = src, None
+
+            if file_name not in file_to_chapters:
+                file_to_chapters[file_name] = []
+            file_to_chapters[file_name].append((anchor, idx))
 
         # Track paragraphs for each chapter
         chapter_paragraphs: dict[int, list[str]] = {
             i: [] for i in range(len(toc_chapters))
         }
-        current_chapter_idx = -1
 
         # Get all items in reading order
         for item in self.book.get_items():
@@ -368,9 +328,11 @@ class EpubReader:
 
             item_name = item.get_name()
 
-            # Check which chapter this file belongs to
-            if item_name in file_to_chapter_idx:
-                current_chapter_idx = file_to_chapter_idx[item_name]
+            # Check if this file has any chapters
+            if item_name not in file_to_chapters:
+                continue
+
+            chapter_entries = file_to_chapters[item_name]
 
             try:
                 content = item.get_content()
@@ -380,50 +342,84 @@ class EpubReader:
             soup = BeautifulSoup(content, "html.parser")
             self._clean_soup(soup)
 
-            # Extract text from all paragraphs and divs
-            for elem in soup.find_all(["p", "div"]):
-                # Skip nested elements
-                if elem.find_parent(["p", "div"]):
-                    continue
+            if len(chapter_entries) == 1:
+                # Single chapter in this file - assign all content to it
+                _, chapter_idx = chapter_entries[0]
+                for elem in soup.find_all(["p", "div"]):
+                    if elem.find_parent(["p", "div"]):
+                        continue
+                    text = self._clean_text(elem.get_text(" "))
+                    if text and len(text) >= 2:
+                        chapter_paragraphs[chapter_idx].append(text)
+            else:
+                # Multiple chapters in this file - need to split by anchor
+                # Sort chapters by their position in the document
+                sorted_entries = []
+                for anchor, chapter_idx in chapter_entries:
+                    if anchor:
+                        elem = soup.find(id=anchor) or soup.find(attrs={"name": anchor})
+                        if elem:
+                            # Count how many elements come before this anchor
+                            position = len(list(elem.find_all_previous()))
+                            sorted_entries.append((position, anchor, chapter_idx))
+                        else:
+                            # Anchor not found, put at end
+                            sorted_entries.append((float("inf"), anchor, chapter_idx))
+                    else:
+                        # No anchor - assume this is the first chapter (position 0)
+                        sorted_entries.append((0, anchor, chapter_idx))
 
-                text = self._clean_text(elem.get_text(" "))
-                if text and len(text) >= 2:
-                    # Add to current chapter if we have one
-                    if current_chapter_idx >= 0 and current_chapter_idx < len(
-                        toc_chapters
-                    ):
-                        chapter_paragraphs[current_chapter_idx].append(text)
+                sorted_entries.sort(key=lambda x: x[0])
+
+                # Now extract content for each chapter
+                for i, (pos, anchor, chapter_idx) in enumerate(sorted_entries):
+                    if anchor:
+                        start_elem = soup.find(id=anchor) or soup.find(
+                            attrs={"name": anchor}
+                        )
+                    else:
+                        # No anchor - start from beginning
+                        start_elem = None
+
+                    # Determine where this chapter ends
+                    if i + 1 < len(sorted_entries):
+                        _, next_anchor, _ = sorted_entries[i + 1]
+                        if next_anchor:
+                            end_elem = soup.find(id=next_anchor) or soup.find(
+                                attrs={"name": next_anchor}
+                            )
+                        else:
+                            end_elem = None
+                    else:
+                        end_elem = None
+
+                    # Extract all paragraphs between start and end elements
+                    if start_elem:
+                        current = start_elem.find_next_sibling()
+                    else:
+                        # Start from beginning of document
+                        current = soup.find(["p", "div"])
+
+                    while current and current != end_elem:
+                        if current.name in ["p", "div"]:
+                            if not current.find_parent(["p", "div"]):
+                                text = self._clean_text(current.get_text(" "))
+                                if text and len(text) >= 2:
+                                    chapter_paragraphs[chapter_idx].append(text)
+                        current = current.find_next_sibling()
 
         # Create Chapter objects from TOC with accumulated paragraphs
         chapter_idx = 1
         for toc_idx, toc_ch in enumerate(toc_chapters):
             paragraphs = chapter_paragraphs[toc_idx]
 
-            # Skip non-chapter entries and empty chapters
-            if not toc_ch["is_chapter"]:
-                continue
+            # Classify chapter using ChapterClassifier
+            tags = ChapterClassifier.classify(toc_ch["title"])
 
-            # Check if this is a book/volume header (should be included even if empty)
-            is_book_header = bool(
-                re.search(
-                    r"^BOOK\s+(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH|I+|II+|III+|IV+|V+|VI+|VII+|VIII+|IX+|X+)",
-                    toc_ch["title"],
-                    re.IGNORECASE,
-                )
-            )
-            is_volume_header = bool(
-                re.search(
-                    r"^VOLUME\s+(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH|I+|II+|III+|IV+|V+|VI+|VII+|VIII+|IX+|X+|\d+)",
-                    toc_ch["title"],
-                    re.IGNORECASE,
-                )
-            )
-
-            # Include book/volume headers even if they have no paragraphs (they're landmarks)
-            if is_book_header or is_volume_header:
-                chapters.append(Chapter(chapter_idx, toc_ch["title"], []))
-                chapter_idx += 1
-            elif paragraphs:
+            # Include ALL chapters (filtering happens later via ChapterFilter)
+            # For chapters with content, include the paragraphs
+            # For chapters without content (like part dividers), include empty list
+            if paragraphs:
                 content = " ".join(paragraphs)
                 if len(content) >= min_text_len:
                     # Clean up paragraphs (remove title from first paragraph if repeated)
@@ -432,10 +428,29 @@ class EpubReader:
                     ):
                         paragraphs = paragraphs[1:]
 
-                    # Store original paragraphs for accurate progress tracking
-                    # Batching happens in the worker, not here
-                    chapters.append(Chapter(chapter_idx, toc_ch["title"], paragraphs))
+                    chapters.append(
+                        Chapter(
+                            index=chapter_idx,
+                            title=toc_ch["title"],
+                            paragraphs=paragraphs,
+                            tags=tags,
+                            toc_index=toc_idx,
+                        )
+                    )
                     chapter_idx += 1
+            else:
+                # Include chapters without paragraphs (like part/book dividers)
+                # These will be filtered by ChapterFilter based on user preferences
+                chapters.append(
+                    Chapter(
+                        index=chapter_idx,
+                        title=toc_ch["title"],
+                        paragraphs=[],
+                        tags=tags,
+                        toc_index=toc_idx,
+                    )
+                )
+                chapter_idx += 1
 
         return chapters
 
@@ -534,7 +549,12 @@ class EpubReader:
         return chapters
 
     def _add_chapter(
-        self, chapters: list[Chapter], title: str, paragraphs: list[str], min_len: int
+        self,
+        chapters: list[Chapter],
+        title: str,
+        paragraphs: list[str],
+        min_len: int,
+        toc_index: int = 0,
     ):
         content = " ".join(paragraphs)
         if len(content) < min_len:
@@ -547,9 +567,20 @@ class EpubReader:
         if paragraphs and final_title.lower().endswith(paragraphs[0].lower()):
             paragraphs = paragraphs[1:]
 
+        # Classify the chapter
+        tags = ChapterClassifier.classify(final_title)
+
         # Store original paragraphs for accurate progress tracking
         # Batching happens in the worker, not here
-        chapters.append(Chapter(len(chapters) + 1, final_title, paragraphs))
+        chapters.append(
+            Chapter(
+                index=len(chapters) + 1,
+                title=final_title,
+                paragraphs=paragraphs,
+                tags=tags,
+                toc_index=toc_index,
+            )
+        )
 
     def _build_toc_map(self) -> dict[str, str]:
         toc_map = {}
@@ -1070,18 +1101,34 @@ class AudioBuilder:
     def run(self):
         """Main entry point for audiobook creation"""
         reader = EpubReader(self.cfg.epub_path, self.cfg.verbose)
-        chapters = reader.extract_chapters()
 
-        if not chapters:
+        # Extract ALL chapters with tags
+        all_chapters = reader.extract_chapters()
+
+        if not all_chapters:
             self.console.print("[red]No chapters found in EPUB[/red]")
             return False
 
+        # Apply default filter preset
+        from .chapter_filter import ChapterFilter
+
+        chapters = ChapterFilter.apply_preset(
+            all_chapters, self.cfg.chapter_filter_preset
+        )
+
+        self.console.print(
+            f"[dim]Extracted {len(all_chapters)} chapters, "
+            f"{len(chapters)} after '{self.cfg.chapter_filter_preset}' filter[/dim]"
+        )
+
         # Interactive chapter selection if requested
         if self.cfg.interactive_chapters:
-            from .helpers import interactive_select
+            from .chapter_selector import interactive_select_chapters
 
-            chapters = interactive_select(
-                chapters, "Available Chapters", self.console, lambda ch: ch.title
+            chapters = interactive_select_chapters(
+                all_chapters,  # Pass all so user can change filters
+                self.console,
+                initial_preset=self.cfg.chapter_filter_preset,
             )
             if not chapters:
                 self.console.print("[yellow]No chapters selected[/yellow]")

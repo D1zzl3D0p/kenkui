@@ -24,6 +24,9 @@ from .helpers import (
 )
 from .parsing import EpubReader, AudioBuilder
 from .workers import worker_process_chapter
+from .chapter_classifier import ChapterTags, ChapterClassifier
+from .chapter_filter import ChapterFilter, FilterPreset
+from .chapter_selector import interactive_select_chapters, ChapterSelectorApp
 
 __version__ = "0.3.5"
 __author__ = "Sumner MacArthur"
@@ -36,6 +39,13 @@ __all__ = [
     "AudioResult",
     "EpubReader",
     "AudioBuilder",
+    # Chapter classification
+    "ChapterTags",
+    "ChapterClassifier",
+    "ChapterFilter",
+    "FilterPreset",
+    "interactive_select_chapters",
+    "ChapterSelectorApp",
     # Functions
     "parse_range_string",
     "interactive_select",

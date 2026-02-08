@@ -25,6 +25,7 @@ dependencies = [
   "pydub>=0.25.0",
   "pocket-tts>=1.0.0",
   "mutagen>=1.45.0",
+  "textual>=0.85.0",
 ]
 
 scripts = { kenkui = "kenkui.cli:main" }

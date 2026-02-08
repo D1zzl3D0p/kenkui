@@ -47,6 +47,44 @@ def suppress_c_stderr():
         os.close(original_stderr_fd)
 
 
+def print_abbreviated_help():
+    """Print abbreviated help with examples when no arguments provided."""
+    help_text = """
+[bold cyan]Kenkui - EPUB to Audiobook Converter[/bold cyan]
+
+[bold]Usage:[/bold]
+  kenkui <epub_file_or_directory> [options]
+
+[bold]Quick Examples:[/bold]
+  # Convert a single book with default voice
+  kenkui book.epub
+
+  # Use a specific voice
+  kenkui book.epub --voice AlbusDumbledore
+
+  # Process all books in a directory
+  kenkui ~/books/
+
+  # Interactive chapter selection
+  kenkui book.epub --select-chapters
+
+  # Use different chapter filter preset
+  kenkui book.epub --chapter-preset all
+
+[bold]Common Options:[/bold]
+  --voice NAME          TTS voice (default: alba)
+  -o, --output DIR      Output directory
+  --select-chapters     Interactive chapter selection
+  --chapter-preset      Filter: all|content-only|chapters-only|with-parts
+  --list-voices         Show available voices
+  -v, --verbose         Show detailed logs
+
+[dim]Use --help for full options[/dim]
+"""
+    console = Console()
+    console.print(help_text)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert EPUB files to audiobooks with custom voice support."
@@ -86,7 +124,13 @@ def main():
     parser.add_argument(
         "--select-chapters",
         action="store_true",
-        help="Pick chapters interactively",
+        help="Pick chapters interactively with filter options",
+    )
+    parser.add_argument(
+        "--chapter-preset",
+        choices=["all", "content-only", "chapters-only", "with-parts"],
+        default="content-only",
+        help="Initial filter preset for chapter selection (default: content-only)",
     )
     parser.add_argument(
         "--list-voices",
@@ -149,6 +193,7 @@ def main():
             keep_temp=args.keep,
             debug_html=args.debug,
             interactive_chapters=args.select_chapters,
+            chapter_filter_preset=args.chapter_preset,
             verbose=args.verbose,
         )
 
@@ -158,6 +203,11 @@ def main():
     # Handle --list-voices
     if args.list_voices:
         print_available_voices(console)
+        return
+
+    # Show abbreviated help if no input provided
+    if args.input is None:
+        print_abbreviated_help()
         return
 
     # Validate input
@@ -203,13 +253,15 @@ def main():
             keep_temp=args.keep,
             debug_html=args.debug,
             interactive_chapters=args.select_chapters,
+            chapter_filter_preset=args.chapter_preset,
             verbose=args.verbose,
         )
 
         builder = AudioBuilder(cfg)
         try:
-            # Suppress C-level stderr unless in verbose mode
-            if not args.verbose:
+            # Suppress C-level stderr unless in verbose mode or interactive selection
+            # (interactive mode needs full terminal control)
+            if not args.verbose and not args.select_chapters:
                 with suppress_c_stderr():
                     builder.run()
             else:

@@ -1,6 +1,6 @@
 import sys
 import importlib.resources
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Any
 
@@ -16,6 +16,8 @@ from huggingface_hub.errors import (
     GatedRepoError,
     RepositoryNotFoundError,
 )
+
+from .chapter_classifier import ChapterTags
 
 # --- CONSTANTS ---
 
@@ -52,6 +54,7 @@ class Config:
     model_name: str = "pocket-tts"
     elevenlabs_key: str = ""
     elevenlabs_turbo: bool = False
+    chapter_filter_preset: str = "content-only"  # New field for Phase 2
 
 
 @dataclass
@@ -59,6 +62,8 @@ class Chapter:
     index: int
     title: str
     paragraphs: list[str]
+    tags: ChapterTags = field(default_factory=lambda: ChapterTags(is_chapter=True))
+    toc_index: int = 0
 
 
 @dataclass

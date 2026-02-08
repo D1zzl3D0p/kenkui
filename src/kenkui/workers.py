@@ -1,3 +1,5 @@
+import importlib
+import importlib.resources
 import io
 import os
 import multiprocessing
@@ -11,7 +13,7 @@ from urllib.parse import urlparse
 from pydub import AudioSegment
 import scipy.io.wavfile
 
-from .helpers import Chapter, AudioResult
+from .helpers import Chapter, AudioResult, get_bundled_voices
 
 
 def _load_voice(voice: str, verbose: bool = False) -> str:
@@ -60,6 +62,21 @@ def _load_voice(voice: str, verbose: bool = False) -> str:
         if verbose:
             print(f"[Voice] Using local file: {voice_path}")
         return str(voice_path)
+
+    # Check if it's a bundled voice (without .wav extension)
+    voice_filename = f"{voice}.wav"
+    bundled_voices = get_bundled_voices()
+    if voice_filename in bundled_voices:
+        try:
+            pkg_name = "kenkui"
+            # Get the path to the voice file in the bundled voices directory
+            voice_file = importlib.resources.files(pkg_name) / "voices" / voice_filename
+            if verbose:
+                print(f"[Voice] Using bundled voice: {voice_file}")
+            return str(voice_file)
+        except Exception:
+            # Fall through to built-in voice if we can't resolve the bundled voice
+            pass
 
     # Otherwise, assume it's a built-in voice name
     if verbose:
