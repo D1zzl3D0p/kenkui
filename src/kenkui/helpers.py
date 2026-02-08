@@ -18,19 +18,7 @@ from huggingface_hub.errors import (
 )
 
 from .chapter_classifier import ChapterTags
-
-# --- CONSTANTS ---
-
-DEFAULT_VOICES = [
-    "alba",
-    "marius",
-    "javert",
-    "jean",
-    "fantine",
-    "cosette",
-    "eponine",
-    "azelma",
-]
+from .utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
 
 # Helper Classes
 
@@ -286,20 +274,6 @@ def get_bundled_voices():
 
 def print_available_voices(console: Console):
     """Prints a styled table of all available voices."""
-
-    # --- CONSTANTS ---
-    # Adjust this list to match the actual defaults provided by your underlying library
-    DEFAULT_VOICES = [
-        "alba",
-        "marius",
-        "javert",
-        "jean",
-        "fantine",
-        "cosette",
-        "eponine",
-        "azelma",
-    ]
-
     table = Table(
         title="Available Voices", show_header=True, header_style="bold magenta"
     )
@@ -309,25 +283,7 @@ def print_available_voices(console: Console):
 
     # Add Built-in Defaults
     for voice in DEFAULT_VOICES:
-        # Determine rough description based on prefix conventions (af=American Female, etc)
-        desc = "Standard Voice"
-        if voice.startswith("alba"):
-            desc = "American Male"
-        elif voice.startswith("marius"):
-            desc = "American Male"
-        elif voice.startswith("javert"):
-            desc = "American Male"
-        elif voice.startswith("jean"):
-            desc = "American Male"
-        elif voice.startswith("fantine"):
-            desc = "British Female"
-        elif voice.startswith("cosette"):
-            desc = "American Female"
-        elif voice.startswith("eponine"):
-            desc = "British Female"
-        elif voice.startswith("azelma"):
-            desc = "American Female"
-
+        desc = VOICE_DESCRIPTIONS.get(voice, "Standard Voice")
         table.add_row("Built-in", voice, desc)
 
     # Add Custom Voices found in package

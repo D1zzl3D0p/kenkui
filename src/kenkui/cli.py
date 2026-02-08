@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from rich.console import Console
 
 # Local imports
+from . import __version__
 from .parsing import AudioBuilder
 from .helpers import (
     Config,
@@ -157,7 +158,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.4.2",
+        version=f"%(prog)s {__version__}",
         help="Show version information and exit",
     )
 

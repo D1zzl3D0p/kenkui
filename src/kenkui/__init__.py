@@ -12,6 +12,8 @@ Example:
     >>> builder.run()
 """
 
+import importlib.metadata
+
 from .helpers import (
     Config,
     Chapter,
@@ -28,7 +30,11 @@ from .chapter_classifier import ChapterTags, ChapterClassifier
 from .chapter_filter import ChapterFilter, FilterPreset
 from .chapter_selector import interactive_select_chapters, ChapterSelectorApp
 
-__version__ = "0.3.5"
+try:
+    __version__ = importlib.metadata.version("kenkui")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "0.5.0"
+
 __author__ = "Sumner MacArthur"
 __license__ = "GPL-3.0"
 

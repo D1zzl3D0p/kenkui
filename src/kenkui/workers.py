@@ -14,6 +14,7 @@ from pydub import AudioSegment
 import scipy.io.wavfile
 
 from .helpers import Chapter, AudioResult, get_bundled_voices
+from .utils import batch_text
 
 
 def _load_voice(voice: str, verbose: bool = False) -> str:
@@ -84,38 +85,6 @@ def _load_voice(voice: str, verbose: bool = False) -> str:
     return voice
 
 
-def _batch_text(paragraphs: list[str], max_chars: int = 1000) -> list[str]:
-    """Batch paragraphs into ~max_chars character chunks, splitting long paragraphs at sentence boundaries."""
-    batched = []
-
-    for p in paragraphs:
-        # If paragraph exceeds max_chars, split it at sentence boundaries
-        if len(p) > max_chars:
-            sentences = re.split(r"(?<=[.!?])\s+", p)
-            current_chunk = []
-            current_len = 0
-
-            for sentence in sentences:
-                sent_len = len(sentence)
-                # Check if adding this sentence exceeds max_chars
-                if current_len + sent_len + (1 if current_chunk else 0) > max_chars:
-                    if current_chunk:
-                        batched.append(" ".join(current_chunk))
-                    current_chunk = [sentence]
-                    current_len = sent_len
-                else:
-                    current_chunk.append(sentence)
-                    current_len += sent_len + (1 if len(current_chunk) > 1 else 0)
-
-            if current_chunk:
-                batched.append(" ".join(current_chunk))
-        else:
-            # Normal case: paragraph fits within max_chars, add as-is
-            batched.append(p)
-
-    return batched
-
-
 def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[int, int]:
     """Pre-calculate batch count and total characters for a chapter.
 
@@ -126,7 +95,7 @@ def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[in
         tuple of (batch_count, total_characters)
     """
     batch_size = 250 if is_first_chapter else 800
-    batches = _batch_text(chapter.paragraphs, max_chars=batch_size)
+    batches = batch_text(chapter.paragraphs, max_chars=batch_size)
     total_chars = sum(len(batch) for batch in batches)
     return len(batches), total_chars
 
@@ -174,7 +143,7 @@ def worker_process_chapter(
 
         # Adaptive batching: smaller batches for first chapter (better ETA), larger for rest (performance)
         batch_size = 250 if is_first_chapter else 800
-        batches = _batch_text(chapter.paragraphs, max_chars=batch_size)
+        batches = batch_text(chapter.paragraphs, max_chars=batch_size)
         total_batches = len(batches)
         total_chars = sum(len(batch) for batch in batches)
         log_message(

@@ -1,6 +1,4 @@
-"""
-Fix audiobook functionality - scans for missing chapters, salvages existing audio, and fixes metadata
-"""
+"""Fix audiobook functionality - scans for missing chapters, salvages existing audio, and fixes metadata."""
 
 import os
 import sys
@@ -9,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import io
+import json
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from difflib import SequenceMatcher
@@ -20,9 +19,8 @@ from rich.panel import Panel
 
 from .helpers import Config, Chapter
 from .parsing import EpubReader
+from .utils import extract_epub_cover, batch_text
 
-
-# Mutagen import for cover embedding only
 try:
     from mutagen.mp4 import MP4, MP4Cover
 
@@ -31,97 +29,7 @@ except ImportError:
     MUTAGEN_AVAILABLE = False
 
 
-def extract_epub_cover(epub_path: Path) -> Tuple[Optional[bytes], Optional[str]]:
-    """Extract cover image from EPUB file."""
-    try:
-        import zipfile
-        import xml.etree.ElementTree as ET
-
-        with zipfile.ZipFile(str(epub_path), "r") as epub:
-            try:
-                container = epub.read("META-INF/container.xml")
-                tree = ET.fromstring(container)
-
-                ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
-                rootfile = tree.find(".//container:rootfile", ns)
-                if rootfile is None:
-                    return None, None
-
-                opf_path = rootfile.get("full-path")
-                if opf_path is None:
-                    return None, None
-
-                opf_content = epub.read(opf_path)
-                opf_tree = ET.fromstring(opf_content)
-
-                namespaces = {
-                    "opf": "http://www.idpf.org/2007/opf",
-                    "dc": "http://purl.org/dc/elements/1.1/",
-                }
-
-                cover_id = None
-
-                for meta in opf_tree.findall('.//opf:meta[@name="cover"]', namespaces):
-                    cover_id = meta.get("content")
-                    break
-
-                if not cover_id:
-                    for item in opf_tree.findall(
-                        './/opf:item[@properties="cover-image"]', namespaces
-                    ):
-                        cover_id = item.get("id")
-                        break
-
-                if cover_id:
-                    for item in opf_tree.findall(".//opf:item", namespaces):
-                        if item.get("id") == cover_id:
-                            cover_href = item.get("href")
-                            if cover_href is None:
-                                continue
-                            mime_type = item.get("media-type", "") or "image/jpeg"
-                            opf_dir = os.path.dirname(opf_path) or ""
-                            cover_path = os.path.join(opf_dir, cover_href).replace(
-                                "\\", "/"
-                            )
-
-                            cover_data = epub.read(cover_path)
-
-                            if not mime_type:
-                                ext = os.path.splitext(cover_path)[1].lower()
-                                mime_type = {
-                                    ".jpg": "image/jpeg",
-                                    ".jpeg": "image/jpeg",
-                                    ".png": "image/png",
-                                }.get(ext, "image/jpeg")
-
-                            return cover_data, mime_type
-
-                for name in epub.namelist():
-                    lower_name = name.lower()
-                    if "cover" in lower_name and any(
-                        lower_name.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
-                    ):
-                        cover_data = epub.read(name)
-                        ext = os.path.splitext(name)[1].lower()
-                        mime_type = {
-                            ".jpg": "image/jpeg",
-                            ".jpeg": "image/jpeg",
-                            ".png": "image/png",
-                        }.get(ext, "image/jpeg")
-                        return cover_data, mime_type
-
-            except Exception as e:
-                print(f"Error extracting cover: {e}", file=sys.stderr)
-                return None, None
-
-    except Exception as e:
-        print(f"Error opening EPUB: {e}", file=sys.stderr)
-        return None, None
-
-    return None, None
-
-
-def embed_cover_in_m4b(m4b_path: Path, cover_data: bytes, mime_type: str) -> bool:
+def _embed_cover_in_m4b(m4b_path: Path, cover_data: bytes, mime_type: str) -> bool:
     """Embed cover image into M4B file using mutagen."""
     if not MUTAGEN_AVAILABLE:
         print(
@@ -132,28 +40,9 @@ def embed_cover_in_m4b(m4b_path: Path, cover_data: bytes, mime_type: str) -> boo
     try:
         from mutagen.mp4 import MP4, MP4Cover
 
-        if mime_type == "image/png":
-            image_format = MP4Cover.FORMAT_PNG
-        else:
-            image_format = MP4Cover.FORMAT_JPEG
-
-        audio = MP4(str(m4b_path))
-        audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
-        audio.save()
-
-        print(f"Successfully embedded cover into {m4b_path}")
-        return True
-
-    except Exception as e:
-        print(f"Error embedding cover: {e}", file=sys.stderr)
-        return False
-
-    try:
-        if mime_type == "image/png":
-            image_format = MP4Cover.FORMAT_PNG
-        else:
-            image_format = MP4Cover.FORMAT_JPEG
-
+        image_format = (
+            MP4Cover.FORMAT_PNG if mime_type == "image/png" else MP4Cover.FORMAT_JPEG
+        )
         audio = MP4(str(m4b_path))
         audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
         audio.save()
@@ -422,18 +311,6 @@ def generate_missing_audio(
             full_audio = AudioSegment.empty()
             silence = AudioSegment.silent(duration=pause_line_ms)
 
-            def batch_text(paragraphs, max_chars=1000):
-                batched, current, curr_len = [], [], 0
-                for p in paragraphs:
-                    if current and (curr_len + len(p) > max_chars):
-                        batched.append(" ".join(current))
-                        current, curr_len = [], 0
-                    current.append(p)
-                    curr_len += len(p)
-                if current:
-                    batched.append(" ".join(current))
-                return batched
-
             batches = batch_text(chapter.paragraphs)
 
             for batch in batches:
@@ -663,7 +540,7 @@ def fix_audiobook(
 
         # Embed cover if available
         if cover_data and mime_type:
-            success = embed_cover_in_m4b(output_path, cover_data, mime_type)
+            success = _embed_cover_in_m4b(output_path, cover_data, mime_type)
             if success:
                 console.print("[green]Cover embedded successfully[/green]")
 

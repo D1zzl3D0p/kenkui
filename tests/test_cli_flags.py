@@ -61,14 +61,15 @@ class TestBasicCLI:
         assert "alba" in result.stdout
 
     def test_no_input_shows_help(self):
-        """Test that running without input shows help and error."""
+        """Test that running without input shows abbreviated help."""
         result = subprocess.run(
             [sys.executable, "-m", "kenkui"],
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 1
-        assert "input argument is required" in result.stdout or "Error" in result.stdout
+        assert result.returncode == 0
+        assert "Kenkui - EPUB to Audiobook Converter" in result.stdout
+        assert "Usage:" in result.stdout
 
     def test_epub_file_not_found(self):
         """Test error handling for non-existent EPUB file."""
