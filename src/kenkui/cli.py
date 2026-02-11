@@ -3,30 +3,31 @@ EPUB to Audiobook Converter
 Batch Processing + Auto-Naming + Chapter Filtering
 """
 
-import os
-
-# Performance tuning
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-
 import argparse
+import logging
 import multiprocessing
-import shutil
+import os
 import sys
 import warnings
 from pathlib import Path
 from contextlib import contextmanager
 from rich.console import Console
 
-# Local imports
-from . import __version__
-from .chapter_filter import FilterOperation
-from .parsing import AudioBuilder
-from .helpers import (
+# Performance tuning (must be before other imports)
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+# Local imports  # noqa: E402
+from . import __version__  # noqa: E402
+from .chapter_filter import FilterOperation  # noqa: E402
+from .parsing import AudioBuilder  # noqa: E402
+from .helpers import (  # noqa: E402
     Config,
     check_huggingface_access,
     print_available_voices,
+    print_chapter_presets,
+    select_books_interactive,
 )
 
 warnings.filterwarnings("ignore")
@@ -50,24 +51,23 @@ def suppress_c_stderr():
 
 def print_abbreviated_help():
     """Print abbreviated help with examples when no arguments provided."""
-    help_text = """
-[bold cyan]Kenkui - EPUB to Audiobook Converter[/bold cyan]
+    help_text = """[bold cyan]Kenkui - EPUB to Audiobook Converter[/bold cyan]
 
 [bold]Usage:[/bold]
   kenkui <epub_file_or_directory> [options]
 
-    [bold]Quick Examples:[/bold]
+[bold]Quick Examples:[/bold]
   # Convert a single book with default voice
   kenkui book.epub
 
   # Use a specific voice
-  kenkui book.epub --voice AlbusDumbledore
+  kenkui book.epub -v AlbusDumbledore
 
   # Process all books in a directory
   kenkui ~/books/
 
   # Filter chapters with regex patterns
-  kenkui book.epub --include-chapter "Chapter.*" --exclude-chapter "Appendix"
+  kenkui book.epub -i "Chapter.*" -e "Appendix"
 
   # Use chapter filter preset
   kenkui book.epub --chapter-preset content-only
@@ -76,14 +76,18 @@ def print_abbreviated_help():
   kenkui book.epub --preview
 
 [bold]Common Options:[/bold]
-  --voice NAME          TTS voice (default: alba)
+  -v, --voice NAME      TTS voice (default: alba)
   -o, --output DIR      Output directory
-  --chapter-preset      Filter: all|content-only|chapters-only|with-parts
-  --include-chapter     Include chapters matching regex (repeatable)
-  --exclude-chapter     Exclude chapters matching regex (repeatable)
+  --chapter-preset      Filter: none|all|content-only|chapters-only|with-parts
+  -i, --include-chapter Include chapters matching regex (repeatable)
+  -e, --exclude-chapter Exclude chapters matching regex (repeatable)
+  --select-books        Interactively select books from directory (default)
+  --no-select-books     Process all books without prompting
   --preview             Preview what would be converted
   --list-voices         Show available voices
-  -v, --verbose         Show detailed logs
+  --list-chapter-presets  Show available chapter filter presets
+  --log FILE            Log detailed output to file
+  --verbose             Show detailed logs
 
 [dim]Use --help for full options[/dim]
 """
@@ -103,6 +107,7 @@ def main():
         help="EPUB file or directory",
     )
     parser.add_argument(
+        "-v",
         "--voice",
         default="alba",
         help="TTS voice name (see --list-voices)",
@@ -132,20 +137,20 @@ def main():
     chapter_filter_group = parser.add_argument_group("chapter filtering")
     chapter_filter_group.add_argument(
         "--chapter-preset",
-        choices=["all", "content-only", "chapters-only", "with-parts"],
+        choices=["none", "all", "content-only", "chapters-only", "with-parts"],
         action="append",
         dest="chapter_presets",
         help="Chapter filter preset (repeatable, later overrides earlier)",
     )
     chapter_filter_group.add_argument(
-        "-I",
+        "-i",
         "--include-chapter",
         action="append",
         dest="chapter_includes",
         help="Regex pattern to include chapters by title (repeatable)",
     )
     chapter_filter_group.add_argument(
-        "-X",
+        "-e",
         "--exclude-chapter",
         action="append",
         dest="chapter_excludes",
@@ -163,7 +168,11 @@ def main():
         help="Display all available voices",
     )
     parser.add_argument(
-        "-v",
+        "--list-chapter-presets",
+        action="store_true",
+        help="Display all available chapter filter presets",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Show all worker logs and TTS output (not sent to /dev/null)",
@@ -180,14 +189,48 @@ def main():
         help="Keep temporary files (for debugging)",
     )
     parser.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help="Log file path for detailed output logging",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
         help="Show version information and exit",
     )
+    parser.add_argument(
+        "--select-books",
+        action="store_true",
+        default=True,
+        help="Interactively select books when processing a directory (default: True)",
+    )
+    parser.add_argument(
+        "--no-select-books",
+        action="store_false",
+        dest="select_books",
+        help="Process all books in directory without selection prompt",
+    )
 
     args = parser.parse_args()
     console = Console()
+
+    # Setup logging if log file path provided
+    if args.log:
+        # Ensure log directory exists
+        args.log.parent.mkdir(parents=True, exist_ok=True)
+
+        # Configure logging
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        logging.basicConfig(
+            level=logging.DEBUG if args.verbose else logging.INFO,
+            format=log_format,
+            handlers=[
+                logging.FileHandler(args.log, mode="w"),
+            ],
+        )
+        console.print(f"[dim]Logging to: {args.log}[/dim]")
 
     def build_chapter_operations(
         presets: list[str] | None,
@@ -197,12 +240,19 @@ def main():
         """Build filter operations from CLI arguments."""
         operations: list[FilterOperation] = []
 
-        # Track which arguments were provided to apply default if needed
-        has_any_filter = bool(presets or includes or excludes)
+        # Track which arguments were provided
+        has_preset = bool(presets)
+        has_include = bool(includes)
+        has_exclude = bool(excludes)
 
-        if not has_any_filter:
-            # Default to content-only preset if no filters specified
+        # Default to content-only preset if no filters specified at all
+        if not has_preset and not has_include and not has_exclude:
             return [FilterOperation("preset", "content-only")]
+
+        # If includes are provided but no preset, default to the default preset first
+        # This allows -i to add to the default selection instead of starting empty
+        if has_include and not has_preset:
+            operations.append(FilterOperation("preset", "content-only"))
 
         # Build operations in the order: presets, includes, excludes
         # (presets should generally come first to establish base selection)
@@ -265,6 +315,11 @@ def main():
         print_available_voices(console)
         return
 
+    # Handle --list-chapter-presets
+    if args.list_chapter_presets:
+        print_chapter_presets(console)
+        return
+
     # Show abbreviated help if no input provided
     if args.input is None:
         print_abbreviated_help()
@@ -272,40 +327,91 @@ def main():
 
     # Validate input
     if not args.input.exists():
-        console.print(f"[red]Error: Path '{args.input}' does not exist.[/red]")
+        error_msg = f"Path '{args.input}' does not exist."
+        logging.error(error_msg)
+        console.print(f"[red]Error: {error_msg}[/red]")
         sys.exit(1)
+
+    logging.info(f"Processing input: {args.input}")
 
     # Build queue
     if args.input.is_dir():
         queue_files = sorted(args.input.glob("*.epub"))
+        logging.info(f"Found {len(queue_files)} EPUB files in directory")
     else:
         queue_files = [args.input]
+        logging.info(f"Processing single file: {args.input}")
 
     if not queue_files:
+        logging.error("No EPUB files found in input path")
         console.print("[red]No EPUB files found in input path.[/red]")
         sys.exit(1)
 
+    # Interactive book selection for directories with multiple books
+    is_multi_book = len(queue_files) > 1
+    if is_multi_book and args.select_books:
+        if args.preview:
+            # In preview mode, show selector first
+            queue_files = select_books_interactive(queue_files, console)
+            if not queue_files:
+                console.print("[yellow]No books selected. Exiting.[/yellow]")
+                sys.exit(0)
+        else:
+            # In normal mode, show selector
+            queue_files = select_books_interactive(queue_files, console)
+            if not queue_files:
+                console.print("[yellow]No books selected. Exiting.[/yellow]")
+                sys.exit(0)
+
     console.print(f"[bold green]Queue:[/bold green] {len(queue_files)} books.")
+    logging.info(f"Queue: {len(queue_files)} books to process")
 
     check_huggingface_access()
+    logging.info("HuggingFace access check completed")
+
+    # Create base output directory for multi-book processing
+    base_output_path = args.output
+    if is_multi_book and base_output_path is None:
+        # Default to input directory if not specified
+        base_output_path = args.input if args.input.is_dir() else args.input.parent
 
     # Process Queue
     for idx, epub_file in enumerate(queue_files, 1):
         console.rule(f"[bold magenta]Processing Book {idx}/{len(queue_files)}")
+        logging.info(f"Processing book {idx}/{len(queue_files)}: {epub_file}")
 
         # Validate voice parameter
         voice = args.voice.strip() if args.voice else "alba"
         if not voice or voice.lower() == "voice":
+            error_msg = "Invalid voice name"
+            logging.error(error_msg)
             console.print(
-                "[red]Error: Invalid voice name. Please specify a valid voice using --voice[/red]"
+                f"[red]Error: {error_msg}. Please specify a valid voice using --voice[/red]"
             )
             console.print("[dim]Use --list-voices to see available options[/dim]")
             sys.exit(1)
 
+        logging.info(f"Using voice: {voice}")
+
+        # Create book-specific output directory for multi-book processing
+        book_output_path = args.output
+        if is_multi_book:
+            # Create subdirectory for each book
+            book_name = epub_file.stem
+            if book_output_path:
+                book_output_path = book_output_path / book_name
+            else:
+                # Default: create subdirectory in input directory
+                book_output_path = epub_file.parent / book_name
+
+            # Ensure the directory exists
+            book_output_path.mkdir(parents=True, exist_ok=True)
+            logging.info(f"Created output directory: {book_output_path}")
+
         cfg = Config(
             voice=voice,
             epub_path=epub_file,
-            output_path=args.output,
+            output_path=book_output_path,
             pause_line_ms=400,
             pause_chapter_ms=2000,
             workers=args.workers,
@@ -329,7 +435,9 @@ def main():
                     builder.run()
             else:
                 builder.run()
+            logging.info(f"Successfully processed: {epub_file}")
         except KeyboardInterrupt:
+            logging.warning("Batch cancelled by user")
             console.print("\n[bold red]Batch Cancelled.[/bold red]")
             sys.exit(130)
         except Exception as e:
@@ -337,8 +445,13 @@ def main():
             error_msg = str(e)
             error_msg = error_msg.encode("utf-8", errors="replace").decode("utf-8")
             # Escape Rich markup characters to prevent parsing errors
-            error_msg = error_msg.replace("[", "\\[").replace("]", "\\]")
-            console.print(f"[red]Error processing {epub_file.name}: {error_msg}[/red]")
+            error_msg_safe = error_msg.replace("[", "\\[").replace("]", "\\]")
+            logging.error(
+                f"Error processing {epub_file}: {error_msg}", exc_info=args.debug
+            )
+            console.print(
+                f"[red]Error processing {epub_file.name}: {error_msg_safe}[/red]"
+            )
             if args.debug:
                 import traceback
 

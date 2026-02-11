@@ -1,8 +1,9 @@
+import logging
 import sys
 import importlib.resources
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable
 
 from rich.console import Console
 from rich.table import Table
@@ -20,6 +21,131 @@ from huggingface_hub.errors import (
 from .chapter_classifier import ChapterTags
 from .chapter_filter import FilterOperation
 from .utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
+
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+
+def quick_count_chapters(epub_path: Path) -> int | None:
+    """Quickly count chapters in an EPUB without full processing.
+
+    Returns None if counting fails.
+    """
+    logger.debug(f"Counting chapters in {epub_path}")
+    try:
+        # Import here to avoid circular dependency
+        from .parsing import EpubReader
+
+        reader = EpubReader(epub_path)
+        chapters = reader.extract_chapters()
+        count = len(chapters)
+        logger.debug(f"Found {count} chapters in {epub_path}")
+        return count
+    except Exception as e:
+        logger.warning(f"Failed to count chapters in {epub_path}: {e}")
+        return None
+
+
+def select_books_interactive(
+    book_files: list[Path],
+    console: Console,
+) -> list[Path]:
+    """Interactive book selection when processing a directory.
+
+    Displays a table of books with chapter counts and lets user select
+    which ones to process using comma-separated numbers or ranges.
+
+    Returns filtered list of selected book files.
+    """
+    logger.info(f"Starting interactive book selection for {len(book_files)} books")
+
+    if len(book_files) <= 1:
+        logger.debug("Only one book, skipping selection")
+        return book_files
+
+    # Count chapters for each book
+    console.print("[dim]Scanning books for chapter counts...[/dim]")
+    book_info: list[tuple[Path, int | None]] = []
+    for book_path in book_files:
+        chapter_count = quick_count_chapters(book_path)
+        book_info.append((book_path, chapter_count))
+
+    # Create selection table
+    table = Table(
+        title="[bold magenta]Book Selection[/bold magenta]",
+        show_header=True,
+        header_style="bold magenta",
+        box=box.ROUNDED,
+        expand=True,
+    )
+    table.add_column("#", style="cyan", width=6, justify="center")
+    table.add_column("Filename", style="white")
+    table.add_column("Chapters", style="green", width=12, justify="center")
+
+    for i, (book_path, chapter_count) in enumerate(book_info, 1):
+        chapter_text = str(chapter_count) if chapter_count is not None else "?"
+        table.add_row(f"{i}", escape(book_path.name), chapter_text)
+
+    console.print()
+    console.print(table)
+    console.print()
+    console.print(
+        Panel(
+            "[dim]Enter book numbers to process (e.g., '1,3,5-10')[/dim]\n"
+            "[dim]Press Enter to select ALL books[/dim]",
+            title="Selection Options",
+            border_style="blue",
+        )
+    )
+
+    while True:
+        selection = Prompt.ask("[bold cyan]Select books[/bold cyan]")
+
+        if not selection.strip():
+            # Empty selection = all books
+            return book_files
+
+        indices = parse_range_string(selection, len(book_info))
+
+        if not indices:
+            console.print(
+                "[yellow]No books selected. Try again or press Enter for all.[/yellow]"
+            )
+            continue
+
+        selected_books = [book_info[i][0] for i in indices]
+
+        # Show selected summary
+        summary_table = Table(
+            title=f"[green]Selected {len(selected_books)} of {len(book_info)} books[/green]",
+            show_header=True,
+            header_style="bold green",
+            box=box.SIMPLE,
+        )
+        summary_table.add_column("#", style="cyan", width=6)
+        summary_table.add_column("Filename", style="white")
+        summary_table.add_column("Chapters", style="green", width=12)
+
+        for i, book_path in enumerate(selected_books[:10], 1):
+            chapter_count = book_info[book_files.index(book_path)][1]
+            chapter_text = str(chapter_count) if chapter_count is not None else "?"
+            summary_table.add_row(f"{i}", escape(book_path.name), chapter_text)
+
+        if len(selected_books) > 10:
+            summary_table.add_row(
+                "...", f"[dim]and {len(selected_books) - 10} more...[/dim]", ""
+            )
+
+        console.print()
+        console.print(summary_table)
+        console.print()
+
+        logger.info(
+            f"User selected {len(selected_books)} books: {[b.name for b in selected_books]}"
+        )
+        return selected_books
+
 
 # Helper Classes
 
@@ -208,7 +334,7 @@ def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
         except GatedRepoError:
             console.print("\n" + "!" * 60, style="bold red")
             console.print(
-                f"[bold red]ACCESS DENIED: TERMS OF USE NOT ACCEPTED[/bold red]"
+                "[bold red]ACCESS DENIED: TERMS OF USE NOT ACCEPTED[/bold red]"
             )
             console.print(
                 f"The model '{model_id}' is gated and requires you to accept the terms on Hugging Face."
@@ -266,7 +392,7 @@ def get_bundled_voices():
                     if f.is_file() and not f.name.startswith("__")
                 ]
 
-    except Exception as e:
+    except Exception:
         # Fail silently or log if needed, return empty list if path not found
         pass
 
@@ -320,3 +446,49 @@ def print_available_voices(console: Console):
             expand=False,
         )
     )
+
+
+def print_chapter_presets(console: Console):
+    """Prints a styled table of all available chapter filter presets."""
+    from .chapter_filter import ChapterFilter
+
+    table = Table(
+        title="Chapter Filter Presets", show_header=True, header_style="bold magenta"
+    )
+    table.add_column("Preset Name", style="bold cyan", width=18)
+    table.add_column("Description", style="white")
+
+    for name, preset in ChapterFilter.PRESETS.items():
+        # Mark the default preset
+        display_name = (
+            f"{name} [green](default)[/green]"
+            if name == ChapterFilter.DEFAULT_PRESET
+            else name
+        )
+        table.add_row(display_name, preset.description)
+
+    console.print(table)
+    console.print(
+        Panel(
+            "[dim]To use a preset, run:[/dim]\n"
+            "[green]kenkui input.epub --chapter-preset [bold]preset_name[/bold][/green]\n"
+            "[green]kenkui input.epub --chapter-preset [bold]content-only[/bold][/green]",
+            title="Usage Hint",
+            expand=False,
+        )
+    )
+
+
+__all__ = [
+    "Config",
+    "Chapter",
+    "AudioResult",
+    "parse_range_string",
+    "interactive_select",
+    "check_huggingface_access",
+    "get_bundled_voices",
+    "print_available_voices",
+    "print_chapter_presets",
+    "select_books_interactive",
+    "quick_count_chapters",
+]
