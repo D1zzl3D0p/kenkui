@@ -39,7 +39,14 @@ class FilterPreset:
 class ChapterFilter:
     """Manages filter presets and applies them to chapters."""
 
+    DEFAULT_PRESET = "content-only"
+
     PRESETS: dict[str, FilterPreset] = {
+        "none": FilterPreset(
+            name="None",
+            description="Include no chapters (use with -i/-e to build custom selection)",
+            filter_fn=lambda t: False,
+        ),
         "all": FilterPreset(
             name="All Chapters",
             description="Include all chapters including front/back matter",
@@ -47,7 +54,7 @@ class ChapterFilter:
         ),
         "content-only": FilterPreset(
             name="Content Only",
-            description="Exclude front matter, back matter, and title pages",
+            description="Exclude front matter, back matter, and title pages (default)",
             filter_fn=lambda t: not (
                 t.is_front_matter or t.is_back_matter or t.is_title_page
             ),
@@ -108,11 +115,12 @@ class ChapterFilter:
         # - include: start empty (will add matching)
         # - exclude: start with all (will remove matching)
         # - preset: will replace selection entirely
+        selected: set[int]
         if self.operations[0].type == "exclude":
-            selected: set[int] = set(all_chapters.keys())
+            selected = set(all_chapters.keys())
             logger.debug("First operation is exclude, starting with all chapters")
         else:
-            selected: set[int] = set()
+            selected = set()
             logger.debug(
                 "First operation is include/preset, starting with empty selection"
             )
@@ -206,3 +214,6 @@ class ChapterFilter:
         for name, desc in cls.list_presets():
             lines.append(f"  {name:15} - {desc}")
         return "\n".join(lines)
+
+
+__all__ = ["FilterOperation", "FilterPreset", "ChapterFilter"]
