@@ -3,9 +3,7 @@ import importlib.resources
 import io
 import os
 import multiprocessing
-import re
 import sys
-import tempfile
 import traceback
 from pathlib import Path
 from urllib.parse import urlparse
@@ -147,7 +145,8 @@ def worker_process_chapter(
         total_batches = len(batches)
         total_chars = sum(len(batch) for batch in batches)
         log_message(
-            f"[Worker {pid}] Batched {len(chapter.paragraphs)} paragraphs into {total_batches} batches ({total_chars} chars) using {batch_size}-char batches"
+            f"[Worker {pid}] Batched {len(chapter.paragraphs)} paragraphs into "
+            f"{total_batches} batches ({total_chars} chars) using {batch_size}-char batches"
         )
 
         # Report start with batch count and total characters for progress tracking
@@ -159,7 +158,6 @@ def worker_process_chapter(
         full_audio = AudioSegment.empty()
 
         for batch_idx, batch in enumerate(batches):
-            success = False
             for attempt in range(2):  # Try twice per batch
                 try:
                     log_message(
@@ -230,7 +228,6 @@ def worker_process_chapter(
                                 f"✓ Generated audio (final shape: {audio_tensor.shape})"
                             )
 
-                            success = True
                             break
                         else:
                             log_message(
@@ -238,7 +235,7 @@ def worker_process_chapter(
                             )
                             break
                     else:
-                        log_message(f"✗ Empty or None tensor")
+                        log_message("✗ Empty or None tensor")
                         break
                 except Exception as e:
                     log_message(f"✗ Attempt {attempt + 1} failed: {e}")
@@ -283,3 +280,6 @@ def worker_process_chapter(
         queue.put(("ERROR", pid, chapter.title, error_msg, error_text))
         queue.put(("DONE", pid))
         return None
+
+
+__all__ = ["get_batch_info", "worker_process_chapter"]

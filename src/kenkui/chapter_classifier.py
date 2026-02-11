@@ -3,7 +3,7 @@ Chapter classification system - replaces skip_patterns with tag-based filtering.
 Tags allow users to understand WHY a chapter was filtered and give them control.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 import re
 
@@ -73,7 +73,8 @@ class ChapterClassifier:
             "part divider",
         ),
         (
-            r"(?i)^book\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|one|two|three|four|five|\d+|[ivx]+)",
+            r"(?i)^book\s+(first|second|third|fourth|fifth|sixth|"
+            r"seventh|eighth|ninth|tenth|one|two|three|four|five|\d+|[ivx]+)",
             "book divider",
         ),
         (r"(?i)^volume\s+[\divxlc]+", "volume divider"),
@@ -176,16 +177,22 @@ class ChapterClassifier:
         cls.PART_DIVIDER_PATTERNS = [
             (r"(?i)^part\s+[\divxlc]+", "part divider"),
             (
-                r"(?i)^part\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|one|two|three|four|five)",
+                r"(?i)^part\s+(first|second|third|fourth|fifth|sixth|"
+                r"seventh|eighth|ninth|tenth|one|two|three|four|five)",
                 "part divider",
             ),
             (
-                r"(?i)^book\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|one|two|three|four|five|\d+|[ivx]+)",
+                r"(?i)^book\s+(first|second|third|fourth|fifth|sixth|"
+                r"seventh|eighth|ninth|tenth|one|two|three|four|five|\d+|[ivx]+)",
                 "book divider",
             ),
             (r"(?i)^volume\s+[\divxlc]+", "volume divider"),
             (
-                r"(?i)^volume\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|one|two|three|four|five)",
+                r"(?i)^volume\s+(first|second|third|fourth|fifth|sixth|"
+                r"seventh|eighth|ninth|tenth|one|two|three|four|five)",
                 "volume divider",
             ),
         ]
+
+
+__all__ = ["ChapterTags", "ChapterClassifier"]

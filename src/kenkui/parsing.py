@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 
@@ -20,7 +19,6 @@ from rich.progress import (
     SpinnerColumn,
     BarColumn,
     TextColumn,
-    TimeRemainingColumn,
     MofNCompleteColumn,
 )
 from rich.console import Console
@@ -30,10 +28,10 @@ from rich.table import Table
 from rich.layout import Layout
 from rich import box
 
-from .chapter_classifier import ChapterClassifier, ChapterTags
+from .chapter_classifier import ChapterClassifier
 from .helpers import Chapter, AudioResult, Config
 from .workers import worker_process_chapter
-from .utils import extract_epub_cover, clean_text, sanitize_filename
+from .utils import extract_epub_cover
 
 # Suppress ALL warnings by default (verbose mode will re-enable them)
 warnings.filterwarnings("ignore")
@@ -217,7 +215,7 @@ class EpubReader:
         Returns ALL TOC entries (no filtering - filtering happens later via ChapterClassifier)
         """
         toc_file, toc_type = self.find_toc_file()
-        chapters = []
+        chapters: list[dict[str, str | None]] = []
 
         if toc_file is None:
             return chapters
@@ -278,7 +276,7 @@ class EpubReader:
     def extract_chapters(self, min_text_len: int = 50) -> list[Chapter]:
         """Extract chapters using TOC as ground truth, falling back to regex detection."""
         # Capture warnings during chapter extraction, only show in verbose mode
-        with warnings.catch_warnings(record=True) as w:
+        with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             # Try to use TOC as ground truth
             toc_chapters = self._parse_toc_structure()
@@ -348,7 +346,7 @@ class EpubReader:
             else:
                 # Multiple chapters in this file - need to split by anchor
                 # Sort chapters by their position in the document
-                sorted_entries = []
+                sorted_entries: list[tuple[float, str | None, int]] = []
                 for anchor, chapter_idx in chapter_entries:
                     if anchor:
                         elem = soup.find(id=anchor) or soup.find(attrs={"name": anchor})
@@ -451,7 +449,7 @@ class EpubReader:
     def _extract_chapters_legacy(self, min_text_len: int = 50) -> list[Chapter]:
         """Legacy regex-based chapter extraction (fallback when no TOC)."""
         toc_map = self._build_toc_map()
-        chapters = []
+        chapters: list[Chapter] = []
 
         # Track hierarchy for books like Les Mis
         current_vol = ""
@@ -472,7 +470,7 @@ class EpubReader:
             elements = soup.find_all(["h1", "h2", "h3", "h4", "p", "div", "section"])
 
             current_chapter_title = toc_map.get(item.get_name(), "")
-            current_paragraphs = []
+            current_paragraphs: list[str] = []
 
             for elem in elements:
                 # Avoid processing nested tags twice
@@ -811,7 +809,11 @@ class AudioBuilder:
                             layout["logs"].update(logs_panel)
 
                         # Update progress panel with stats
-                        stats_text = f"Elapsed: {eta_tracker.format_elapsed()} | Rate: {eta_tracker.format_rate()} chars/sec | Chapters: {completed_chapters}/{total_chapters}"
+                        stats_text = (
+                            f"Elapsed: {eta_tracker.format_elapsed()} | "
+                            f"Rate: {eta_tracker.format_rate()} chars/sec | "
+                            f"Chapters: {completed_chapters}/{total_chapters}"
+                        )
                         progress_panel = Panel(
                             overall_progress,
                             title=f"Overall Progress • {stats_text}",
@@ -1115,3 +1117,6 @@ class AudioBuilder:
         finally:
             if not self.cfg.keep_temp and self.temp_dir.exists():
                 shutil.rmtree(self.temp_dir)
+
+
+__all__ = ["ETATracker", "EpubReader", "AudioBuilder"]

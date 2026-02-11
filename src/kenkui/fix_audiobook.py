@@ -1,13 +1,11 @@
 """Fix audiobook functionality - scans for missing chapters, salvages existing audio, and fixes metadata."""
 
-import os
 import sys
 import re
 import shutil
 import subprocess
 import tempfile
 import io
-import json
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from difflib import SequenceMatcher
@@ -38,8 +36,6 @@ def _embed_cover_in_m4b(m4b_path: Path, cover_data: bytes, mime_type: str) -> bo
         return False
 
     try:
-        from mutagen.mp4 import MP4, MP4Cover
-
         image_format = (
             MP4Cover.FORMAT_PNG if mime_type == "image/png" else MP4Cover.FORMAT_JPEG
         )
@@ -57,10 +53,9 @@ def _embed_cover_in_m4b(m4b_path: Path, cover_data: bytes, mime_type: str) -> bo
 
 def extract_m4b_chapters(m4b_path: Path) -> List[Dict[str, Any]]:
     """Extract chapter information from M4B file using ffprobe."""
-    import json
-    import subprocess
+    import json as json_module
 
-    chapters = []
+    chapters: list[dict[str, Any]] = []
 
     try:
         # Use ffprobe to get chapter information
@@ -80,7 +75,7 @@ def extract_m4b_chapters(m4b_path: Path) -> List[Dict[str, Any]]:
             print(f"Error running ffprobe: {result.stderr}", file=sys.stderr)
             return chapters
 
-        data = json.loads(result.stdout)
+        data = json_module.loads(result.stdout)
         chapter_data = data.get("chapters", [])
 
         for i, chapter in enumerate(chapter_data):
@@ -101,7 +96,7 @@ def extract_m4b_chapters(m4b_path: Path) -> List[Dict[str, Any]]:
 
     except subprocess.TimeoutExpired:
         print("Error: ffprobe timed out", file=sys.stderr)
-    except json.JSONDecodeError:
+    except json_module.JSONDecodeError:
         print("Error: Invalid JSON from ffprobe", file=sys.stderr)
     except Exception as e:
         print(f"Error extracting chapters from M4B: {e}", file=sys.stderr)
@@ -168,8 +163,8 @@ def extract_audio_segment(
     try:
         output_file = temp_dir / "segment.wav"
 
-        start_sec = start_ms / 1000.0
-        duration = (end_ms - start_ms) / 1000.0
+        start_sec: float = start_ms / 1000.0
+        duration: float = (end_ms - start_ms) / 1000.0
 
         cmd = [
             "ffmpeg",
@@ -189,7 +184,7 @@ def extract_audio_segment(
             str(output_file),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        subprocess.run(cmd, capture_output=True, timeout=120)
 
         if output_file.exists():
             with open(output_file, "rb") as f:
@@ -240,8 +235,8 @@ def prepare_chapter_audio(
             "[yellow]No chapters found in audiobook - will generate all[/yellow]"
         )
 
-    chapters_with_audio = []
-    missing_indices = []
+    chapters_with_audio: list[tuple[Chapter, bytes | None]] = []
+    missing_indices: list[int] = []
     matched_count = 0
 
     for chapter in epub_chapters:
@@ -374,8 +369,11 @@ def rebuild_audiobook(
             file_list = temp_dir / "files.txt"
             meta_file = temp_dir / "metadata.txt"
 
-            # Write audio files
-            for idx, (chapter, audio_data) in enumerate(chapters_with_audio):
+            # Write audio files (skip None audio data)
+            valid_chapters: list[tuple[Chapter, bytes]] = [
+                (ch, audio) for ch, audio in chapters_with_audio if audio is not None
+            ]
+            for idx, (chapter, audio_data) in enumerate(valid_chapters):
                 audio_file = temp_dir / f"ch_{idx:04d}.wav"
                 with open(audio_file, "wb") as f:
                     f.write(audio_data)
@@ -387,7 +385,7 @@ def rebuild_audiobook(
             with open(meta_file, "w", encoding="utf-8") as f:
                 f.write(";FFMETADATA1\n")
                 t = 0
-                for idx, (chapter, audio_data) in enumerate(chapters_with_audio):
+                for idx, (chapter, audio_data) in enumerate(valid_chapters):
                     # Get duration from audio
                     audio = AudioSegment.from_wav(io.BytesIO(audio_data))
                     duration_ms = len(audio)
@@ -524,7 +522,9 @@ def fix_audiobook(
 
         # Remove any chapters without audio
         chapters_with_audio = [
-            (ch, audio) for ch, audio in chapters_with_audio if audio is not None
+            (ch, audio)
+            for ch, audio in chapters_with_audio
+            if audio is not None  # type: ignore[misc]
         ]
 
         if not chapters_with_audio:

@@ -43,7 +43,7 @@ def batch_text(paragraphs: list[str], max_chars: int = 1000) -> list[str]:
     for p in paragraphs:
         if len(p) > max_chars:
             sentences = re.split(r"(?<=[.!?])\s+", p)
-            current_chunk = []
+            current_chunk: list[str] = []
             current_len = 0
 
             for sentence in sentences:
@@ -162,3 +162,13 @@ def clean_text(text: str) -> str:
     """Normalize text and handle encoding issues."""
     text = text.encode("utf-8", errors="replace").decode("utf-8")
     return re.sub(r"\s+", " ", text).strip()
+
+
+__all__ = [
+    "DEFAULT_VOICES",
+    "VOICE_DESCRIPTIONS",
+    "batch_text",
+    "extract_epub_cover",
+    "sanitize_filename",
+    "clean_text",
+]
