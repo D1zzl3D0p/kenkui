@@ -16,19 +16,52 @@ def epub_path():
     return TEST_EPUB
 
 
-class TestSelectChaptersFlag:
-    """Tests for the --select-chapters flag."""
+class TestChapterFilteringFlags:
+    """Tests for the chapter filtering flags."""
 
-    def test_select_chapters_help_text(self):
-        """Test that --select-chapters appears in help output."""
+    def test_chapter_preset_help_text(self):
+        """Test that --chapter-preset appears in help output."""
         result = subprocess.run(
             [sys.executable, "-m", "kenkui", "--help"],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0
-        assert "--select-chapters" in result.stdout
-        assert "Pick chapters interactively" in result.stdout
+        assert "--chapter-preset" in result.stdout
+        # argparse shows choices with curly braces and commas
+        assert "all,content-only,chapters-only,with-parts" in result.stdout.replace(
+            " ", ""
+        ).replace("{", "").replace("}", "")
+
+    def test_include_chapter_help_text(self):
+        """Test that --include-chapter appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--include-chapter" in result.stdout or "-I" in result.stdout
+
+    def test_exclude_chapter_help_text(self):
+        """Test that --exclude-chapter appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--exclude-chapter" in result.stdout or "-X" in result.stdout
+
+    def test_preview_help_text(self):
+        """Test that --preview appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--preview" in result.stdout
 
 
 class TestVerboseFlag:

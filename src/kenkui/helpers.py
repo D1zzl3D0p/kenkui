@@ -18,6 +18,7 @@ from huggingface_hub.errors import (
 )
 
 from .chapter_classifier import ChapterTags
+from .chapter_filter import FilterOperation
 from .utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
 
 # Helper Classes
@@ -34,7 +35,8 @@ class Config:
     m4b_bitrate: str
     keep_temp: bool
     debug_html: bool
-    interactive_chapters: bool  # New flag
+    chapter_filters: list[FilterOperation]  # Chapter filtering operations
+    preview: bool = False  # Preview mode (show what would be converted)
     verbose: bool = False
     # TTS configuration attributes (voice field supports: built-in name, local path, or hf:// URL)
     tts_model: str = "kyutai/pocket-tts"
@@ -42,7 +44,6 @@ class Config:
     model_name: str = "pocket-tts"
     elevenlabs_key: str = ""
     elevenlabs_turbo: bool = False
-    chapter_filter_preset: str = "content-only"  # New field for Phase 2
 
 
 @dataclass

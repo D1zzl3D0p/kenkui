@@ -984,30 +984,26 @@ class AudioBuilder:
             self.console.print("[red]No chapters found in EPUB[/red]")
             return False
 
-        # Apply default filter preset
+        # Apply chapter filters
         from .chapter_filter import ChapterFilter
 
-        chapters = ChapterFilter.apply_preset(
-            all_chapters, self.cfg.chapter_filter_preset
-        )
+        filter_chain = ChapterFilter(self.cfg.chapter_filters)
+        chapters = filter_chain.apply(all_chapters)
 
         self.console.print(
             f"[dim]Extracted {len(all_chapters)} chapters, "
-            f"{len(chapters)} after '{self.cfg.chapter_filter_preset}' filter[/dim]"
+            f"{len(chapters)} after filtering[/dim]"
         )
 
-        # Interactive chapter selection if requested
-        if self.cfg.interactive_chapters:
-            from .chapter_selector import interactive_select_chapters
-
-            chapters = interactive_select_chapters(
-                all_chapters,  # Pass all so user can change filters
-                self.console,
-                initial_preset=self.cfg.chapter_filter_preset,
+        if not chapters:
+            self.console.print(
+                "[yellow]No chapters match the specified filters[/yellow]"
             )
-            if not chapters:
-                self.console.print("[yellow]No chapters selected[/yellow]")
-                return False
+            return False
+
+        # Preview mode: show what would be converted and exit
+        if self.cfg.preview:
+            return self._show_preview(reader, all_chapters, chapters)
 
         # Pre-calculate batch information for accurate progress tracking
         # First chapter uses smaller batches for better ETA, rest use larger for performance
@@ -1037,6 +1033,77 @@ class AudioBuilder:
         return self.build(
             chapters, output_file, chapter_batch_info, total_batches, total_chars
         )
+
+    def _show_preview(
+        self,
+        reader: EpubReader,
+        all_chapters: list[Chapter],
+        filtered_chapters: list[Chapter],
+    ) -> bool:
+        """Display preview of what would be converted."""
+        book_title = reader.get_book_title()
+
+        # Create preview table
+        table = Table(
+            title=f"[bold cyan]Preview: {book_title}[/bold cyan]",
+            show_header=True,
+            header_style="bold magenta",
+            box=box.ROUNDED,
+        )
+        table.add_column("#", style="cyan", width=6, justify="center")
+        table.add_column("Chapter Title", style="white")
+        table.add_column("Status", style="green", width=12)
+        table.add_column("Tags", style="dim", width=20)
+
+        filtered_indices = {ch.index for ch in filtered_chapters}
+
+        for ch in all_chapters:
+            status = (
+                "[green]✓ Include[/green]"
+                if ch.index in filtered_indices
+                else "[red]✗ Exclude[/red]"
+            )
+            tags = ", ".join(
+                tag
+                for tag, val in [
+                    ("front", ch.tags.is_front_matter),
+                    ("back", ch.tags.is_back_matter),
+                    ("title", ch.tags.is_title_page),
+                    ("part", ch.tags.is_part_divider),
+                    ("chapter", ch.tags.is_chapter),
+                ]
+                if val
+            )
+            table.add_row(
+                str(ch.index + 1),
+                ch.title[:60] + "..." if len(ch.title) > 60 else ch.title,
+                status,
+                tags,
+            )
+
+        self.console.print()
+        self.console.print(table)
+        self.console.print()
+
+        # Summary panel
+        summary = (
+            f"[bold]Book:[/bold] {book_title}\n"
+            f"[bold]Voice:[/bold] {self.cfg.voice}\n"
+            f"[bold]Workers:[/bold] {self.cfg.workers}\n"
+            f"[bold]Chapters:[/bold] {len(filtered_chapters)} of {len(all_chapters)} selected\n"
+            f"[bold]Output:[/bold] {self.cfg.output_path or self.cfg.epub_path.parent}"
+        )
+
+        self.console.print(
+            Panel(summary, title="[bold green]Conversion Summary", border_style="green")
+        )
+        self.console.print()
+        self.console.print("[dim]Use --preview to see this without converting[/dim]")
+        self.console.print(
+            "[dim]Remove --preview to perform the actual conversion[/dim]"
+        )
+
+        return True
 
     @contextmanager
     def _managed_temp_dir(self):

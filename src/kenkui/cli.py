@@ -1,6 +1,6 @@
 """
 EPUB to Audiobook Converter
-Batch Processing + Auto-Naming + Interactive Selection + TUI
+Batch Processing + Auto-Naming + Chapter Filtering
 """
 
 import os
@@ -21,11 +21,11 @@ from rich.console import Console
 
 # Local imports
 from . import __version__
+from .chapter_filter import FilterOperation
 from .parsing import AudioBuilder
 from .helpers import (
     Config,
     check_huggingface_access,
-    interactive_select,
     print_available_voices,
 )
 
@@ -56,7 +56,7 @@ def print_abbreviated_help():
 [bold]Usage:[/bold]
   kenkui <epub_file_or_directory> [options]
 
-[bold]Quick Examples:[/bold]
+    [bold]Quick Examples:[/bold]
   # Convert a single book with default voice
   kenkui book.epub
 
@@ -66,17 +66,22 @@ def print_abbreviated_help():
   # Process all books in a directory
   kenkui ~/books/
 
-  # Interactive chapter selection
-  kenkui book.epub --select-chapters
+  # Filter chapters with regex patterns
+  kenkui book.epub --include-chapter "Chapter.*" --exclude-chapter "Appendix"
 
-  # Use different chapter filter preset
-  kenkui book.epub --chapter-preset all
+  # Use chapter filter preset
+  kenkui book.epub --chapter-preset content-only
+
+  # Preview what would be converted
+  kenkui book.epub --preview
 
 [bold]Common Options:[/bold]
   --voice NAME          TTS voice (default: alba)
   -o, --output DIR      Output directory
-  --select-chapters     Interactive chapter selection
   --chapter-preset      Filter: all|content-only|chapters-only|with-parts
+  --include-chapter     Include chapters matching regex (repeatable)
+  --exclude-chapter     Exclude chapters matching regex (repeatable)
+  --preview             Preview what would be converted
   --list-voices         Show available voices
   -v, --verbose         Show detailed logs
 
@@ -122,16 +127,35 @@ def main():
         metavar=("EBOOK", "AUDIOBOOK"),
         help="Fix audiobook metadata and missing chapters (requires: ebook_path audiobook_path)",
     )
-    parser.add_argument(
-        "--select-chapters",
-        action="store_true",
-        help="Pick chapters interactively with filter options",
-    )
-    parser.add_argument(
+
+    # Chapter filtering arguments
+    chapter_filter_group = parser.add_argument_group("chapter filtering")
+    chapter_filter_group.add_argument(
         "--chapter-preset",
         choices=["all", "content-only", "chapters-only", "with-parts"],
-        default="content-only",
-        help="Initial filter preset for chapter selection (default: content-only)",
+        action="append",
+        dest="chapter_presets",
+        help="Chapter filter preset (repeatable, later overrides earlier)",
+    )
+    chapter_filter_group.add_argument(
+        "-I",
+        "--include-chapter",
+        action="append",
+        dest="chapter_includes",
+        help="Regex pattern to include chapters by title (repeatable)",
+    )
+    chapter_filter_group.add_argument(
+        "-X",
+        "--exclude-chapter",
+        action="append",
+        dest="chapter_excludes",
+        help="Regex pattern to exclude chapters by title (repeatable)",
+    )
+
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Preview what would be converted without processing",
     )
     parser.add_argument(
         "--list-voices",
@@ -165,6 +189,37 @@ def main():
     args = parser.parse_args()
     console = Console()
 
+    def build_chapter_operations(
+        presets: list[str] | None,
+        includes: list[str] | None,
+        excludes: list[str] | None,
+    ) -> list[FilterOperation]:
+        """Build filter operations from CLI arguments."""
+        operations: list[FilterOperation] = []
+
+        # Track which arguments were provided to apply default if needed
+        has_any_filter = bool(presets or includes or excludes)
+
+        if not has_any_filter:
+            # Default to content-only preset if no filters specified
+            return [FilterOperation("preset", "content-only")]
+
+        # Build operations in the order: presets, includes, excludes
+        # (presets should generally come first to establish base selection)
+        if presets:
+            for preset in presets:
+                operations.append(FilterOperation("preset", preset))
+
+        if includes:
+            for pattern in includes:
+                operations.append(FilterOperation("include", pattern))
+
+        if excludes:
+            for pattern in excludes:
+                operations.append(FilterOperation("exclude", pattern))
+
+        return operations
+
     # Handle --fix-audiobook
     if args.fix_audiobook:
         ebook_path = Path(args.fix_audiobook[0])
@@ -193,8 +248,12 @@ def main():
             m4b_bitrate="64k",
             keep_temp=args.keep,
             debug_html=args.debug,
-            interactive_chapters=args.select_chapters,
-            chapter_filter_preset=args.chapter_preset,
+            chapter_filters=build_chapter_operations(
+                args.chapter_presets,
+                args.chapter_includes,
+                args.chapter_excludes,
+            ),
+            preview=args.preview,
             verbose=args.verbose,
         )
 
@@ -253,16 +312,19 @@ def main():
             m4b_bitrate="64k",
             keep_temp=args.keep,
             debug_html=args.debug,
-            interactive_chapters=args.select_chapters,
-            chapter_filter_preset=args.chapter_preset,
+            chapter_filters=build_chapter_operations(
+                args.chapter_presets,
+                args.chapter_includes,
+                args.chapter_excludes,
+            ),
+            preview=args.preview,
             verbose=args.verbose,
         )
 
         builder = AudioBuilder(cfg)
         try:
-            # Suppress C-level stderr unless in verbose mode or interactive selection
-            # (interactive mode needs full terminal control)
-            if not args.verbose and not args.select_chapters:
+            # Suppress C-level stderr unless in verbose mode
+            if not args.verbose:
                 with suppress_c_stderr():
                     builder.run()
             else:

@@ -27,8 +27,7 @@ from .helpers import (
 from .parsing import EpubReader, AudioBuilder
 from .workers import worker_process_chapter
 from .chapter_classifier import ChapterTags, ChapterClassifier
-from .chapter_filter import ChapterFilter, FilterPreset
-from .chapter_selector import interactive_select_chapters, ChapterSelectorApp
+from .chapter_filter import ChapterFilter, FilterPreset, FilterOperation
 
 try:
     __version__ = importlib.metadata.version("kenkui")
@@ -45,13 +44,12 @@ __all__ = [
     "AudioResult",
     "EpubReader",
     "AudioBuilder",
-    # Chapter classification
+    # Chapter classification and filtering
     "ChapterTags",
     "ChapterClassifier",
     "ChapterFilter",
     "FilterPreset",
-    "interactive_select_chapters",
-    "ChapterSelectorApp",
+    "FilterOperation",
     # Functions
     "parse_range_string",
     "interactive_select",
