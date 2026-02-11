@@ -81,16 +81,46 @@ You can pass either a single EPUB file or a directory.
 # Convert a single book
 kenkui book.epub
 
-# Convert an entire library
+# Convert an entire library (interactive book selection)
 kenkui library/
+
+# Convert all books without prompting
+kenkui library/ --no-select-books
 
 # Specify output directory
 kenkui book.epub -o output/
+
+# Log detailed output to file
+kenkui book.epub --log conversion.log
+
+# Debug mode with full logging
+kenkui book.epub --log debug.log --verbose
 ```
+
+### 📝 Logging
+
+Use `--log` to save detailed output to a file:
+
+```bash
+# Basic logging
+kenkui book.epub --log conversion.log
+
+# Debug logging with verbose output
+kenkui book.epub --log debug.log --verbose
+
+# Log multiple books
+kenkui library/ --log batch.log
+```
+
+The log file includes:
+- Processing steps and book queue information
+- Chapter filtering decisions
+- Error messages with full tracebacks (with --verbose)
+- Book selection and processing status
 
 ### 🎙️ Voice Selection
 
-Use `--voice` to choose a voice.
+Use `-v` or `--voice` to choose a voice.
 
 Accepted inputs:
 
@@ -117,6 +147,44 @@ To use your own voice, record a **5–10 second** clip of clean speech with mini
 Cleaning the audio makes a noticeable difference. Tools like Adobe's Enhance Speech work well:
 https://podcast.adobe.com/en/enhance
 
+### 📚 Batch Processing (Multiple Books)
+
+When you point Kenkui at a directory containing multiple EPUB files, it will:
+
+1. **Scan all books** and count chapters
+2. **Show an interactive selector** where you can choose which books to process
+3. **Create subdirectories** for each book's output
+
+```bash
+# Process selected books from a directory
+kenkui library/
+
+# Skip the interactive selector and process all books
+kenkui library/ --no-select-books
+
+# Preview shows book selector first, then chapter previews
+kenkui library/ --preview
+```
+
+**Book Selection Interface:**
+
+```
+                          Book Selection
+┏━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃  #   ┃ Filename                        ┃ Chapters ┃
+┡━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│  1   │ Les Miserables.epub             │ 365      │
+│  2   │ War and Peace.epub              │ 361      │
+│  3   │ The Hobbit.epub                 │ 19       │
+└──────┴─────────────────────────────────┴──────────┘
+
+[Selection Options]
+Enter book numbers to process (e.g., '1,3' or '1-3')
+Press Enter to select ALL books
+
+Select books: 1,3
+```
+
 ---
 
 ## 📖 Chapter Filtering
@@ -135,17 +203,24 @@ This shows a table with all chapters, their include/exclude status, and their cl
 
 ### Filter Presets
 
-Kenkui comes with four built-in presets:
+Kenkui comes with five built-in presets:
 
 - **`content-only`** (default) — Exclude front matter, back matter, and title pages
-- **`all` — Include all chapters
-- **`chapters-only` — Only main chapters (exclude part/book dividers)
-- **`with-parts` — Main chapters plus Part/Book dividers
+- **`all`** — Include all chapters
+- **`chapters-only`** — Only main chapters (exclude all dividers)
+- **`with-parts`** — Main chapters plus Part/Book dividers
+- **`none`** — Include no chapters (use with `-i` and `-e` to build custom selection)
 
 Use `--chapter-preset` to select a preset:
 
 ```bash
 kenkui book.epub --chapter-preset all
+```
+
+To see all available presets with descriptions:
+
+```bash
+kenkui --list-chapter-presets
 ```
 
 ### Regex Filtering
@@ -154,23 +229,24 @@ For more control, use regex patterns to include or exclude chapters by their tit
 
 ```bash
 # Include only chapters matching a pattern (starts from empty selection)
-kenkui book.epub --include-chapter "Chapter [0-9]+"
+kenkui book.epub -i "Chapter [0-9]+"
 
 # Exclude chapters matching a pattern (starts from all chapters)
-kenkui book.epub --exclude-chapter "Appendix"
+kenkui book.epub -e "Appendix"
 
 # Combine multiple patterns
 kenkui book.epub \
-  --include-chapter "^CHAPTER I[—\s]" \
-  --include-chapter "^CHAPTER II[—\s]" \
-  --exclude-chapter "Appendix"
+  -i "^CHAPTER I[—\s]" \
+  -i "^CHAPTER II[—\s]" \
+  -e "Appendix"
 ```
 
 **Notes on regex filtering:**
 - Patterns are matched against chapter titles
 - Matching is case-sensitive by default (use `(?i)` for case-insensitive)
-- `--include-chapter` without a preset starts with an empty selection and adds matching chapters
-- `--exclude-chapter` without a preset starts with all chapters and removes matching ones
+- `-i`/`--include-chapter` without a preset uses the default preset (`content-only`) and adds matching chapters to it
+- `-e`/`--exclude-chapter` without a preset uses the default preset (`content-only`) and removes matching chapters from it
+- To start with an empty selection and build your own, use `--chapter-preset none` with `-i` patterns
 
 ### Combining Presets and Regex
 

@@ -41,7 +41,7 @@ class TestChapterFilteringFlags:
             text=True,
         )
         assert result.returncode == 0
-        assert "--include-chapter" in result.stdout or "-I" in result.stdout
+        assert "--include-chapter" in result.stdout or "-i" in result.stdout
 
     def test_exclude_chapter_help_text(self):
         """Test that --exclude-chapter appears in help output."""
@@ -51,7 +51,7 @@ class TestChapterFilteringFlags:
             text=True,
         )
         assert result.returncode == 0
-        assert "--exclude-chapter" in result.stdout or "-X" in result.stdout
+        assert "--exclude-chapter" in result.stdout or "-e" in result.stdout
 
     def test_preview_help_text(self):
         """Test that --preview appears in help output."""
@@ -93,6 +93,18 @@ class TestBasicCLI:
         assert "Available Voices" in result.stdout
         assert "alba" in result.stdout
 
+    def test_list_chapter_presets_flag(self):
+        """Test that --list-chapter-presets works and shows available presets."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--list-chapter-presets"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "Chapter Filter Presets" in result.stdout
+        assert "content-only" in result.stdout
+        assert "all" in result.stdout
+
     def test_no_input_shows_help(self):
         """Test that running without input shows abbreviated help."""
         result = subprocess.run(
@@ -113,6 +125,44 @@ class TestBasicCLI:
         )
         assert result.returncode == 1
         assert "No EPUB files found" in result.stdout or "Error" in result.stdout
+
+
+class TestBookSelectionFlags:
+    """Tests for the book selection flags."""
+
+    def test_select_books_help_text(self):
+        """Test that --select-books appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--select-books" in result.stdout
+
+    def test_no_select_books_help_text(self):
+        """Test that --no-select-books appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--no-select-books" in result.stdout
+
+
+class TestLoggingFlags:
+    """Tests for the logging flags."""
+
+    def test_log_flag_help_text(self):
+        """Test that --log appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--log" in result.stdout
 
 
 class TestKeyboardInterrupt:
