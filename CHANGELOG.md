@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2025-02-12
+
+### Added
+
+- Fast recursive EPUB file discovery with `file_finder.py` module
+  - Uses `os.scandir()` for optimal performance (~9,400 files/second)
+  - Searches up to 10 levels deep by default
+  - Skips hidden directories (Unix, macOS, and Windows conventions)
+  - New `--search-hidden-dirs` flag to include hidden directories
+- Default to current directory when no input path provided
+- Lightweight chapter counting for `--select-books` mode
+  - Uses TOC parsing instead of full chapter extraction
+  - Performance improvement: ~12ms per book (was several seconds)
+- Natural sort for book selection (case-insensitive, numeric-aware)
+  - Books now sorted alphabetically: "Book 1", "Book 2", "Book 10"
+- User-friendly HuggingFace authentication flow
+  - Interactive step-by-step guide for first-time users
+  - Automatically opens browser for account creation and token generation
+  - Guides users through terms acceptance for gated models
+  - Graceful fallback to default voice if auth is cancelled
+  - Only triggers when using custom voices (not built-in defaults)
+- New test file: `tests/test_huggingface_auth.py` with comprehensive auth tests
+- FAQ entry explaining HuggingFace authentication requirements
+
+### Changed
+
+- Directory scanning is now recursive by default
+- Improved `--select-books` performance with faster chapter counting
+- Books displayed in alphabetical order with natural sorting
+- HuggingFace auth check only runs when using custom voices (not for built-in defaults)
+- Removed old `check_huggingface_access()` function from helpers.py
+- Updated `__init__.py` exports to include new auth functions
+- Voice loading now properly detects custom vs built-in voices
+
+### Removed
+
+- `check_huggingface_access()` function (replaced with new auth flow)
+- Non-recursive directory scanning (now always recursive)
+- Unused imports from helpers.py (sys, HfApi, login, GatedRepoError, RepositoryNotFoundError)
+
+### Fixed
+
+- `--select-books` no longer hangs when counting chapters in large books
+- Book selection table now displays books in predictable alphabetical order
+- Voice authentication only triggers when actually needed
+- Improved error handling for HuggingFace authentication failures
+
+## [0.6.0] - 2025-02-10
+
 ### Added
 
 - New CLI-based chapter filtering system with regex support
@@ -189,3 +238,22 @@ kenkui book.epub --chapter-preset content-only --exclude-chapter "Appendix"
 ```
 
 The new system is more flexible and scriptable, allowing precise control over chapter selection without interactive prompts.
+
+### From 0.6.0 to 0.6.1
+
+**Directory scanning is now recursive by default.** Previously, kenkui only looked in the top-level directory. Now it searches up to 10 levels deep automatically. Use `--search-hidden-dirs` if you need to include hidden directories (starting with `.`).
+
+**No input path now defaults to current directory.** You can now run `kenkui` without arguments to process all EPUBs in the current directory:
+
+```bash
+# These are now equivalent:
+kenkui
+kenkui .
+```
+
+**HuggingFace authentication only triggers for custom voices.** If you're using the 8 built-in voices (alba, marius, javert, jean, fantine, cosette, eponine, azelma), you won't see the auth flow. It only appears when using:
+- Bundled custom voices
+- Local `.wav` files
+- HuggingFace URLs (`hf://`)
+
+If you do use custom voices, the new auth flow is interactive and will guide you through creating an account (if needed), generating a token, and accepting terms. It will automatically open your browser at the right pages.
