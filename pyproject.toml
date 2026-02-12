@@ -8,12 +8,11 @@ version = "0.6.2"
 description = "Convert Ebooks to Audiobooks with [custom] voice samples"
 readme = "README.md"
 authors = [{ name = "Sumner MacArthur", email = "spn1kolat3sla@gmail.com" }]
-license = { file = "LICENSE" }
+license = "GPL-3.0-or-later"
 requires-python = ">=3.7" # See 'How to determine' section below
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
-  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
 ]
 
 dependencies = [
