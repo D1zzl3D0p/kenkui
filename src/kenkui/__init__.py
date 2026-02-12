@@ -20,9 +20,13 @@ from .helpers import (
     AudioResult,
     parse_range_string,
     interactive_select,
-    check_huggingface_access,
     get_bundled_voices,
     print_available_voices,
+)
+from .huggingface_auth import (
+    ensure_huggingface_access,
+    is_custom_voice,
+    check_voice_access,
 )
 from .parsing import EpubReader, AudioBuilder
 from .workers import worker_process_chapter
@@ -53,10 +57,12 @@ __all__ = [
     # Functions
     "parse_range_string",
     "interactive_select",
-    "check_huggingface_access",
     "get_bundled_voices",
     "print_available_voices",
     "worker_process_chapter",
+    "ensure_huggingface_access",
+    "is_custom_voice",
+    "check_voice_access",
     # Metadata
     "__version__",
     "__author__",

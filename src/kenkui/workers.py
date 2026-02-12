@@ -12,7 +12,7 @@ from pydub import AudioSegment
 import scipy.io.wavfile
 
 from .helpers import Chapter, AudioResult, get_bundled_voices
-from .utils import batch_text
+from .utils import batch_text, DEFAULT_VOICES
 
 
 def _load_voice(voice: str, verbose: bool = False) -> str:

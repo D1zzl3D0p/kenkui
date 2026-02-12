@@ -24,12 +24,12 @@ from .chapter_filter import FilterOperation  # noqa: E402
 from .parsing import AudioBuilder  # noqa: E402
 from .helpers import (  # noqa: E402
     Config,
-    check_huggingface_access,
     print_available_voices,
     print_chapter_presets,
     select_books_interactive,
 )
 from .file_finder import find_epub_files  # noqa: E402
+from .huggingface_auth import ensure_huggingface_access, is_custom_voice  # noqa: E402
 
 warnings.filterwarnings("ignore")
 
@@ -378,8 +378,21 @@ def main():
     console.print(f"[bold green]Queue:[/bold green] {len(queue_files)} books.")
     logging.info(f"Queue: {len(queue_files)} books to process")
 
-    check_huggingface_access()
-    logging.info("HuggingFace access check completed")
+    # Check if using custom voice and ensure HuggingFace access if needed
+    voice = args.voice.strip() if args.voice else "alba"
+    from .helpers import get_bundled_voices
+
+    bundled_voices = get_bundled_voices()
+
+    if is_custom_voice(voice, bundled_voices):
+        logging.info("Custom voice detected, checking HuggingFace access")
+        if not ensure_huggingface_access(console=console):
+            console.print(
+                "[yellow]Custom voice authentication failed or was cancelled.[/yellow]"
+            )
+            console.print("[yellow]Falling back to built-in voice 'alba'.[/yellow]")
+            voice = "alba"
+    logging.info("Voice access check completed")
 
     # Create base output directory for multi-book processing
     base_output_path = args.output
@@ -392,8 +405,7 @@ def main():
         console.rule(f"[bold magenta]Processing Book {idx}/{len(queue_files)}")
         logging.info(f"Processing book {idx}/{len(queue_files)}: {epub_file}")
 
-        # Validate voice parameter
-        voice = args.voice.strip() if args.voice else "alba"
+        # Validate voice parameter (voice already set earlier, just validate here)
         if not voice or voice.lower() == "voice":
             error_msg = "Invalid voice name"
             logging.error(error_msg)

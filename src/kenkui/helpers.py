@@ -1,6 +1,5 @@
 import logging
 import re
-import sys
 import importlib.resources
 import zipfile
 from dataclasses import dataclass, field
@@ -14,12 +13,6 @@ from rich import box
 from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.markup import escape
-
-from huggingface_hub import HfApi, login
-from huggingface_hub.errors import (
-    GatedRepoError,
-    RepositoryNotFoundError,
-)
 
 from .chapter_classifier import ChapterTags
 from .chapter_filter import FilterOperation
@@ -459,67 +452,6 @@ def interactive_select[T](
         return selected_items
 
 
-# --- AUTH CHECKER (Run Once at Startup) ---
-
-
-def check_huggingface_access(model_id: str = "kyutai/pocket-tts"):
-    """
-    Ensures the user is logged in and has accepted the ToS for the gated model.
-    """
-    console = Console()
-    api = HfApi()
-
-    try:
-        # Check repo access without downloading model files
-        api.model_info(model_id)
-        # If successful, return silently
-        return
-    except GatedRepoError:
-        # Handle gated repository - requires authentication and terms acceptance
-        console.rule("[bold red]Authentication Required")
-        console.print(
-            f"[yellow]The model '{model_id}' requires Hugging Face authentication.[/yellow]"
-        )
-
-        # 1. Attempt Login
-        print("\nAttempting to log in...")
-        login()  # This handles the token prompt securely
-
-        # 2. Re-check for Gate Acceptance
-        try:
-            api.model_info(model_id)
-            console.print("[green]Authentication successful![/green]")
-            return
-        except GatedRepoError:
-            console.print("\n" + "!" * 60, style="bold red")
-            console.print(
-                "[bold red]ACCESS DENIED: TERMS OF USE NOT ACCEPTED[/bold red]"
-            )
-            console.print(
-                f"The model '{model_id}' is gated and requires you to accept the terms on Hugging Face."
-            )
-            console.print(
-                f"Please visit [blue underline]https://huggingface.co/{model_id}[/blue underline]"
-            )
-            console.print("Read the license and click 'Agree and access repository'.")
-            console.print("After accepting, run this command again.\n")
-            console.print("!" * 60, style="bold red")
-            sys.exit(1)
-    except RepositoryNotFoundError:
-        # Handle repository not found (not gated)
-        console.rule("[bold red]Model Not Found")
-        console.print(
-            f"[yellow]The model '{model_id}' could not be found on Hugging Face.[/yellow]"
-        )
-        console.print(
-            "Check the model ID or update the project to use an available model."
-        )
-        console.print(
-            f"[blue underline]https://huggingface.co/{model_id}[/blue underline]"
-        )
-        sys.exit(1)
-
-
 def get_bundled_voices():
     """
     Scans the 'voices' directory inside the package for custom voice files.
@@ -644,7 +576,6 @@ __all__ = [
     "AudioResult",
     "parse_range_string",
     "interactive_select",
-    "check_huggingface_access",
     "get_bundled_voices",
     "print_available_voices",
     "print_chapter_presets",
