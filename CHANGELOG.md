@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2025-02-12
+
+### Changed
+
+- **Output File Placement**: Audiobook files are now placed directly next to their source EPUBs instead of in subdirectories
+- **Automatic Duplicate Handling**: If a file with the same name already exists, a number suffix is automatically appended (e.g., `Book_1.m4b`, `Book_2.m4b`)
+- **Improved Stitching Feedback**: Replaced simple spinner with a full Rich progress bar showing:
+  - Progress percentage and ETA
+  - Current operation phase (writing file list, writing metadata, combining with ffmpeg)
+  - Output directory location displayed before stitching begins
+
 ## [0.6.1] - 2025-02-12
 
 ### Added
