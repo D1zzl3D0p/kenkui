@@ -417,20 +417,8 @@ def main():
 
         logging.info(f"Using voice: {voice}")
 
-        # Create book-specific output directory for multi-book processing
+        # Determine output path - file will be placed next to the source EPUB
         book_output_path = args.output
-        if is_multi_book:
-            # Create subdirectory for each book
-            book_name = epub_file.stem
-            if book_output_path:
-                book_output_path = book_output_path / book_name
-            else:
-                # Default: create subdirectory in input directory
-                book_output_path = epub_file.parent / book_name
-
-            # Ensure the directory exists
-            book_output_path.mkdir(parents=True, exist_ok=True)
-            logging.info(f"Created output directory: {book_output_path}")
 
         cfg = Config(
             voice=voice,

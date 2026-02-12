@@ -40,6 +40,40 @@ warnings.filterwarnings("ignore", message=".*looks like.*")
 warnings.filterwarnings("ignore", message=".*surrogate.*")
 
 
+def get_unique_output_path(output_file: Path) -> Path:
+    """Generate a unique output path by appending a number if file exists.
+
+    Example: If Book.m4b exists, returns Book_1.m4b, then Book_2.m4b, etc.
+    """
+    if not output_file.exists():
+        return output_file
+
+    # Split into stem, number suffix, and extension
+    stem = output_file.stem
+    suffix = output_file.suffix
+    parent = output_file.parent
+
+    # Check if stem already ends with _N pattern
+    import re
+
+    match = re.match(r"^(.+)_(\d+)$", stem)
+    if match:
+        base_stem = match.group(1)
+        start_num = int(match.group(2)) + 1
+    else:
+        base_stem = stem
+        start_num = 1
+
+    # Find next available number
+    counter = start_num
+    while True:
+        new_name = f"{base_stem}_{counter}{suffix}"
+        new_path = parent / new_name
+        if not new_path.exists():
+            return new_path
+        counter += 1
+
+
 @dataclass
 class ETATracker:
     """Tracks TTS throughput for accurate ETA calculation."""
@@ -638,8 +672,32 @@ class AudioBuilder:
                 self.console.print("[red]No results generated. Aborting.[/red]")
                 return False
 
-            with self.console.status("[bold green]Stitching audio..."):
-                self._stitch_files(results, output_file)
+            # Stitch audio files with progress display
+            self.console.print(f"[dim]Output location:[/dim] {output_file.parent}")
+
+            from rich.progress import (
+                Progress,
+                SpinnerColumn,
+                BarColumn,
+                TextColumn,
+                TimeRemainingColumn,
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold green]Stitching audio..."),
+                BarColumn(complete_style="green", finished_style="green"),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=self.console,
+                transient=True,
+            ) as progress:
+                stitch_task = progress.add_task(
+                    "Stitching", total=len(results), completed=0
+                )
+                self._stitch_files_with_progress(
+                    results, output_file, progress, stitch_task
+                )
 
             # Embed cover from EPUB into the audiobook
             self._embed_cover(output_file)
@@ -948,6 +1006,80 @@ class AudioBuilder:
         cmd.append(str(output_file))
         subprocess.run(cmd, check=True)
 
+    def _stitch_files_with_progress(
+        self,
+        results: list[AudioResult],
+        output_file: Path,
+        progress: "Progress",
+        task_id: "TaskID",
+    ):
+        """Stitch audio files with progress updates.
+
+        This method does the same work as _stitch_files but updates
+        the progress bar as each chapter is processed.
+        """
+        file_list = self.temp_dir / "files.txt"
+        meta_file = self.temp_dir / "metadata.txt"
+
+        # Write file list with progress updates
+        with open(file_list, "w", encoding="utf-8") as f:
+            for idx, res in enumerate(results):
+                f.write(f"file '{res.file_path.resolve().as_posix()}'\n")
+                progress.update(task_id, completed=idx + 1)
+
+        # Reset progress for metadata writing phase
+        progress.update(
+            task_id, completed=0, total=len(results), description="Writing metadata..."
+        )
+
+        # Write metadata with progress updates
+        with open(meta_file, "w", encoding="utf-8") as f:
+            f.write(";FFMETADATA1\n")
+            t = 0
+            for idx, res in enumerate(results):
+                start, end = int(t), int(t + res.duration_ms)
+                f.write(
+                    f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={res.title}\n"
+                )
+                t += res.duration_ms
+                progress.update(task_id, completed=idx + 1)
+
+        # Update description for ffmpeg phase
+        progress.update(
+            task_id, completed=0, total=100, description="Combining with ffmpeg..."
+        )
+
+        # Build ffmpeg command
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(file_list),
+            "-i",
+            str(meta_file),
+            "-map_metadata",
+            "1",
+            "-c:a",
+            "aac" if output_file.suffix == ".m4b" else "libmp3lame",
+            "-b:a",
+            self.cfg.m4b_bitrate if output_file.suffix == ".m4b" else "128k",
+        ]
+        if output_file.suffix == ".m4b":
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(str(output_file))
+
+        # Run ffmpeg (we can't easily track progress here, so we just show it's working)
+        subprocess.run(cmd, check=True)
+
+        # Mark as complete
+        progress.update(task_id, completed=100)
+
     def _embed_cover(self, output_file: Path) -> None:
         """Embed cover image from EPUB into the M4B file."""
         try:
@@ -1031,6 +1163,9 @@ class AudioBuilder:
                 else self.cfg.epub_path.parent
             )
             output_file = output_dir / f"{book_title}.m4b"
+
+        # Ensure unique filename if file already exists
+        output_file = get_unique_output_path(output_file)
 
         return self.build(
             chapters, output_file, chapter_batch_info, total_batches, total_chars
