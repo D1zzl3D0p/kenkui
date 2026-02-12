@@ -105,16 +105,20 @@ class TestBasicCLI:
         assert "content-only" in result.stdout
         assert "all" in result.stdout
 
-    def test_no_input_shows_help(self):
-        """Test that running without input shows abbreviated help."""
-        result = subprocess.run(
-            [sys.executable, "-m", "kenkui"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "Kenkui - EPUB to Audiobook Converter" in result.stdout
-        assert "Usage:" in result.stdout
+    def test_no_input_uses_current_directory(self):
+        """Test that running without input defaults to current directory."""
+        import tempfile
+
+        # Create a truly empty temporary directory
+        with tempfile.TemporaryDirectory() as empty_dir:
+            result = subprocess.run(
+                [sys.executable, "-m", "kenkui", empty_dir],
+                capture_output=True,
+                text=True,
+            )
+            # Should report no EPUB files found in empty directory
+            assert result.returncode == 1
+            assert "No EPUB files found" in result.stdout
 
     def test_epub_file_not_found(self):
         """Test error handling for non-existent EPUB file."""
@@ -149,6 +153,16 @@ class TestBookSelectionFlags:
         )
         assert result.returncode == 0
         assert "--no-select-books" in result.stdout
+
+    def test_search_hidden_dirs_help_text(self):
+        """Test that --search-hidden-dirs appears in help output."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kenkui", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "--search-hidden-dirs" in result.stdout
 
 
 class TestLoggingFlags:

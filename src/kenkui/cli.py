@@ -29,6 +29,7 @@ from .helpers import (  # noqa: E402
     print_chapter_presets,
     select_books_interactive,
 )
+from .file_finder import find_epub_files  # noqa: E402
 
 warnings.filterwarnings("ignore")
 
@@ -54,7 +55,7 @@ def print_abbreviated_help():
     help_text = """[bold cyan]Kenkui - EPUB to Audiobook Converter[/bold cyan]
 
 [bold]Usage:[/bold]
-  kenkui <epub_file_or_directory> [options]
+  kenkui [epub_file_or_directory] [options]
 
 [bold]Quick Examples:[/bold]
   # Convert a single book with default voice
@@ -63,8 +64,14 @@ def print_abbreviated_help():
   # Use a specific voice
   kenkui book.epub -v AlbusDumbledore
 
-  # Process all books in a directory
+  # Process all books in current directory (recursive search)
+  kenkui
+
+  # Process all books in a specific directory
   kenkui ~/books/
+
+  # Include hidden directories in search
+  kenkui ~/books/ --search-hidden-dirs
 
   # Filter chapters with regex patterns
   kenkui book.epub -i "Chapter.*" -e "Appendix"
@@ -102,9 +109,9 @@ def main():
     parser.add_argument(
         "input",
         type=Path,
-        nargs="?",  # Make input optional for --fix-audiobook mode
-        default=None,
-        help="EPUB file or directory",
+        nargs="?",
+        default=Path.cwd(),  # Default to current directory
+        help="EPUB file or directory (default: current directory)",
     )
     parser.add_argument(
         "-v",
@@ -211,6 +218,12 @@ def main():
         action="store_false",
         dest="select_books",
         help="Process all books in directory without selection prompt",
+    )
+    parser.add_argument(
+        "--search-hidden-dirs",
+        action="store_true",
+        default=False,
+        help="Search hidden directories when looking for EPUB files (default: False)",
     )
 
     args = parser.parse_args()
@@ -320,10 +333,9 @@ def main():
         print_chapter_presets(console)
         return
 
-    # Show abbreviated help if no input provided
+    # Handle case when input is explicitly None (shouldn't happen with default)
     if args.input is None:
-        print_abbreviated_help()
-        return
+        args.input = Path.cwd()
 
     # Validate input
     if not args.input.exists():
@@ -334,10 +346,10 @@ def main():
 
     logging.info(f"Processing input: {args.input}")
 
-    # Build queue
+    # Build queue - uses fast recursive search for directories
     if args.input.is_dir():
-        queue_files = sorted(args.input.glob("*.epub"))
-        logging.info(f"Found {len(queue_files)} EPUB files in directory")
+        queue_files = sorted(find_epub_files(args.input, args.search_hidden_dirs))
+        logging.info(f"Found {len(queue_files)} EPUB files in directory (recursive)")
     else:
         queue_files = [args.input]
         logging.info(f"Processing single file: {args.input}")

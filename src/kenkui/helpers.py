@@ -1,9 +1,12 @@
 import logging
+import re
 import sys
 import importlib.resources
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+from xml.etree import ElementTree as ET
 
 from rich.console import Console
 from rich.table import Table
@@ -27,24 +30,176 @@ from .utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
 logger = logging.getLogger(__name__)
 
 
+def _natural_sort_key(text: str) -> list:
+    """Generate a sort key for natural (human-friendly) sorting.
+
+    Splits text into alternating non-numeric and numeric parts.
+    Non-numeric parts are lowercased for case-insensitive sorting.
+    Numeric parts are converted to integers for proper numeric comparison.
+
+    Example: "Chapter 10" -> ['chapter ', 10]
+             "Chapter 2" -> ['chapter ', 2]
+
+    This ensures "Chapter 2" comes before "Chapter 10".
+    """
+    parts = []
+    for part in re.split(r"(\d+)", text.lower()):
+        if part.isdigit():
+            parts.append(int(part))
+        else:
+            parts.append(part)
+    return parts
+
+
 def quick_count_chapters(epub_path: Path) -> int | None:
-    """Quickly count chapters in an EPUB without full processing.
+    """Quickly count chapters in an EPUB by parsing TOC without full extraction.
+
+    This lightweight version:
+    1. Opens the EPUB as a ZIP file
+    2. Finds the TOC file (NCX or NAV)
+    3. Counts TOC entries
+    4. Falls back to counting HTML/XHTML files if no TOC found
+
+    Much faster than full chapter extraction since it avoids:
+    - BeautifulSoup HTML parsing
+    - Full text extraction
+    - Chapter object creation
 
     Returns None if counting fails.
     """
     logger.debug(f"Counting chapters in {epub_path}")
-    try:
-        # Import here to avoid circular dependency
-        from .parsing import EpubReader
 
-        reader = EpubReader(epub_path)
-        chapters = reader.extract_chapters()
-        count = len(chapters)
-        logger.debug(f"Found {count} chapters in {epub_path}")
-        return count
-    except Exception as e:
-        logger.warning(f"Failed to count chapters in {epub_path}: {e}")
+    try:
+        with zipfile.ZipFile(epub_path, "r") as epub_zip:
+            namelist = epub_zip.namelist()
+
+            # Find the container.xml to locate the OPF file
+            container_path = "META-INF/container.xml"
+            if container_path not in namelist:
+                return _count_html_files(namelist)
+
+            try:
+                container_xml = epub_zip.read(container_path)
+                container_tree = ET.fromstring(container_xml)
+
+                ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
+                rootfile = container_tree.find(".//container:rootfile", ns)
+
+                if rootfile is None:
+                    return _count_html_files(namelist)
+
+                opf_path = rootfile.get("full-path")
+                if opf_path is None or opf_path not in namelist:
+                    return _count_html_files(namelist)
+
+                # Read OPF to find TOC reference
+                opf_xml = epub_zip.read(opf_path)
+                opf_tree = ET.fromstring(opf_xml)
+                opf_ns = {"opf": "http://www.idpf.org/2007/opf"}
+
+                # Look for NCX file (EPUB2)
+                ncx_item = opf_tree.find(
+                    ".//opf:item[@media-type='application/x-dtbncx+xml']", opf_ns
+                )
+
+                if ncx_item is not None:
+                    ncx_href = ncx_item.get("href")
+                    if ncx_href:
+                        opf_dir = str(Path(opf_path).parent)
+                        if opf_dir == ".":
+                            ncx_path = ncx_href
+                        else:
+                            ncx_path = str(Path(opf_dir) / ncx_href)
+
+                        if ncx_path in namelist:
+                            count = _count_ncx_chapters(epub_zip, ncx_path)
+                            if count > 0:
+                                logger.debug(
+                                    f"Found {count} chapters via NCX in {epub_path}"
+                                )
+                                return count
+
+                # Look for NAV file (EPUB3)
+                nav_item = opf_tree.find(".//opf:item[@properties='nav']", opf_ns)
+
+                if nav_item is not None:
+                    nav_href = nav_item.get("href")
+                    if nav_href:
+                        opf_dir = str(Path(opf_path).parent)
+                        if opf_dir == ".":
+                            nav_path = nav_href
+                        else:
+                            nav_path = str(Path(opf_dir) / nav_href)
+
+                        if nav_path in namelist:
+                            count = _count_nav_chapters(epub_zip, nav_path)
+                            if count > 0:
+                                logger.debug(
+                                    f"Found {count} chapters via NAV in {epub_path}"
+                                )
+                                return count
+
+                # Fallback: count HTML files
+                return _count_html_files(namelist)
+
+            except ET.ParseError:
+                return _count_html_files(namelist)
+
+    except (zipfile.BadZipFile, OSError, PermissionError) as e:
+        logger.warning(f"Failed to read EPUB {epub_path}: {e}")
         return None
+
+
+def _count_ncx_chapters(epub_zip: zipfile.ZipFile, ncx_path: str) -> int:
+    """Count chapters in NCX TOC file."""
+    try:
+        ncx_content = epub_zip.read(ncx_path).decode("utf-8", errors="ignore")
+        ncx_tree = ET.fromstring(ncx_content)
+
+        ns = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
+        navpoints = ncx_tree.findall(".//ncx:navPoint", ns)
+
+        return len(navpoints)
+    except Exception:
+        return 0
+
+
+def _count_nav_chapters(epub_zip: zipfile.ZipFile, nav_path: str) -> int:
+    """Count chapters in EPUB3 NAV file."""
+    try:
+        nav_content = epub_zip.read(nav_path).decode("utf-8", errors="ignore")
+        nav_tree = ET.fromstring(nav_content)
+
+        ns = {"xhtml": "http://www.w3.org/1999/xhtml"}
+
+        # Look for toc nav element
+        toc_nav = nav_tree.find(".//xhtml:nav[@epub:type='toc']", ns)
+        if toc_nav is None:
+            toc_nav = nav_tree.find(".//nav[@epub:type='toc']")
+
+        if toc_nav is not None:
+            # Count links in the toc
+            links = toc_nav.findall(".//xhtml:a", ns)
+            if not links:
+                links = toc_nav.findall(".//a")
+            return len(links)
+
+        return 0
+    except Exception:
+        return 0
+
+
+def _count_html_files(namelist: list[str]) -> int:
+    """Fallback: count HTML/XHTML files as approximate chapter count."""
+    count = 0
+    for name in namelist:
+        if name.lower().endswith((".html", ".htm", ".xhtml")):
+            # Skip common non-chapter files
+            lower_name = name.lower()
+            if any(skip in lower_name for skip in ["toc", "nav", "cover", "copyright"]):
+                continue
+            count += 1
+    return count
 
 
 def select_books_interactive(
@@ -53,8 +208,9 @@ def select_books_interactive(
 ) -> list[Path]:
     """Interactive book selection when processing a directory.
 
-    Displays a table of books with chapter counts and lets user select
-    which ones to process using comma-separated numbers or ranges.
+    Displays a table of books with chapter counts (sorted alphabetically)
+    and lets user select which ones to process using comma-separated numbers
+    or ranges.
 
     Returns filtered list of selected book files.
     """
@@ -70,6 +226,9 @@ def select_books_interactive(
     for book_path in book_files:
         chapter_count = quick_count_chapters(book_path)
         book_info.append((book_path, chapter_count))
+
+    # Sort books by filename using natural sort (case-insensitive)
+    book_info.sort(key=lambda x: _natural_sort_key(x[0].name))
 
     # Create selection table
     table = Table(
