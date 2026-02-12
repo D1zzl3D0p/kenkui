@@ -148,6 +148,16 @@ No. This is intentional — M4B is a significantly better format for audiobooks.
 **Does it support formats other than EPUB?**  
 Not currently. EPUB only, for now.
 
+**Why do I need to log in to Hugging Face for custom voices?**  
+The pocket-tts model that powers kenkui is hosted on Hugging Face and is "gated," meaning the authors require users to accept their terms of use before downloading it. This is a one-time setup that takes about 2 minutes.
+
+When you first use a custom voice (anything other than the 8 built-in defaults), kenkui will guide you through:
+1. Creating a free Hugging Face account (if you don't have one)
+2. Generating a read-only access token
+3. Accepting the model's terms of use
+
+The process is interactive and will open your browser at the right pages. You only need to do this once.
+
 **Does it upload my books anywhere?**  
 No. Everything runs locally. Internet access is only needed if you pull voices from Hugging Face.
 
