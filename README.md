@@ -44,6 +44,20 @@ kenkui is intentionally easy to install and easy to use.
 
 ### Install
 
+#### One-line installer (macOS / Linux)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/D1zzl3D0p/kenkui/main/install.sh | bash
+```
+
+#### One-line installer (Windows)
+
+```powershell
+powershell -Command "irm https://raw.githubusercontent.com/D1zzl3D0p/kenkui/main/install.ps1 | iex"
+```
+
+#### Manual install
+
 Recommended:
 
 ```bash
