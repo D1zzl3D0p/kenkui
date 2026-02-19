@@ -22,7 +22,7 @@ If you have ebooks and want audiobooks, kenkui is for you.
 - Super high-quality text-to-speech
 - Multithreaded
 - EPUB-aware chapter parsing
-- **Flexible chapter filtering with regex patterns and presets**
+- Flexible chapter filtering with regex patterns and presets
 - Custom voices
 - Batch processing
 - Automatic cover embedding (EPUB → M4B)
