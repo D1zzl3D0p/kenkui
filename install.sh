@@ -6,6 +6,8 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+PYTHON_CMD=""
+
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
@@ -38,8 +40,12 @@ check_python() {
     elif command -v python &> /dev/null; then
         PYTHON_CMD="python"
     else
-        log_error "Python not found. Please install Python 3.7 or later."
-        return 1
+        log_error "Python not found."
+        install_python
+        if [[ $? -ne 0 ]]; then
+            return 1
+        fi
+        return 0
     fi
     
     PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
@@ -48,15 +54,84 @@ check_python() {
     
     if [[ "$PYTHON_MAJOR" -lt 3 ]] || ([[ "$PYTHON_MAJOR" -eq 3 ]] && [[ "$PYTHON_MINOR" -lt 7 ]]); then
         log_error "Python 3.7+ required, found $PYTHON_VERSION"
-        return 1
+        install_python
+        if [[ $? -ne 0 ]]; then
+            return 1
+        fi
     fi
     
     log_info "Python $PYTHON_VERSION found"
     return 0
 }
 
+install_python() {
+    log_warn "Installing Python 3.12..."
+    
+    case "$OS" in
+        macos)
+            if command -v brew &> /dev/null; then
+                log_info "Installing Python via Homebrew..."
+                brew install python312
+            else
+                log_info "Installing Homebrew first..."
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                brew install python312
+            fi
+            ;;
+        debian|linux)
+            if command -v apt &> /dev/null; then
+                log_info "Installing Python via apt..."
+                sudo apt update
+                sudo apt install -y python3.12 python3-pip
+            elif command -v dnf &> /dev/null; then
+                log_info "Installing Python via dnf..."
+                sudo dnf install -y python3.12 python3-pip
+            else
+                log_info "Installing Python via official installer..."
+                curl -sSL https://www.python.org/ftp/python/3.12.0/python-3.12.0-macos11.pkg -o /tmp/python.pkg || true
+            fi
+            ;;
+        fedora)
+            log_info "Installing Python via dnf..."
+            sudo dnf install -y python3.12 python3-pip
+            ;;
+        arch)
+            log_info "Installing Python via pacman..."
+            sudo pacman -S --noconfirm python python-pip
+            ;;
+        freebsd)
+            log_info "Installing Python via pkg..."
+            sudo pkg install -y python312
+            ;;
+        *)
+            log_error "Cannot automatically install Python on this platform. Please install Python 3.7+ manually."
+            return 1
+            ;;
+    esac
+    
+    if command -v python3 &> /dev/null; then
+        PYTHON_CMD="python3"
+    elif command -v python &> /dev/null; then
+        PYTHON_CMD="python"
+    else
+        log_error "Failed to install Python"
+        return 1
+    fi
+    
+    log_info "Python installed successfully"
+    return 0
+}
+
 check_uv() {
     log_info "Checking for uv..."
+    
+    if [[ -z "$PYTHON_CMD" ]]; then
+        if command -v python3 &> /dev/null; then
+            PYTHON_CMD="python3"
+        elif command -v python &> /dev/null; then
+            PYTHON_CMD="python"
+        fi
+    fi
     
     if command -v uv &> /dev/null; then
         log_info "uv already installed"
@@ -116,7 +191,8 @@ install_kenkui() {
         log_info "Run 'kenkui --help' to get started"
     else
         log_error "Failed to install kenkui"
-        return 1    fi
+        return 1
+    fi
     
     return 0
 }
