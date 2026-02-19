@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-19
+
+### Changed
+
+- **Simplified CLI**: Removed redundant `--select-books` flag (was default behavior)
+- **Consolidated logging**: Merged `--debug` into `--verbose` for simpler CLI
+- **Renamed flags**:
+  - `--no-select-books` → `--no-select`
+  - `--list-chapter-presets` → `--list-filter-presets`
+- **Removed `--search-hidden-dirs`**: Users should pass files directly if in hidden directories
+
+### Added
+
+- FAQ entry explaining hidden directory handling
+- `--list-voices` now includes chapter filter presets in output
+
+### Fixed
+
+- Fixed `-v` short flag conflict between `--voice` and `--verbose`
+
 ## [0.6.4] - 2026-02-19
 
 ### Changed

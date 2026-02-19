@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kenkui"
-version = "0.6.4"
+version = "0.7.0"
 description = "Convert Ebooks to Audiobooks with [custom] voice samples"
 readme = "README.md"
 authors = [{ name = "Sumner MacArthur", email = "spn1kolat3sla@gmail.com" }]
 license = "GPL-3.0-or-later"
-requires-python = ">=3.7" # See 'How to determine' section below
+requires-python = ">=3.12"
 classifiers = [
-  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
   "Operating System :: OS Independent",
 ]
 

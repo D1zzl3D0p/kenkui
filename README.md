@@ -1,6 +1,6 @@
 # kenkui
 
-![Python](https://img.shields.io/badge/python-3.7+-blue)
+![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![License](https://img.shields.io/github/license/D1zzl3D0p/kenkui)
 ![PyPI](https://img.shields.io/pypi/v/kenkui)
@@ -34,43 +34,34 @@ If you have ebooks and want audiobooks, kenkui is for you.
 
 kenkui is intentionally easy to install and easy to use.
 
-### Requirements
-
-- Python **3.7+**
-- One Python installer:
-  - `uv` (recommended): <https://docs.astral.sh/uv/getting-started/installation/>
-  - or `pip`
-  - or `pipx`
-
-### Install
-
-#### One-line installer (macOS / Linux)
+### One-line installer (macOS / Linux)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/D1zzl3D0p/kenkui/main/install.sh | bash
 ```
 
-#### One-line installer (Windows)
+### One-line installer (Windows)
 
 ```powershell
 powershell -Command "irm https://raw.githubusercontent.com/D1zzl3D0p/kenkui/main/install.ps1 | iex"
 ```
 
-#### Manual install
+### Requirements
 
-Recommended:
+- Python **3.12+**
+- One Python installer: `uv` (recommended), `pip`, or `pipx`
+
+### Manual install
 
 ```bash
 uv tool install kenkui
 ```
 
-Alternatives if you prefer:
+Or with pip/pipx:
 
 ```bash
 pip install kenkui
-```
-
-```bash
+# or
 pipx install kenkui
 ```
 
@@ -82,7 +73,7 @@ kenkui book.epub
 
 That's it. You'll get a `book.m4b` alongside your EPUB.
 
-You can also point Kenkui at a directory, and it will recursively convert all EPUBs it finds.
+You can also point Kenkui at a directory, and it will recursively convert all EPUBs it finds. Running without arguments searches the current directory and all subdirectories.
 
 ---
 
@@ -173,6 +164,13 @@ The process is interactive and will open your browser at the right pages. You on
 
 **Does it upload my books anywhere?**  
 No. Everything runs locally. Internet access is only needed if you pull voices from Hugging Face.
+
+**Why isn't Kenkui finding my EPUB in a hidden directory?**  
+Kenkui doesn't search hidden directories by default. If you have books in hidden folders, pass the file directly instead of the directory:
+
+```bash
+kenkui /path/to/hidden/directory/book.epub
+```
 
 ---
 

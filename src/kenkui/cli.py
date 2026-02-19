@@ -70,9 +70,6 @@ def print_abbreviated_help():
   # Process all books in a specific directory
   kenkui ~/books/
 
-  # Include hidden directories in search
-  kenkui ~/books/ --search-hidden-dirs
-
   # Filter chapters with regex patterns
   kenkui book.epub -i "Chapter.*" -e "Appendix"
 
@@ -88,11 +85,10 @@ def print_abbreviated_help():
   --chapter-preset      Filter: none|all|content-only|chapters-only|with-parts
   -i, --include-chapter Include chapters matching regex (repeatable)
   -e, --exclude-chapter Exclude chapters matching regex (repeatable)
-  --select-books        Interactively select books from directory (default)
-  --no-select-books     Process all books without prompting
+  --no-select           Process all books without prompting
   --preview             Preview what would be converted
   --list-voices         Show available voices
-  --list-chapter-presets  Show available chapter filter presets
+  --list-filter-presets Show chapter filter presets
   --log FILE            Log detailed output to file
   --verbose             Show detailed logs
 
@@ -175,20 +171,15 @@ def main():
         help="Display all available voices",
     )
     parser.add_argument(
-        "--list-chapter-presets",
+        "--list-filter-presets",
         action="store_true",
         help="Display all available chapter filter presets",
     )
+
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Show all worker logs and TTS output (not sent to /dev/null)",
-    )
-    parser.add_argument(
-        "-d",
-        "--debug",
-        action="store_true",
-        help="Show full exception tracebacks",
+        help="Show detailed logs and full exception tracebacks",
     )
     parser.add_argument(
         "--keep",
@@ -208,22 +199,9 @@ def main():
         help="Show version information and exit",
     )
     parser.add_argument(
-        "--select-books",
+        "--no-select",
         action="store_true",
-        default=True,
-        help="Interactively select books when processing a directory (default: True)",
-    )
-    parser.add_argument(
-        "--no-select-books",
-        action="store_false",
-        dest="select_books",
         help="Process all books in directory without selection prompt",
-    )
-    parser.add_argument(
-        "--search-hidden-dirs",
-        action="store_true",
-        default=False,
-        help="Search hidden directories when looking for EPUB files (default: False)",
     )
 
     args = parser.parse_args()
@@ -310,7 +288,7 @@ def main():
             workers=args.workers,
             m4b_bitrate="64k",
             keep_temp=args.keep,
-            debug_html=args.debug,
+            debug_html=args.verbose,
             chapter_filters=build_chapter_operations(
                 args.chapter_presets,
                 args.chapter_includes,
@@ -328,8 +306,8 @@ def main():
         print_available_voices(console)
         return
 
-    # Handle --list-chapter-presets
-    if args.list_chapter_presets:
+    # Handle --list-filter-presets
+    if args.list_filter_presets:
         print_chapter_presets(console)
         return
 
@@ -348,7 +326,7 @@ def main():
 
     # Build queue - uses fast recursive search for directories
     if args.input.is_dir():
-        queue_files = sorted(find_epub_files(args.input, args.search_hidden_dirs))
+        queue_files = sorted(find_epub_files(args.input))
         logging.info(f"Found {len(queue_files)} EPUB files in directory (recursive)")
     else:
         queue_files = [args.input]
@@ -361,7 +339,7 @@ def main():
 
     # Interactive book selection for directories with multiple books
     is_multi_book = len(queue_files) > 1
-    if is_multi_book and args.select_books:
+    if is_multi_book and not args.no_select:
         if args.preview:
             # In preview mode, show selector first
             queue_files = select_books_interactive(queue_files, console)
@@ -429,7 +407,7 @@ def main():
             workers=args.workers,
             m4b_bitrate="64k",
             keep_temp=args.keep,
-            debug_html=args.debug,
+            debug_html=args.verbose,
             chapter_filters=build_chapter_operations(
                 args.chapter_presets,
                 args.chapter_includes,
@@ -459,12 +437,12 @@ def main():
             # Escape Rich markup characters to prevent parsing errors
             error_msg_safe = error_msg.replace("[", "\\[").replace("]", "\\]")
             logging.error(
-                f"Error processing {epub_file}: {error_msg}", exc_info=args.debug
+                f"Error processing {epub_file}: {error_msg}", exc_info=args.verbose
             )
             console.print(
                 f"[red]Error processing {epub_file.name}: {error_msg_safe}[/red]"
             )
-            if args.debug:
+            if args.verbose:
                 import traceback
 
                 console.print(traceback.format_exc())

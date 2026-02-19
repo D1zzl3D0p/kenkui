@@ -76,7 +76,7 @@ class TestVerboseFlag:
         )
         assert result.returncode == 0
         assert "--verbose" in result.stdout
-        assert "worker logs" in result.stdout.lower() or "Show all" in result.stdout
+        assert "detailed logs" in result.stdout.lower()
 
 
 class TestBasicCLI:
@@ -93,10 +93,10 @@ class TestBasicCLI:
         assert "Available Voices" in result.stdout
         assert "alba" in result.stdout
 
-    def test_list_chapter_presets_flag(self):
-        """Test that --list-chapter-presets works and shows available presets."""
+    def test_list_filter_presets_flag(self):
+        """Test that --list-filter-presets works and shows available presets."""
         result = subprocess.run(
-            [sys.executable, "-m", "kenkui", "--list-chapter-presets"],
+            [sys.executable, "-m", "kenkui", "--list-filter-presets"],
             capture_output=True,
             text=True,
         )
@@ -134,35 +134,15 @@ class TestBasicCLI:
 class TestBookSelectionFlags:
     """Tests for the book selection flags."""
 
-    def test_select_books_help_text(self):
-        """Test that --select-books appears in help output."""
+    def test_no_select_help_text(self):
+        """Test that --no-select appears in help output."""
         result = subprocess.run(
             [sys.executable, "-m", "kenkui", "--help"],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0
-        assert "--select-books" in result.stdout
-
-    def test_no_select_books_help_text(self):
-        """Test that --no-select-books appears in help output."""
-        result = subprocess.run(
-            [sys.executable, "-m", "kenkui", "--help"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "--no-select-books" in result.stdout
-
-    def test_search_hidden_dirs_help_text(self):
-        """Test that --search-hidden-dirs appears in help output."""
-        result = subprocess.run(
-            [sys.executable, "-m", "kenkui", "--help"],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "--search-hidden-dirs" in result.stdout
+        assert "--no-select" in result.stdout
 
 
 class TestLoggingFlags:
