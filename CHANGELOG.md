@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-02-19
+
+### Changed
+
+- **Bundled ffmpeg**: ffmpeg is now included as a dependency via `imageio-ffmpeg`, so users no longer need to install it separately
+
 ## [0.6.2] - 2025-02-12
 
 ### Changed

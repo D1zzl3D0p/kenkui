@@ -37,7 +37,6 @@ kenkui is intentionally easy to install and easy to use.
 ### Requirements
 
 - Python **3.7+**
-- `ffmpeg` (<https://ffmpeg.org/download.html>)
 - One Python installer:
   - `uv` (recommended): <https://docs.astral.sh/uv/getting-started/installation/>
   - or `pip`

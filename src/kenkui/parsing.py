@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import imageio_ffmpeg
 from ebooklib import epub
 from bs4 import BeautifulSoup
 
@@ -981,7 +982,7 @@ class AudioBuilder:
                 t += res.duration_ms
 
         cmd = [
-            "ffmpeg",
+            imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-v",
             "error",
@@ -1051,7 +1052,7 @@ class AudioBuilder:
 
         # Build ffmpeg command
         cmd = [
-            "ffmpeg",
+            imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-v",
             "error",

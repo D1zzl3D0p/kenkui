@@ -11,6 +11,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from difflib import SequenceMatcher
 from contextlib import contextmanager
 
+import imageio_ffmpeg
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.panel import Panel
@@ -167,7 +168,7 @@ def extract_audio_segment(
         duration: float = (end_ms - start_ms) / 1000.0
 
         cmd = [
-            "ffmpeg",
+            imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-v",
             "error",
@@ -398,7 +399,7 @@ def rebuild_audiobook(
 
             # Build command
             cmd = [
-                "ffmpeg",
+                imageio_ffmpeg.get_ffmpeg_exe(),
                 "-y",
                 "-v",
                 "error",
