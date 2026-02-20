@@ -7,7 +7,6 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Tuple, Optional
 
 # Constants
 DEFAULT_VOICES = [
@@ -65,7 +64,7 @@ def batch_text(paragraphs: list[str], max_chars: int = 1000) -> list[str]:
     return batched
 
 
-def extract_epub_cover(epub_path: Path) -> Tuple[Optional[bytes], Optional[str]]:
+def extract_epub_cover(epub_path: Path) -> tuple[bytes | None, str | None]:
     """Extract cover image from EPUB file.
 
     Returns:

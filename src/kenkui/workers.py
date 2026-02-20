@@ -1,18 +1,20 @@
+from __future__ import annotations
+
 import importlib
 import importlib.resources
 import io
-import os
 import multiprocessing
+import os
 import sys
 import traceback
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydub import AudioSegment
 import scipy.io.wavfile
+from pydub import AudioSegment
 
-from .helpers import Chapter, AudioResult, get_bundled_voices
-from .utils import batch_text, DEFAULT_VOICES
+from .helpers import AudioResult, Chapter, get_bundled_voices
+from .utils import DEFAULT_VOICES, batch_text
 
 
 def _load_voice(voice: str, verbose: bool = False) -> str:

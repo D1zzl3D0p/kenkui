@@ -116,9 +116,9 @@ class TestBasicCLI:
                 capture_output=True,
                 text=True,
             )
-            # Should report no EPUB files found in empty directory
+            # Should report no ebook files found in empty directory
             assert result.returncode == 1
-            assert "No EPUB files found" in result.stdout
+            assert "No ebook files found" in result.stdout
 
     def test_epub_file_not_found(self):
         """Test error handling for non-existent EPUB file."""

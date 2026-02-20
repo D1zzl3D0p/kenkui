@@ -3,9 +3,10 @@ Chapter classification system - replaces skip_patterns with tag-based filtering.
 Tags allow users to understand WHY a chapter was filtered and give them control.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from __future__ import annotations
+
 import re
+from dataclasses import dataclass
 
 
 @dataclass
@@ -85,7 +86,7 @@ class ChapterClassifier:
     ]
 
     @classmethod
-    def classify(cls, title: Optional[str]) -> ChapterTags:
+    def classify(cls, title: str | None) -> ChapterTags:
         """Classify a chapter based on its title."""
         if not title:
             return ChapterTags(is_chapter=False)

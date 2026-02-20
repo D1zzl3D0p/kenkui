@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import multiprocessing
 import re
 import shutil
@@ -12,27 +14,27 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import imageio_ffmpeg
-from ebooklib import epub
 from bs4 import BeautifulSoup
-
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    BarColumn,
-    TextColumn,
-    MofNCompleteColumn,
-)
+from ebooklib import epub
 from rich.console import Console
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 from rich.table import Table
-from rich.layout import Layout
 from rich import box
 
 from .chapter_classifier import ChapterClassifier
-from .helpers import Chapter, AudioResult, Config
-from .workers import worker_process_chapter
+from .helpers import AudioResult, Chapter, Config
+from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
+from .workers import worker_process_chapter
 
 # Suppress ALL warnings by default (verbose mode will re-enable them)
 warnings.filterwarnings("ignore")
@@ -651,6 +653,7 @@ class AudioBuilder:
         self.cfg = config
         self.temp_dir = Path("temp_audio_build")
         self.console = Console()
+        self._reader = None  # Will be set in run()
 
     def build(
         self,
@@ -1082,11 +1085,16 @@ class AudioBuilder:
         progress.update(task_id, completed=100)
 
     def _embed_cover(self, output_file: Path) -> None:
-        """Embed cover image from EPUB into the M4B file."""
+        """Embed cover image from ebook into the M4B file."""
         try:
             from mutagen.mp4 import MP4, MP4Cover
 
-            cover_data, mime_type = extract_epub_cover(self.cfg.epub_path)
+            # Use the reader to get the cover (if available)
+            if self._reader is not None:
+                cover_data, mime_type = self._reader.get_cover()
+            else:
+                # Fallback for backwards compatibility
+                cover_data, mime_type = extract_epub_cover(self.cfg.ebook_path)
 
             if cover_data:
                 image_format = (
@@ -1110,13 +1118,16 @@ class AudioBuilder:
 
     def run(self):
         """Main entry point for audiobook creation"""
-        reader = EpubReader(self.cfg.epub_path, self.cfg.verbose)
+        # Use the generic reader interface to support multiple formats
+        self._reader = get_reader(self.cfg.ebook_path, self.cfg.verbose)
 
         # Extract ALL chapters with tags
-        all_chapters = reader.extract_chapters()
+        all_chapters = self._reader.get_chapters()
 
         if not all_chapters:
-            self.console.print("[red]No chapters found in EPUB[/red]")
+            self.console.print(
+                f"[red]No chapters found in {self._reader.format_name}[/red]"
+            )
             return False
 
         # Apply chapter filters
@@ -1138,7 +1149,7 @@ class AudioBuilder:
 
         # Preview mode: show what would be converted and exit
         if self.cfg.preview:
-            return self._show_preview(reader, all_chapters, chapters)
+            return self._show_preview(self._reader, all_chapters, chapters)
 
         # Pre-calculate batch information for accurate progress tracking
         # First chapter uses smaller batches for better ETA, rest use larger for performance
@@ -1157,11 +1168,13 @@ class AudioBuilder:
         if self.cfg.output_path and self.cfg.output_path.suffix:
             output_file = self.cfg.output_path
         else:
-            book_title = reader.get_book_title()
+            # Use metadata from the reader
+            metadata = self._reader.get_metadata()
+            book_title = metadata.title
             output_dir = (
                 self.cfg.output_path
                 if self.cfg.output_path
-                else self.cfg.epub_path.parent
+                else self.cfg.ebook_path.parent
             )
             output_file = output_dir / f"{book_title}.m4b"
 
@@ -1174,12 +1187,12 @@ class AudioBuilder:
 
     def _show_preview(
         self,
-        reader: EpubReader,
+        reader: EbookReader,
         all_chapters: list[Chapter],
         filtered_chapters: list[Chapter],
     ) -> bool:
         """Display preview of what would be converted."""
-        book_title = reader.get_book_title()
+        book_title = reader.get_metadata().title
 
         # Create preview table
         table = Table(

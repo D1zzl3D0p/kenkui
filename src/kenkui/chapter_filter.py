@@ -3,14 +3,17 @@ Chapter filtering system with presets and custom regex filters.
 Applied sequentially based on command-line argument order.
 """
 
+from __future__ import annotations
+
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from .helpers import Chapter
     from .chapter_classifier import ChapterTags
+    from .helpers import Chapter
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +58,8 @@ class ChapterFilter:
         "content-only": FilterPreset(
             name="Content Only",
             description="Exclude front matter, back matter, and title pages (default)",
-            filter_fn=lambda t: not (
-                t.is_front_matter or t.is_back_matter or t.is_title_page
+            filter_fn=lambda t: (
+                not (t.is_front_matter or t.is_back_matter or t.is_title_page)
             ),
         ),
         "chapters-only": FilterPreset(

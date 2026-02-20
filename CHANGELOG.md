@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-02-20
+
+### Added
+
+- **MOBI/AZW Support**: Added support for .mobi, .azw, .azw3, and .azw4 formats via new `readers/` module
+- **FB2 Support**: Added support for .fb2 and .fb2.zip formats
+- **Modular Reader Architecture**: New `EbookReader` interface with registry pattern for easy extensibility
+
+### Changed
+
+- **Format-Agnostic CLI**: Changed all "EPUB" references to "ebook" to reflect multi-format support
+- **Type Hints**: Standardized type hints across codebase using `from __future__ import annotations` and modern syntax
+- **Import Organization**: Standardized import grouping across all modules
+
+### Fixed
+
+- **Anxious People Bug**: Fixed chapters being skipped in books with script/dialogue format (content in `<b>` tags instead of `<p>` tags)
+- **quick_count_chapters()**: Fixed to use reader interface for multi-format support
+
+### Removed
+
+- **PDF Support**: Removed PDF support as it's beyond project scope
+
 ## [0.7.0] - 2026-02-19
 
 ### Changed

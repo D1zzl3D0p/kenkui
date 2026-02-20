@@ -1,7 +1,9 @@
 """
-EPUB to Audiobook Converter
-Batch Processing + Auto-Naming + Chapter Filtering
+Kenkui - Ebook to Audiobook Converter
+Supports EPUB, MOBI, AZW, AZW3, and AZW4 formats
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
@@ -9,8 +11,9 @@ import multiprocessing
 import os
 import sys
 import warnings
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
+
 from rich.console import Console
 
 # Performance tuning (must be before other imports)
@@ -28,7 +31,7 @@ from .helpers import (  # noqa: E402
     print_chapter_presets,
     select_books_interactive,
 )
-from .file_finder import find_epub_files  # noqa: E402
+from .file_finder import find_ebook_files  # noqa: E402
 from .huggingface_auth import ensure_huggingface_access, is_custom_voice  # noqa: E402
 
 warnings.filterwarnings("ignore")
@@ -52,14 +55,20 @@ def suppress_c_stderr():
 
 def print_abbreviated_help():
     """Print abbreviated help with examples when no arguments provided."""
-    help_text = """[bold cyan]Kenkui - EPUB to Audiobook Converter[/bold cyan]
+    help_text = """[bold cyan]Kenkui - Ebook to Audiobook Converter[/bold cyan]
+[dim]Supports: EPUB, MOBI, AZW, FB2, PDF[/dim]
 
 [bold]Usage:[/bold]
-  kenkui [epub_file_or_directory] [options]
+  kenkui [ebook_file_or_directory] [options]
 
 [bold]Quick Examples:[/bold]
   # Convert a single book with default voice
   kenkui book.epub
+
+  # Convert a MOBI, FB2, or PDF file
+  kenkui book.mobi
+  kenkui book.fb2
+  kenkui book.pdf
 
   # Use a specific voice
   kenkui book.epub -v AlbusDumbledore
@@ -100,14 +109,14 @@ def print_abbreviated_help():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert EPUB files to audiobooks with custom voice support."
+        description="Convert ebook files (EPUB, MOBI, AZW, FB2, PDF) to audiobooks with custom voice support."
     )
     parser.add_argument(
         "input",
         type=Path,
         nargs="?",
-        default=Path.cwd(),  # Default to current directory
-        help="EPUB file or directory (default: current directory)",
+        default=Path.cwd(),
+        help="Ebook file or directory (default: current directory). Supported: EPUB, MOBI, AZW, AZW3, AZW4, FB2, PDF",
     )
     parser.add_argument(
         "-v",
@@ -267,7 +276,7 @@ def main():
         audiobook_path = Path(args.fix_audiobook[1])
 
         if not ebook_path.exists():
-            console.print(f"[red]Error: EPUB file not found: {ebook_path}[/red]")
+            console.print(f"[red]Error: Ebook file not found: {ebook_path}[/red]")
             sys.exit(1)
 
         if not audiobook_path.exists():
@@ -281,7 +290,7 @@ def main():
 
         cfg = Config(
             voice=args.voice,
-            epub_path=ebook_path,
+            ebook_path=ebook_path,
             output_path=audiobook_path.parent,
             pause_line_ms=400,
             pause_chapter_ms=2000,
@@ -326,15 +335,15 @@ def main():
 
     # Build queue - uses fast recursive search for directories
     if args.input.is_dir():
-        queue_files = sorted(find_epub_files(args.input))
-        logging.info(f"Found {len(queue_files)} EPUB files in directory (recursive)")
+        queue_files = sorted(find_ebook_files(args.input))
+        logging.info(f"Found {len(queue_files)} ebook files in directory (recursive)")
     else:
         queue_files = [args.input]
         logging.info(f"Processing single file: {args.input}")
 
     if not queue_files:
-        logging.error("No EPUB files found in input path")
-        console.print("[red]No EPUB files found in input path.[/red]")
+        logging.error("No ebook files found in input path")
+        console.print("[red]No ebook files found in input path.[/red]")
         sys.exit(1)
 
     # Interactive book selection for directories with multiple books
@@ -379,9 +388,9 @@ def main():
         base_output_path = args.input if args.input.is_dir() else args.input.parent
 
     # Process Queue
-    for idx, epub_file in enumerate(queue_files, 1):
+    for idx, ebook_file in enumerate(queue_files, 1):
         console.rule(f"[bold magenta]Processing Book {idx}/{len(queue_files)}")
-        logging.info(f"Processing book {idx}/{len(queue_files)}: {epub_file}")
+        logging.info(f"Processing book {idx}/{len(queue_files)}: {ebook_file}")
 
         # Validate voice parameter (voice already set earlier, just validate here)
         if not voice or voice.lower() == "voice":
@@ -395,12 +404,12 @@ def main():
 
         logging.info(f"Using voice: {voice}")
 
-        # Determine output path - file will be placed next to the source EPUB
+        # Determine output path - file will be placed next to the source ebook
         book_output_path = args.output
 
         cfg = Config(
             voice=voice,
-            epub_path=epub_file,
+            ebook_path=ebook_file,
             output_path=book_output_path,
             pause_line_ms=400,
             pause_chapter_ms=2000,
@@ -425,7 +434,7 @@ def main():
                     builder.run()
             else:
                 builder.run()
-            logging.info(f"Successfully processed: {epub_file}")
+            logging.info(f"Successfully processed: {ebook_file}")
         except KeyboardInterrupt:
             logging.warning("Batch cancelled by user")
             console.print("\n[bold red]Batch Cancelled.[/bold red]")
@@ -437,10 +446,10 @@ def main():
             # Escape Rich markup characters to prevent parsing errors
             error_msg_safe = error_msg.replace("[", "\\[").replace("]", "\\]")
             logging.error(
-                f"Error processing {epub_file}: {error_msg}", exc_info=args.verbose
+                f"Error processing {ebook_file}: {error_msg}", exc_info=args.verbose
             )
             console.print(
-                f"[red]Error processing {epub_file.name}: {error_msg_safe}[/red]"
+                f"[red]Error processing {ebook_file.name}: {error_msg_safe}[/red]"
             )
             if args.verbose:
                 import traceback
