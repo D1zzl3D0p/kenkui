@@ -1,37 +1,20 @@
 from __future__ import annotations
 
 import multiprocessing
-import re
 import shutil
 import subprocess
 import time
 import warnings
-import zipfile
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
 import imageio_ffmpeg
-from bs4 import BeautifulSoup
-from ebooklib import epub
-from rich.console import Console
-from rich.layout import Layout
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-)
-from rich.table import Table
-from rich import box
 
-from .chapter_classifier import ChapterClassifier
-from .helpers import AudioResult, Chapter, Config
+from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
+from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .workers import worker_process_chapter
@@ -43,6 +26,18 @@ warnings.filterwarnings("ignore", message=".*looks like.*")
 warnings.filterwarnings("ignore", message=".*surrogate.*")
 
 
+class SimpleConsole:
+    """Simple console output replacement for Rich."""
+
+    def print(self, msg: str = "", style: str = ""):
+        msg = str(msg)
+        # Strip Rich markup tags
+        import re
+
+        msg = re.sub(r"\[/?[a-zA-Z_ ]+\]", "", msg)
+        print(msg)
+
+
 def get_unique_output_path(output_file: Path) -> Path:
     """Generate a unique output path by appending a number if file exists.
 
@@ -51,13 +46,11 @@ def get_unique_output_path(output_file: Path) -> Path:
     if not output_file.exists():
         return output_file
 
-    # Split into stem, number suffix, and extension
+    import re
+
     stem = output_file.stem
     suffix = output_file.suffix
     parent = output_file.parent
-
-    # Check if stem already ends with _N pattern
-    import re
 
     match = re.match(r"^(.+)_(\d+)$", stem)
     if match:
@@ -67,11 +60,9 @@ def get_unique_output_path(output_file: Path) -> Path:
         base_stem = stem
         start_num = 1
 
-    # Find next available number
     counter = start_num
     while True:
-        new_name = f"{base_stem}_{counter}{suffix}"
-        new_path = parent / new_name
+        new_path = parent / f"{base_stem}_{counter}{suffix}"
         if not new_path.exists():
             return new_path
         counter += 1
@@ -133,527 +124,53 @@ class ETATracker:
         return f"{rate:,.1f}"
 
 
-class EpubReader:
-    def __init__(self, filepath: Path, verbose: bool = False):
-        self.filepath = filepath
-        self.verbose = verbose
-        self.book = epub.read_epub(str(filepath))
-
-    def get_book_title(self) -> str:
-        try:
-            metadata = self.book.get_metadata("DC", "title")
-            if metadata:
-                return self._sanitize_filename(metadata[0][0])
-        except Exception:
-            pass
-        return self.filepath.stem
-
-    def find_toc_file(self) -> tuple[str | None, str | None]:
-        """
-        Find the TOC file (NCX or NAV) in the EPUB.
-        Returns tuple of (file_path, toc_type) where toc_type is 'ncx' or 'nav'
-        """
-        with zipfile.ZipFile(str(self.filepath), "r") as epub_zip:
-            # First, find the content.opf file
-            namelist = epub_zip.namelist()
-
-            # Look for container.xml to find the OPF file
-            container_path = "META-INF/container.xml"
-            if container_path in namelist:
-                container_xml = epub_zip.read(container_path)
-                container_tree = ET.fromstring(container_xml)
-
-                # Find the OPF file path
-                ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
-                rootfile = container_tree.find(".//container:rootfile", ns)
-                if rootfile is not None:
-                    opf_path = rootfile.get("full-path")
-                    if opf_path is None:
-                        return (None, None)
-
-                    # Read the OPF file
-                    opf_xml = epub_zip.read(opf_path)
-                    opf_tree = ET.fromstring(opf_xml)
-
-                    # Look for NCX file reference
-                    opf_ns = {"opf": "http://www.idpf.org/2007/opf"}
-                    ncx_item = opf_tree.find(
-                        ".//opf:item[@media-type='application/x-dtbncx+xml']", opf_ns
-                    )
-
-                    if ncx_item is not None:
-                        ncx_href = ncx_item.get("href")
-                        if ncx_href is not None:
-                            # Resolve relative path
-                            opf_dir = str(Path(opf_path).parent)
-                            if opf_dir == ".":
-                                ncx_path = ncx_href
-                            else:
-                                ncx_path = str(Path(opf_dir) / ncx_href)
-                            return (ncx_path, "ncx")
-
-                    # Look for NAV file (EPUB3)
-                    nav_item = opf_tree.find(".//opf:item[@properties='nav']", opf_ns)
-                    if nav_item is not None:
-                        nav_href = nav_item.get("href")
-                        if nav_href is not None:
-                            opf_dir = str(Path(opf_path).parent)
-                            if opf_dir == ".":
-                                nav_path = nav_href
-                            else:
-                                nav_path = str(Path(opf_dir) / nav_href)
-                            return (nav_path, "nav")
-
-            # Fallback: search for common TOC file names
-            for name in namelist:
-                if name.endswith(".ncx"):
-                    return (name, "ncx")
-                if "nav.xhtml" in name.lower() or "toc.xhtml" in name.lower():
-                    return (name, "nav")
-
-        return (None, None)
-
-    def extract_raw_toc(self) -> str | None:
-        """
-        Extract the raw TOC content from the EPUB file.
-        Returns the raw XML/XHTML content as a string.
-        """
-        toc_file, toc_type = self.find_toc_file()
-
-        if toc_file is None:
-            return None
-
-        with zipfile.ZipFile(str(self.filepath), "r") as epub_zip:
-            toc_content = epub_zip.read(toc_file).decode("utf-8")
-            return toc_content
-
-    def get_toc_info(self) -> dict[str, any]:  # type: ignore
-        """
-        Get information about the TOC file without extracting full content.
-        Returns a dict with toc_file path, toc_type, and whether it was found.
-        """
-        toc_file, toc_type = self.find_toc_file()
-
-        return {
-            "found": toc_file is not None,
-            "file_path": toc_file,
-            "toc_type": toc_type,
-            "description": (
-                f"{'EPUB3 NAV' if toc_type == 'nav' else 'EPUB2 NCX'} file"
-                if toc_file
-                else "No TOC file found"
-            ),
-        }
-
-    def _parse_toc_structure(self) -> list[dict]:
-        """Parse the EPUB TOC (NCX or NAV) into a structured list of chapters.
-
-        Returns a list of dicts with keys: title, href, src
-        Returns ALL TOC entries (no filtering - filtering happens later via ChapterClassifier)
-        """
-        toc_file, toc_type = self.find_toc_file()
-        chapters: list[dict[str, str | None]] = []
-
-        if toc_file is None:
-            return chapters
-
-        try:
-            with zipfile.ZipFile(str(self.filepath), "r") as epub_zip:
-                toc_content = epub_zip.read(toc_file).decode("utf-8")
-                toc_tree = ET.fromstring(toc_content)
-
-                if toc_type == "ncx":
-                    # Parse NCX format
-                    ns = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
-                    for navpoint in toc_tree.findall(".//ncx:navPoint", ns):
-                        navlabel = navpoint.find("ncx:navLabel/ncx:text", ns)
-                        title = navlabel.text if navlabel is not None else "Untitled"
-
-                        content = navpoint.find("ncx:content", ns)
-                        if content is not None:
-                            src = content.get("src", "")
-                            href = src.split("#")[0]
-
-                            # Return ALL entries - classification happens later
-                            chapters.append(
-                                {
-                                    "title": title,
-                                    "href": href,
-                                    "src": src,
-                                }
-                            )
-                else:
-                    # Parse EPUB3 NAV format
-                    ns = {"xhtml": "http://www.w3.org/1999/xhtml"}
-                    toc_nav = toc_tree.find(".//xhtml:nav[@epub:type='toc']", ns)
-                    if toc_nav is None:
-                        toc_nav = toc_tree.find(".//nav[@epub:type='toc']")
-
-                    if toc_nav is not None:
-                        for link in toc_nav.findall(".//xhtml:a", ns):
-                            title = link.text or "Untitled"
-                            src = link.get("href", "")
-                            href = src.split("#")[0] if src else ""
-
-                            if href:
-                                # Return ALL entries - classification happens later
-                                chapters.append(
-                                    {
-                                        "title": title,
-                                        "href": href,
-                                        "src": src,
-                                    }
-                                )
-        except Exception:
-            # If TOC parsing fails, return empty list
-            pass
-
-        return chapters
-
-    def extract_chapters(self, min_text_len: int = 50) -> list[Chapter]:
-        """Extract chapters using TOC as ground truth, falling back to regex detection."""
-        # Capture warnings during chapter extraction, only show in verbose mode
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            # Try to use TOC as ground truth
-            toc_chapters = self._parse_toc_structure()
-
-        if toc_chapters:
-            return self._extract_chapters_from_toc(toc_chapters, min_text_len)
-        else:
-            # Fallback to legacy regex-based extraction
-            return self._extract_chapters_legacy(min_text_len)
-
-    def _extract_chapters_from_toc(
-        self, toc_chapters: list[dict], min_text_len: int
-    ) -> list[Chapter]:
-        """Extract chapters using TOC structure as ground truth."""
-        chapters = []
-
-        # Build a map of file -> list of (anchor, chapter_idx) tuples
-        # This handles cases where multiple chapters share the same HTML file
-        file_to_chapters: dict[str, list[tuple[str | None, int]]] = {}
-        for idx, ch in enumerate(toc_chapters):
-            # Use 'src' which contains the full path including anchor fragment
-            src = ch["src"]
-            if "#" in src:
-                file_name, anchor = src.split("#", 1)
-            else:
-                file_name, anchor = src, None
-
-            if file_name not in file_to_chapters:
-                file_to_chapters[file_name] = []
-            file_to_chapters[file_name].append((anchor, idx))
-
-        # Track paragraphs for each chapter
-        chapter_paragraphs: dict[int, list[str]] = {
-            i: [] for i in range(len(toc_chapters))
-        }
-
-        # Get all items in reading order
-        for item in self.book.get_items():
-            if not hasattr(item, "get_content") or not hasattr(item, "get_name"):
-                continue
-
-            item_name = item.get_name()
-
-            # Check if this file has any chapters
-            if item_name not in file_to_chapters:
-                continue
-
-            chapter_entries = file_to_chapters[item_name]
-
-            try:
-                content = item.get_content()
-            except Exception:
-                continue
-
-            soup = BeautifulSoup(content, "html.parser")
-            self._clean_soup(soup)
-
-            if len(chapter_entries) == 1:
-                # Single chapter in this file - assign all content to it
-                _, chapter_idx = chapter_entries[0]
-                for elem in soup.find_all(["p", "div"]):
-                    if elem.find_parent(["p", "div"]):
-                        continue
-                    text = self._clean_text(elem.get_text(" "))
-                    if text and len(text) >= 2:
-                        chapter_paragraphs[chapter_idx].append(text)
-            else:
-                # Multiple chapters in this file - need to split by anchor
-                # Sort chapters by their position in the document
-                sorted_entries: list[tuple[float, str | None, int]] = []
-                for anchor, chapter_idx in chapter_entries:
-                    if anchor:
-                        elem = soup.find(id=anchor) or soup.find(attrs={"name": anchor})
-                        if elem:
-                            # Count how many elements come before this anchor
-                            position = len(list(elem.find_all_previous()))
-                            sorted_entries.append((position, anchor, chapter_idx))
-                        else:
-                            # Anchor not found, put at end
-                            sorted_entries.append((float("inf"), anchor, chapter_idx))
-                    else:
-                        # No anchor - assume this is the first chapter (position 0)
-                        sorted_entries.append((0, anchor, chapter_idx))
-
-                sorted_entries.sort(key=lambda x: x[0])
-
-                # Now extract content for each chapter
-                for i, (pos, anchor, chapter_idx) in enumerate(sorted_entries):
-                    if anchor:
-                        start_elem = soup.find(id=anchor) or soup.find(
-                            attrs={"name": anchor}
-                        )
-                    else:
-                        # No anchor - start from beginning
-                        start_elem = None
-
-                    # Determine where this chapter ends
-                    if i + 1 < len(sorted_entries):
-                        _, next_anchor, _ = sorted_entries[i + 1]
-                        if next_anchor:
-                            end_elem = soup.find(id=next_anchor) or soup.find(
-                                attrs={"name": next_anchor}
-                            )
-                        else:
-                            end_elem = None
-                    else:
-                        end_elem = None
-
-                    # Extract all paragraphs between start and end elements
-                    if start_elem:
-                        current = start_elem.find_next_sibling()
-                    else:
-                        # Start from beginning of document
-                        current = soup.find(["p", "div"])
-
-                    while current and current != end_elem:
-                        if current.name in ["p", "div"]:
-                            if not current.find_parent(["p", "div"]):
-                                text = self._clean_text(current.get_text(" "))
-                                if text and len(text) >= 2:
-                                    chapter_paragraphs[chapter_idx].append(text)
-                        current = current.find_next_sibling()
-
-        # Create Chapter objects from TOC with accumulated paragraphs
-        chapter_idx = 1
-        for toc_idx, toc_ch in enumerate(toc_chapters):
-            paragraphs = chapter_paragraphs[toc_idx]
-
-            # Classify chapter using ChapterClassifier
-            tags = ChapterClassifier.classify(toc_ch["title"])
-
-            # Include ALL chapters (filtering happens later via ChapterFilter)
-            # For chapters with content, include the paragraphs
-            # For chapters without content (like part dividers), include empty list
-            if paragraphs:
-                content = " ".join(paragraphs)
-                if len(content) >= min_text_len:
-                    # Clean up paragraphs (remove title from first paragraph if repeated)
-                    if paragraphs and toc_ch["title"].lower().endswith(
-                        paragraphs[0].lower()
-                    ):
-                        paragraphs = paragraphs[1:]
-
-                    chapters.append(
-                        Chapter(
-                            index=chapter_idx,
-                            title=toc_ch["title"],
-                            paragraphs=paragraphs,
-                            tags=tags,
-                            toc_index=toc_idx,
-                        )
-                    )
-                    chapter_idx += 1
-            else:
-                # Include chapters without paragraphs (like part/book dividers)
-                # These will be filtered by ChapterFilter based on user preferences
-                chapters.append(
-                    Chapter(
-                        index=chapter_idx,
-                        title=toc_ch["title"],
-                        paragraphs=[],
-                        tags=tags,
-                        toc_index=toc_idx,
-                    )
-                )
-                chapter_idx += 1
-
-        return chapters
-
-    def _extract_chapters_legacy(self, min_text_len: int = 50) -> list[Chapter]:
-        """Legacy regex-based chapter extraction (fallback when no TOC)."""
-        toc_map = self._build_toc_map()
-        chapters: list[Chapter] = []
-
-        # Track hierarchy for books like Les Mis
-        current_vol = ""
-        current_book = ""
-
-        for item in self.book.get_items():
-            # Only process HTML documents
-            if not hasattr(item, "get_content") or not hasattr(item, "get_name"):
-                continue
-            try:
-                content = item.get_content()
-            except Exception:
-                continue
-            soup = BeautifulSoup(content, "html.parser")
-            self._clean_soup(soup)
-
-            # We iterate through all block-level elements
-            elements = soup.find_all(["h1", "h2", "h3", "h4", "p", "div", "section"])
-
-            current_chapter_title = toc_map.get(item.get_name(), "")
-            current_paragraphs: list[str] = []
-
-            for elem in elements:
-                # Avoid processing nested tags twice
-                if elem.find_parent(["p", "h1", "h2", "h3", "h4", "section"]):
-                    continue
-
-                text = self._clean_text(elem.get_text(" "))
-                if not text or len(text) < 2:
-                    continue
-
-                # 1. Check for Volume/Book markers to update hierarchy
-                if re.match(r"^(volume|part)\s+[ivxlcdm\d]+", text, re.I):
-                    current_vol = text
-                    continue
-                if re.match(r"^book\s+(?:the\s+)?(?:[ivxlcdm\d]+|[a-z]+)", text, re.I):
-                    current_book = text
-                    continue
-
-                # 2. Check for Chapter markers
-                # Regex looks for "Chapter X" or "X." at start of line
-                chap_match = re.match(
-                    r"^(chapter\s+[ivxlcdm\d]+|(?=[IVXLCDM]+\.)[IVXLCDM]+)([\.\-\—\s:]+)(.*)$",
-                    text,
-                    re.I,
-                )
-
-                if chap_match:
-                    # If we had content, save it as the previous chapter
-                    if current_paragraphs:
-                        self._add_chapter(
-                            chapters,
-                            current_chapter_title,
-                            current_paragraphs,
-                            min_text_len,
-                        )
-
-                    header_label = chap_match.group(1)  # e.g., "CHAPTER I"
-                    remaining_text = chap_match.group(
-                        3
-                    ).strip()  # Title text + potentially body text
-
-                    # Construct a full title: "Vol 1, Book 1, Chapter I: Title"
-                    prefix = f"{current_vol}, " if current_vol else ""
-                    prefix += f"{current_book}, " if current_book else ""
-
-                    # Split if the tag contains both title and body
-                    # If remaining_text is very long and contains a sentence break, split it.
-                    if len(remaining_text) > 200 and "." in remaining_text:
-                        # Split at first period followed by space
-                        parts = re.split(r"(?<=\.)\s+", remaining_text, maxsplit=1)
-                        current_chapter_title = f"{prefix}{header_label}: {parts[0]}"
-                        current_paragraphs = [parts[1]] if len(parts) > 1 else []
-                    else:
-                        current_chapter_title = (
-                            f"{prefix}{header_label}: {remaining_text}"
-                        )
-                        current_paragraphs = []
-                else:
-                    # It's just normal body text
-                    current_paragraphs.append(text)
-
-            # Close the last chapter of the file
-            if current_paragraphs:
-                self._add_chapter(
-                    chapters, current_chapter_title, current_paragraphs, min_text_len
-                )
-
-        return chapters
-
-    def _add_chapter(
-        self,
-        chapters: list[Chapter],
-        title: str,
-        paragraphs: list[str],
-        min_len: int,
-        toc_index: int = 0,
-    ):
-        content = " ".join(paragraphs)
-        if len(content) < min_len:
-            return
-
-        # Fallback for untitled sections
-        final_title = title if title else f"Chapter {len(chapters) + 1}"
-
-        # Clean up cases where title is just a repeat of first paragraph
-        if paragraphs and final_title.lower().endswith(paragraphs[0].lower()):
-            paragraphs = paragraphs[1:]
-
-        # Classify the chapter
-        tags = ChapterClassifier.classify(final_title)
-
-        # Store original paragraphs for accurate progress tracking
-        # Batching happens in the worker, not here
-        chapters.append(
-            Chapter(
-                index=len(chapters) + 1,
-                title=final_title,
-                paragraphs=paragraphs,
-                tags=tags,
-                toc_index=toc_index,
-            )
-        )
-
-    def _build_toc_map(self) -> dict[str, str]:
-        toc_map = {}
-
-        def traverse(nodes):
-            for node in nodes:
-                if hasattr(node, "href") and hasattr(node, "title"):  # Link-like object
-                    toc_map[node.href.split("#")[0]] = node.title
-                elif hasattr(node, "children"):  # Section-like object
-                    traverse(node.children)
-
-        if hasattr(self.book, "toc"):
-            traverse(self.book.toc)
-        return toc_map
-
-    def _clean_soup(self, soup: BeautifulSoup):
-        # Remove common non-story elements
-        for t in soup.find_all(["sup", "script", "style", "nav", "footer"]):
-            t.decompose()
-        for t in soup.find_all(
-            class_=re.compile(r"page-?number|hidden|metadata|footnote", re.I)
-        ):
-            t.decompose()
-
-    @staticmethod
-    def _clean_text(text: str) -> str:
-        # Normalize text and handle encoding issues
-        text = text.encode("utf-8", errors="replace").decode("utf-8")
-        return re.sub(r"\s+", " ", text).strip()
-
-    @staticmethod
-    def _sanitize_filename(name: str) -> str:
-        return re.sub(r'[\\/*?:"<>|]', "", name).strip()
-
-
-# --- UI MANAGER ---
-
-
 class AudioBuilder:
-    def __init__(self, config: Config):
+    """Builds audiobooks from ebooks with progress tracking."""
+
+    def __init__(
+        self,
+        config: ProcessingConfig,
+        progress_callback: Callable[[float, str, int], None] | None = None,
+    ):
+        """
+        Initialize AudioBuilder.
+
+        Args:
+            config: Configuration for audio building
+            progress_callback: Optional callback(percent_complete, current_chapter, eta_seconds)
+        """
         self.cfg = config
+        self.progress_callback = progress_callback
         self.temp_dir = Path("temp_audio_build")
-        self.console = Console()
-        self._reader = None  # Will be set in run()
+        self.console = SimpleConsole()
+        self._reader: EbookReader | None = None
+        self._total_batches = 0
+        self._completed_batches = 0
+        self._current_chapter = ""
+
+    def _report_progress(self, chapter: str = "", eta: int = 0):
+        """Report progress to callback if configured."""
+        if self.progress_callback and self._total_batches > 0:
+            percent = (self._completed_batches / self._total_batches) * 100
+            self.progress_callback(percent, chapter, eta)
+
+    def _signal_phase(self, message: str):
+        """Send a named post-TTS phase status (stitching, cover, etc.) at 100%."""
+        if self.progress_callback:
+            self.progress_callback(100.0, message, 0)
+
+    def _calculate_eta(self, eta_tracker: ETATracker) -> int:
+        """Calculate ETA in seconds from eta_tracker."""
+        try:
+            eta_str = eta_tracker.format_eta()
+            parts = eta_str.split(":")
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            elif len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            pass
+        return 0
 
     def build(
         self,
@@ -665,50 +182,30 @@ class AudioBuilder:
     ) -> bool:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
+        self._total_batches = total_batches
+        self._completed_batches = 0
+        self._report_progress("Starting...", 0)
+
         with self._managed_temp_dir():
-            self.console.print(
-                f"[bold cyan]Building audiobook:[/bold cyan] {output_file.name}"
-            )
+            print(f"Building audiobook: {output_file.name}")
             results = self._process_chapters(
                 chapters, chapter_batch_info, total_batches, total_chars
             )
             if not results:
-                self.console.print("[red]No results generated. Aborting.[/red]")
+                print("No results generated. Aborting.")
                 return False
 
-            # Stitch audio files with progress display
-            self.console.print(f"[dim]Output location:[/dim] {output_file.parent}")
+            # ── Stitching phase ──────────────────────────────────────────
+            # Signal explicitly so the UI doesn't look frozen at 100%.
+            self._signal_phase("Stitching audio files…")
+            print("Stitching audio files...")
+            self._stitch_files(results, output_file)
 
-            from rich.progress import (
-                Progress,
-                SpinnerColumn,
-                BarColumn,
-                TextColumn,
-                TimeRemainingColumn,
-            )
-
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold green]Stitching audio..."),
-                BarColumn(complete_style="green", finished_style="green"),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeRemainingColumn(),
-                console=self.console,
-                transient=True,
-            ) as progress:
-                stitch_task = progress.add_task(
-                    "Stitching", total=len(results), completed=0
-                )
-                self._stitch_files_with_progress(
-                    results, output_file, progress, stitch_task
-                )
-
-            # Embed cover from EPUB into the audiobook
+            # ── Cover embedding ──────────────────────────────────────────
+            self._signal_phase("Embedding cover art…")
             self._embed_cover(output_file)
 
-            self.console.print(
-                f"[bold green]✓ Audiobook created:[/bold green] {output_file}"
-            )
+            print(f"Audiobook created: {output_file}")
             return True
 
     def _process_chapters(
@@ -719,11 +216,10 @@ class AudioBuilder:
         total_chars: int,
     ) -> list[AudioResult]:
         results = []
-        worker_state = {}
-        worker_errors = []
-        worker_logs = []
+        worker_state: dict = {}
+        worker_errors: list[dict] = []
+        worker_logs: list[str] = []
 
-        # Initialize ETA tracker for accurate time estimation
         eta_tracker = ETATracker(total_chars)
         chapter_start_times: dict[int, float] = {}
         completed_chapters = 0
@@ -732,49 +228,27 @@ class AudioBuilder:
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore
 
-        # Create configuration dict for workers
-        cfg_dict: dict = {}
-        cfg_dict["voice"] = self.cfg.voice
-        cfg_dict["pause_line_ms"] = self.cfg.pause_line_ms
-        cfg_dict["pause_chapter_ms"] = self.cfg.pause_chapter_ms
-        cfg_dict["tts_model"] = self.cfg.tts_model
-        cfg_dict["tts_provider"] = self.cfg.tts_provider
-        cfg_dict["model_name"] = self.cfg.model_name
-        cfg_dict["elevenlabs_key"] = self.cfg.elevenlabs_key
-        cfg_dict["elevenlabs_turbo"] = self.cfg.elevenlabs_turbo
-        cfg_dict["debug_html"] = self.cfg.debug_html
-        cfg_dict["verbose"] = self.cfg.verbose
-
-        # Create a layout depending on verbose mode
-        if self.cfg.verbose:
-            layout = Layout()
-            layout.split_column(
-                Layout(name="header", size=6),
-                Layout(name="logs", size=12),
-                Layout(name="footer"),
-            )
-        else:
-            layout = Layout()
-            layout.split_column(Layout(name="upper", size=6), Layout(name="lower"))
-
-        overall_progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TextColumn("•"),
-            TextColumn("[cyan]{task.fields[eta]} remaining"),
-            expand=True,
-        )
-        overall_task = overall_progress.add_task(
-            "[bold]Total Progress", total=total_batches, eta="--:--:--"
-        )
+        cfg_dict: dict = {
+            "voice": self.cfg.voice,
+            "pause_line_ms": self.cfg.pause_line_ms,
+            "pause_chapter_ms": self.cfg.pause_chapter_ms,
+            "tts_model": self.cfg.tts_model,
+            "tts_provider": self.cfg.tts_provider,
+            "model_name": self.cfg.model_name,
+            "elevenlabs_key": self.cfg.elevenlabs_key,
+            "elevenlabs_turbo": self.cfg.elevenlabs_turbo,
+            "debug_html": self.cfg.debug_html,
+            "verbose": self.cfg.verbose,
+            # TTS quality parameters — passed through to TTSModel.load_model()
+            "temp": self.cfg.temp,
+            "lsd_decode_steps": self.cfg.lsd_decode_steps,
+            "noise_clamp": self.cfg.noise_clamp,
+        }
 
         try:
             with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
                 futures = {}
                 for idx, ch in enumerate(chapters):
-                    # First chapter gets smaller batches for better ETA accuracy
                     info = chapter_batch_info.get(ch.title, (0, 0, idx == 0))
                     is_first = bool(info[2]) if len(info) > 2 else (idx == 0)
                     fut = pool.submit(
@@ -787,159 +261,66 @@ class AudioBuilder:
                     )
                     futures[fut] = ch
 
-                with Live(layout, refresh_per_second=8, console=self.console) as live:
-                    while True:
-                        while not queue.empty():
-                            try:
-                                msg = queue.get_nowait()
-                                event, pid = msg[0], msg[1]
-                                if event == "START":
-                                    # msg format: ("START", pid, title, total_batches, total_chars, is_first_chapter)
-                                    worker_state[pid] = {
-                                        "title": msg[2],
-                                        "total": msg[3],
-                                        "current": 0,
-                                        "total_chars": msg[4] if len(msg) > 4 else 0,
-                                        "is_first": msg[5] if len(msg) > 5 else False,
+                while True:
+                    while not queue.empty():
+                        try:
+                            msg = queue.get_nowait()
+                            event, pid = msg[0], msg[1]
+                            if event == "START":
+                                worker_state[pid] = {
+                                    "title": msg[2],
+                                    "total": msg[3],
+                                    "current": 0,
+                                    "total_chars": msg[4] if len(msg) > 4 else 0,
+                                    "is_first": msg[5] if len(msg) > 5 else False,
+                                }
+                                chapter_start_times[pid] = time.monotonic()
+                            elif event == "UPDATE":
+                                chars = msg[5] if len(msg) > 5 else 1000
+                                self._completed_batches += msg[2]
+                                eta_tracker.update(chars)
+                                if pid in worker_state:
+                                    worker_state[pid]["current"] += msg[2]
+                                    self._current_chapter = worker_state[pid].get(
+                                        "title", ""
+                                    )
+                                eta_seconds = self._calculate_eta(eta_tracker)
+                                self._report_progress(
+                                    self._current_chapter, eta_seconds
+                                )
+                            elif event == "DONE":
+                                if pid in worker_state:
+                                    if pid in chapter_start_times:
+                                        elapsed = (
+                                            time.monotonic() - chapter_start_times[pid]
+                                        )
+                                        chars = worker_state[pid].get("total_chars", 0)
+                                        eta_tracker.on_chapter_complete(chars, elapsed)
+                                        del chapter_start_times[pid]
+                                    del worker_state[pid]
+                                    completed_chapters += 1
+                            elif event == "ERROR":
+                                worker_errors.append(
+                                    {
+                                        "pid": pid,
+                                        "chapter": msg[2],
+                                        "message": msg[3],
+                                        "traceback": msg[4],
                                     }
-                                    chapter_start_times[pid] = time.monotonic()
-                                elif event == "UPDATE":
-                                    # msg format: ("UPDATE", pid, advance, current, total, batch_chars)
-                                    chars = msg[5] if len(msg) > 5 else 1000
-                                    overall_progress.advance(overall_task, msg[2])
-                                    eta_tracker.update(chars)
-                                    if pid in worker_state:
-                                        worker_state[pid]["current"] += msg[2]
-                                    # Update overall ETA display
-                                    overall_progress.update(
-                                        overall_task, eta=eta_tracker.format_eta()
-                                    )
-                                elif event == "DONE":
-                                    if pid in worker_state:
-                                        # Record chapter completion for rate refinement
-                                        if pid in chapter_start_times:
-                                            elapsed = (
-                                                time.monotonic()
-                                                - chapter_start_times[pid]
-                                            )
-                                            chars = worker_state[pid].get(
-                                                "total_chars", 0
-                                            )
-                                            eta_tracker.on_chapter_complete(
-                                                chars, elapsed
-                                            )
-                                            del chapter_start_times[pid]
-                                        del worker_state[pid]
-                                        completed_chapters += 1
-                                elif event == "ERROR":
-                                    worker_errors.append(
-                                        {
-                                            "pid": pid,
-                                            "chapter": msg[2],
-                                            "message": msg[3],
-                                            "traceback": msg[4],
-                                        }
-                                    )
-                                elif event == "LOG":
-                                    # Handle log messages from workers
-                                    worker_logs.append(f"[{pid}] {msg[2]}")
-                                    # Keep only last 20 log messages to avoid memory issues
-                                    if len(worker_logs) > 20:
-                                        worker_logs.pop(0)
-                            except Exception:
-                                break
-
-                        all_done = all(f.done() for f in futures)
-                        if overall_progress.tasks[0].finished:
-                            break
-                        if all_done and not worker_state and queue.empty():
+                                )
+                            elif event == "LOG":
+                                worker_logs.append(f"[{pid}] {msg[2]}")
+                                if len(worker_logs) > 20:
+                                    worker_logs.pop(0)
+                        except Exception:
                             break
 
-                        # Update log panel in verbose mode
-                        if self.cfg.verbose:
-                            if worker_logs:
-                                log_text = "\n".join(
-                                    worker_logs[-10:]
-                                )  # Show last 10 logs
-                            else:
-                                log_text = "[dim]Waiting for worker logs...[/dim]"
-                            logs_panel = Panel(
-                                log_text,
-                                title="Worker Logs",
-                                border_style="green",
-                            )
-                            layout["logs"].update(logs_panel)
-
-                        # Update progress panel with stats
-                        stats_text = (
-                            f"Elapsed: {eta_tracker.format_elapsed()} | "
-                            f"Rate: {eta_tracker.format_rate()} chars/sec | "
-                            f"Chapters: {completed_chapters}/{total_chapters}"
-                        )
-                        progress_panel = Panel(
-                            overall_progress,
-                            title=f"Overall Progress • {stats_text}",
-                            border_style="blue",
-                        )
-                        if self.cfg.verbose:
-                            layout["header"].update(progress_panel)
-                        else:
-                            layout["upper"].update(progress_panel)
-
-                        worker_table = Table(
-                            box=box.SIMPLE,
-                            show_header=True,
-                            header_style="bold magenta",
-                            expand=True,
-                        )
-                        worker_table.add_column("PID", width=6)
-                        worker_table.add_column("Chapter", ratio=2)
-                        worker_table.add_column("Progress", ratio=1)
-
-                        for pid in sorted(worker_state.keys()):
-                            state = worker_state[pid]
-                            pct = (
-                                (state["current"] / state["total"]) * 100
-                                if state["total"] > 0
-                                else 0
-                            )
-                            bar_len = 20
-                            filled = int((pct / 100) * bar_len)
-                            bar_str = "█" * filled + "░" * (bar_len - filled)
-
-                            # Calculate chapter ETA
-                            chapter_eta = ""
-                            if pid in chapter_start_times and state["current"] > 0:
-                                elapsed = time.monotonic() - chapter_start_times[pid]
-                                rate = state["current"] / elapsed if elapsed > 0 else 0
-                                remaining_batches = state["total"] - state["current"]
-                                if rate > 0:
-                                    remaining_secs = remaining_batches / rate
-                                    mins = int(remaining_secs // 60)
-                                    secs = int(remaining_secs % 60)
-                                    chapter_eta = f" • {mins:02d}:{secs:02d} remaining"
-
-                            worker_table.add_row(
-                                str(pid),
-                                state["title"][:40],
-                                f"[green]{bar_str}[/green] {pct:.0f}%{chapter_eta}",
-                            )
-
-                        active_count = len(worker_state)
-                        if active_count < self.cfg.workers:
-                            for _ in range(self.cfg.workers - active_count):
-                                worker_table.add_row("-", "[dim]Idle[/dim]", "")
-
-                        # Update worker panel (different layout in verbose mode)
-                        worker_panel = Panel(
-                            worker_table,
-                            title=f"Worker Threads ({self.cfg.workers})",
-                            border_style="grey50",
-                        )
-                        if self.cfg.verbose:
-                            layout["footer"].update(worker_panel)
-                        else:
-                            layout["lower"].update(worker_panel)
+                    if (
+                        all(f.done() for f in futures)
+                        and not worker_state
+                        and queue.empty()
+                    ):
+                        break
 
                 for future in as_completed(futures):
                     res = future.result()
@@ -947,22 +328,20 @@ class AudioBuilder:
                         results.append(res)
 
         except KeyboardInterrupt:
-            self.console.print(
-                "\n[yellow]Interrupted by user. Shutting down workers...[/yellow]"
-            )
-            # Properly shutdown the executor to prevent zombie processes
+            print("Interrupted by user. Shutting down workers...")
             if "pool" in locals():
                 pool.shutdown(wait=False, cancel_futures=True)
             return []
         finally:
             if worker_errors:
-                self.console.print("[red]Worker errors encountered:[/red]")
+                print("Worker errors encountered:")
                 for err in worker_errors:
-                    self.console.print(
-                        f"[red]- PID {err['pid']} {err['chapter']}: {err['message']}[/red]"
-                    )
+                    print(f"- PID {err['pid']} {err['chapter']}: {err['message']}")
                     if self.cfg.debug_html:
-                        self.console.print(f"[dim]{err['traceback']}[/dim]")
+                        print(err["traceback"])
+
+        # Suppress unused variable warning — total_chapters used in loop above
+        _ = total_chapters
 
         return sorted(results, key=lambda x: x.chapter_index)
 
@@ -1003,97 +382,23 @@ class AudioBuilder:
             "-c:a",
             "aac" if output_file.suffix == ".m4b" else "libmp3lame",
             "-b:a",
-            self.cfg.m4b_bitrate if output_file.suffix == ".m4b" else "128k",
+            _normalize_bitrate(self.cfg.m4b_bitrate)
+            if output_file.suffix == ".m4b"
+            else "128k",
         ]
         if output_file.suffix == ".m4b":
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(output_file))
         subprocess.run(cmd, check=True)
-
-    def _stitch_files_with_progress(
-        self,
-        results: list[AudioResult],
-        output_file: Path,
-        progress: "Progress",
-        task_id: "TaskID",
-    ):
-        """Stitch audio files with progress updates.
-
-        This method does the same work as _stitch_files but updates
-        the progress bar as each chapter is processed.
-        """
-        file_list = self.temp_dir / "files.txt"
-        meta_file = self.temp_dir / "metadata.txt"
-
-        # Write file list with progress updates
-        with open(file_list, "w", encoding="utf-8") as f:
-            for idx, res in enumerate(results):
-                f.write(f"file '{res.file_path.resolve().as_posix()}'\n")
-                progress.update(task_id, completed=idx + 1)
-
-        # Reset progress for metadata writing phase
-        progress.update(
-            task_id, completed=0, total=len(results), description="Writing metadata..."
-        )
-
-        # Write metadata with progress updates
-        with open(meta_file, "w", encoding="utf-8") as f:
-            f.write(";FFMETADATA1\n")
-            t = 0
-            for idx, res in enumerate(results):
-                start, end = int(t), int(t + res.duration_ms)
-                f.write(
-                    f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={res.title}\n"
-                )
-                t += res.duration_ms
-                progress.update(task_id, completed=idx + 1)
-
-        # Update description for ffmpeg phase
-        progress.update(
-            task_id, completed=0, total=100, description="Combining with ffmpeg..."
-        )
-
-        # Build ffmpeg command
-        cmd = [
-            imageio_ffmpeg.get_ffmpeg_exe(),
-            "-y",
-            "-v",
-            "error",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(file_list),
-            "-i",
-            str(meta_file),
-            "-map_metadata",
-            "1",
-            "-c:a",
-            "aac" if output_file.suffix == ".m4b" else "libmp3lame",
-            "-b:a",
-            self.cfg.m4b_bitrate if output_file.suffix == ".m4b" else "128k",
-        ]
-        if output_file.suffix == ".m4b":
-            cmd.extend(["-movflags", "+faststart"])
-        cmd.append(str(output_file))
-
-        # Run ffmpeg (we can't easily track progress here, so we just show it's working)
-        subprocess.run(cmd, check=True)
-
-        # Mark as complete
-        progress.update(task_id, completed=100)
 
     def _embed_cover(self, output_file: Path) -> None:
         """Embed cover image from ebook into the M4B file."""
         try:
             from mutagen.mp4 import MP4, MP4Cover
 
-            # Use the reader to get the cover (if available)
             if self._reader is not None:
                 cover_data, mime_type = self._reader.get_cover()
             else:
-                # Fallback for backwards compatibility
                 cover_data, mime_type = extract_epub_cover(self.cfg.ebook_path)
 
             if cover_data:
@@ -1105,54 +410,38 @@ class AudioBuilder:
                 audio = MP4(str(output_file))
                 audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
                 audio.save()
-                self.console.print(
-                    "[bold green]✓ Cover embedded successfully[/bold green]"
-                )
+                self.console.print("Cover embedded successfully")
 
         except ImportError:
             self.console.print(
-                "[yellow]Warning: mutagen library not found. Cover not embedded.[/yellow]"
+                "Warning: mutagen library not found. Cover not embedded."
             )
         except Exception as e:
-            self.console.print(f"[yellow]Warning: Could not embed cover: {e}[/yellow]")
+            self.console.print(f"Warning: Could not embed cover: {e}")
 
-    def run(self):
-        """Main entry point for audiobook creation"""
-        # Use the generic reader interface to support multiple formats
+    def run(self) -> bool:
+        """Main entry point for audiobook creation."""
         self._reader = get_reader(self.cfg.ebook_path, self.cfg.verbose)
 
-        # Extract ALL chapters with tags
         all_chapters = self._reader.get_chapters()
 
         if not all_chapters:
-            self.console.print(
-                f"[red]No chapters found in {self._reader.format_name}[/red]"
-            )
+            self.console.print(f"No chapters found in {self._reader.format_name}")
             return False
 
-        # Apply chapter filters
         from .chapter_filter import ChapterFilter
 
         filter_chain = ChapterFilter(self.cfg.chapter_filters)
         chapters = filter_chain.apply(all_chapters)
 
         self.console.print(
-            f"[dim]Extracted {len(all_chapters)} chapters, "
-            f"{len(chapters)} after filtering[/dim]"
+            f"Extracted {len(all_chapters)} chapters, {len(chapters)} after filtering"
         )
 
         if not chapters:
-            self.console.print(
-                "[yellow]No chapters match the specified filters[/yellow]"
-            )
+            self.console.print("No chapters match the specified filters")
             return False
 
-        # Preview mode: show what would be converted and exit
-        if self.cfg.preview:
-            return self._show_preview(self._reader, all_chapters, chapters)
-
-        # Pre-calculate batch information for accurate progress tracking
-        # First chapter uses smaller batches for better ETA, rest use larger for performance
         from .workers import get_batch_info
 
         chapter_batch_info = {}
@@ -1164,11 +453,9 @@ class AudioBuilder:
         total_batches = sum(info[0] for info in chapter_batch_info.values())
         total_chars = sum(info[1] for info in chapter_batch_info.values())
 
-        # Determine output file path
         if self.cfg.output_path and self.cfg.output_path.suffix:
             output_file = self.cfg.output_path
         else:
-            # Use metadata from the reader
             metadata = self._reader.get_metadata()
             book_title = metadata.title
             output_dir = (
@@ -1178,83 +465,11 @@ class AudioBuilder:
             )
             output_file = output_dir / f"{book_title}.m4b"
 
-        # Ensure unique filename if file already exists
         output_file = get_unique_output_path(output_file)
 
         return self.build(
             chapters, output_file, chapter_batch_info, total_batches, total_chars
         )
-
-    def _show_preview(
-        self,
-        reader: EbookReader,
-        all_chapters: list[Chapter],
-        filtered_chapters: list[Chapter],
-    ) -> bool:
-        """Display preview of what would be converted."""
-        book_title = reader.get_metadata().title
-
-        # Create preview table
-        table = Table(
-            title=f"[bold cyan]Preview: {book_title}[/bold cyan]",
-            show_header=True,
-            header_style="bold magenta",
-            box=box.ROUNDED,
-        )
-        table.add_column("#", style="cyan", width=6, justify="center")
-        table.add_column("Chapter Title", style="white")
-        table.add_column("Status", style="green", width=12)
-        table.add_column("Tags", style="dim", width=20)
-
-        filtered_indices = {ch.index for ch in filtered_chapters}
-
-        for ch in all_chapters:
-            status = (
-                "[green]✓ Include[/green]"
-                if ch.index in filtered_indices
-                else "[red]✗ Exclude[/red]"
-            )
-            tags = ", ".join(
-                tag
-                for tag, val in [
-                    ("front", ch.tags.is_front_matter),
-                    ("back", ch.tags.is_back_matter),
-                    ("title", ch.tags.is_title_page),
-                    ("part", ch.tags.is_part_divider),
-                    ("chapter", ch.tags.is_chapter),
-                ]
-                if val
-            )
-            table.add_row(
-                str(ch.index + 1),
-                ch.title[:60] + "..." if len(ch.title) > 60 else ch.title,
-                status,
-                tags,
-            )
-
-        self.console.print()
-        self.console.print(table)
-        self.console.print()
-
-        # Summary panel
-        summary = (
-            f"[bold]Book:[/bold] {book_title}\n"
-            f"[bold]Voice:[/bold] {self.cfg.voice}\n"
-            f"[bold]Workers:[/bold] {self.cfg.workers}\n"
-            f"[bold]Chapters:[/bold] {len(filtered_chapters)} of {len(all_chapters)} selected\n"
-            f"[bold]Output:[/bold] {self.cfg.output_path or self.cfg.epub_path.parent}"
-        )
-
-        self.console.print(
-            Panel(summary, title="[bold green]Conversion Summary", border_style="green")
-        )
-        self.console.print()
-        self.console.print("[dim]Use --preview to see this without converting[/dim]")
-        self.console.print(
-            "[dim]Remove --preview to perform the actual conversion[/dim]"
-        )
-
-        return True
 
     @contextmanager
     def _managed_temp_dir(self):
@@ -1268,4 +483,4 @@ class AudioBuilder:
                 shutil.rmtree(self.temp_dir)
 
 
-__all__ = ["ETATracker", "EpubReader", "AudioBuilder"]
+__all__ = ["ETATracker", "AudioBuilder"]

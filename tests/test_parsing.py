@@ -1,9 +1,11 @@
 """Tests for kenkui parsing functionality."""
 
-import pytest
 from pathlib import Path
-from kenkui.parsing import EpubReader
-from kenkui.helpers import Chapter
+
+import pytest
+
+from kenkui.models import Chapter
+from kenkui.readers.epub import EpubReader
 
 TEST_EPUB = Path("src/kenkui/samples/Les Miserables - Victor Hugo.epub")
 
@@ -23,7 +25,7 @@ class TestEpubReader:
 
     def test_get_book_title(self, reader):
         """Test extracting book title from EPUB."""
-        title = reader.get_book_title()
+        title = reader.get_metadata().title
         assert isinstance(title, str)
         assert len(title) > 0
         # Title should be sanitized (no special chars)
@@ -31,13 +33,13 @@ class TestEpubReader:
         assert ">" not in title
 
     def test_extract_chapters_returns_list(self, reader):
-        """Test that extract_chapters returns a list."""
-        chapters = reader.extract_chapters()
+        """Test that get_chapters returns a list."""
+        chapters = reader.get_chapters()
         assert isinstance(chapters, list)
 
     def test_extract_chapters_returns_chapter_objects(self, reader):
-        """Test that extract_chapters returns Chapter objects."""
-        chapters = reader.extract_chapters()
+        """Test that get_chapters returns Chapter objects."""
+        chapters = reader.get_chapters()
         if chapters:  # Only test if chapters were found
             for chapter in chapters:
                 assert isinstance(chapter, Chapter)

@@ -6,17 +6,15 @@ Provides EbookReader interface for MOBI and AZW formats using the mobi library.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import tempfile
-import warnings
 from pathlib import Path
 
 from bs4 import BeautifulSoup
 
 from ..chapter_classifier import ChapterClassifier
-from ..helpers import Chapter
+from ..models import Chapter
 from . import EbookMetadata, EbookReader, Registry, TocEntry
 
 
@@ -139,7 +137,7 @@ class MobiReader(EbookReader):
         if self._extracted_html and self._extracted_html.exists():
             try:
                 with open(
-                    self._extracted_html, "r", encoding="utf-8", errors="ignore"
+                    self._extracted_html, encoding="utf-8", errors="ignore"
                 ) as f:
                     html_content = f.read()
 
@@ -191,7 +189,7 @@ class MobiReader(EbookReader):
 
             for toc_file in toc_files:
                 try:
-                    with open(toc_file, "r", encoding="utf-8", errors="ignore") as f:
+                    with open(toc_file, encoding="utf-8", errors="ignore") as f:
                         toc_content = f.read()
 
                     soup = BeautifulSoup(toc_content, "html.parser")
@@ -269,7 +267,7 @@ class MobiReader(EbookReader):
         html_content_map: dict[str, str] = {}
         for html_file in self._html_files:
             try:
-                with open(html_file, "r", encoding="utf-8", errors="ignore") as f:
+                with open(html_file, encoding="utf-8", errors="ignore") as f:
                     content = f.read()
                 rel_path = (
                     str(html_file.relative_to(self._extracted_dir))
@@ -348,7 +346,7 @@ class MobiReader(EbookReader):
 
         for html_file in self._html_files:
             try:
-                with open(html_file, "r", encoding="utf-8", errors="ignore") as f:
+                with open(html_file, encoding="utf-8", errors="ignore") as f:
                     content = f.read()
             except Exception:
                 continue

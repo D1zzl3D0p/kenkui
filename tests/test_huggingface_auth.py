@@ -1,10 +1,9 @@
 """Tests for the HuggingFace authentication module."""
 
-import pytest
 from kenkui.huggingface_auth import (
+    GATED_MODELS,
     is_custom_voice,
     is_model_gated,
-    GATED_MODELS,
 )
 from kenkui.utils import DEFAULT_VOICES
 

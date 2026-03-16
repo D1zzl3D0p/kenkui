@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from ebooklib import epub
 
 from ..chapter_classifier import ChapterClassifier
-from ..helpers import Chapter
+from ..models import Chapter
 from ..utils import extract_epub_cover
 from . import EbookMetadata, EbookReader, Registry, TocEntry
 
@@ -171,7 +171,6 @@ class EpubReader(EbookReader):
 
     def _parse_nav_recursive(self, element, chapters: list[dict], level: int):
         """Parse NAV element recursively to extract TOC with levels."""
-        from xml.etree import ElementTree as ET
 
         ns = {"xhtml": "http://www.w3.org/1999/xhtml"}
 
@@ -467,12 +466,16 @@ class EpubReader(EbookReader):
                 text = self._clean_text(section.get_text(separator="\n"))
                 if text:
                     # Split by double newlines or multiple spaces
-                    lines = [l.strip() for l in text.split("\n\n") if l.strip()]
+                    lines = [
+                        line.strip() for line in text.split("\n\n") if line.strip()
+                    ]
                     if lines:
                         paragraphs.extend(lines)
                     else:
                         # Fallback: split by single newlines
-                        lines = [l.strip() for l in text.split("\n") if l.strip()]
+                        lines = [
+                            line.strip() for line in text.split("\n") if line.strip()
+                        ]
                         paragraphs.extend(lines)
 
         # Strategy 2: Standard <p> and <div> elements
@@ -501,7 +504,6 @@ class EpubReader(EbookReader):
                 # We have dialogue format - reconstruct paragraphs
                 paragraphs = []
                 current_speaker = ""
-                current_text = ""
 
                 for i, part in enumerate(parts):
                     if i == 0:
@@ -528,9 +530,9 @@ class EpubReader(EbookReader):
             text = soup.get_text(separator="\n")
             if text:
                 lines = [
-                    l.strip()
-                    for l in text.split("\n")
-                    if l.strip() and len(l.strip()) >= 2
+                    line.strip()
+                    for line in text.split("\n")
+                    if line.strip() and len(line.strip()) >= 2
                 ]
                 paragraphs.extend(lines)
 

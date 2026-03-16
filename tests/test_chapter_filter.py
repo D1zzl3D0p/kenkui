@@ -1,9 +1,10 @@
 """Tests for the chapter filtering system."""
 
 import pytest
-from kenkui.chapter_filter import ChapterFilter, FilterOperation, FilterPreset
+
 from kenkui.chapter_classifier import ChapterTags
-from kenkui.helpers import Chapter
+from kenkui.chapter_filter import ChapterFilter, FilterOperation, FilterPreset
+from kenkui.models import Chapter
 
 
 @pytest.fixture

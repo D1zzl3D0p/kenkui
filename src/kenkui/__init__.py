@@ -1,69 +1,63 @@
-"""Kenkui - Convert Ebooks to Audiobooks with custom voice samples.
+"""Kenkui — Convert Ebooks to Audiobooks with custom voice samples.
 
-This package provides tools for converting EPUB files to audiobooks using
+This package provides tools for converting ebooks to audiobooks using
 text-to-speech synthesis with support for custom voice samples.
 
 Example:
-    >>> from kenkui import EpubReader, AudioBuilder, Config
+    >>> from kenkui import EpubReader, AudioBuilder, ProcessingConfig
     >>> reader = EpubReader(Path("book.epub"))
-    >>> chapters = reader.extract_chapters()
-    >>> config = Config(voice="alba", epub_path=Path("book.epub"))
+    >>> config = ProcessingConfig(voice="alba", ebook_path=Path("book.epub"), ...)
     >>> builder = AudioBuilder(config)
     >>> builder.run()
 """
 
 import importlib.metadata
 
-from .helpers import (
-    Config,
-    Chapter,
-    AudioResult,
-    parse_range_string,
-    interactive_select,
-    get_bundled_voices,
-    print_available_voices,
-)
+from .chapter_classifier import ChapterClassifier, ChapterTags
+from .chapter_filter import ChapterFilter, FilterOperation, FilterPreset
+from .helpers import get_bundled_voices
 from .huggingface_auth import (
+    check_voice_access,
     ensure_huggingface_access,
     is_custom_voice,
-    check_voice_access,
 )
-from .parsing import EpubReader, AudioBuilder
+from .models import (
+    AudioResult,
+    Chapter,
+    ProcessingConfig,
+    Segment,
+)
+from .parsing import AudioBuilder
+from .readers.epub import EpubReader
+from .voice_loader import load_voice
 from .workers import worker_process_chapter
-from .chapter_classifier import ChapterTags, ChapterClassifier
-from .chapter_filter import ChapterFilter, FilterPreset, FilterOperation
 
 try:
     __version__ = importlib.metadata.version("kenkui")
 except importlib.metadata.PackageNotFoundError:
-    __version__ = "0.5.0"
+    __version__ = "0.9.0"
 
 __author__ = "Sumner MacArthur"
 __license__ = "GPL-3.0"
 
 __all__ = [
-    # Core classes
-    "Config",
+    "ProcessingConfig",
     "Chapter",
+    "Segment",
     "AudioResult",
     "EpubReader",
     "AudioBuilder",
-    # Chapter classification and filtering
     "ChapterTags",
     "ChapterClassifier",
     "ChapterFilter",
     "FilterPreset",
     "FilterOperation",
-    # Functions
-    "parse_range_string",
-    "interactive_select",
     "get_bundled_voices",
-    "print_available_voices",
+    "load_voice",
     "worker_process_chapter",
     "ensure_huggingface_access",
     "is_custom_voice",
     "check_voice_access",
-    # Metadata
     "__version__",
     "__author__",
     "__license__",

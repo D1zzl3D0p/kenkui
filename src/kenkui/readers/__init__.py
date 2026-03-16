@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..helpers import Chapter
+from ..models import Chapter
 
 
 @dataclass
@@ -215,9 +215,12 @@ def get_reader(filepath: Path, verbose: bool = False) -> EbookReader:
 
 
 # Import implementations to register them with the Registry
-from . import epub
-from . import mobi
-from . import fb2
+# These must appear after class definitions to avoid circular references.
+from . import (
+    epub,  # noqa: E402
+    fb2,  # noqa: E402
+    mobi,  # noqa: E402
+)
 
 __all__ = [
     "EbookReader",

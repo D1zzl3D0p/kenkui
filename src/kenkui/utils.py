@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 import re
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 # Constants
@@ -32,36 +32,89 @@ VOICE_DESCRIPTIONS = {
 }
 
 
-def batch_text(paragraphs: list[str], max_chars: int = 1000) -> list[str]:
-    """Batch paragraphs into ~max_chars character chunks.
+def batch_text(
+    paragraphs: list[str],
+    max_chars: int = 800,
+    merge_short: bool = True,
+) -> list[str]:
+    """Batch paragraphs into ~max_chars character chunks for TTS.
 
-    Splits long paragraphs at sentence boundaries for natural breaks.
+    Algorithm:
+    - Paragraphs shorter than ``max_chars`` are *merged* into a running buffer
+      (when ``merge_short=True``) so that many short dialogue lines become a
+      single, efficient TTS call instead of dozens of tiny ones.
+    - Paragraphs longer than ``max_chars`` are split at sentence boundaries
+      and each sentence-chunk is appended directly (never merged with a
+      subsequent short paragraph — that would create unnatural boundaries).
+    - When ``merge_short=False`` every paragraph is emitted individually
+      (only splitting if it exceeds ``max_chars``).  Use this mode for
+      multi-voice segments where speaker boundaries must not be crossed.
+
+    Args:
+        paragraphs:  List of text segments (paragraphs, dialogue lines, etc.)
+        max_chars:   Target maximum characters per TTS call.
+        merge_short: If True, accumulate short paragraphs into batches up to
+                     ``max_chars``.  If False, each paragraph is its own item.
+
+    Returns:
+        List of text chunks ready for individual TTS calls.
     """
-    batched = []
+    if not paragraphs:
+        return []
 
-    for p in paragraphs:
-        if len(p) > max_chars:
-            sentences = re.split(r"(?<=[.!?])\s+", p)
-            current_chunk: list[str] = []
-            current_len = 0
+    result: list[str] = []
+    buffer: list[str] = []
+    buffer_len: int = 0
 
-            for sentence in sentences:
-                sent_len = len(sentence)
-                if current_len + sent_len + (1 if current_chunk else 0) > max_chars:
-                    if current_chunk:
-                        batched.append(" ".join(current_chunk))
-                    current_chunk = [sentence]
-                    current_len = sent_len
-                else:
-                    current_chunk.append(sentence)
-                    current_len += sent_len + (1 if len(current_chunk) > 1 else 0)
+    def _flush_buffer():
+        if buffer:
+            result.append(" ".join(buffer))
+            buffer.clear()
 
-            if current_chunk:
-                batched.append(" ".join(current_chunk))
+    def _split_long(text: str) -> list[str]:
+        """Split a single long paragraph at sentence boundaries."""
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        chunks: list[str] = []
+        current: list[str] = []
+        current_len = 0
+        for sentence in sentences:
+            slen = len(sentence)
+            sep = 1 if current else 0
+            if current_len + sep + slen > max_chars:
+                if current:
+                    chunks.append(" ".join(current))
+                current = [sentence]
+                current_len = slen
+            else:
+                current.append(sentence)
+                current_len += sep + slen
+        if current:
+            chunks.append(" ".join(current))
+        return chunks
+
+    for para in paragraphs:
+        if not para.strip():
+            continue
+
+        if len(para) > max_chars:
+            # Long paragraph: flush any pending buffer first, then split
+            _flush_buffer()
+            buffer_len = 0
+            for chunk in _split_long(para):
+                result.append(chunk)
+        elif merge_short:
+            sep = 1 if buffer else 0
+            if buffer_len + sep + len(para) > max_chars:
+                _flush_buffer()
+                buffer_len = 0
+            buffer.append(para)
+            buffer_len += (1 if len(buffer) > 1 else 0) + len(para)
         else:
-            batched.append(p)
+            # merge_short=False: each paragraph is its own item
+            result.append(para)
 
-    return batched
+    _flush_buffer()
+    return result
 
 
 def extract_epub_cover(epub_path: Path) -> tuple[bytes | None, str | None]:

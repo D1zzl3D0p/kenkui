@@ -6,15 +6,13 @@ Provides EbookReader interface for FB2 files using standard XML parsing.
 
 from __future__ import annotations
 
-import re
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from ..chapter_classifier import ChapterClassifier
-from ..helpers import Chapter
+from ..models import Chapter
 from . import EbookMetadata, EbookReader, Registry, TocEntry
-
 
 FB2_NS = {"fb": "http://www.gribuser.ru/xml/fictionbook/2/0"}
 

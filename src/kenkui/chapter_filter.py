@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .chapter_classifier import ChapterTags
-    from .helpers import Chapter
+    from .models import Chapter
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class FilterOperation:
     """A single filter operation to be applied to chapters."""
 
-    type: Literal["preset", "include", "exclude"]
+    type: Literal["preset", "include", "exclude", "index"]
     value: str
 
 
@@ -32,9 +32,9 @@ class FilterPreset:
 
     name: str
     description: str
-    filter_fn: Callable[["ChapterTags"], bool]
+    filter_fn: Callable[[ChapterTags], bool]
 
-    def apply(self, tags: "ChapterTags") -> bool:
+    def apply(self, tags: ChapterTags) -> bool:
         """Apply this filter to chapter tags."""
         return self.filter_fn(tags)
 
@@ -45,15 +45,15 @@ class ChapterFilter:
     DEFAULT_PRESET = "content-only"
 
     PRESETS: dict[str, FilterPreset] = {
+        "all": FilterPreset(
+            name="All",
+            description="Include all chapters (no filtering)",
+            filter_fn=lambda t: True,
+        ),
         "none": FilterPreset(
             name="None",
-            description="Include no chapters (use with -i/-e to build custom selection)",
+            description="Include no chapters (use manual selection)",
             filter_fn=lambda t: False,
-        ),
-        "all": FilterPreset(
-            name="All Chapters",
-            description="Include all chapters including front/back matter",
-            filter_fn=lambda t: True,
         ),
         "content-only": FilterPreset(
             name="Content Only",
@@ -97,8 +97,15 @@ class ChapterFilter:
                     re.compile(op.value)
                 except re.error as e:
                     raise ValueError(f"Invalid regex pattern '{op.value}': {e}") from e
+            elif op.type == "index":
+                try:
+                    int(op.value)
+                except ValueError as e:
+                    raise ValueError(
+                        f"Invalid index value '{op.value}': must be an integer"
+                    ) from e
 
-    def apply(self, chapters: list["Chapter"]) -> list["Chapter"]:
+    def apply(self, chapters: list[Chapter]) -> list[Chapter]:
         """
         Apply all filter operations sequentially.
 
@@ -115,7 +122,7 @@ class ChapterFilter:
         all_chapters = {ch.index: ch for ch in chapters}
 
         # Determine initial selection based on first operation type
-        # - include: start empty (will add matching)
+        # - include/index: start empty (will add matching)
         # - exclude: start with all (will remove matching)
         # - preset: will replace selection entirely
         selected: set[int]
@@ -125,7 +132,7 @@ class ChapterFilter:
         else:
             selected = set()
             logger.debug(
-                "First operation is include/preset, starting with empty selection"
+                "First operation is include/preset/index, starting with empty selection"
             )
 
         for i, op in enumerate(self.operations):
@@ -164,6 +171,12 @@ class ChapterFilter:
                     f"{len(selected)} remaining"
                 )
 
+            elif op.type == "index":
+                idx = int(op.value)
+                if idx in all_chapters:
+                    selected.add(idx)
+                    logger.debug(f"Index include: added chapter index {idx}")
+
         # Log summary of filtered chapters
         included = [all_chapters[idx] for idx in sorted(selected)]
         excluded = [ch for ch in chapters if ch.index not in selected]
@@ -195,8 +208,8 @@ class ChapterFilter:
 
     @classmethod
     def apply_preset(
-        cls, chapters: list["Chapter"], preset_name: str
-    ) -> list["Chapter"]:
+        cls, chapters: list[Chapter], preset_name: str
+    ) -> list[Chapter]:
         """Apply a preset filter to chapters (legacy method)."""
         preset = cls.get_preset(preset_name)
         if not preset:

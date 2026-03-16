@@ -19,6 +19,7 @@ env/
 # --- Tool Configuration/Cache ---
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .tox/
 .coverage
 htmlcov/
@@ -26,6 +27,9 @@ htmlcov/
 # --- OS Files ---
 .DS_Store
 Thumbs.db
+
+# --- Kenkui runtime cache ---
+.kenkui_cache/
 
 # --- Your Application Outputs (Don't commit your own audiobooks!) ---
 # Assuming your script creates these, block them so your repo stays small
