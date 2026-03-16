@@ -36,6 +36,7 @@ from .models import AppConfig, BookInfo, ChapterPreset, ChapterSelection
 from .widgets import (
     ChapterPresetSelector,
     ConfigForm,
+    HuggingFaceAuthModal,
     JobActionsModal,
     LoadConfigDialog,
     SaveConfigDialog,
@@ -77,11 +78,7 @@ class SelectionHelpers:
         if not search_term:
             return items
         term = search_term.lower()
-        return [
-            item
-            for item in items
-            if any(f(item) and term in f(item).lower() for f in fields)
-        ]
+        return [item for item in items if any(f(item) and term in f(item).lower() for f in fields)]
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +221,7 @@ class BookSelectionScreen(Screen):
                         )
                     )
                 except Exception:
-                    infos.append(
-                        BookInfo(path=bp, title=bp.stem, format=bp.suffix.upper())
-                    )
+                    infos.append(BookInfo(path=bp, title=bp.stem, format=bp.suffix.upper()))
             infos.sort(key=lambda b: b.title.lower())
             self.post_message(BooksLoaded(infos, path))
 
@@ -334,9 +329,7 @@ class BookSelectionScreen(Screen):
 
     def _action_browse(self):
         async def _pick():
-            picker = SelectDirectory(
-                location=str(Path.home()), title="Select Directory"
-            )
+            picker = SelectDirectory(location=str(Path.home()), title="Select Directory")
             result = await self.app.push_screen(picker, wait_for_dismiss=True)
             if result:
                 p = Path(result)
@@ -382,9 +375,7 @@ class ChapterSelectionScreen(Screen):
         with Container(id="main-content"):
             yield Label("Select Chapters", id="title-label")
             yield Static(CHAPTER_HINT, id="screen-hint")
-            yield ChapterPresetSelector(
-                id="preset-selector", on_change=self._on_preset_changed
-            )
+            yield ChapterPresetSelector(id="preset-selector", on_change=self._on_preset_changed)
             yield Input(placeholder="Filter chapters by title…", id="chapter-filter")
             yield Static("", id="chapter-count")
             yield SelectionList(id="chapter-list")
@@ -521,10 +512,7 @@ class ChapterSelectionScreen(Screen):
             self.app.pop_screen()
         elif bid == "btn-select-all":
             self._checked_orig_indices = {
-                orig
-                for orig, _ in [
-                    (orig, ch) for orig, ch in self._chapters_with_content()
-                ]
+                orig for orig, _ in [(orig, ch) for orig, ch in self._chapters_with_content()]
             }
             self._rebuild_list()
         elif bid == "btn-select-none":
@@ -583,9 +571,7 @@ class VoiceSelectionScreen(Screen, TableSelectionMixin):
         table.add_columns("#", "Voice", "Description")
         self.voices = []
         for v in DEFAULT_VOICES:
-            self.voices.append(
-                (v, f"Built-in — {VOICE_DESCRIPTIONS.get(v, 'Default voice')}")
-            )
+            self.voices.append((v, f"Built-in — {VOICE_DESCRIPTIONS.get(v, 'Default voice')}"))
         for v in get_bundled_voices():
             if v.lower() != "default.txt":
                 self.voices.append(
@@ -594,9 +580,7 @@ class VoiceSelectionScreen(Screen, TableSelectionMixin):
                         "Bundled voice (requires HuggingFace login)",
                     )
                 )
-        self.voices.append(
-            ("Custom…", "Browse for a voice file or enter a HuggingFace URL")
-        )
+        self.voices.append(("Custom…", "Browse for a voice file or enter a HuggingFace URL"))
         for i, (name, desc) in enumerate(self.voices, 1):
             table.add_row(str(i), name, desc)
         table.cursor_type = "row"
@@ -609,6 +593,11 @@ class VoiceSelectionScreen(Screen, TableSelectionMixin):
         else:
             self.selected_voice = voice_id
             self.app.current_voice = voice_id  # type: ignore[attr-defined]
+            # Check HuggingFace auth for bundled / non-default voices
+            from .utils import DEFAULT_VOICES
+
+            if voice_id not in DEFAULT_VOICES:
+                self._check_hf_auth(voice_id)
 
     def _show_custom_voice_dialog(self):
         from .widgets import PathSelectionDialog
@@ -626,6 +615,36 @@ class VoiceSelectionScreen(Screen, TableSelectionMixin):
             on_select=on_select,
         )
         self.mount(dialog)
+
+    def _check_hf_auth(self, voice_id: str):
+        """Check HuggingFace auth status for a bundled/custom voice.
+
+        If auth is needed, opens HuggingFaceAuthModal.  The user can still
+        proceed to the next screen regardless — auth is advisory, not blocking,
+        because the actual download happens later in the worker process.
+        """
+        from .huggingface_auth import AuthStatus, check_auth_status
+
+        status = check_auth_status("kyutai/pocket-tts")
+        if status == AuthStatus.OK:
+            # Already authenticated — nothing to do
+            return
+
+        # Notify user and offer to open setup flow
+        self.app.notify(  # type: ignore[attr-defined]
+            f"Voice '{voice_id}' may require HuggingFace access. Starting setup…",
+            title="HuggingFace Setup",
+        )
+
+        async def _open_modal():
+            await self.app.push_screen(  # type: ignore[attr-defined]
+                HuggingFaceAuthModal(model_id="kyutai/pocket-tts"),
+                wait_for_dismiss=True,
+            )
+            # Regardless of result, allow the user to continue.
+            # The worker will fail gracefully if access is not granted.
+
+        self.run_worker(_open_modal)
 
     def action_next(self):
         if self.selected_voice:
@@ -798,9 +817,7 @@ class QueueScreen(Screen):
             yield Button("← Back", id="btn-back", variant="default")
             yield Button("Add Job", id="btn-add", variant="primary")
             yield Button("Start / Stop", id="btn-startstop", variant="success")
-            yield Button(
-                "Actions ▾", id="btn-actions", variant="default", disabled=True
-            )
+            yield Button("Actions ▾", id="btn-actions", variant="default", disabled=True)
 
     def on_mount(self):
         table = self.query_one("#queue-table", DataTable)
@@ -823,15 +840,11 @@ class QueueScreen(Screen):
         table.clear()
         for item in queue_info.items:
             ebook_path = item.job.get("ebook_path", "")
-            name = item.job.get("name") or (
-                Path(ebook_path).stem if ebook_path else "Unknown"
-            )
+            name = item.job.get("name") or (Path(ebook_path).stem if ebook_path else "Unknown")
             voice = item.job.get("voice", "alba")
             progress = f"{item.progress:.0f}%"
             is_finalising = (
-                item.status == "processing"
-                and item.progress >= 100.0
-                and item.current_chapter
+                item.status == "processing" and item.progress >= 100.0 and item.current_chapter
             )
             if is_finalising:
                 status_icon = "⚙ finalising"
@@ -965,9 +978,7 @@ class QueueScreen(Screen):
                 return
             item = queue_info.items[cursor]
             ebook_path = item.job.get("ebook_path", "")
-            job_name = item.job.get("name") or (
-                Path(ebook_path).stem if ebook_path else "Unknown"
-            )
+            job_name = item.job.get("name") or (Path(ebook_path).stem if ebook_path else "Unknown")
             can_retry = item.status == "failed"
         except Exception as e:
             self.app.notify(f"Error: {e}", title="Error")

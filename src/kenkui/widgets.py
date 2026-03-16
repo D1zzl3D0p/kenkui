@@ -908,3 +908,289 @@ class PreviewPanel(Static):
             f"Bitrate:  {self.data.get('m4b_bitrate', '64k')}",
         ]
         yield Static("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# HuggingFaceAuthModal
+# ---------------------------------------------------------------------------
+
+
+class HuggingFaceAuthModal(ModalScreen):
+    """Multi-step Textual modal that walks the user through HuggingFace setup.
+
+    Dismisses with ``True`` on successful authentication, ``False`` if the
+    user skips or if authentication fails after all steps.
+
+    Steps:
+      0 — Check status (automatic)
+      1 — Account (has account? / create account)
+      2 — Token  (open browser, paste token, validate)
+      3 — Terms  (open model page, verify access)
+      4 — Done / error
+    """
+
+    CSS = """
+    HuggingFaceAuthModal {
+        align: center middle;
+    }
+    #hf-container {
+        width: 72;
+        height: auto;
+        max-height: 44;
+        border: solid $primary;
+        padding: 1 2;
+        background: $surface;
+    }
+    #hf-title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #hf-step-indicator {
+        color: $primary;
+        margin-bottom: 1;
+    }
+    #hf-body {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #hf-status {
+        color: $success;
+        margin-bottom: 1;
+    }
+    #hf-error {
+        color: $error;
+        margin-bottom: 1;
+    }
+    #hf-token-input {
+        margin-bottom: 1;
+    }
+    #hf-buttons {
+        height: auto;
+        margin-top: 1;
+        align: right middle;
+    }
+    #hf-buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(self, model_id: str = "kyutai/pocket-tts", **kwargs):
+        super().__init__(**kwargs)
+        self.model_id = model_id
+        self._step: int = 0  # 0=checking, 1=account, 2=token, 3=terms, 4=done
+
+    # ------------------------------------------------------------------
+    # Compose
+    # ------------------------------------------------------------------
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="hf-container"):
+            yield Label("HuggingFace Setup", id="hf-title")
+            yield Label("", id="hf-step-indicator")
+            yield Static("Checking access status…", id="hf-body")
+            yield Static("", id="hf-status")
+            yield Static("", id="hf-error")
+            yield Input(
+                placeholder="Paste your hf_ token here…",
+                id="hf-token-input",
+                password=True,
+            )
+            with Horizontal(id="hf-buttons"):
+                yield Button("Skip", id="btn-hf-skip", variant="default")
+                yield Button("Open Browser", id="btn-hf-browser", variant="primary")
+                yield Button("Next →", id="btn-hf-next", variant="success")
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def on_mount(self):
+        # Hide token input until step 2
+        self.query_one("#hf-token-input", Input).display = False
+        # Run the status check in a worker so the modal renders first
+        self.run_worker(self._async_check_status)
+
+    async def _async_check_status(self):
+        from .huggingface_auth import AuthStatus, check_auth_status
+
+        status = check_auth_status(self.model_id)
+
+        if status == AuthStatus.OK:
+            self._show_done(success=True)
+        elif status == AuthStatus.NOT_FOUND:
+            self._show_error(f"Model '{self.model_id}' not found on HuggingFace.")
+        elif status == AuthStatus.NEEDS_TERMS:
+            self._go_to_step(3)
+        else:
+            # NO_TOKEN or ERROR → start from account step
+            self._go_to_step(1)
+
+    # ------------------------------------------------------------------
+    # Step rendering
+    # ------------------------------------------------------------------
+
+    def _go_to_step(self, step: int):
+        self._step = step
+        body = self.query_one("#hf-body", Static)
+        indicator = self.query_one("#hf-step-indicator", Label)
+        token_input = self.query_one("#hf-token-input", Input)
+        browser_btn = self.query_one("#btn-hf-browser", Button)
+        next_btn = self.query_one("#btn-hf-next", Button)
+        self._clear_status()
+
+        if step == 1:
+            indicator.update("Step 1 of 3 — Account")
+            body.update(
+                "Custom voices require a free HuggingFace account.\n\n"
+                "Do you already have an account?\n\n"
+                "  • If YES — click Next →\n"
+                "  • If NO  — click 'Open Browser' to create one, then click Next →"
+            )
+            token_input.display = False
+            browser_btn.label = "Create Account (opens browser)"
+            next_btn.label = "I have an account →"
+
+        elif step == 2:
+            indicator.update("Step 2 of 3 — Access Token")
+            body.update(
+                "You need a read-only access token.\n\n"
+                "1. Click 'Open Browser' — a token creation page will open\n"
+                "2. Click 'Create token' (select the Read permission type)\n"
+                "3. Copy the token (it starts with hf_)\n"
+                "4. Paste it in the field below and click Next →"
+            )
+            token_input.display = True
+            token_input.value = ""
+            token_input.focus()
+            browser_btn.label = "Open Token Page (browser)"
+            next_btn.label = "Validate Token →"
+
+        elif step == 3:
+            indicator.update("Step 3 of 3 — Accept Terms of Use")
+            body.update(
+                "Almost there! The voice model requires accepting terms of use.\n\n"
+                "1. Click 'Open Browser' — the model page will open\n"
+                "2. Find the 'Access repository' / 'Gated model' section\n"
+                "3. Click 'Agree and access repository'\n"
+                "4. Return here and click 'Verify Access →'"
+            )
+            token_input.display = False
+            browser_btn.label = "Open Model Page (browser)"
+            next_btn.label = "Verify Access →"
+
+    def _show_done(self, success: bool):
+        self._step = 4
+        indicator = self.query_one("#hf-step-indicator", Label)
+        body = self.query_one("#hf-body", Static)
+        self.query_one("#hf-token-input", Input).display = False
+        self.query_one("#btn-hf-browser", Button).display = False
+        self._clear_status()
+
+        if success:
+            indicator.update("✓ Complete")
+            body.update("Access granted! Custom voices are now available.")
+            self.query_one("#btn-hf-next", Button).label = "Continue →"
+        else:
+            indicator.update("✗ Skipped")
+            body.update(
+                "HuggingFace setup was skipped.\n"
+                "Custom voices will not be available until you complete setup."
+            )
+            self.query_one("#btn-hf-next", Button).label = "Close"
+
+    def _set_status(self, msg: str):
+        self.query_one("#hf-status", Static).update(msg)
+        self.query_one("#hf-error", Static).update("")
+
+    def _show_error(self, msg: str):
+        self.query_one("#hf-error", Static).update(f"⚠ {msg}")
+        self.query_one("#hf-status", Static).update("")
+
+    def _clear_status(self):
+        self.query_one("#hf-status", Static).update("")
+        self.query_one("#hf-error", Static).update("")
+
+    # ------------------------------------------------------------------
+    # Button handlers
+    # ------------------------------------------------------------------
+
+    def on_button_pressed(self, event: Button.Pressed):
+        bid = event.button.id
+        if bid == "btn-hf-skip":
+            self._show_done(success=False)
+        elif bid == "btn-hf-browser":
+            self._handle_browser()
+        elif bid == "btn-hf-next":
+            self._handle_next()
+
+    def _handle_browser(self):
+        from .huggingface_auth import open_model_page, open_signup_page, open_token_page
+
+        if self._step == 1:
+            open_signup_page()
+            self._set_status("Browser opened — complete signup, then click Next →")
+        elif self._step == 2:
+            open_token_page()
+            self._set_status("Browser opened — create token, paste it below")
+        elif self._step == 3:
+            open_model_page(self.model_id)
+            self._set_status("Browser opened — accept terms, then click Verify →")
+
+    def _handle_next(self):
+        if self._step == 4:
+            # Done screen — close with last auth check result
+            ok, _ = self._final_verify()
+            self.dismiss(ok)
+            return
+
+        if self._step == 1:
+            self._go_to_step(2)
+
+        elif self._step == 2:
+            token = self.query_one("#hf-token-input", Input).value.strip()
+            if not token:
+                self._show_error("Please paste your token before continuing.")
+                return
+            self._set_status("Validating token…")
+            self.run_worker(lambda: self._async_validate_token(token))
+
+        elif self._step == 3:
+            self._set_status("Verifying access…")
+            self.run_worker(self._async_verify_access)
+
+    async def _async_validate_token(self, token: str):
+        from .huggingface_auth import AuthStatus, check_auth_status, do_login
+
+        ok, msg = do_login(token)
+        if not ok:
+            self._show_error(msg)
+            return
+
+        # Token accepted — check if terms are also needed
+        status = check_auth_status(self.model_id)
+        if status == AuthStatus.OK:
+            self._show_done(success=True)
+        elif status == AuthStatus.NEEDS_TERMS:
+            self._set_status("Token accepted! Now accept the model terms.")
+            self._go_to_step(3)
+        else:
+            self._show_error(f"Unexpected status after login: {status.value}")
+
+    async def _async_verify_access(self):
+        from .huggingface_auth import verify_access
+
+        ok, msg = verify_access(self.model_id)
+        if ok:
+            self._show_done(success=True)
+        else:
+            self._show_error(msg)
+
+    def _final_verify(self) -> tuple[bool, str]:
+        from .huggingface_auth import AuthStatus, check_auth_status
+
+        status = check_auth_status(self.model_id)
+        return status == AuthStatus.OK, status.value
+
+    def on_key(self, event):
+        if event.key == "escape":
+            self._show_done(success=False)
