@@ -38,7 +38,7 @@ from .workers import worker_process_chapter
 try:
     __version__ = importlib.metadata.version("kenkui")
 except importlib.metadata.PackageNotFoundError:
-    __version__ = "0.9.0"
+    __version__ = "1.0.0"
 
 __author__ = "Sumner MacArthur"
 __license__ = "GPL-3.0"
