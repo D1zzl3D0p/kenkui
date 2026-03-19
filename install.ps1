@@ -121,6 +121,43 @@ function Install-Kenkui {
     }
 }
 
+function Install-MultiVoice {
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host "  Optional: Multi-Voice Support (BookNLP)" -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Info "Multi-voice mode uses BookNLP to identify characters"
+    Write-Info "and assign each one a different voice."
+    Write-Host ""
+    Write-Warn "Note: BookNLP installs ~500MB-1.5GB of NLP models."
+    Write-Host ""
+
+    $response = Read-Host "Install multi-voice support? [y/N]"
+    if ($response -match '^[yY]') {
+        Write-Info "Installing kenkui[multivoice]..."
+        try {
+            uv tool install "kenkui[multivoice]" --force
+            Write-Info "Multi-voice dependencies installed."
+            Write-Info "Downloading spaCy language model..."
+            python -m spacy download en_core_web_sm
+            Write-Info "spaCy model installed. Multi-voice support is ready!"
+        }
+        catch {
+            Write-Warn "Multi-voice install encountered an error."
+            Write-Warn "You can retry later with:"
+            Write-Warn "  pip install kenkui[multivoice]"
+            Write-Warn "  python -m spacy download en_core_web_sm"
+        }
+    }
+    else {
+        Write-Info "Skipping multi-voice support."
+        Write-Info "To install later, run:"
+        Write-Info "  pip install kenkui[multivoice]"
+        Write-Info "  python -m spacy download en_core_web_sm"
+    }
+}
+
 function Main {
     Write-Host "=====================================" -ForegroundColor Cyan
     Write-Host "  kenkui Windows Installer" -ForegroundColor Cyan
@@ -146,6 +183,7 @@ function Main {
     $installOk = Install-Kenkui
 
     if ($installOk) {
+        Install-MultiVoice
         Write-Host ""
         Write-Info "Installation complete!"
     }

@@ -197,6 +197,45 @@ install_kenkui() {
     return 0
 }
 
+install_multivoice() {
+    log_info ""
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "  Optional: Multi-Voice Support (BookNLP)"
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_info "Multi-voice mode uses BookNLP to identify characters"
+    log_info "and assign each one a different voice."
+    log_info ""
+    log_warn "Note: BookNLP installs ~500MB–1.5GB of NLP models."
+    log_info ""
+    
+    read -r -p "Install multi-voice support? [y/N] " response
+    case "$response" in
+        [yY][eE][sS]|[yY])
+            log_info "Installing kenkui[multivoice]..."
+            if uv tool install "kenkui[multivoice]" --force; then
+                log_info "Multi-voice dependencies installed."
+                log_info "Downloading spaCy language model..."
+                if $PYTHON_CMD -m spacy download en_core_web_sm; then
+                    log_info "spaCy model installed. Multi-voice support is ready!"
+                else
+                    log_warn "spaCy model download failed. Run manually:"
+                    log_warn "  python -m spacy download en_core_web_sm"
+                fi
+            else
+                log_warn "Multi-voice install failed. You can retry later with:"
+                log_warn "  pip install kenkui[multivoice]"
+                log_warn "  python -m spacy download en_core_web_sm"
+            fi
+            ;;
+        *)
+            log_info "Skipping multi-voice support."
+            log_info "To install later, run:"
+            log_info "  pip install kenkui[multivoice]"
+            log_info "  python -m spacy download en_core_web_sm"
+            ;;
+    esac
+}
+
 main() {
     log_info "Starting kenkui installer..."
     
@@ -206,7 +245,9 @@ main() {
     check_python || exit 1
     check_uv || exit 1
     install_kenkui || exit 1
+    install_multivoice
     
+    log_info ""
     log_info "Installation complete!"
 }
 
