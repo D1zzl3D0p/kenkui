@@ -33,8 +33,8 @@ detect_os() {
 }
 
 check_python() {
-    log_info "Checking for Python 3.7+..."
-    
+    log_info "Checking for Python 3.12+..."
+
     if command -v python3 &> /dev/null; then
         PYTHON_CMD="python3"
     elif command -v python &> /dev/null; then
@@ -47,53 +47,53 @@ check_python() {
         fi
         return 0
     fi
-    
-    PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+
     PYTHON_MAJOR=$($PYTHON_CMD -c 'import sys; print(sys.version_info[0])')
     PYTHON_MINOR=$($PYTHON_CMD -c 'import sys; print(sys.version_info[1])')
-    
-    if [[ "$PYTHON_MAJOR" -lt 3 ]] || ([[ "$PYTHON_MAJOR" -eq 3 ]] && [[ "$PYTHON_MINOR" -lt 7 ]]); then
-        log_error "Python 3.7+ required, found $PYTHON_VERSION"
+
+    if [[ "$PYTHON_MAJOR" -lt 3 ]] || ([[ "$PYTHON_MAJOR" -eq 3 ]] && [[ "$PYTHON_MINOR" -lt 12 ]]); then
+        log_error "Python 3.12+ required, found $PYTHON_MAJOR.$PYTHON_MINOR"
         install_python
         if [[ $? -ne 0 ]]; then
             return 1
         fi
     fi
-    
-    log_info "Python $PYTHON_VERSION found"
+
+    log_info "Python $PYTHON_MAJOR.$PYTHON_MINOR found"
     return 0
 }
 
 install_python() {
     log_warn "Installing Python 3.12..."
-    
+
     case "$OS" in
         macos)
             if command -v brew &> /dev/null; then
                 log_info "Installing Python via Homebrew..."
-                brew install python312
+                brew install python@3.12
             else
                 log_info "Installing Homebrew first..."
                 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-                brew install python312
+                brew install python@3.12
             fi
             ;;
         debian|linux)
             if command -v apt &> /dev/null; then
                 log_info "Installing Python via apt..."
                 sudo apt update
-                sudo apt install -y python3.12 python3-pip
+                sudo apt install -y python3.12 python3.12-venv python3-pip
             elif command -v dnf &> /dev/null; then
                 log_info "Installing Python via dnf..."
-                sudo dnf install -y python3.12 python3-pip
+                sudo dnf install -y python3.12 python3.12-pip
             else
-                log_info "Installing Python via official installer..."
-                curl -sSL https://www.python.org/ftp/python/3.12.0/python-3.12.0-macos11.pkg -o /tmp/python.pkg || true
+                log_error "Cannot install Python automatically on this distro."
+                log_error "Install Python 3.12 manually from https://python.org"
+                return 1
             fi
             ;;
         fedora)
             log_info "Installing Python via dnf..."
-            sudo dnf install -y python3.12 python3-pip
+            sudo dnf install -y python3.12 python3.12-pip
             ;;
         arch)
             log_info "Installing Python via pacman..."
@@ -101,14 +101,15 @@ install_python() {
             ;;
         freebsd)
             log_info "Installing Python via pkg..."
-            sudo pkg install -y python312
+            sudo pkg install -y python3.12
             ;;
         *)
-            log_error "Cannot automatically install Python on this platform. Please install Python 3.7+ manually."
+            log_error "Cannot automatically install Python on this platform."
+            log_error "Install Python 3.12 manually from https://python.org"
             return 1
             ;;
     esac
-    
+
     if command -v python3 &> /dev/null; then
         PYTHON_CMD="python3"
     elif command -v python &> /dev/null; then
@@ -117,29 +118,21 @@ install_python() {
         log_error "Failed to install Python"
         return 1
     fi
-    
+
     log_info "Python installed successfully"
     return 0
 }
 
 check_uv() {
     log_info "Checking for uv..."
-    
-    if [[ -z "$PYTHON_CMD" ]]; then
-        if command -v python3 &> /dev/null; then
-            PYTHON_CMD="python3"
-        elif command -v python &> /dev/null; then
-            PYTHON_CMD="python"
-        fi
-    fi
-    
+
     if command -v uv &> /dev/null; then
         log_info "uv already installed"
         return 0
     fi
-    
+
     log_warn "uv not found. Installing..."
-    
+
     case "$OS" in
         macos)
             if command -v brew &> /dev/null; then
@@ -172,83 +165,56 @@ check_uv() {
             curl -LsSf https://astral.sh/uv/install.sh | sh
             ;;
     esac
-    
+
     if command -v uv &> /dev/null; then
         log_info "uv installed successfully"
     else
         log_error "Failed to install uv"
         return 1
     fi
-    
+
     return 0
 }
 
 install_kenkui() {
-    log_info "Installing kenkui..."
-    
-    if uv tool install kenkui; then
+    log_info "Installing kenkui from current directory..."
+
+    if [[ ! -f "pyproject.toml" ]]; then
+        log_error "pyproject.toml not found. Run this script from the kenkui root directory."
+        return 1
+    fi
+
+    if uv pip install -e .; then
         log_info "kenkui installed successfully!"
         log_info "Run 'kenkui --help' to get started"
     else
         log_error "Failed to install kenkui"
         return 1
     fi
-    
-    return 0
-}
 
-install_multivoice() {
-    log_info ""
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "  Optional: Multi-Voice Support (BookNLP)"
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Multi-voice mode uses BookNLP to identify characters"
-    log_info "and assign each one a different voice."
-    log_info ""
-    log_warn "Note: BookNLP installs ~500MB–1.5GB of NLP models."
-    log_info ""
-    
-    read -r -p "Install multi-voice support? [y/N] " response
-    case "$response" in
-        [yY][eE][sS]|[yY])
-            log_info "Installing kenkui[multivoice]..."
-            if uv tool install "kenkui[multivoice]" --force; then
-                log_info "Multi-voice dependencies installed."
-                log_info "Downloading spaCy language model..."
-                if $PYTHON_CMD -m spacy download en_core_web_sm; then
-                    log_info "spaCy model installed. Multi-voice support is ready!"
-                else
-                    log_warn "spaCy model download failed. Run manually:"
-                    log_warn "  python -m spacy download en_core_web_sm"
-                fi
-            else
-                log_warn "Multi-voice install failed. You can retry later with:"
-                log_warn "  pip install kenkui[multivoice]"
-                log_warn "  python -m spacy download en_core_web_sm"
-            fi
-            ;;
-        *)
-            log_info "Skipping multi-voice support."
-            log_info "To install later, run:"
-            log_info "  pip install kenkui[multivoice]"
-            log_info "  python -m spacy download en_core_web_sm"
-            ;;
-    esac
+    return 0
 }
 
 main() {
     log_info "Starting kenkui installer..."
-    
+
     OS=$(detect_os)
     log_info "Detected OS: $OS"
-    
+
     check_python || exit 1
     check_uv || exit 1
     install_kenkui || exit 1
-    install_multivoice
-    
+
     log_info ""
     log_info "Installation complete!"
+    log_info ""
+    log_info "To add a book:"
+    log_info "  kenkui add /path/to/book.epub"
+    log_info ""
+    log_info "For multi-voice narration (BookNLP):"
+    log_info "  BookNLP and spaCy are included by default."
+    log_info "  The spaCy language model (en_core_web_sm) is installed automatically"
+    log_info "  when kenkui is first used in multi-voice mode."
 }
 
 main "$@"

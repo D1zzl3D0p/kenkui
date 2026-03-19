@@ -26,7 +26,7 @@ function Write-Error {
 }
 
 function Check-Python {
-    Write-Info "Checking for Python 3.7+..."
+    Write-Info "Checking for Python 3.12+..."
 
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     if (-not $pythonCmd) {
@@ -35,7 +35,15 @@ function Check-Python {
 
     if ($pythonCmd) {
         $version = & $pythonCmd.Source --version 2>&1
-        Write-Info "Found $version"
+        $major = & $pythonCmd -c "import sys; print(sys.version_info.major)" 2>&1
+        $minor = & $pythonCmd -c "import sys; print(sys.version_info.minor)" 2>&1
+        Write-Info "Found Python $major.$minor ($version)"
+        if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 12)) {
+            Write-Error "Python 3.12+ required, found $major.$minor"
+            if (-not $SkipPython) {
+                return $false
+            }
+        }
         return $true
     }
 
@@ -53,7 +61,7 @@ function Check-Python {
         return $true
     }
     catch {
-        Write-Error "Failed to install Python. Please install Python 3.7+ manually from https://python.org"
+        Write-Error "Failed to install Python. Please install Python 3.12+ manually from https://python.org"
         return $false
     }
 }
@@ -78,7 +86,7 @@ function Check-Uv {
     try {
         winget install -e --id Astral.UV --silent --accept-package-agreements --accept-source-agreements
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-        
+
         $uvCmd = Get-Command uv -ErrorAction SilentlyContinue
         if ($uvCmd) {
             Write-Info "uv installed successfully via winget"
@@ -109,52 +117,29 @@ function Check-Uv {
 function Install-Kenkui {
     Write-Info "Installing kenkui..."
 
+    $scriptRoot = $PSScriptRoot
+    if (-not $scriptRoot) {
+        $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+
+    $pyproject = Join-Path $scriptRoot "pyproject.toml"
+    if (-not (Test-Path $pyproject)) {
+        Write-Error "pyproject.toml not found. Run this script from the kenkui root directory."
+        return $false
+    }
+
     try {
-        uv tool install kenkui
+        Push-Location $scriptRoot
+        uv pip install -e .
+        Pop-Location
         Write-Info "kenkui installed successfully!"
         Write-Info "Run 'kenkui --help' to get started"
         return $true
     }
     catch {
+        Pop-Location $null
         Write-Error "Failed to install kenkui: $_"
         return $false
-    }
-}
-
-function Install-MultiVoice {
-    Write-Host ""
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  Optional: Multi-Voice Support (BookNLP)" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Info "Multi-voice mode uses BookNLP to identify characters"
-    Write-Info "and assign each one a different voice."
-    Write-Host ""
-    Write-Warn "Note: BookNLP installs ~500MB-1.5GB of NLP models."
-    Write-Host ""
-
-    $response = Read-Host "Install multi-voice support? [y/N]"
-    if ($response -match '^[yY]') {
-        Write-Info "Installing kenkui[multivoice]..."
-        try {
-            uv tool install "kenkui[multivoice]" --force
-            Write-Info "Multi-voice dependencies installed."
-            Write-Info "Downloading spaCy language model..."
-            python -m spacy download en_core_web_sm
-            Write-Info "spaCy model installed. Multi-voice support is ready!"
-        }
-        catch {
-            Write-Warn "Multi-voice install encountered an error."
-            Write-Warn "You can retry later with:"
-            Write-Warn "  pip install kenkui[multivoice]"
-            Write-Warn "  python -m spacy download en_core_web_sm"
-        }
-    }
-    else {
-        Write-Info "Skipping multi-voice support."
-        Write-Info "To install later, run:"
-        Write-Info "  pip install kenkui[multivoice]"
-        Write-Info "  python -m spacy download en_core_web_sm"
     }
 }
 
@@ -167,8 +152,10 @@ function Main {
     # Check for winget
     $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
     if (-not $wingetCmd) {
-        Write-Error "winget not found. Please install App Installer from Microsoft Store or manually install Python and uv."
-        Write-Host "Alternative: Install Python from https://python.org, then run: pip install uv"
+        Write-Error "winget not found. Please install App Installer from Microsoft Store."
+        Write-Host "Alternative: Install Python 3.12 from https://python.org, then run:"
+        Write-Host "  pip install uv"
+        Write-Host "  uv pip install -e ."
         exit 1
     }
 
@@ -183,9 +170,16 @@ function Main {
     $installOk = Install-Kenkui
 
     if ($installOk) {
-        Install-MultiVoice
         Write-Host ""
         Write-Info "Installation complete!"
+        Write-Host ""
+        Write-Info "To add a book:"
+        Write-Info "  kenkui add C:\path\to\book.epub"
+        Write-Host ""
+        Write-Info "For multi-voice narration (BookNLP):"
+        Write-Info "  BookNLP and spaCy are included by default."
+        Write-Info "  The spaCy language model (en_core_web_sm) is installed automatically"
+        Write-Info "  when kenkui is first used in multi-voice mode."
     }
     else {
         Write-Error "Installation failed"
