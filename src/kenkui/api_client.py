@@ -86,11 +86,15 @@ class APIClient:
         chapter_selection: dict | None = None,
         output_path: str | None = None,
         name: str | None = None,
+        narration_mode: str = "single",
+        speaker_voices: dict | None = None,
+        annotated_chapters_path: str | None = None,
     ) -> JobInfo:
         """Add a new job to the queue."""
-        payload = {
+        payload: dict = {
             "ebook_path": ebook_path,
             "voice": voice,
+            "narration_mode": narration_mode,
         }
         if chapter_selection:
             payload["chapter_selection"] = chapter_selection
@@ -98,6 +102,10 @@ class APIClient:
             payload["output_path"] = output_path
         if name:
             payload["name"] = name
+        if speaker_voices:
+            payload["speaker_voices"] = speaker_voices
+        if annotated_chapters_path:
+            payload["annotated_chapters_path"] = annotated_chapters_path
 
         data = self._request("POST", "/queue", json=payload)
         return JobInfo(**data)

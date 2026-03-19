@@ -1,3 +1,11 @@
+"""Legacy Processor class — retained for backward-compatibility.
+
+The production processing path is :class:`kenkui.server.worker.WorkerServer`,
+which combines queue management and AudioBuilder execution with full multi-voice
+support.  ``Processor`` is used by the older TUI code paths and tests that pre-date
+the client-server architecture.  New code should prefer ``WorkerServer``.
+"""
+
 import logging
 import threading
 from collections.abc import Callable
@@ -94,8 +102,7 @@ class Processor:
         if preset in (ChapterPreset.MANUAL, ChapterPreset.CUSTOM):
             # Use explicit index list from the UI checkbox selection
             operations = [
-                FilterOperation("index", str(idx))
-                for idx in job.chapter_selection.included
+                FilterOperation("index", str(idx)) for idx in job.chapter_selection.included
             ]
             if not operations:
                 operations = [FilterOperation("preset", "content-only")]
@@ -119,6 +126,11 @@ class Processor:
             temp=app_config.temp,
             lsd_decode_steps=app_config.lsd_decode_steps,
             noise_clamp=app_config.noise_clamp,
+            # Multi-voice fields — mirror WorkerServer._build_config() so that
+            # any legacy code path using Processor still handles multi-voice jobs.
+            speaker_voices=getattr(job, "speaker_voices", {}),
+            annotated_chapters_path=getattr(job, "annotated_chapters_path", None),
+            _included_indices=job.chapter_selection.included,
         )
 
     @property

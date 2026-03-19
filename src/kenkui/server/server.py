@@ -44,7 +44,15 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"Starting kenkui worker server on {args.host}:{args.port}")
+    # Configure per-process logging to kenkui-server.log so the server's
+    # output is captured independently of the TUI process.
+    from ..log import setup_logging
+    import logging
+    log_path = setup_logging("server")
+    logging.getLogger(__name__).info(
+        "kenkui worker server starting on %s:%s — log: %s", args.host, args.port, log_path
+    )
+
     run_server(args.host, args.port, args.reload)
 
 

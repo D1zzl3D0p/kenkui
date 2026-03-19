@@ -1,10 +1,9 @@
 """FastAPI routes for the kenkui server."""
 
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from ..models import AppConfig, ChapterSelection, JobConfig, JobStatus
+from ..models import AppConfig, ChapterSelection, JobConfig, JobStatus, NarrationMode
 from .worker import get_server
 
 app = FastAPI(title="kenkui Worker Server", version="0.8.0")
@@ -16,6 +15,10 @@ class JobCreateRequest(BaseModel):
     chapter_selection: ChapterSelection | None = None
     output_path: str | None = None
     name: str | None = None
+    # Multi-voice fields
+    narration_mode: str = "single"
+    speaker_voices: dict[str, str] = {}
+    annotated_chapters_path: str | None = None
 
 
 class JobResponse(BaseModel):
@@ -99,6 +102,11 @@ def add_job(request: JobCreateRequest):
         chapter_selection=request.chapter_selection or ChapterSelection(),
         output_path=Path(request.output_path) if request.output_path else None,
         name=request.name or "",
+        narration_mode=NarrationMode(request.narration_mode),
+        speaker_voices=request.speaker_voices or {},
+        annotated_chapters_path=Path(request.annotated_chapters_path)
+        if request.annotated_chapters_path
+        else None,
     )
 
     server = get_server()

@@ -1,14 +1,25 @@
 import logging
+import tomllib
 import uuid
 
-import yaml
+import tomli_w
 
 from .config import CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 from .models import AppConfig, JobConfig, JobStatus, QueueItem
 
-QUEUE_FILE = CONFIG_DIR / "queue.yaml"
+QUEUE_FILE = CONFIG_DIR / "queue.toml"
+_LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
+
+
+def _strip_none(obj: object) -> object:
+    """Recursively remove None values — TOML has no null type."""
+    if isinstance(obj, dict):
+        return {k: _strip_none(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_strip_none(v) for v in obj if v is not None]
+    return obj
 
 
 class QueueManager:
@@ -19,9 +30,23 @@ class QueueManager:
         self._load()
 
     def _load(self):
+        # Auto-migrate legacy yaml if needed.
+        if not QUEUE_FILE.exists() and _LEGACY_QUEUE_FILE.exists():
+            try:
+                import yaml  # pyyaml may still be present as a transitive dep
+
+                data = yaml.safe_load(_LEGACY_QUEUE_FILE.read_text())
+                if data:
+                    QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    clean: dict = _strip_none(data)  # type: ignore[assignment]
+                    QUEUE_FILE.write_bytes(tomli_w.dumps(clean).encode("utf-8"))
+                _LEGACY_QUEUE_FILE.unlink(missing_ok=True)
+            except Exception as exc:
+                logger.warning("Could not migrate queue.yaml: %s", exc)
+
         if QUEUE_FILE.exists():
             try:
-                data = yaml.safe_load(QUEUE_FILE.read_text())
+                data = tomllib.loads(QUEUE_FILE.read_text(encoding="utf-8"))
                 if data:
                     self.items = [QueueItem.from_dict(d) for d in data.get("items", [])]
                     self._app_config = AppConfig.from_dict(data.get("app_config", {}))
@@ -30,12 +55,13 @@ class QueueManager:
         self.reset_stale_processing()
 
     def _save(self):
-        data = {
+        raw = {
             "items": [item.to_dict() for item in self.items],
             "app_config": self._app_config.to_dict(),
         }
+        data: dict = _strip_none(raw)  # type: ignore[assignment]
         QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        QUEUE_FILE.write_text(yaml.dump(data, default_flow_style=False))
+        QUEUE_FILE.write_bytes(tomli_w.dumps(data).encode("utf-8"))
 
     @property
     def app_config(self) -> AppConfig:

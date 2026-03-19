@@ -31,6 +31,20 @@ VOICE_DESCRIPTIONS = {
     "azelma": "American Female",
 }
 
+VOICE_GENDER: dict[str, str] = {
+    "alba": "male",
+    "marius": "male",
+    "javert": "male",
+    "jean": "male",
+    "fantine": "female",
+    "cosette": "female",
+    "eponine": "female",
+    "azelma": "female",
+}
+
+MALE_VOICES = [v for v, g in VOICE_GENDER.items() if g == "male"]
+FEMALE_VOICES = [v for v, g in VOICE_GENDER.items() if g == "female"]
+
 
 def batch_text(
     paragraphs: list[str],
@@ -154,9 +168,7 @@ def extract_epub_cover(epub_path: Path) -> tuple[bytes | None, str | None]:
 
             # Method 2: Look for item with properties="cover-image"
             if not cover_id:
-                for item in opf_tree.findall(
-                    './/opf:item[@properties="cover-image"]', namespaces
-                ):
+                for item in opf_tree.findall('.//opf:item[@properties="cover-image"]', namespaces):
                     cover_id = item.get("id")
                     break
 
@@ -168,9 +180,7 @@ def extract_epub_cover(epub_path: Path) -> tuple[bytes | None, str | None]:
                             continue
                         mime_type = item.get("media-type", "")
                         opf_dir = os.path.dirname(opf_path) or ""
-                        cover_path = os.path.join(opf_dir, cover_href).replace(
-                            "\\", "/"
-                        )
+                        cover_path = os.path.join(opf_dir, cover_href).replace("\\", "/")
 
                         cover_data = epub.read(cover_path)
 

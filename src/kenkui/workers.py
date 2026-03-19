@@ -103,6 +103,15 @@ def worker_process_chapter(
 
     Executed inside a subprocess worker via ``ProcessPoolExecutor``.
     """
+    # Configure logging for this worker process on first chapter call.
+    # setup_logging() is idempotent — subsequent calls for the same
+    # process_name are no-ops, so this pays no cost after the first chapter.
+    try:
+        from .log import setup_logging
+        setup_logging("workers")
+    except Exception:
+        pass
+
     pid = os.getpid()
     max_retries = 2
 

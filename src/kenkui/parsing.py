@@ -19,6 +19,62 @@ from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .workers import worker_process_chapter
 
+
+# ---------------------------------------------------------------------------
+# Multi-voice cache error
+# ---------------------------------------------------------------------------
+
+
+class AnnotatedChaptersCacheMissError(Exception):
+    """Raised when annotated_chapters_path is set but the file does not exist.
+
+    The WorkerServer catches this and marks the job with a CACHE_MISS sentinel
+    so the UI can offer the user a recovery choice (re-analyse or fall back to
+    single-voice).
+    """
+
+
+# ---------------------------------------------------------------------------
+# Annotated chapter loading helper
+# ---------------------------------------------------------------------------
+
+
+def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> list[Chapter]:
+    """Load annotated chapters from a BookNLP cache JSON file.
+
+    Args:
+        cache_path:       Path to the BookNLP cache JSON written by
+                          ``booknlp_processor.cache_result()``.
+        included_indices: Chapter indices that should be included (from the
+                          job's ChapterSelection.included list).  An empty
+                          list means include all chapters in the cache.
+
+    Returns:
+        List of Chapter objects with ``.segments`` populated, filtered to
+        ``included_indices`` and sorted by chapter index.
+
+    Raises:
+        AnnotatedChaptersCacheMissError: If ``cache_path`` does not exist.
+    """
+    import json
+
+    if not cache_path.exists():
+        raise AnnotatedChaptersCacheMissError(
+            f"BookNLP cache file not found: {cache_path}\n"
+            "CACHE_MISS: The annotated chapters cache file is missing. "
+            "Please re-analyse the book or fall back to single-voice mode."
+        )
+
+    data = json.loads(cache_path.read_text(encoding="utf-8"))
+    chapters = [Chapter.from_dict(ch) for ch in data.get("chapters", [])]
+
+    if included_indices:
+        idx_set = set(included_indices)
+        chapters = [ch for ch in chapters if ch.index in idx_set]
+
+    return sorted(chapters, key=lambda c: c.index)
+
+
 # Suppress ALL warnings by default (verbose mode will re-enable them)
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("ignore", message=".*characters could not be decoded.*")
@@ -243,8 +299,11 @@ class AudioBuilder:
             "temp": self.cfg.temp,
             "lsd_decode_steps": self.cfg.lsd_decode_steps,
             "noise_clamp": self.cfg.noise_clamp,
+            # Multi-voice: character id → voice name mapping
+            "speaker_voices": self.cfg.speaker_voices,
         }
 
+        pool: ProcessPoolExecutor | None = None
         try:
             with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
                 futures = {}
@@ -281,19 +340,13 @@ class AudioBuilder:
                                 eta_tracker.update(chars)
                                 if pid in worker_state:
                                     worker_state[pid]["current"] += msg[2]
-                                    self._current_chapter = worker_state[pid].get(
-                                        "title", ""
-                                    )
+                                    self._current_chapter = worker_state[pid].get("title", "")
                                 eta_seconds = self._calculate_eta(eta_tracker)
-                                self._report_progress(
-                                    self._current_chapter, eta_seconds
-                                )
+                                self._report_progress(self._current_chapter, eta_seconds)
                             elif event == "DONE":
                                 if pid in worker_state:
                                     if pid in chapter_start_times:
-                                        elapsed = (
-                                            time.monotonic() - chapter_start_times[pid]
-                                        )
+                                        elapsed = time.monotonic() - chapter_start_times[pid]
                                         chars = worker_state[pid].get("total_chars", 0)
                                         eta_tracker.on_chapter_complete(chars, elapsed)
                                         del chapter_start_times[pid]
@@ -315,11 +368,7 @@ class AudioBuilder:
                         except Exception:
                             break
 
-                    if (
-                        all(f.done() for f in futures)
-                        and not worker_state
-                        and queue.empty()
-                    ):
+                    if all(f.done() for f in futures) and not worker_state and queue.empty():
                         break
 
                 for future in as_completed(futures):
@@ -329,7 +378,7 @@ class AudioBuilder:
 
         except KeyboardInterrupt:
             print("Interrupted by user. Shutting down workers...")
-            if "pool" in locals():
+            if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
             return []
         finally:
@@ -382,9 +431,7 @@ class AudioBuilder:
             "-c:a",
             "aac" if output_file.suffix == ".m4b" else "libmp3lame",
             "-b:a",
-            _normalize_bitrate(self.cfg.m4b_bitrate)
-            if output_file.suffix == ".m4b"
-            else "128k",
+            _normalize_bitrate(self.cfg.m4b_bitrate) if output_file.suffix == ".m4b" else "128k",
         ]
         if output_file.suffix == ".m4b":
             cmd.extend(["-movflags", "+faststart"])
@@ -403,9 +450,7 @@ class AudioBuilder:
 
             if cover_data:
                 image_format = (
-                    MP4Cover.FORMAT_PNG
-                    if mime_type == "image/png"
-                    else MP4Cover.FORMAT_JPEG
+                    MP4Cover.FORMAT_PNG if mime_type == "image/png" else MP4Cover.FORMAT_JPEG
                 )
                 audio = MP4(str(output_file))
                 audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
@@ -413,9 +458,7 @@ class AudioBuilder:
                 self.console.print("Cover embedded successfully")
 
         except ImportError:
-            self.console.print(
-                "Warning: mutagen library not found. Cover not embedded."
-            )
+            self.console.print("Warning: mutagen library not found. Cover not embedded.")
         except Exception as e:
             self.console.print(f"Warning: Could not embed cover: {e}")
 
@@ -423,20 +466,31 @@ class AudioBuilder:
         """Main entry point for audiobook creation."""
         self._reader = get_reader(self.cfg.ebook_path, self.cfg.verbose)
 
-        all_chapters = self._reader.get_chapters()
+        # ── Chapter loading ───────────────────────────────────────────────
+        # Multi-voice jobs reference a BookNLP cache file.  Load annotated
+        # chapters from cache when available; raise AnnotatedChaptersCacheMissError
+        # if the cache file has gone missing so the server can surface a
+        # recovery dialog in the UI.
+        if self.cfg.annotated_chapters_path is not None:
+            # This call raises AnnotatedChaptersCacheMissError if file missing.
+            included = getattr(self.cfg, "_included_indices", [])
+            chapters = _load_annotated_chapters(self.cfg.annotated_chapters_path, included)
+            self.console.print(f"Loaded {len(chapters)} annotated chapters from BookNLP cache")
+        else:
+            all_chapters = self._reader.get_chapters()
 
-        if not all_chapters:
-            self.console.print(f"No chapters found in {self._reader.format_name}")
-            return False
+            if not all_chapters:
+                self.console.print(f"No chapters found in {self._reader.format_name}")
+                return False
 
-        from .chapter_filter import ChapterFilter
+            from .chapter_filter import ChapterFilter
 
-        filter_chain = ChapterFilter(self.cfg.chapter_filters)
-        chapters = filter_chain.apply(all_chapters)
+            filter_chain = ChapterFilter(self.cfg.chapter_filters)
+            chapters = filter_chain.apply(all_chapters)
 
-        self.console.print(
-            f"Extracted {len(all_chapters)} chapters, {len(chapters)} after filtering"
-        )
+            self.console.print(
+                f"Extracted {len(all_chapters)} chapters, {len(chapters)} after filtering"
+            )
 
         if not chapters:
             self.console.print("No chapters match the specified filters")
@@ -459,17 +513,13 @@ class AudioBuilder:
             metadata = self._reader.get_metadata()
             book_title = metadata.title
             output_dir = (
-                self.cfg.output_path
-                if self.cfg.output_path
-                else self.cfg.ebook_path.parent
+                self.cfg.output_path if self.cfg.output_path else self.cfg.ebook_path.parent
             )
             output_file = output_dir / f"{book_title}.m4b"
 
         output_file = get_unique_output_path(output_file)
 
-        return self.build(
-            chapters, output_file, chapter_batch_info, total_batches, total_chars
-        )
+        return self.build(chapters, output_file, chapter_batch_info, total_batches, total_chars)
 
     @contextmanager
     def _managed_temp_dir(self):

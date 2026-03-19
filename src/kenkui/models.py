@@ -43,6 +43,13 @@ class JobStatus(Enum):
     CANCELLED = "cancelled"
 
 
+class NarrationMode(Enum):
+    """Whether a job uses a single narrator voice or per-character multi-voice."""
+
+    SINGLE = "single"
+    MULTI = "multi"
+
+
 class ChapterPreset(Enum):
     NONE = "none"
     CONTENT_ONLY = "content-only"
@@ -50,6 +57,21 @@ class ChapterPreset(Enum):
     WITH_PARTS = "with-parts"
     MANUAL = "manual"
     CUSTOM = "custom"  # User manually modified selection
+
+
+@dataclass
+class CharacterInfo:
+    """Metadata for a character identified by BookNLP.
+
+    Used in the MultiVoiceScreen for per-character voice assignment.
+    Not persisted directly in JobConfig — only the resulting
+    ``speaker_voices`` mapping is stored.
+    """
+
+    character_id: str  # BookNLP coref ID, e.g. "ELIZABETH_BENNETT-0"
+    display_name: str  # Most common name form from BookNLP clusters
+    quote_count: int = 0
+    gender_pronoun: str = ""  # "he", "she", "they", etc.
 
 
 @dataclass
@@ -100,6 +122,10 @@ class JobConfig:
     chapter_selection: ChapterSelection = field(default_factory=ChapterSelection)
     output_path: Path | None = None
     name: str = ""
+    # --- Multi-voice fields ---
+    narration_mode: NarrationMode = NarrationMode.SINGLE
+    speaker_voices: dict[str, str] = field(default_factory=dict)  # char_id → voice
+    annotated_chapters_path: Path | None = None  # BookNLP cache JSON path
 
     def __post_init__(self):
         if not self.name:
@@ -112,6 +138,11 @@ class JobConfig:
             "chapter_selection": self.chapter_selection.to_dict(),
             "output_path": str(self.output_path) if self.output_path else None,
             "name": self.name,
+            "narration_mode": self.narration_mode.value,
+            "speaker_voices": self.speaker_voices,
+            "annotated_chapters_path": str(self.annotated_chapters_path)
+            if self.annotated_chapters_path
+            else None,
         }
 
     @classmethod
@@ -119,11 +150,14 @@ class JobConfig:
         return cls(
             ebook_path=Path(data["ebook_path"]),
             voice=data.get("voice", "alba"),
-            chapter_selection=ChapterSelection.from_dict(
-                data.get("chapter_selection", {})
-            ),
+            chapter_selection=ChapterSelection.from_dict(data.get("chapter_selection", {})),
             output_path=Path(data["output_path"]) if data.get("output_path") else None,
             name=data.get("name", ""),
+            narration_mode=NarrationMode(data.get("narration_mode", "single")),
+            speaker_voices=data.get("speaker_voices") or {},
+            annotated_chapters_path=Path(data["annotated_chapters_path"])
+            if data.get("annotated_chapters_path")
+            else None,
         )
 
 
@@ -139,13 +173,13 @@ class AppConfig:
     pause_chapter_ms: int = 2000
     temp: float = 0.7  # Sampling temperature (lower = stable, higher = expressive)
     lsd_decode_steps: int = 1  # LSD decode steps (higher = better quality, slower)
-    noise_clamp: float | None = (
-        None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
-    )
+    noise_clamp: float | None = None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
     # --- Job defaults (used by CLI / headless mode) ---
     default_voice: str = "alba"  # Voice used when no per-job override
     default_chapter_preset: str = "content-only"  # Chapter filter preset for CLI
     default_output_dir: Path | None = None  # Output directory for CLI runs
+    # --- Multi-voice / BookNLP ---
+    booknlp_model: str = "small"  # "small" (fast, CPU) or "big" (accurate, GPU)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,9 +196,8 @@ class AppConfig:
             "noise_clamp": self.noise_clamp,
             "default_voice": self.default_voice,
             "default_chapter_preset": self.default_chapter_preset,
-            "default_output_dir": str(self.default_output_dir)
-            if self.default_output_dir
-            else None,
+            "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
+            "booknlp_model": self.booknlp_model,
         }
 
     @classmethod
@@ -186,6 +219,7 @@ class AppConfig:
             default_output_dir=Path(data["default_output_dir"])
             if data.get("default_output_dir")
             else None,
+            booknlp_model=data.get("booknlp_model", "small"),
         )
 
 
@@ -236,8 +270,23 @@ class Segment:
     """
 
     text: str
-    speaker: str = "narrator"  # voice name or character identifier
+    speaker: str = "NARRATOR"  # voice name, character id, or "NARRATOR"
     index: int = 0  # original position in the chapter
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "speaker": self.speaker,
+            "index": self.index,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Segment":
+        return cls(
+            text=data["text"],
+            speaker=data.get("speaker", "NARRATOR"),
+            index=data.get("index", 0),
+        )
 
 
 def _default_chapter_tags() -> "ChapterTags":
@@ -254,6 +303,30 @@ class Chapter:
     tags: "ChapterTags" = field(default_factory=_default_chapter_tags)
     toc_index: int = 0
     segments: list[Segment] | None = None  # Populated by BookNLP for multi-voice
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "index": self.index,
+            "title": self.title,
+            "paragraphs": self.paragraphs,
+            "toc_index": self.toc_index,
+        }
+        if self.segments is not None:
+            d["segments"] = [s.to_dict() for s in self.segments]
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Chapter":
+        segments: list[Segment] | None = None
+        if "segments" in data and data["segments"] is not None:
+            segments = [Segment.from_dict(s) for s in data["segments"]]
+        return cls(
+            index=data["index"],
+            title=data["title"],
+            paragraphs=data.get("paragraphs", []),
+            toc_index=data.get("toc_index", 0),
+            segments=segments,
+        )
 
 
 @dataclass
@@ -286,6 +359,15 @@ class ProcessingConfig:
     temp: float = 0.7
     lsd_decode_steps: int = 1
     noise_clamp: float | None = None
+    # --- Multi-voice fields ---
+    speaker_voices: dict[str, str] = field(default_factory=dict)
+    annotated_chapters_path: Path | None = None
+    # Chapter indices to include when loading from annotated cache.
+    # An empty list means "include all chapters in the cache file".
+    # Set by WorkerServer._build_config() / Processor._build_config() from
+    # JobConfig.chapter_selection.included so that multi-voice jobs respect
+    # the user's chapter selection without needing a runtime-injected attribute.
+    _included_indices: list[int] = field(default_factory=list)
 
     @property
     def epub_path(self) -> Path:

@@ -88,9 +88,7 @@ class TestAppConfigRoundTrip:
 
 class TestChapterSelectionRoundTrip:
     def test_preset_round_trip(self):
-        sel = ChapterSelection(
-            preset=ChapterPreset.CONTENT_ONLY, included=[1, 2], excluded=[3]
-        )
+        sel = ChapterSelection(preset=ChapterPreset.CONTENT_ONLY, included=[1, 2], excluded=[3])
         restored = ChapterSelection.from_dict(sel.to_dict())
         assert restored.preset == ChapterPreset.CONTENT_ONLY
         assert restored.included == [1, 2]
@@ -112,7 +110,7 @@ class TestChapterSelectionRoundTrip:
 class TestSegment:
     def test_segment_defaults(self):
         s = Segment(text="Hello world.")
-        assert s.speaker == "narrator"
+        assert s.speaker == "NARRATOR"
         assert s.index == 0
 
     def test_segment_custom_speaker(self):
@@ -138,7 +136,7 @@ class TestChapterWithSegments:
         assert ch.segments is None
 
     def test_chapter_with_segments(self):
-        segs = [Segment("Narration.", "narrator", 0), Segment("Dialogue.", "alice", 1)]
+        segs = [Segment("Narration.", "NARRATOR", 0), Segment("Dialogue.", "alice", 1)]
         ch = Chapter(index=0, title="Ch 1", paragraphs=["Para."], segments=segs)
         assert ch.segments is not None
         assert len(ch.segments) == 2

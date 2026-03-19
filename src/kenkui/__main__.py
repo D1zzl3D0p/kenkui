@@ -1,15 +1,22 @@
 """
 Kenkui — Ebook to Audiobook Converter
-Entry point for both TUI and headless (CLI) modes.
+Entry point / sub-command dispatcher.
 
-Usage:
-  kenkui                          # open TUI, browse for a book
-  kenkui /path/to/book.epub       # headless: convert using saved config
-  kenkui /path/to/dir             # open TUI pre-navigated to that directory
-  kenkui --list-voices            # print available voices and exit
-  kenkui --list-presets           # print chapter filter presets and exit
-  kenkui /path/to/book.epub -c myprofile          # use named config
-  kenkui /path/to/book.epub --output ~/Audiobooks # override output dir
+Sub-commands
+------------
+  kenkui book.epub                    Interactive wizard → auto-start queue → live dashboard
+  kenkui book.epub -c config.toml     Headless: queue → start → Rich progress poll → exit 0/1
+
+  kenkui add book.epub                Interactive wizard → queue only (prints hint)
+  kenkui add book.epub -c config.toml Headless: queue only → print hint (no auto-start)
+
+  kenkui queue                        Snapshot: Rich table of all jobs, exits immediately
+  kenkui queue --live                 Live-refreshing Rich dashboard (Ctrl+C to exit)
+  kenkui queue start                  Start processing next pending job
+  kenkui queue start --live           Start processing + enter live dashboard
+  kenkui queue stop                   Stop current job
+
+  kenkui config path/to/config.toml   Create/edit a config at the given path
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-# MUST set multiprocessing start method BEFORE any multiprocessing usage
+# MUST set multiprocessing start method BEFORE any multiprocessing usage.
 if __name__ == "__main__":
     try:
         multiprocessing.set_start_method("spawn", force=True)
@@ -32,17 +39,15 @@ import argparse
 
 import httpx
 
-from .app import run_app
-
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 45365
 
-# Recognised ebook extensions that trigger headless mode
+# Recognised ebook extensions that trigger the bare-path shorthand.
 EBOOK_EXTENSIONS = {".epub", ".mobi", ".fb2", ".azw", ".azw3", ".azw4"}
 
 
 # ---------------------------------------------------------------------------
-# Server lifecycle helpers
+# Server lifecycle helpers  (kept verbatim from the original implementation)
 # ---------------------------------------------------------------------------
 
 
@@ -86,7 +91,7 @@ def start_server(host: str, port: int) -> subprocess.Popen:
 
 def ensure_server(args) -> subprocess.Popen | None:
     """Start the server if it is not already running."""
-    if args.no_auto_server:
+    if getattr(args, "no_auto_server", False):
         return None
     try:
         httpx.get(f"http://{args.server_host}:{args.server_port}/health", timeout=2.0)
@@ -95,7 +100,7 @@ def ensure_server(args) -> subprocess.Popen | None:
         return start_server(args.server_host, args.server_port)
 
 
-def shutdown_server(proc: subprocess.Popen | None):
+def shutdown_server(proc: subprocess.Popen | None) -> None:
     if proc is None:
         return
     print("Shutting down worker server…", file=sys.stderr)
@@ -108,193 +113,12 @@ def shutdown_server(proc: subprocess.Popen | None):
 
 
 # ---------------------------------------------------------------------------
-# Informational commands (no server needed)
-# ---------------------------------------------------------------------------
-
-
-def _list_voices() -> int:
-    from .helpers import get_bundled_voices
-    from .utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
-
-    print("=== Built-in Voices ===")
-    for v in DEFAULT_VOICES:
-        desc = VOICE_DESCRIPTIONS.get(v, "")
-        print(f"  {v:<20} {desc}")
-    bundled = [b for b in get_bundled_voices() if b.lower() != "default.txt"]
-    if bundled:
-        print("\n=== Bundled Voices (requires HuggingFace login) ===")
-        for b in bundled:
-            print(f"  {b.replace('.wav', '')}")
-    print("\nCustom voices: pass a local file path or hf://user/repo/voice.wav")
-    return 0
-
-
-def _list_presets() -> int:
-    from .chapter_filter import ChapterFilter
-
-    print("=== Chapter Filter Presets ===")
-    for name, desc in ChapterFilter.list_presets():
-        print(f"  {name:<20} {desc}")
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Headless processing
-# ---------------------------------------------------------------------------
-
-
-def _run_headless(args) -> int:
-    """Submit a job to the server and poll until it completes."""
-    from .api_client import APIClient
-    from .config import get_config_manager
-    from .models import AppConfig, ChapterPreset, ChapterSelection
-
-    cfg_mgr = get_config_manager()
-    app_config: AppConfig = cfg_mgr.load_app_config(args.config)
-
-    input_path: Path = args.input
-    if args.output:
-        output_dir = Path(args.output).expanduser().resolve()
-    elif app_config.default_output_dir:
-        output_dir = Path(app_config.default_output_dir).expanduser().resolve()
-    else:
-        output_dir = input_path.parent
-
-    voice = app_config.default_voice
-    preset_str = app_config.default_chapter_preset
-
-    try:
-        preset_enum = ChapterPreset(preset_str)
-    except ValueError:
-        preset_enum = ChapterPreset.CONTENT_ONLY
-    chapter_selection = ChapterSelection(preset=preset_enum).to_dict()
-
-    print(f"Book:    {input_path}")
-    print(f"Voice:   {voice}")
-    print(f"Preset:  {preset_str}")
-    print(f"Output:  {output_dir}")
-    print(f"Config:  {app_config.name}")
-    print()
-
-    server_proc = ensure_server(args)
-    client = APIClient(host=args.server_host, port=args.server_port)
-
-    try:
-        client.update_config(app_config.to_dict())
-        job_info = client.add_job(
-            ebook_path=str(input_path),
-            voice=voice,
-            chapter_selection=chapter_selection,
-            output_path=str(output_dir),
-        )
-        job_id = job_info.id
-        print(f"Job queued: {job_id}")
-        client.start_processing()
-
-        last_chapter = ""
-        while True:
-            time.sleep(2)
-            try:
-                item = client.get_job(job_id)
-            except Exception:
-                continue
-
-            if item is None:
-                print("Error: job disappeared from queue.", file=sys.stderr)
-                return 1
-
-            progress = item.progress
-            chapter = item.current_chapter or ""
-            filled = int(progress / 5)
-            bar = "█" * filled + "░" * (20 - filled)
-            line = f"\r  [{bar}] {progress:5.1f}%"
-            if chapter and chapter != last_chapter:
-                line += f"  {chapter[:50]}"
-                last_chapter = chapter
-            print(line, end="", flush=True)
-
-            if item.status == "completed":
-                print()
-                print(f"\nDone! Output: {item.output_path or output_dir}")
-                return 0
-            elif item.status == "failed":
-                print()
-                print(f"\nFailed: {item.error_message}", file=sys.stderr)
-                return 1
-            elif item.status == "cancelled":
-                print()
-                print("\nCancelled.", file=sys.stderr)
-                return 1
-
-    finally:
-        client.close()
-        shutdown_server(server_proc)
-
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# TUI mode
-# ---------------------------------------------------------------------------
-
-
-def _run_tui(args) -> int:
-    server_proc = ensure_server(args)
-    try:
-        run_app(
-            config_name=args.config,
-            initial_path=args.input,
-            server_host=args.server_host,
-            server_port=args.server_port,
-        )
-        return 0
-    finally:
-        shutdown_server(server_proc)
-
-
-# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    from . import __version__
-
-    parser = argparse.ArgumentParser(
-        prog="kenkui",
-        description=(
-            "Kenkui — Ebook to Audiobook Converter.\n\n"
-            "Passing an ebook file (.epub/.mobi/.fb2) runs headless (no TUI).\n"
-            "Passing a directory or no argument opens the interactive TUI.\n\n"
-            "Create named configs in the TUI (Config screen → Save Config…)\n"
-            "then reuse them with:  kenkui book.epub -c myconfig"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "input",
-        type=Path,
-        nargs="?",
-        default=None,
-        help="Ebook file (headless) or directory (TUI). Omit to open TUI.",
-    )
-    parser.add_argument(
-        "-c",
-        "--config",
-        default=None,
-        metavar="NAME",
-        help=(
-            "Named config from ~/.config/kenkui/configs/<NAME>.yaml. "
-            "Defaults to 'default'."
-        ),
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        default=None,
-        metavar="DIR",
-        help="Output directory (headless only). Overrides config default_output_dir.",
-    )
+def _add_server_flags(parser: argparse.ArgumentParser) -> None:
+    """Attach the common server-connection flags to *parser*."""
     parser.add_argument(
         "--server-host",
         default=DEFAULT_HOST,
@@ -311,32 +135,116 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not auto-start the worker server (assume it is already running).",
     )
-    parser.add_argument(
-        "--list-voices",
-        action="store_true",
-        help="Print all available voices and exit.",
+
+
+def _build_bare_parser() -> argparse.ArgumentParser:
+    """Parser for the bare shorthand: kenkui book.epub [-c config] [-o dir]."""
+    from . import __version__
+
+    parser = argparse.ArgumentParser(
+        prog="kenkui",
+        description=(
+            "Kenkui — Ebook to Audiobook Converter.\n\n"
+            "Pass an ebook path directly to run the interactive wizard then\n"
+            "auto-start the queue with a live dashboard.  Add -c config.toml\n"
+            "to skip the wizard and run headless instead.\n\n"
+            "Sub-commands: add, queue, config"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--list-presets",
-        action="store_true",
-        help="Print all chapter filter presets and exit.",
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--verbose", action="store_true", help="Enable DEBUG logging.")
+    parser.add_argument("--log-file", default=None, metavar="PATH")
+    _add_server_flags(parser)
+    parser.add_argument("book", type=Path, help="Ebook file path.")
+    parser.add_argument("-c", "--config", default=None, metavar="PATH_OR_NAME")
+    parser.add_argument("-o", "--output", default=None, metavar="DIR")
+    return parser
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
+    parser = argparse.ArgumentParser(
+        prog="kenkui",
+        description=(
+            "Kenkui — Ebook to Audiobook Converter.\n\n"
+            "Pass an ebook path directly to run the interactive wizard then\n"
+            "auto-start the queue with a live dashboard.  Add -c config.toml\n"
+            "to skip the wizard and run headless instead.\n\n"
+            "Sub-commands: add, queue, config"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose (DEBUG) logging to stderr.",
-    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--verbose", action="store_true", help="Enable DEBUG logging.")
     parser.add_argument(
         "--log-file",
         default=None,
         metavar="PATH",
-        help="Write log output to this file in addition to stderr.",
+        help="Write log output to this file.",
+    )
+    _add_server_flags(parser)
+    parser.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        metavar="PATH_OR_NAME",
+        help=(
+            "Config file path or bare name to look up in XDG config dir. "
+            "Triggers headless mode when combined with a book path."
+        ),
     )
     parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
+        "-o",
+        "--output",
+        default=None,
+        metavar="DIR",
+        help="Output directory (headless only).",
     )
+
+    sub = parser.add_subparsers(dest="command")
+
+    # ---- kenkui add --------------------------------------------------------
+    add_p = sub.add_parser("add", help="Add a book to the queue (interactive wizard).")
+    add_p.add_argument("book", type=Path, help="Path to the ebook file.")
+    add_p.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        metavar="PATH_OR_NAME",
+        help="Config file/name. Triggers headless mode (queue only, no auto-start).",
+    )
+    add_p.add_argument("-o", "--output", default=None, metavar="DIR")
+    _add_server_flags(add_p)
+
+    # ---- kenkui queue ------------------------------------------------------
+    queue_p = sub.add_parser("queue", help="View or control the job queue.")
+    queue_p.add_argument("--live", action="store_true", help="Show a live-refreshing dashboard.")
+    _add_server_flags(queue_p)
+
+    queue_sub = queue_p.add_subparsers(dest="queue_command")
+
+    queue_start = queue_sub.add_parser("start", help="Start processing.")
+    queue_start.add_argument(
+        "--live", action="store_true", help="Enter live dashboard after starting."
+    )
+    _add_server_flags(queue_start)
+
+    queue_sub.add_parser("stop", help="Stop current job.")
+
+    # ---- kenkui config -----------------------------------------------------
+    cfg_p = sub.add_parser("config", help="Create or edit a config file.")
+    cfg_p.add_argument(
+        "path",
+        metavar="PATH_OR_NAME",
+        help=(
+            "Destination file path (e.g. ~/my-config.toml) or bare name to "
+            "save in the XDG config directory."
+        ),
+    )
+    _add_server_flags(cfg_p)
+
     return parser
 
 
@@ -345,39 +253,101 @@ def _build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def main():
-    parser = _build_parser()
-    args = parser.parse_args()
+def _is_bare_book_invocation() -> bool:
+    """Return True when sys.argv looks like 'kenkui book.epub [flags]'.
 
-    log_level = logging.DEBUG if args.verbose else logging.WARNING
+    We detect this by checking whether the first non-flag argument in sys.argv
+    (after the program name) looks like an ebook path rather than a sub-command
+    name.  This lets us route to _build_bare_parser() before argparse gets a
+    chance to confuse the path with a sub-command.
+    """
+    for arg in sys.argv[1:]:
+        if arg.startswith("-"):
+            # Skip flags and their values (best-effort; doesn't need to be
+            # perfect because _build_bare_parser will catch any real errors).
+            continue
+        # First non-flag arg: if it has an ebook extension it's a bare book path.
+        return Path(arg).suffix.lower() in EBOOK_EXTENSIONS
+    return False
+
+
+def main() -> None:
+    # Pre-detect bare-book invocation BEFORE handing off to the subparser,
+    # because argparse subparsers clash with positional paths that contain
+    # spaces or dots when they're not listed as valid sub-command names.
+    if _is_bare_book_invocation():
+        bare_parser = _build_bare_parser()
+        args = bare_parser.parse_args()
+    else:
+        parser = _build_parser()
+        args = parser.parse_args()
+        # Attach a dummy bare_parser reference so the else-branch below can
+        # call parser.print_help() safely.
+        bare_parser = parser  # type: ignore[assignment]
+
+    # Logging setup — headless / CLI only; TUI-style stripping not needed.
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
-    if args.log_file:
+    if getattr(args, "log_file", None):
         handlers.append(logging.FileHandler(args.log_file))
     logging.basicConfig(
-        level=log_level,
+        level=logging.DEBUG if getattr(args, "verbose", False) else logging.WARNING,
         format="%(levelname)s [%(name)s] %(message)s",
         handlers=handlers,
     )
 
-    if args.list_voices:
-        sys.exit(_list_voices())
-    if args.list_presets:
-        sys.exit(_list_presets())
+    command = getattr(args, "command", None)
 
-    if (
-        args.input is not None
-        and args.input.is_file()
-        and args.input.suffix.lower() in EBOOK_EXTENSIONS
-    ):
-        if not args.input.exists():
-            print(f"Error: file not found: {args.input}", file=sys.stderr)
-            sys.exit(1)
-        sys.exit(_run_headless(args))
+    # ---- Sub-command dispatch ----------------------------------------------
+    if command == "add":
+        from .cli.add import cmd_add
+
+        if args.book is None:
+            _build_parser().error("kenkui add: book path is required.")
+        server_proc = ensure_server(args)
+        try:
+            sys.exit(cmd_add(args))
+        finally:
+            # 'add' queues only; server stays alive for subsequent commands.
+            shutdown_server(server_proc)
+
+    elif command == "queue":
+        from .cli.queue import cmd_queue
+
+        server_proc = ensure_server(args)
+        try:
+            sys.exit(cmd_queue(args))
+        finally:
+            shutdown_server(server_proc)
+
+    elif command == "config":
+        from .cli.config import cmd_config
+
+        sys.exit(cmd_config(args))
+
     else:
-        if args.input is not None and not args.input.exists():
-            print(f"Error: path not found: {args.input}", file=sys.stderr)
+        # ---- Bare shorthand: kenkui book.epub [-c config] ------------------
+        book_path: Path | None = getattr(args, "book", None)
+        if book_path is None:
+            bare_parser.print_help()
+            sys.exit(0)
+
+        if not book_path.exists():
+            print(f"Error: file not found: {book_path}", file=sys.stderr)
             sys.exit(1)
-        sys.exit(_run_tui(args))
+        if book_path.suffix.lower() not in EBOOK_EXTENSIONS:
+            print(
+                f"Error: unrecognised ebook format: {book_path.suffix}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        from .cli.add import cmd_bare
+
+        server_proc = ensure_server(args)
+        try:
+            sys.exit(cmd_bare(args))
+        finally:
+            shutdown_server(server_proc)
 
 
 if __name__ == "__main__":

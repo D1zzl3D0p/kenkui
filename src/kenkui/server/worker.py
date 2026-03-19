@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+import tomllib
 import uuid
 from collections.abc import Callable
 
-import yaml
+import tomli_w
 
 from ..chapter_filter import FilterOperation
 from ..config import CONFIG_DIR
 from ..models import AppConfig, JobConfig, JobStatus, QueueItem
-from ..parsing import AudioBuilder
+from ..parsing import AnnotatedChaptersCacheMissError, AudioBuilder
 
-QUEUE_FILE = CONFIG_DIR / "queue.yaml"
+logger = logging.getLogger(__name__)
+
+QUEUE_FILE = CONFIG_DIR / "queue.toml"
+_LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
+
+
+def _strip_none(obj: object) -> object:
+    """Recursively remove None values — TOML has no null type."""
+    if isinstance(obj, dict):
+        return {k: _strip_none(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [_strip_none(v) for v in obj if v is not None]
+    return obj
 
 
 class WorkerServer:
@@ -30,29 +44,46 @@ class WorkerServer:
         self._lock = threading.RLock()
         self._processing_thread: threading.Thread | None = None
         self._running = False
-        self._progress_callback: Callable[[float, str, int], None] = None
+        self._progress_callback: Callable[[float, str, int], None] | None = None
         self._load()
 
     def _load(self):
+        # Auto-migrate from legacy queue.yaml if queue.toml does not exist yet.
+        if not QUEUE_FILE.exists() and _LEGACY_QUEUE_FILE.exists():
+            self._migrate_yaml_to_toml()
+
         if QUEUE_FILE.exists():
             try:
-                data = yaml.safe_load(QUEUE_FILE.read_text())
+                data = tomllib.loads(QUEUE_FILE.read_text(encoding="utf-8"))
                 if data:
-                    self._items = [
-                        QueueItem.from_dict(d) for d in data.get("items", [])
-                    ]
+                    self._items = [QueueItem.from_dict(d) for d in data.get("items", [])]
                     self._app_config = AppConfig.from_dict(data.get("app_config", {}))
             except Exception:
                 pass
         self._reset_stale_processing()
 
+    def _migrate_yaml_to_toml(self) -> None:
+        """Convert queue.yaml → queue.toml and remove the old file."""
+        try:
+            import yaml  # pyyaml may still be present as a transitive dep
+
+            data = yaml.safe_load(_LEGACY_QUEUE_FILE.read_text())
+            if data:
+                QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                QUEUE_FILE.write_bytes(tomli_w.dumps(_strip_none(data)).encode("utf-8"))
+            _LEGACY_QUEUE_FILE.unlink(missing_ok=True)
+            logger.info("Migrated queue.yaml → queue.toml")
+        except Exception as exc:
+            logger.warning("Could not migrate queue.yaml: %s — starting fresh", exc)
+
     def _save(self):
-        data = {
+        raw = {
             "items": [item.to_dict() for item in self._items],
             "app_config": self._app_config.to_dict(),
         }
+        data: dict = _strip_none(raw)  # type: ignore[assignment]
         QUEUE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        QUEUE_FILE.write_text(yaml.dump(data, default_flow_style=False))
+        QUEUE_FILE.write_bytes(tomli_w.dumps(data).encode("utf-8"))
 
     @property
     def app_config(self) -> AppConfig:
@@ -67,9 +98,7 @@ class WorkerServer:
     @property
     def current_item(self) -> QueueItem | None:
         with self._lock:
-            return next(
-                (i for i in self._items if i.status == JobStatus.PROCESSING), None
-            )
+            return next((i for i in self._items if i.status == JobStatus.PROCESSING), None)
 
     @property
     def pending_items(self) -> list[QueueItem]:
@@ -151,9 +180,7 @@ class WorkerServer:
                 self._save()
             return item
 
-    def update_progress(
-        self, job_id: str, progress: float, current_chapter: str, eta_seconds: int
-    ):
+    def update_progress(self, job_id: str, progress: float, current_chapter: str, eta_seconds: int):
         with self._lock:
             for item in self._items:
                 if item.id == job_id:
@@ -191,9 +218,7 @@ class WorkerServer:
                 return True
             return False
 
-    def start_processing(
-        self, progress_callback: Callable[[float, str, int], None] | None = None
-    ):
+    def start_processing(self, progress_callback: Callable[[float, str, int], None] | None = None):
         """Start processing the next job in the queue."""
         if self._running:
             return False
@@ -248,6 +273,10 @@ class WorkerServer:
             else:
                 self.fail_job(item.id, "Conversion failed")
 
+        except AnnotatedChaptersCacheMissError as e:
+            # Surface the CACHE_MISS sentinel so QueueScreen can present the
+            # recovery dialog (re-analyse or fall back to single voice).
+            self.fail_job(item.id, f"CACHE_MISS: {e}")
         except Exception as e:
             self.fail_job(item.id, str(e))
 
@@ -259,8 +288,7 @@ class WorkerServer:
         if preset.value in ("manual", "custom"):
             # Use explicit index list from the UI checkbox selection
             operations = [
-                FilterOperation("index", str(idx))
-                for idx in job.chapter_selection.included
+                FilterOperation("index", str(idx)) for idx in job.chapter_selection.included
             ]
             if not operations:
                 operations = [FilterOperation("preset", "content-only")]
@@ -269,7 +297,7 @@ class WorkerServer:
 
         output_path = job.output_path or job.ebook_path.parent
 
-        return ProcessingConfig(
+        cfg = ProcessingConfig(
             voice=job.voice,
             ebook_path=job.ebook_path,
             output_path=output_path,
@@ -284,7 +312,12 @@ class WorkerServer:
             temp=self._app_config.temp,
             lsd_decode_steps=self._app_config.lsd_decode_steps,
             noise_clamp=self._app_config.noise_clamp,
+            # Multi-voice fields
+            speaker_voices=job.speaker_voices,
+            annotated_chapters_path=job.annotated_chapters_path,
+            _included_indices=job.chapter_selection.included,
         )
+        return cfg
 
 
 _server: WorkerServer | None = None

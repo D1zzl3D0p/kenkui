@@ -21,9 +21,12 @@ from .huggingface_auth import (
     ensure_huggingface_access,
     is_custom_voice,
 )
+from .booknlp_processor import BookNLPResult
 from .models import (
     AudioResult,
     Chapter,
+    CharacterInfo,
+    NarrationMode,
     ProcessingConfig,
     Segment,
 )
@@ -45,19 +48,29 @@ __all__ = [
     "Chapter",
     "Segment",
     "AudioResult",
+    # Multi-voice / BookNLP
+    "BookNLPResult",
+    "CharacterInfo",
+    "NarrationMode",
+    # Ebook reading
     "EpubReader",
     "AudioBuilder",
+    # Chapter handling
     "ChapterTags",
     "ChapterClassifier",
     "ChapterFilter",
     "FilterPreset",
     "FilterOperation",
+    # Voices
     "get_bundled_voices",
     "load_voice",
+    # Workers
     "worker_process_chapter",
+    # HuggingFace auth
     "ensure_huggingface_access",
     "is_custom_voice",
     "check_voice_access",
+    # Package metadata
     "__version__",
     "__author__",
     "__license__",
