@@ -6,7 +6,7 @@ Covers:
 - Segment to_dict / from_dict
 - Chapter to_dict / from_dict (with and without segments)
 - JobConfig round-trip with multi-voice fields
-- AppConfig round-trip with booknlp_model
+- AppConfig round-trip with nlp_model
 - ProcessingConfig multi-voice fields
 - Backward compatibility (old dicts without new fields)
 """
@@ -230,26 +230,26 @@ class TestJobConfigMultiVoice:
 
 
 # ---------------------------------------------------------------------------
-# AppConfig booknlp_model field
+# AppConfig nlp_model field
 # ---------------------------------------------------------------------------
 
 
-class TestAppConfigBookNLP:
-    def test_default_booknlp_model(self):
-        assert AppConfig().booknlp_model == "small"
+class TestAppConfigNLPModel:
+    def test_default_nlp_model(self):
+        assert AppConfig().nlp_model == "llama3.2"
 
-    def test_to_dict_includes_booknlp_model(self):
-        cfg = AppConfig(booknlp_model="big")
+    def test_to_dict_includes_nlp_model(self):
+        cfg = AppConfig(nlp_model="phi3:mini")
         d = cfg.to_dict()
-        assert d["booknlp_model"] == "big"
+        assert d["nlp_model"] == "phi3:mini"
 
     def test_from_dict_round_trip(self):
-        cfg = AppConfig.from_dict({"booknlp_model": "big"})
-        assert cfg.booknlp_model == "big"
+        cfg = AppConfig.from_dict({"nlp_model": "phi3:mini"})
+        assert cfg.nlp_model == "phi3:mini"
 
-    def test_missing_booknlp_model_defaults_to_small(self):
+    def test_missing_nlp_model_defaults(self):
         cfg = AppConfig.from_dict({})
-        assert cfg.booknlp_model == "small"
+        assert cfg.nlp_model == "llama3.2"
 
 
 # ---------------------------------------------------------------------------

@@ -211,10 +211,10 @@ main() {
     log_info "To add a book:"
     log_info "  kenkui add /path/to/book.epub"
     log_info ""
-    log_info "For multi-voice narration (BookNLP):"
-    log_info "  BookNLP and spaCy are included by default."
+    log_info "For multi-voice narration:"
     log_info "  The spaCy language model (en_core_web_sm) is installed automatically"
     log_info "  when kenkui is first used in multi-voice mode."
+    log_info "  BookNLP is included and used for character detection."
 }
 
 main "$@"

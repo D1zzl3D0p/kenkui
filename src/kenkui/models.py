@@ -61,17 +61,34 @@ class ChapterPreset(Enum):
 
 @dataclass
 class CharacterInfo:
-    """Metadata for a character identified by BookNLP.
+    """Metadata for a character identified by the NLP pipeline.
 
-    Used in the MultiVoiceScreen for per-character voice assignment.
+    Used for per-character voice assignment in multi-voice mode.
     Not persisted directly in JobConfig — only the resulting
     ``speaker_voices`` mapping is stored.
     """
 
-    character_id: str  # BookNLP coref ID, e.g. "ELIZABETH_BENNETT-0"
-    display_name: str  # Most common name form from BookNLP clusters
+    character_id: str  # Canonical name, e.g. "Elizabeth Bennet"
+    display_name: str  # Human-readable label shown in the UI
     quote_count: int = 0
-    gender_pronoun: str = ""  # "he", "she", "they", etc.
+    gender_pronoun: str = ""  # "he", "she", "they", etc. (optional)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "character_id": self.character_id,
+            "display_name": self.display_name,
+            "quote_count": self.quote_count,
+            "gender_pronoun": self.gender_pronoun,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CharacterInfo":
+        return cls(
+            character_id=data["character_id"],
+            display_name=data.get("display_name", data["character_id"]),
+            quote_count=data.get("quote_count", 0),
+            gender_pronoun=data.get("gender_pronoun", ""),
+        )
 
 
 @dataclass
@@ -125,14 +142,24 @@ class JobConfig:
     # --- Multi-voice fields ---
     narration_mode: NarrationMode = NarrationMode.SINGLE
     speaker_voices: dict[str, str] = field(default_factory=dict)  # char_id → voice
-    annotated_chapters_path: Path | None = None  # BookNLP cache JSON path
+    annotated_chapters_path: Path | None = None  # NLP cache JSON path
+    # Per-chapter voice override (chapter-voice mode): str(chapter_index) → voice_name
+    chapter_voices: dict[str, str] = field(default_factory=dict)
+    # Per-job quality overrides (None = inherit from AppConfig)
+    job_temp: float | None = None
+    job_lsd_decode_steps: int | None = None
+    job_noise_clamp: float | None = None
+    job_m4b_bitrate: str | None = None
+    job_pause_line_ms: int | None = None
+    job_pause_chapter_ms: int | None = None
+    job_frames_after_eos: int | None = None
 
     def __post_init__(self):
         if not self.name:
             self.name = self.ebook_path.stem
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "ebook_path": str(self.ebook_path),
             "voice": self.voice,
             "chapter_selection": self.chapter_selection.to_dict(),
@@ -143,7 +170,17 @@ class JobConfig:
             "annotated_chapters_path": str(self.annotated_chapters_path)
             if self.annotated_chapters_path
             else None,
+            "chapter_voices": self.chapter_voices,
         }
+        # Only include per-job overrides when explicitly set (non-None)
+        for key in (
+            "job_temp", "job_lsd_decode_steps", "job_noise_clamp", "job_m4b_bitrate",
+            "job_pause_line_ms", "job_pause_chapter_ms", "job_frames_after_eos",
+        ):
+            val = getattr(self, key)
+            if val is not None:
+                d[key] = val
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "JobConfig":
@@ -158,6 +195,14 @@ class JobConfig:
             annotated_chapters_path=Path(data["annotated_chapters_path"])
             if data.get("annotated_chapters_path")
             else None,
+            chapter_voices=data.get("chapter_voices") or {},
+            job_temp=data.get("job_temp"),
+            job_lsd_decode_steps=data.get("job_lsd_decode_steps"),
+            job_noise_clamp=data.get("job_noise_clamp"),
+            job_m4b_bitrate=data.get("job_m4b_bitrate"),
+            job_pause_line_ms=data.get("job_pause_line_ms"),
+            job_pause_chapter_ms=data.get("job_pause_chapter_ms"),
+            job_frames_after_eos=data.get("job_frames_after_eos"),
         )
 
 
@@ -174,12 +219,13 @@ class AppConfig:
     temp: float = 0.7  # Sampling temperature (lower = stable, higher = expressive)
     lsd_decode_steps: int = 1  # LSD decode steps (higher = better quality, slower)
     noise_clamp: float | None = None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
+    frames_after_eos: int = 0  # Frames after EoS cutoff (0=suppress trailing noise)
     # --- Job defaults (used by CLI / headless mode) ---
     default_voice: str = "alba"  # Voice used when no per-job override
     default_chapter_preset: str = "content-only"  # Chapter filter preset for CLI
     default_output_dir: Path | None = None  # Output directory for CLI runs
-    # --- Multi-voice / BookNLP ---
-    booknlp_model: str = "small"  # "small" (fast, CPU) or "big" (accurate, GPU)
+    # --- Multi-voice / NLP ---
+    nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -194,10 +240,11 @@ class AppConfig:
             "temp": self.temp,
             "lsd_decode_steps": self.lsd_decode_steps,
             "noise_clamp": self.noise_clamp,
+            "frames_after_eos": self.frames_after_eos,
             "default_voice": self.default_voice,
             "default_chapter_preset": self.default_chapter_preset,
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
-            "booknlp_model": self.booknlp_model,
+            "nlp_model": self.nlp_model,
         }
 
     @classmethod
@@ -214,12 +261,13 @@ class AppConfig:
             temp=data.get("temp", 0.7),
             lsd_decode_steps=data.get("lsd_decode_steps", 1),
             noise_clamp=data.get("noise_clamp"),
+            frames_after_eos=data.get("frames_after_eos", 0),
             default_voice=data.get("default_voice", "alba"),
             default_chapter_preset=data.get("default_chapter_preset", "content-only"),
             default_output_dir=Path(data["default_output_dir"])
             if data.get("default_output_dir")
             else None,
-            booknlp_model=data.get("booknlp_model", "small"),
+            nlp_model=data.get("nlp_model", "llama3.2"),
         )
 
 
@@ -233,6 +281,7 @@ class QueueItem:
     eta_seconds: int = 0
     error_message: str = ""
     output_path: str = ""
+    started_at: float = 0.0  # Unix timestamp set when job enters PROCESSING
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -244,6 +293,7 @@ class QueueItem:
             "eta_seconds": self.eta_seconds,
             "error_message": self.error_message,
             "output_path": self.output_path,
+            "started_at": self.started_at,
         }
 
     @classmethod
@@ -257,6 +307,7 @@ class QueueItem:
             eta_seconds=data.get("eta_seconds", 0),
             error_message=data.get("error_message", ""),
             output_path=data.get("output_path", ""),
+            started_at=data.get("started_at", 0.0),
         )
 
 
@@ -264,8 +315,8 @@ class QueueItem:
 class Segment:
     """A unit of attributed speech within a chapter.
 
-    Populated by BookNLP during multi-voice tagging.
-    When ``Chapter.segments`` is ``None`` the existing single-voice
+    Populated by the NLP pipeline during multi-voice tagging.
+    When ``Chapter.segments`` is ``None`` the single-voice
     paragraph rendering path is used unchanged.
     """
 
@@ -302,7 +353,7 @@ class Chapter:
     paragraphs: list[str]
     tags: "ChapterTags" = field(default_factory=_default_chapter_tags)
     toc_index: int = 0
-    segments: list[Segment] | None = None  # Populated by BookNLP for multi-voice
+    segments: list[Segment] | None = None  # Populated by NLP pipeline for multi-voice
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -326,6 +377,37 @@ class Chapter:
             paragraphs=data.get("paragraphs", []),
             toc_index=data.get("toc_index", 0),
             segments=segments,
+        )
+
+
+@dataclass
+class NLPResult:
+    """Output of an NLP analysis run (speaker attribution pipeline).
+
+    Replaces the old BookNLPResult.  The ``chapters`` list has
+    ``Chapter.segments`` populated for every chapter.  The cache JSON
+    written to disk has the shape ``{"characters": [...], "chapters": [...],
+    "book_hash": "..."}`` so that ``_load_annotated_chapters`` in
+    ``parsing.py`` can reconstruct the chapters via ``Chapter.from_dict``.
+    """
+
+    characters: list[CharacterInfo]
+    chapters: list["Chapter"]
+    book_hash: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "characters": [c.to_dict() for c in self.characters],
+            "chapters": [ch.to_dict() for ch in self.chapters],
+            "book_hash": self.book_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NLPResult":
+        return cls(
+            characters=[CharacterInfo.from_dict(c) for c in data.get("characters", [])],
+            chapters=[Chapter.from_dict(ch) for ch in data.get("chapters", [])],
+            book_hash=data.get("book_hash", ""),
         )
 
 
@@ -359,9 +441,12 @@ class ProcessingConfig:
     temp: float = 0.7
     lsd_decode_steps: int = 1
     noise_clamp: float | None = None
+    frames_after_eos: int = 0  # Frames after EoS cutoff (0=suppress trailing noise)
     # --- Multi-voice fields ---
     speaker_voices: dict[str, str] = field(default_factory=dict)
     annotated_chapters_path: Path | None = None
+    # Per-chapter voice override (chapter-voice mode): str(chapter_index) → voice_name
+    chapter_voices: dict[str, str] = field(default_factory=dict)
     # Chapter indices to include when loading from annotated cache.
     # An empty list means "include all chapters in the cache file".
     # Set by WorkerServer._build_config() / Processor._build_config() from

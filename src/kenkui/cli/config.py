@@ -149,6 +149,14 @@ def cmd_config(args) -> int:
     ).execute()
     noise_clamp_val: float | None = None if noise_clamp == 0.0 else noise_clamp
 
+    frames_after_eos = inquirer.number(
+        message="Frames after EoS cutoff (0=suppress trailing noise, 1–50=add silence tail):",
+        default=cfg.frames_after_eos,
+        min_allowed=0,
+        max_allowed=50,
+        validate=NumberValidator(),
+    ).execute()
+
     # ---- Confirmation summary -----------------------------------------
     console.print()
     tbl = Table(title="Config Summary", show_header=False, box=None)
@@ -164,6 +172,7 @@ def cmd_config(args) -> int:
     tbl.add_row("Sampling temperature", str(temp))
     tbl.add_row("LSD decode steps", str(lsd_decode_steps))
     tbl.add_row("Noise clamp", str(noise_clamp_val) if noise_clamp_val else "off")
+    tbl.add_row("Frames after EoS", str(frames_after_eos))
     tbl.add_row("Save to", str(dest_path))
     console.print(tbl)
     console.print()
@@ -186,10 +195,11 @@ def cmd_config(args) -> int:
         temp=float(temp),
         lsd_decode_steps=int(lsd_decode_steps),
         noise_clamp=float(noise_clamp_val) if noise_clamp_val is not None else None,
+        frames_after_eos=int(frames_after_eos),
         default_voice=default_voice,
         default_chapter_preset=default_chapter_preset,
         default_output_dir=Path(default_output_dir).expanduser() if default_output_dir else None,
-        booknlp_model=cfg.booknlp_model,
+        nlp_model=cfg.nlp_model,
     )
 
     saved_path = save_app_config(updated, dest_path)

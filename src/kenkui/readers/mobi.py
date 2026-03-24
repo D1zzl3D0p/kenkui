@@ -304,7 +304,8 @@ class MobiReader(EbookReader):
                 full_text = " ".join(paragraphs)
 
                 if len(full_text) >= min_text_len:
-                    tags = ChapterClassifier.classify(title)
+                    word_count = sum(len(p.split()) for p in paragraphs)
+                    tags = ChapterClassifier.classify(title, word_count=word_count)
 
                     # Clean up if title repeats first paragraph
                     if paragraphs and title.lower().endswith(
@@ -468,7 +469,8 @@ class MobiReader(EbookReader):
         if paragraphs and final_title.lower().endswith(paragraphs[0].lower()[:50]):
             paragraphs = paragraphs[1:]
 
-        tags = ChapterClassifier.classify(final_title)
+        word_count = sum(len(p.split()) for p in paragraphs)
+        tags = ChapterClassifier.classify(final_title, word_count=word_count)
 
         chapters.append(
             Chapter(

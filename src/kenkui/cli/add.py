@@ -48,10 +48,10 @@ def _load_config(args):
 
 
 def _gender_pool(gender_str: str | None) -> str:
-    """Return 'male', 'female', or 'they' from a BookNLP gender_pronoun value.
+    """Return 'male', 'female', or 'they' from a gender_pronoun string.
 
-    BookNLP returns values like "she/her", "he/him/his", "they/them/their".
-    We split on '/' and check each segment as a word to handle all three formats.
+    Handles values like "she/her", "he/him/his", "they/them/their".
+    Splits on '/' and checks each segment to handle all three formats.
     """
     raw = (gender_str or "").strip().lower()
     if not raw:
@@ -217,7 +217,46 @@ def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
     ).to_dict()
 
 
-def _ensure_spacy(booknlp_model: str = "small") -> bool:
+def _pip_install(package_spec: str) -> None:
+    """Install *package_spec* using the first available package manager.
+
+    Tries, in order:
+      1. ``python -m pip``          — standard pip in any virtualenv
+      2. ``uv pip install``         — uv-managed envs where pip is absent
+      3. ``pip install``            — pip on PATH (pipx, conda, system)
+      4. ``pip3 install``           — alternate pip entry point
+
+    Raises ``RuntimeError`` if every strategy fails.
+    """
+    import shutil
+    import subprocess
+    import sys
+
+    strategies: list[list[str]] = [
+        [sys.executable, "-m", "pip", "install", package_spec],
+    ]
+    if shutil.which("uv"):
+        strategies.append(["uv", "pip", "install", "--python", sys.executable, package_spec])
+    if shutil.which("pip"):
+        strategies.append(["pip", "install", package_spec])
+    if shutil.which("pip3"):
+        strategies.append(["pip3", "install", package_spec])
+
+    last_exc: Exception | None = None
+    for cmd in strategies:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            return
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            last_exc = exc
+
+    raise RuntimeError(
+        f"Could not install '{package_spec}' — tried pip, uv, pip3. "
+        f"Last error: {last_exc}"
+    )
+
+
+def _ensure_spacy() -> bool:
     """Download spaCy model if missing. Returns True when ready."""
     import spacy  # type: ignore[import]
 
@@ -225,40 +264,33 @@ def _ensure_spacy(booknlp_model: str = "small") -> bool:
         return True
 
     console.print("[cyan]spaCy model (en_core_web_sm) not found. Downloading (~12 MB)…[/cyan]")
-    from ..booknlp_processor import ensure_spacy_model
-
-    success = False
-
-    def _cb(msg: str) -> None:
-        console.print(f"  {msg}")
-
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as prog:
-        prog.add_task("Downloading spaCy model…", total=None)
-        try:
-            ensure_spacy_model(progress_callback=_cb)
-            success = True
-        except Exception as exc:
-            console.print(f"[red]Download failed: {exc}[/red]")
-
-    return success
+    _whl = (
+        "https://github.com/explosion/spacy-models/releases/download/"
+        "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+    )
+    try:
+        _pip_install(_whl)
+        return True
+    except Exception as exc:
+        console.print(f"[red]spaCy model download failed: {exc}[/red]")
+        console.print("[red]Cannot proceed without spaCy model.[/red]")
+        return False
 
 
-def _run_booknlp_analysis(book_path: Path, booknlp_model: str = "small"):
-    """Run BookNLP analysis with a spinner. Returns BookNLPResult or None."""
-    from ..booknlp_processor import BOOKNLP_AVAILABLE, cache_result, get_cached_result, run_analysis
+def _run_nlp_analysis(book_path: Path, nlp_model: str, use_cache: bool = True):
+    """Run the NLP attribution pipeline with a spinner. Returns NLPResult or None."""
+    from ..nlp import cache_result, get_cached_result, run_analysis
     from ..readers import get_reader
 
-    if not BOOKNLP_AVAILABLE():
-        console.print("[red]BookNLP is not available.[/red]")
-        return None
+    if use_cache:
+        cached = get_cached_result(book_path)
+        if cached is not None:
+            console.print("[green]Using cached NLP analysis.[/green]")
+            return cached
+    else:
+        console.print("[yellow]Cache skipped — running fresh NLP analysis…[/yellow]")
 
-    # Check cache first.
-    cached = get_cached_result(book_path)
-    if cached is not None:
-        console.print("[green]Using cached BookNLP analysis.[/green]")
-        return cached
-
-    console.print(f"[cyan]Running BookNLP analysis on '{book_path.name}'…[/cyan]")
+    console.print(f"[cyan]Running NLP analysis on '{book_path.name}'…[/cyan]")
 
     try:
         reader = get_reader(book_path, verbose=False)
@@ -267,12 +299,12 @@ def _run_booknlp_analysis(book_path: Path, booknlp_model: str = "small"):
         console.print(f"[red]Could not read ebook: {exc}[/red]")
         return None
 
-    result = None
-    status_msgs: list[str] = []
+    last_msg: list[str] = []
 
     def _cb(msg: str) -> None:
-        status_msgs.append(msg)
+        last_msg.append(msg)
 
+    result = None
     with Progress(
         SpinnerColumn(),
         TextColumn("{task.description}"),
@@ -284,12 +316,12 @@ def _run_booknlp_analysis(book_path: Path, booknlp_model: str = "small"):
             result = run_analysis(
                 chapters=chapters,
                 book_path=book_path,
-                model_size=booknlp_model,
-                progress_callback=_cb,
+                nlp_model=nlp_model,
+                progress_callback=lambda msg: prog.update(task, description=msg),
             )
             prog.update(task, description="Analysis complete")
         except Exception as exc:
-            console.print(f"[red]BookNLP analysis failed: {exc}[/red]")
+            console.print(f"[red]NLP analysis failed: {exc}[/red]")
             return None
 
     if result:
@@ -340,6 +372,10 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     """
     from ..utils import MALE_VOICES, FEMALE_VOICES
 
+    # Exclude narrator voice from character pools so it stays unique to the narrator.
+    male_pool = [v for v in MALE_VOICES if v != narrator_voice] or MALE_VOICES
+    female_pool = [v for v in FEMALE_VOICES if v != narrator_voice] or FEMALE_VOICES
+
     male_idx, female_idx = 0, 0
     male_quotes, female_quotes = 0, 0
     speaker_voices: dict[str, str] = {}
@@ -348,20 +384,20 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
         gender = _gender_pool(ch.gender_pronoun)
 
         if gender == "male":
-            voice = MALE_VOICES[male_idx % len(MALE_VOICES)]
+            voice = male_pool[male_idx % len(male_pool)]
             male_idx += 1
             male_quotes += ch.quote_count
         elif gender == "female":
-            voice = FEMALE_VOICES[female_idx % len(FEMALE_VOICES)]
+            voice = female_pool[female_idx % len(female_pool)]
             female_idx += 1
             female_quotes += ch.quote_count
         else:
             if male_quotes <= female_quotes:
-                voice = MALE_VOICES[male_idx % len(MALE_VOICES)]
+                voice = male_pool[male_idx % len(male_pool)]
                 male_idx += 1
                 male_quotes += ch.quote_count
             else:
-                voice = FEMALE_VOICES[female_idx % len(FEMALE_VOICES)]
+                voice = female_pool[female_idx % len(female_pool)]
                 female_idx += 1
                 female_quotes += ch.quote_count
 
@@ -377,7 +413,11 @@ def _prompt_character_voice_review(
     """Show a reference table, then review each character via an InquirerPy list."""
     from InquirerPy import inquirer
 
-    voice_choices = _build_voice_choices()
+    # Exclude narrator voice from per-character assignment choices
+    all_voice_choices = _build_voice_choices()
+    voice_choices = [c for c in all_voice_choices if c.get("value") != narrator_voice]
+    if not voice_choices:  # Safety: if all voices are narrator, allow all
+        voice_choices = all_voice_choices
 
     # Print reference table — show full character IDs, no truncation.
     tbl = Table(title="Characters", show_header=True)
@@ -435,17 +475,17 @@ def _prompt_character_voice_review(
     return speaker_voices
 
 
-def _prompt_multivoice_character_voices(booknlp_result, default_voice: str) -> dict[str, str]:
+def _prompt_multivoice_character_voices(nlp_result, default_voice: str) -> dict[str, str]:
     """Run the full multi-voice character assignment flow.
 
     Returns a dict mapping character_id (including "NARRATOR") to voice name.
     """
     from InquirerPy import inquirer
 
-    characters = booknlp_result.characters
+    characters = nlp_result.characters
     if not characters:
         console.print(
-            "[yellow]No characters found by BookNLP. Using narrator voice for all.[/yellow]"
+            "[yellow]No characters found by the NLP pipeline. Using narrator voice for all.[/yellow]"
         )
         narrator_voice = _prompt_voice(
             default=default_voice, message="Fallback voice for NARRATOR:"
@@ -461,13 +501,255 @@ def _prompt_multivoice_character_voices(booknlp_result, default_voice: str) -> d
     )
     _check_hf_auth(narrator_voice)
 
-    # Step B — auto-assign character voices.
+    # Step B — choose simple or advanced assignment mode.
+    assignment_mode = inquirer.select(
+        message="Character voice assignment mode:",
+        choices=[
+            {
+                "name": "Simple   — all males → one voice, all females → another",
+                "value": "simple",
+            },
+            {
+                "name": "Advanced — individual voice per character",
+                "value": "advanced",
+            },
+        ],
+    ).execute()
+
+    if assignment_mode == "simple":
+        return _prompt_simple_voice_assignment(characters, narrator_voice)
+
+    # Advanced mode: auto-assign then review.
+    # Step C — auto-assign character voices.
     speaker_voices = _auto_assign_character_voices(characters, narrator_voice)
 
-    # Step C — review / adjust via list.
+    # Step D — review / adjust via list.
     speaker_voices = _prompt_character_voice_review(speaker_voices, characters, narrator_voice)
 
     return speaker_voices
+
+
+# ---------------------------------------------------------------------------
+# Multi-voice requirements check
+# ---------------------------------------------------------------------------
+
+
+def _check_multivoice_requirements(app_config) -> bool:
+    """Show a requirements status table for multi-voice mode.
+
+    Returns True if all requirements are met or the user chooses to continue
+    anyway (wizard will attempt fixes inline).
+    """
+    from InquirerPy import inquirer
+    from rich.table import Table
+    from rich.text import Text
+
+    checks: list[tuple[str, bool, str]] = []
+
+    # Check 1: spaCy model
+    try:
+        import spacy
+        spacy_ok = spacy.util.is_package("en_core_web_sm")
+    except Exception:
+        spacy_ok = False
+    checks.append((
+        "spaCy model (en_core_web_sm)",
+        spacy_ok,
+        "python -m spacy download en_core_web_sm" if not spacy_ok else "",
+    ))
+
+    # Check 2: Ollama server running
+    try:
+        import ollama
+        ollama.list()
+        ollama_ok = True
+    except Exception:
+        ollama_ok = False
+    checks.append((
+        "Ollama server",
+        ollama_ok,
+        "Start with: ollama serve" if not ollama_ok else "",
+    ))
+
+    # Check 3: NLP model pulled (only if Ollama is up)
+    if ollama_ok:
+        try:
+            import ollama
+            ollama.show(app_config.nlp_model)
+            model_ok = True
+        except Exception:
+            model_ok = False
+        checks.append((
+            f"NLP model ({app_config.nlp_model})",
+            model_ok,
+            f"ollama pull {app_config.nlp_model}" if not model_ok else "",
+        ))
+
+    tbl = Table(title="Multi-Voice Requirements", show_header=True, header_style="bold")
+    tbl.add_column("Requirement", min_width=30)
+    tbl.add_column("Status", width=10)
+    tbl.add_column("Fix", overflow="fold")
+    for name, ok, fix in checks:
+        status = Text("✓ Ready", style="green") if ok else Text("✗ Missing", style="red bold")
+        tbl.add_row(name, status, fix)
+    console.print(tbl)
+
+    all_ok = all(ok for _, ok, _ in checks)
+    if all_ok:
+        return True
+
+    proceed = inquirer.confirm(
+        message="Continue anyway? (the wizard will attempt to install missing requirements)",
+        default=False,
+    ).execute()
+    return proceed
+
+
+def _prompt_simple_voice_assignment(characters, narrator_voice: str) -> dict[str, str]:
+    """Simple mode: all males → one voice, all females → another.
+
+    Returns speaker_voices dict (including NARRATOR).
+    """
+    from ..utils import MALE_VOICES, FEMALE_VOICES
+
+    male_pool = [v for v in MALE_VOICES if v != narrator_voice] or MALE_VOICES
+    female_pool = [v for v in FEMALE_VOICES if v != narrator_voice] or FEMALE_VOICES
+
+    male_voice = _prompt_voice(
+        default=male_pool[0] if male_pool else "alba",
+        message="Voice for all male characters:",
+    )
+    female_voice = _prompt_voice(
+        default=female_pool[0] if female_pool else "alba",
+        message="Voice for all female characters:",
+    )
+
+    speaker_voices: dict[str, str] = {"NARRATOR": narrator_voice}
+    for ch in characters:
+        g = _gender_pool(ch.gender_pronoun)
+        if g == "male":
+            speaker_voices[ch.character_id] = male_voice
+        elif g == "female":
+            speaker_voices[ch.character_id] = female_voice
+        else:
+            speaker_voices[ch.character_id] = narrator_voice  # ambiguous → narrator
+
+    return speaker_voices
+
+
+def _prompt_chapter_voices(chapters, default_voice: str) -> dict[str, str]:
+    """Chapter-voice mode: assign a voice per chapter.
+
+    Returns {str(chapter_index): voice_name}.
+    """
+    from rich.rule import Rule
+
+    console.print()
+    console.print(Rule("[bold]Chapter Voice Assignment[/bold]"))
+    console.print("[dim]Assign a voice for each chapter. Press Enter to accept the default.[/dim]")
+    console.print()
+
+    chapter_voices: dict[str, str] = {}
+    for ch in chapters:
+        voice = _prompt_voice(
+            default=default_voice,
+            message=f"Voice for '{ch.title[:50]}':",
+        )
+        chapter_voices[str(ch.index)] = voice
+
+    return chapter_voices
+
+
+def _prompt_quality_overrides(app_config) -> dict:
+    """Optionally override TTS quality settings for this specific job.
+
+    Returns a dict of job_* override fields (only keys where user changed the value).
+    """
+    from InquirerPy import inquirer
+
+    want = inquirer.confirm(
+        message="Customize audio quality for this job? (defaults come from your config)",
+        default=False,
+    ).execute()
+    if not want:
+        return {}
+
+    overrides: dict = {}
+
+    temp = inquirer.number(
+        message=f"Temperature (0.0–1.5, current default {app_config.temp}):",
+        default=app_config.temp,
+        float_allowed=True,
+        min_allowed=0.0,
+        max_allowed=1.5,
+    ).execute()
+    if float(temp) != app_config.temp:
+        overrides["job_temp"] = float(temp)
+
+    lsd = inquirer.number(
+        message=f"LSD decode steps (1–50, current default {app_config.lsd_decode_steps}):",
+        default=app_config.lsd_decode_steps,
+        min_allowed=1,
+        max_allowed=50,
+    ).execute()
+    if int(lsd) != app_config.lsd_decode_steps:
+        overrides["job_lsd_decode_steps"] = int(lsd)
+
+    noise_default = app_config.noise_clamp or 0.0
+    noise = inquirer.number(
+        message=f"Noise clamp (0=off, ~3.0=reduce glitches, current default {noise_default}):",
+        default=noise_default,
+        float_allowed=True,
+        min_allowed=0.0,
+        max_allowed=10.0,
+    ).execute()
+    noise_val = float(noise)
+    if noise_val != noise_default:
+        overrides["job_noise_clamp"] = noise_val if noise_val > 0 else None
+
+    fae = inquirer.number(
+        message=f"Frames after EoS cutoff (0=suppress noise, current default {app_config.frames_after_eos}):",
+        default=app_config.frames_after_eos,
+        min_allowed=0,
+        max_allowed=50,
+    ).execute()
+    if int(fae) != app_config.frames_after_eos:
+        overrides["job_frames_after_eos"] = int(fae)
+
+    bitrate_choices = [
+        {"name": "64k  (small file, lower quality)", "value": "64k"},
+        {"name": "96k  (default)", "value": "96k"},
+        {"name": "128k", "value": "128k"},
+        {"name": "192k", "value": "192k"},
+        {"name": "256k  (large file, higher quality)", "value": "256k"},
+    ]
+    bitrate = inquirer.select(
+        message=f"Output bitrate (current default {app_config.m4b_bitrate}):",
+        choices=bitrate_choices,
+        default=app_config.m4b_bitrate,
+    ).execute()
+    if bitrate != app_config.m4b_bitrate:
+        overrides["job_m4b_bitrate"] = bitrate
+
+    pause_line = inquirer.number(
+        message=f"Silence between lines in ms (current default {app_config.pause_line_ms}):",
+        default=app_config.pause_line_ms,
+        min_allowed=0,
+        max_allowed=5000,
+    ).execute()
+    if int(pause_line) != app_config.pause_line_ms:
+        overrides["job_pause_line_ms"] = int(pause_line)
+
+    pause_chapter = inquirer.number(
+        message=f"Silence between chapters in ms (current default {app_config.pause_chapter_ms}):",
+        default=app_config.pause_chapter_ms,
+        min_allowed=0,
+        max_allowed=30000,
+    ).execute()
+    if int(pause_chapter) != app_config.pause_chapter_ms:
+        overrides["job_pause_chapter_ms"] = int(pause_chapter)
+
+    return overrides
 
 
 # ---------------------------------------------------------------------------
@@ -495,46 +777,122 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         message="Narration mode:",
         choices=[
             {"name": "Single Voice", "value": "single"},
-            {"name": "Multi-Voice  (BookNLP — per-character voices)", "value": "multi"},
+            {"name": "Multi-Voice  (per-character, requires local LLM)", "value": "multi"},
+            {"name": "Chapter Voice  (assign a voice per chapter)", "value": "chapter"},
         ],
     ).execute()
 
     speaker_voices: dict[str, str] = {}
+    chapter_voices: dict[str, str] = {}
     annotated_chapters_path: str | None = None
     narration_mode = mode_val
 
     if mode_val == "multi":
-        # Step 2a — Ensure spaCy.
-        if not _ensure_spacy(app_config.booknlp_model):
-            console.print("[red]Cannot proceed without spaCy model.[/red]")
-            return None
+        from ..config import save_app_config, DEFAULT_CONFIG_PATH
+        from ..nlp.setup import check_llm_available, run_setup_dialogue
+        from ..nlp import CACHE_DIR, book_hash
 
-        # Step 2b — BookNLP analysis.
-        result = _run_booknlp_analysis(book_path, app_config.booknlp_model)
-        if result is None:
+        # Step 2a — Show requirements status and confirm readiness.
+        console.print()
+        if not _check_multivoice_requirements(app_config):
             console.print("[yellow]Falling back to single-voice mode.[/yellow]")
             narration_mode = "single"
-        else:
-            # Step 2c — Character voice assignment.
-            speaker_voices = _prompt_multivoice_character_voices(result, app_config.default_voice)
-            # Cache path for the worker (derive from CACHE_DIR + book hash).
-            from ..booknlp_processor import CACHE_DIR, _book_hash
+            mode_val = "single"
 
-            annotated_chapters_path = str(CACHE_DIR / f"{_book_hash(book_path)}.json")
+        if mode_val == "multi":
+            # Step 2b — Ensure spaCy model is available.
+            if not _ensure_spacy():
+                console.print("[red]Cannot proceed without spaCy model.[/red]")
+                return None
+
+            # Step 2c — NLP model: show current model and offer reconfigure.
+            console.print()
+            console.print(
+                f"NLP model for speaker inference: [bold]{app_config.nlp_model}[/bold]"
+            )
+            reconfigure_action = inquirer.select(
+                message="Continue with this model or reconfigure?",
+                choices=[
+                    {"name": f"Continue with {app_config.nlp_model}", "value": "continue"},
+                    {"name": "Reconfigure NLP model…", "value": "reconfigure"},
+                ],
+            ).execute()
+
+            if reconfigure_action == "reconfigure" or not check_llm_available(app_config):
+                updated = run_setup_dialogue(app_config)
+                if updated is None:
+                    console.print("[yellow]Falling back to single-voice mode.[/yellow]")
+                    narration_mode = "single"
+                else:
+                    app_config = updated
+                    save_app_config(app_config, DEFAULT_CONFIG_PATH)
+                    console.print(
+                        f"[green]NLP model set to [bold]{app_config.nlp_model}[/bold][/green]"
+                    )
+
+        if narration_mode == "multi":
+            # Step 2d — Check for a cached analysis and let the user decide.
+            from ..nlp import get_cached_result
+
+            use_cache = True
+            if get_cached_result(book_path) is not None:
+                use_cache = inquirer.select(
+                    message="Cached NLP analysis found for this book.",
+                    choices=[
+                        {"name": "Use cached analysis  (fast)", "value": True},
+                        {
+                            "name": "Regenerate  (re-runs spaCy + LLM speaker attribution"
+                                    " — takes several minutes)",
+                            "value": False,
+                        },
+                    ],
+                ).execute()
+
+            result = _run_nlp_analysis(book_path, app_config.nlp_model, use_cache=use_cache)
+            if result is None:
+                console.print("[yellow]Falling back to single-voice mode.[/yellow]")
+                narration_mode = "single"
+            else:
+                # Step 2e — Character voice assignment (simple or advanced).
+                speaker_voices = _prompt_multivoice_character_voices(
+                    result, app_config.default_voice
+                )
+                annotated_chapters_path = str(CACHE_DIR / f"{book_hash(book_path)}.json")
+
+    elif mode_val == "chapter":
+        # Chapter-voice mode: load chapters already fetched in step 1, assign per chapter.
+        narration_mode = "single"  # Workers use single-voice path + chapter_voices override
+        console.print()
+        console.print("[bold]Voice for narrator / unassigned chapters:[/bold]")
+        voice = _prompt_voice(default=app_config.default_voice, message="Default voice:")
+        _check_hf_auth(voice)
+        # Load chapters for assignment
+        try:
+            from ..readers import get_reader
+            reader = get_reader(book_path, verbose=False)
+            all_chapters = reader.get_chapters()
+            chapter_voices = _prompt_chapter_voices(all_chapters, voice)
+        except Exception as exc:
+            console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
+            chapter_voices = {}
 
     # Step 3 — Voice.
     # In single-voice mode: prompt for the narrator voice.
     # In multi-voice mode: narrator voice was already selected inside
     # _prompt_multivoice_character_voices; skip this prompt.
+    # In chapter-voice mode: voice was selected above.
     if narration_mode == "multi":
         voice = speaker_voices.get("NARRATOR", app_config.default_voice)
-    else:
+    elif mode_val != "chapter":
         console.print()
         console.print("[bold]Voice:[/bold]")
         voice = _prompt_voice(default=app_config.default_voice, message="Select voice:")
         _check_hf_auth(voice)
 
-    # Step 4 — Output directory.
+    # Step 4 — Optional per-job quality overrides.
+    quality_overrides = _prompt_quality_overrides(app_config)
+
+    # Step 5 — Output directory.
     default_out = str(app_config.default_output_dir or book_path.parent)
     output_dir = (
         inquirer.text(
@@ -546,7 +904,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         or default_out
     )
 
-    # Step 5 — Confirmation table.
+    # Step 6 — Confirmation table.
     console.print()
     summary = Table(title="Job Summary", show_header=False, box=None)
     summary.add_column("Field", style="bold", width=20)
@@ -558,11 +916,18 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         summary.add_row("Chapters", f"{preset_label} ({len(included)} selected)")
     else:
         summary.add_row("Chapters", preset_label)
-    summary.add_row("Mode", narration_mode)
+    display_mode = mode_val if mode_val != "chapter" else "chapter-voice"
+    summary.add_row("Mode", display_mode)
     summary.add_row("Narrator voice", voice)
     if narration_mode == "multi" and speaker_voices:
         non_narrator = {k: v for k, v in speaker_voices.items() if k != "NARRATOR"}
         summary.add_row("Character voices", f"{len(non_narrator)} assigned")
+    if chapter_voices:
+        summary.add_row("Chapter voices", f"{len(chapter_voices)} chapters assigned")
+    if quality_overrides:
+        summary.add_row("Quality overrides", ", ".join(
+            f"{k.replace('job_', '')}={v}" for k, v in quality_overrides.items()
+        ))
     summary.add_row("Output", output_dir)
     console.print(summary)
     console.print()
@@ -572,7 +937,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         console.print("Cancelled.")
         return None
 
-    return dict(
+    job_kwargs = dict(
         ebook_path=str(book_path),
         voice=voice,
         chapter_selection=chapter_selection,
@@ -580,7 +945,10 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         narration_mode=narration_mode,
         speaker_voices=speaker_voices or None,
         annotated_chapters_path=annotated_chapters_path,
+        chapter_voices=chapter_voices or None,
     )
+    job_kwargs.update(quality_overrides)
+    return job_kwargs
 
 
 # ---------------------------------------------------------------------------

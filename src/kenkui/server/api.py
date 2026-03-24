@@ -19,6 +19,16 @@ class JobCreateRequest(BaseModel):
     narration_mode: str = "single"
     speaker_voices: dict[str, str] = {}
     annotated_chapters_path: str | None = None
+    # Chapter-voice mode
+    chapter_voices: dict[str, str] = {}
+    # Per-job quality overrides (None = inherit from AppConfig)
+    job_temp: float | None = None
+    job_lsd_decode_steps: int | None = None
+    job_noise_clamp: float | None = None
+    job_m4b_bitrate: str | None = None
+    job_pause_line_ms: int | None = None
+    job_pause_chapter_ms: int | None = None
+    job_frames_after_eos: int | None = None
 
 
 class JobResponse(BaseModel):
@@ -107,6 +117,14 @@ def add_job(request: JobCreateRequest):
         annotated_chapters_path=Path(request.annotated_chapters_path)
         if request.annotated_chapters_path
         else None,
+        chapter_voices=request.chapter_voices or {},
+        job_temp=request.job_temp,
+        job_lsd_decode_steps=request.job_lsd_decode_steps,
+        job_noise_clamp=request.job_noise_clamp,
+        job_m4b_bitrate=request.job_m4b_bitrate,
+        job_pause_line_ms=request.job_pause_line_ms,
+        job_pause_chapter_ms=request.job_pause_chapter_ms,
+        job_frames_after_eos=request.job_frames_after_eos,
     )
 
     server = get_server()

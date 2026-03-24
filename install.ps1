@@ -176,10 +176,10 @@ function Main {
         Write-Info "To add a book:"
         Write-Info "  kenkui add C:\path\to\book.epub"
         Write-Host ""
-        Write-Info "For multi-voice narration (BookNLP):"
-        Write-Info "  BookNLP and spaCy are included by default."
+        Write-Info "For multi-voice narration:"
         Write-Info "  The spaCy language model (en_core_web_sm) is installed automatically"
         Write-Info "  when kenkui is first used in multi-voice mode."
+        Write-Info "  BookNLP is included and used for character detection."
     }
     else {
         Write-Error "Installation failed"

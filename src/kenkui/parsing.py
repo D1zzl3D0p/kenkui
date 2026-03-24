@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing
+import re
 import shutil
 import subprocess
 import time
@@ -10,6 +12,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import imageio_ffmpeg
 
@@ -40,11 +44,11 @@ class AnnotatedChaptersCacheMissError(Exception):
 
 
 def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> list[Chapter]:
-    """Load annotated chapters from a BookNLP cache JSON file.
+    """Load annotated chapters from an NLP cache JSON file.
 
     Args:
-        cache_path:       Path to the BookNLP cache JSON written by
-                          ``booknlp_processor.cache_result()``.
+        cache_path:       Path to the NLP cache JSON written by
+                          ``nlp.cache_result()``.
         included_indices: Chapter indices that should be included (from the
                           job's ChapterSelection.included list).  An empty
                           list means include all chapters in the cache.
@@ -60,7 +64,7 @@ def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> l
 
     if not cache_path.exists():
         raise AnnotatedChaptersCacheMissError(
-            f"BookNLP cache file not found: {cache_path}\n"
+            f"NLP cache file not found: {cache_path}\n"
             "CACHE_MISS: The annotated chapters cache file is missing. "
             "Please re-analyse the book or fall back to single-voice mode."
         )
@@ -92,6 +96,28 @@ class SimpleConsole:
 
         msg = re.sub(r"\[/?[a-zA-Z_ ]+\]", "", msg)
         print(msg)
+
+
+def _sanitize_for_filename(s: str) -> str:
+    """Remove characters that are invalid in filenames across platforms."""
+    return re.sub(r'[<>:"/\\|?*]', "", s).strip()
+
+
+def _make_output_filename(book_title: str, voice: str, is_multi: bool) -> str:
+    """Build an output filename that includes the voice label.
+
+    Examples:
+        Single-voice: "Pride and Prejudice [alba].m4b"
+        Multi-voice:  "Pride and Prejudice [multi-voice].m4b"
+        Custom voice: "Pride and Prejudice [my_voice].m4b"
+    """
+    safe_title = _sanitize_for_filename(book_title)
+    if is_multi:
+        label = "multi-voice"
+    else:
+        # Strip hf:// URLs or absolute file paths down to just the stem
+        label = Path(voice).stem if ("/" in voice or "\\" in voice) else voice
+    return f"{safe_title} [{label}].m4b"
 
 
 def get_unique_output_path(output_file: Path) -> Path:
@@ -242,11 +268,21 @@ class AudioBuilder:
         self._completed_batches = 0
         self._report_progress("Starting...", 0)
 
+        is_multi = bool(self.cfg.speaker_voices)
+        narrator_label = "multi-voice" if is_multi else (
+            Path(self.cfg.voice).stem if ("/" in self.cfg.voice or "\\" in self.cfg.voice)
+            else self.cfg.voice
+        )
+
         with self._managed_temp_dir():
             print(f"Building audiobook: {output_file.name}")
+
+            t0 = time.monotonic()
             results = self._process_chapters(
                 chapters, chapter_batch_info, total_batches, total_chars
             )
+            logger.info("Phase 'processing' completed in %.1fs", time.monotonic() - t0)
+
             if not results:
                 print("No results generated. Aborting.")
                 return False
@@ -255,11 +291,15 @@ class AudioBuilder:
             # Signal explicitly so the UI doesn't look frozen at 100%.
             self._signal_phase("Stitching audio files…")
             print("Stitching audio files...")
-            self._stitch_files(results, output_file)
+            t0 = time.monotonic()
+            self._stitch_files(results, output_file, narrator_label=narrator_label)
+            logger.info("Phase 'stitching' completed in %.1fs", time.monotonic() - t0)
 
             # ── Cover embedding ──────────────────────────────────────────
             self._signal_phase("Embedding cover art…")
+            t0 = time.monotonic()
             self._embed_cover(output_file)
+            logger.info("Phase 'cover_embedding' completed in %.1fs", time.monotonic() - t0)
 
             print(f"Audiobook created: {output_file}")
             return True
@@ -299,8 +339,11 @@ class AudioBuilder:
             "temp": self.cfg.temp,
             "lsd_decode_steps": self.cfg.lsd_decode_steps,
             "noise_clamp": self.cfg.noise_clamp,
+            "frames_after_eos": self.cfg.frames_after_eos,
             # Multi-voice: character id → voice name mapping
             "speaker_voices": self.cfg.speaker_voices,
+            # Chapter-voice mode: str(chapter_index) → voice name
+            "chapter_voices": self.cfg.chapter_voices,
         }
 
         pool: ProcessPoolExecutor | None = None
@@ -394,7 +437,9 @@ class AudioBuilder:
 
         return sorted(results, key=lambda x: x.chapter_index)
 
-    def _stitch_files(self, results: list[AudioResult], output_file: Path):
+    def _stitch_files(
+        self, results: list[AudioResult], output_file: Path, narrator_label: str = ""
+    ):
         file_list = self.temp_dir / "files.txt"
         meta_file = self.temp_dir / "metadata.txt"
 
@@ -404,6 +449,8 @@ class AudioBuilder:
 
         with open(meta_file, "w", encoding="utf-8") as f:
             f.write(";FFMETADATA1\n")
+            if narrator_label:
+                f.write(f"comment=Narrated by {narrator_label}\n")
             t = 0
             for res in results:
                 start, end = int(t), int(t + res.duration_ms)
@@ -467,7 +514,7 @@ class AudioBuilder:
         self._reader = get_reader(self.cfg.ebook_path, self.cfg.verbose)
 
         # ── Chapter loading ───────────────────────────────────────────────
-        # Multi-voice jobs reference a BookNLP cache file.  Load annotated
+        # Multi-voice jobs reference an NLP cache file.  Load annotated
         # chapters from cache when available; raise AnnotatedChaptersCacheMissError
         # if the cache file has gone missing so the server can surface a
         # recovery dialog in the UI.
@@ -475,7 +522,7 @@ class AudioBuilder:
             # This call raises AnnotatedChaptersCacheMissError if file missing.
             included = getattr(self.cfg, "_included_indices", [])
             chapters = _load_annotated_chapters(self.cfg.annotated_chapters_path, included)
-            self.console.print(f"Loaded {len(chapters)} annotated chapters from BookNLP cache")
+            self.console.print(f"Loaded {len(chapters)} annotated chapters from NLP cache")
         else:
             all_chapters = self._reader.get_chapters()
 
@@ -515,7 +562,8 @@ class AudioBuilder:
             output_dir = (
                 self.cfg.output_path if self.cfg.output_path else self.cfg.ebook_path.parent
             )
-            output_file = output_dir / f"{book_title}.m4b"
+            is_multi = bool(self.cfg.speaker_voices)
+            output_file = output_dir / _make_output_filename(book_title, self.cfg.voice, is_multi)
 
         output_file = get_unique_output_path(output_file)
 

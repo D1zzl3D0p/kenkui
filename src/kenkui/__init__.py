@@ -21,12 +21,12 @@ from .huggingface_auth import (
     ensure_huggingface_access,
     is_custom_voice,
 )
-from .booknlp_processor import BookNLPResult
 from .models import (
     AudioResult,
     Chapter,
     CharacterInfo,
     NarrationMode,
+    NLPResult,
     ProcessingConfig,
     Segment,
 )
@@ -48,8 +48,8 @@ __all__ = [
     "Chapter",
     "Segment",
     "AudioResult",
-    # Multi-voice / BookNLP
-    "BookNLPResult",
+    # Multi-voice / NLP
+    "NLPResult",
     "CharacterInfo",
     "NarrationMode",
     # Ebook reading

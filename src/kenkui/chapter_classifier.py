@@ -50,6 +50,8 @@ class ChapterClassifier:
         (r"(?i)^copyright", "copyright"),
         (r"(?i)^dedication", "dedication"),
         (r"(?i)^foreword", "foreword"),
+        (r"(?i)^epigraph", "epigraph"),
+        (r"(?i)^about\s+this\s+(book|edition)", "about this book"),
     ]
 
     BACK_MATTER_PATTERNS = [
@@ -59,6 +61,15 @@ class ChapterClassifier:
         (r"(?i)^appendix", "appendix"),
         (r"(?i)^notes", "notes"),
         (r"(?i)^glossary", "glossary"),
+        (r"(?i)^about\s+the\s+author", "about the author"),
+        (r"(?i)^also\s+by", "also by"),
+        (r"(?i)^praise\s+for", "praise for"),
+        (r"(?i)^a\s+note\s+(from|on|about)", "a note from/on"),
+        (r"(?i)^author'?s?\s+note", "author's note"),
+        (r"(?i)^excerpt", "excerpt"),
+        (r"(?i)^afterword", "afterword"),
+        (r"(?i)^reading\s+(group|guide)", "reading guide"),
+        (r"(?i)^discussion\s+questions", "discussion questions"),
     ]
 
     TITLE_PAGE_PATTERNS = [
@@ -86,8 +97,15 @@ class ChapterClassifier:
     ]
 
     @classmethod
-    def classify(cls, title: str | None) -> ChapterTags:
-        """Classify a chapter based on its title."""
+    def classify(cls, title: str | None, word_count: int | None = None) -> ChapterTags:
+        """Classify a chapter based on its title and optional content length.
+
+        Args:
+            title:      Chapter title (or None / empty string for untitled chapters).
+            word_count: Total word count of the chapter's paragraphs.  When
+                        provided and below 30 words the chapter is treated as a
+                        navigation stub and excluded (``is_chapter=False``).
+        """
         if not title:
             return ChapterTags(is_chapter=False)
 
@@ -121,6 +139,10 @@ class ChapterClassifier:
                 tags.is_part_divider = True
                 # Part dividers can also be chapters (for navigation)
                 return tags
+
+        # Stub/navigation-only chapter: has a title but almost no content
+        if word_count is not None and word_count < 30:
+            return ChapterTags(is_chapter=False)
 
         # Default: it's a regular chapter
         return tags

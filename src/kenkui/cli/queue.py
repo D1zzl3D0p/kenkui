@@ -67,6 +67,7 @@ def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
     tbl.add_column("Name", min_width=20)
     tbl.add_column("Status", width=12)
     tbl.add_column("Progress", width=8, justify="right")
+    tbl.add_column("Elapsed", width=8, justify="right")
     tbl.add_column("ETA", width=8, justify="right")
     tbl.add_column("Chapter", overflow="fold")
 
@@ -77,6 +78,11 @@ def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
         status_style = _STATUS_STYLE.get(item.status, "")
         progress_capped = min(item.progress or 0, 100)
         progress_str = f"{progress_capped:.1f}%"
+        if item.status == "processing" and getattr(item, "started_at", 0) > 0:
+            elapsed_s = int(time.time() - item.started_at)
+            elapsed_str = _eta_str(elapsed_s)
+        else:
+            elapsed_str = "—"
         eta_str = _eta_str(item.eta_seconds) if item.status == "processing" else "—"
         chapter_str = (item.current_chapter or "")[:60]
         job_name = item.job.get("name", item.id) if isinstance(item.job, dict) else item.id
@@ -86,6 +92,7 @@ def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
             job_name,
             Text(item.status, style=status_style),
             progress_str,
+            elapsed_str,
             eta_str,
             chapter_str,
         )
@@ -171,21 +178,22 @@ def _live_dashboard(client) -> int:
             job_name = (
                 active.job.get("name", active.id) if isinstance(active.job, dict) else active.id
             )
-            layout.split_column(
-                Layout(table, name="table"),
-                Layout(Panel(prog, title=f"Active: {job_name}"), name="progress", size=5),
-                Layout(_build_summary_line(queue_info), name="summary", size=1),
-            )
+            progress_panel = Panel(prog, title=f"Active: {job_name}")
         else:
-            layout.split_column(
-                Layout(table, name="table"),
-                Layout(_build_summary_line(queue_info), name="summary", size=1),
+            progress_panel = Panel(
+                Text("[dim]No active job[/dim]"), title="Active", style="dim"
             )
 
+        footer = Text.from_markup("[dim]Ctrl+C to exit  ·  [/dim]")
+        footer.append_text(_build_summary_line(queue_info))
+
+        layout.split_column(
+            Layout(table, name="table"),
+            Layout(progress_panel, name="progress", size=5),  # fixed — never shifts
+            Layout(footer, name="footer", size=1),
+        )
         return layout
 
-    console.print("[dim]Live queue — Ctrl+C to exit[/dim]")
-    console.print()
 
     try:
         with Live(console=console, refresh_per_second=1, screen=True, transient=False) as live:

@@ -359,7 +359,8 @@ class Fb2Reader(EbookReader):
                 if not title.strip():
                     title = f"Section {len(chapters) + 1}"
 
-                tags = ChapterClassifier.classify(title)
+                word_count = sum(len(p.split()) for p in content)
+                tags = ChapterClassifier.classify(title, word_count=word_count)
 
                 chapters.append(
                     Chapter(

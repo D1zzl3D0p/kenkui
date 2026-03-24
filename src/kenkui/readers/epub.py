@@ -367,7 +367,8 @@ class EpubReader(EbookReader):
         chapter_idx = 1
         for toc_idx, toc_ch in enumerate(toc_chapters):
             paragraphs = chapter_paragraphs[toc_idx]
-            tags = ChapterClassifier.classify(toc_ch["title"])
+            word_count = sum(len(p.split()) for p in paragraphs)
+            tags = ChapterClassifier.classify(toc_ch["title"], word_count=word_count)
 
             if paragraphs:
                 content = " ".join(paragraphs)
@@ -629,7 +630,8 @@ class EpubReader(EbookReader):
         if paragraphs and final_title.lower().endswith(paragraphs[0].lower()):
             paragraphs = paragraphs[1:]
 
-        tags = ChapterClassifier.classify(final_title)
+        word_count = sum(len(p.split()) for p in paragraphs)
+        tags = ChapterClassifier.classify(final_title, word_count=word_count)
 
         chapters.append(
             Chapter(

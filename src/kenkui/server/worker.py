@@ -21,6 +21,11 @@ QUEUE_FILE = CONFIG_DIR / "queue.toml"
 _LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
 
 
+def _resolve(job_val, app_val):
+    """Return job_val if explicitly set (not None), else fall back to app_val."""
+    return job_val if job_val is not None else app_val
+
+
 def _strip_none(obj: object) -> object:
     """Recursively remove None values — TOML has no null type."""
     if isinstance(obj, dict):
@@ -172,10 +177,12 @@ class WorkerServer:
             return next((i for i in self._items if i.status == JobStatus.PENDING), None)
 
     def start_next_job(self) -> QueueItem | None:
+        import time
         with self._lock:
             item = self.get_next_pending()
             if item:
                 item.status = JobStatus.PROCESSING
+                item.started_at = time.time()
                 self._current_id = item.id
                 self._save()
             return item
@@ -297,25 +304,31 @@ class WorkerServer:
 
         output_path = job.output_path or job.ebook_path.parent
 
+        from ..models import _normalize_bitrate
         cfg = ProcessingConfig(
             voice=job.voice,
             ebook_path=job.ebook_path,
             output_path=output_path,
-            pause_line_ms=self._app_config.pause_line_ms,
-            pause_chapter_ms=self._app_config.pause_chapter_ms,
+            pause_line_ms=_resolve(job.job_pause_line_ms, self._app_config.pause_line_ms),
+            pause_chapter_ms=_resolve(job.job_pause_chapter_ms, self._app_config.pause_chapter_ms),
             workers=self._app_config.workers,
-            m4b_bitrate=self._app_config.m4b_bitrate,
+            m4b_bitrate=_normalize_bitrate(
+                _resolve(job.job_m4b_bitrate, self._app_config.m4b_bitrate)
+            ),
             keep_temp=self._app_config.keep_temp,
             debug_html=self._app_config.verbose,
             chapter_filters=operations,
             verbose=self._app_config.verbose,
-            temp=self._app_config.temp,
-            lsd_decode_steps=self._app_config.lsd_decode_steps,
-            noise_clamp=self._app_config.noise_clamp,
+            temp=_resolve(job.job_temp, self._app_config.temp),
+            lsd_decode_steps=_resolve(job.job_lsd_decode_steps, self._app_config.lsd_decode_steps),
+            noise_clamp=_resolve(job.job_noise_clamp, self._app_config.noise_clamp),
+            frames_after_eos=_resolve(job.job_frames_after_eos, self._app_config.frames_after_eos),
             # Multi-voice fields
             speaker_voices=job.speaker_voices,
             annotated_chapters_path=job.annotated_chapters_path,
             _included_indices=job.chapter_selection.included,
+            # Chapter-voice mode
+            chapter_voices=job.chapter_voices,
         )
         return cfg
 

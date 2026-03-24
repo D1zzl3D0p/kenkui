@@ -89,6 +89,14 @@ class APIClient:
         narration_mode: str = "single",
         speaker_voices: dict | None = None,
         annotated_chapters_path: str | None = None,
+        chapter_voices: dict | None = None,
+        job_temp: float | None = None,
+        job_lsd_decode_steps: int | None = None,
+        job_noise_clamp: float | None = None,
+        job_m4b_bitrate: str | None = None,
+        job_pause_line_ms: int | None = None,
+        job_pause_chapter_ms: int | None = None,
+        job_frames_after_eos: int | None = None,
     ) -> JobInfo:
         """Add a new job to the queue."""
         payload: dict = {
@@ -106,6 +114,20 @@ class APIClient:
             payload["speaker_voices"] = speaker_voices
         if annotated_chapters_path:
             payload["annotated_chapters_path"] = annotated_chapters_path
+        if chapter_voices:
+            payload["chapter_voices"] = chapter_voices
+        # Per-job quality overrides — only include when explicitly set
+        for key, val in {
+            "job_temp": job_temp,
+            "job_lsd_decode_steps": job_lsd_decode_steps,
+            "job_noise_clamp": job_noise_clamp,
+            "job_m4b_bitrate": job_m4b_bitrate,
+            "job_pause_line_ms": job_pause_line_ms,
+            "job_pause_chapter_ms": job_pause_chapter_ms,
+            "job_frames_after_eos": job_frames_after_eos,
+        }.items():
+            if val is not None:
+                payload[key] = val
 
         data = self._request("POST", "/queue", json=payload)
         return JobInfo(**data)

@@ -9,7 +9,7 @@ Design notes:
   first call.
 - ``frames_after_eos=0`` is passed to ``generate_audio`` to suppress the
   trailing noise artifacts that the model sometimes appends after end-of-speech.
-- The ``Chapter.segments`` field (populated by BookNLP) activates multi-voice
+- The ``Chapter.segments`` field (populated by the NLP pipeline) activates multi-voice
   mode.  When ``None`` the existing single-voice paragraph path is used
   unchanged.
 """
@@ -185,11 +185,16 @@ def _process_chapter_inner(
             noise_clamp=config_dict.get("noise_clamp"),
         )
 
-        # ── Multi-voice path (BookNLP segments present) ───────────────────
+        # ── Multi-voice path (NLP segments present) ──────────────────────
         if chapter.segments is not None:
             return _render_multi_voice(
                 chapter, model, config_dict, temp_dir, queue, pid, log_message
             )
+
+        # ── Per-chapter voice override (chapter-voice mode) ───────────────
+        chapter_voice = config_dict.get("chapter_voices", {}).get(str(chapter.index))
+        if chapter_voice:
+            config_dict = {**config_dict, "voice": chapter_voice}
 
         # ── Single-voice path ─────────────────────────────────────────────
         voice_path = load_voice(config_dict.get("voice") or "alba")
@@ -212,9 +217,11 @@ def _process_chapter_inner(
         silence = AudioSegment.silent(duration=config_dict.get("pause_line_ms", 400))
         full_audio = AudioSegment.empty()
 
+        fae = config_dict.get("frames_after_eos", 0)
         for batch_idx, batch in enumerate(batches):
             audio_seg = _render_text(
-                model, voice_state, batch, log_message, pid, batch_idx, total_batches
+                model, voice_state, batch, log_message, pid, batch_idx, total_batches,
+                frames_after_eos=fae,
             )
             if audio_seg is not None:
                 full_audio += audio_seg + silence
@@ -251,7 +258,7 @@ def _render_multi_voice(
     pid: int,
     log_message,
 ) -> AudioResult | None:
-    """Render a chapter that has BookNLP-assigned speaker segments.
+    """Render a chapter that has NLP-assigned speaker segments.
 
     Groups segments by speaker so voice_state is loaded once per speaker,
     then reassembles audio in the original segment order.
@@ -267,8 +274,7 @@ def _render_multi_voice(
     )
 
     # Load voice state for each unique speaker.
-    # For now all speakers default to the configured voice — BookNLP will
-    # inject per-character voice mappings via config_dict["speaker_voices"].
+    # Per-character voice mappings are injected via config_dict["speaker_voices"].
     speaker_voices: dict[str, str] = config_dict.get("speaker_voices", {})
     speaker_states: dict[str, object] = {}
     for speaker in unique_speakers:
@@ -293,10 +299,12 @@ def _render_multi_voice(
 
     # Render each segment with its speaker's voice state
     rendered: dict[int, AudioSegment] = {}
+    fae = config_dict.get("frames_after_eos", 0)
     for seg_idx, seg in enumerate(segments):
         voice_state = speaker_states[seg.speaker]
         audio_seg = _render_text(
-            model, voice_state, seg.text, log_message, pid, seg_idx, total_segments
+            model, voice_state, seg.text, log_message, pid, seg_idx, total_segments,
+            frames_after_eos=fae,
         )
         rendered[seg.index] = audio_seg if audio_seg is not None else AudioSegment.empty()
         queue.put(("UPDATE", pid, 1, seg_idx + 1, total_segments, len(seg.text)))
@@ -346,10 +354,13 @@ def _render_text(
     pid: int,
     batch_idx: int,
     total_batches: int,
+    frames_after_eos: int = 0,
 ) -> AudioSegment | None:
     """Generate audio for one text batch, retrying once on failure.
 
-    Passes ``frames_after_eos=0`` to suppress trailing noise artifacts.
+    ``frames_after_eos`` controls how many frames are appended after the
+    end-of-speech cutoff.  0 (default) suppresses trailing noise artifacts;
+    higher values add a brief silence tail.
     """
     for attempt in range(2):
         try:
@@ -357,7 +368,7 @@ def _render_text(
             tensor = model.generate_audio(
                 voice_state,
                 text,
-                frames_after_eos=0,
+                frames_after_eos=frames_after_eos,
             )
             seg = _tensor_to_audio(tensor, model.sample_rate)
             if seg is not None:

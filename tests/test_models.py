@@ -7,8 +7,10 @@ from pathlib import Path
 from kenkui.models import (
     AppConfig,
     Chapter,
+    CharacterInfo,
     ChapterPreset,
     ChapterSelection,
+    NLPResult,
     Segment,
 )
 
@@ -31,6 +33,9 @@ class TestAppConfigDefaults:
 
     def test_default_lsd_decode_steps(self):
         assert AppConfig().lsd_decode_steps == 1
+
+    def test_default_nlp_model(self):
+        assert AppConfig().nlp_model == "llama3.2"
 
 
 class TestAppConfigRoundTrip:
@@ -72,18 +77,24 @@ class TestAppConfigRoundTrip:
         assert cfg.default_voice == "alba"
         assert cfg.default_chapter_preset == "content-only"
 
+    def test_nlp_model_round_trip(self):
+        cfg = AppConfig(nlp_model="phi3:mini")
+        restored = AppConfig.from_dict(cfg.to_dict())
+        assert restored.nlp_model == "phi3:mini"
+
     def test_new_fields_backward_compatible(self):
         """Old YAML files without the new fields should load cleanly."""
         old_data = {
             "name": "legacy",
             "workers": 4,
             "m4b_bitrate": "64k",
-            # No default_voice, default_chapter_preset, default_output_dir
+            # No default_voice, default_chapter_preset, default_output_dir, nlp_model
         }
         cfg = AppConfig.from_dict(old_data)
         assert cfg.default_voice == "alba"
         assert cfg.default_chapter_preset == "content-only"
         assert cfg.default_output_dir is None
+        assert cfg.nlp_model == "llama3.2"  # default when field absent
 
 
 class TestChapterSelectionRoundTrip:
@@ -141,3 +152,60 @@ class TestChapterWithSegments:
         assert ch.segments is not None
         assert len(ch.segments) == 2
         assert ch.segments[1].speaker == "alice"
+
+
+class TestCharacterInfo:
+    def test_round_trip(self):
+        c = CharacterInfo(
+            character_id="Harry Potter",
+            display_name="Harry Potter",
+            quote_count=42,
+            gender_pronoun="he",
+        )
+        restored = CharacterInfo.from_dict(c.to_dict())
+        assert restored.character_id == "Harry Potter"
+        assert restored.quote_count == 42
+        assert restored.gender_pronoun == "he"
+
+    def test_defaults_on_from_dict(self):
+        c = CharacterInfo.from_dict({"character_id": "Alice"})
+        assert c.display_name == "Alice"
+        assert c.quote_count == 0
+        assert c.gender_pronoun == ""
+
+
+class TestNLPResult:
+    def _make_result(self):
+        ch = Chapter(
+            index=0,
+            title="Chapter One",
+            paragraphs=["Para."],
+            segments=[Segment("Para.", "NARRATOR", 0)],
+        )
+        ci = CharacterInfo(
+            character_id="Alice Wonderland",
+            display_name="Alice Wonderland",
+            quote_count=5,
+        )
+        return NLPResult(characters=[ci], chapters=[ch], book_hash="abc123")
+
+    def test_round_trip(self):
+        result = self._make_result()
+        restored = NLPResult.from_dict(result.to_dict())
+        assert restored.book_hash == "abc123"
+        assert len(restored.characters) == 1
+        assert restored.characters[0].character_id == "Alice Wonderland"
+        assert len(restored.chapters) == 1
+        assert restored.chapters[0].title == "Chapter One"
+
+    def test_segments_preserved_through_round_trip(self):
+        result = self._make_result()
+        restored = NLPResult.from_dict(result.to_dict())
+        assert restored.chapters[0].segments is not None
+        assert restored.chapters[0].segments[0].speaker == "NARRATOR"
+
+    def test_empty_result(self):
+        empty = NLPResult(characters=[], chapters=[], book_hash="")
+        restored = NLPResult.from_dict(empty.to_dict())
+        assert restored.characters == []
+        assert restored.chapters == []
