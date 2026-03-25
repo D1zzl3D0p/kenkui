@@ -149,6 +149,7 @@ class JobConfig:
     job_temp: float | None = None
     job_lsd_decode_steps: int | None = None
     job_noise_clamp: float | None = None
+    job_eos_threshold: float | None = None
     job_m4b_bitrate: str | None = None
     job_pause_line_ms: int | None = None
     job_pause_chapter_ms: int | None = None
@@ -174,8 +175,9 @@ class JobConfig:
         }
         # Only include per-job overrides when explicitly set (non-None)
         for key in (
-            "job_temp", "job_lsd_decode_steps", "job_noise_clamp", "job_m4b_bitrate",
-            "job_pause_line_ms", "job_pause_chapter_ms", "job_frames_after_eos",
+            "job_temp", "job_lsd_decode_steps", "job_noise_clamp", "job_eos_threshold",
+            "job_m4b_bitrate", "job_pause_line_ms", "job_pause_chapter_ms",
+            "job_frames_after_eos",
         ):
             val = getattr(self, key)
             if val is not None:
@@ -199,10 +201,77 @@ class JobConfig:
             job_temp=data.get("job_temp"),
             job_lsd_decode_steps=data.get("job_lsd_decode_steps"),
             job_noise_clamp=data.get("job_noise_clamp"),
+            job_eos_threshold=data.get("job_eos_threshold"),
             job_m4b_bitrate=data.get("job_m4b_bitrate"),
             job_pause_line_ms=data.get("job_pause_line_ms"),
             job_pause_chapter_ms=data.get("job_pause_chapter_ms"),
             job_frames_after_eos=data.get("job_frames_after_eos"),
+        )
+
+
+@dataclass
+class PostProcessingConfig:
+    """Broadcast-quality audio effects chain applied per-chapter WAV."""
+
+    enabled: bool = True
+    # 1. Noise reduction
+    noise_reduce: bool = True
+    noise_reduce_prop_decrease: float = 0.8
+    # 2. High-pass filter (removes low-end rumble)
+    highpass_hz: int = 80
+    # 3. Low shelf (reduces boominess)
+    lowshelf_hz: int = 250
+    lowshelf_db: float = -3.0
+    # 4. Presence / clarity boost
+    presence_hz: int = 3500
+    presence_db: float = 2.0
+    # 5. De-esser
+    deesser: bool = True
+    deesser_hz: int = 6500
+    deesser_db: float = -4.0
+    # 6. Compressor
+    compressor_threshold_db: float = -18.0
+    compressor_ratio: float = 3.0
+    compressor_attack_ms: float = 5.0
+    compressor_release_ms: float = 50.0
+    # 7. Limiter
+    limiter_threshold_db: float = -1.0
+    # 8. Autogain — normalize each clip's RMS to a common level before stitching
+    autogain: bool = True
+    autogain_target_lufs: float = -23.0  # EBU R128 reference level for RMS normalization
+    # 9. Final loudness normalization (applied to output M4B/MP3)
+    normalize: bool = False
+    normalize_target_db: float = -3.0  # dBFS peak target (ACX ceiling)
+    normalize_lufs: float | None = None  # EBU R128 LUFS target (None = peak mode)
+
+    def to_dict(self) -> dict:
+        import dataclasses as _dc
+        return _dc.asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PostProcessingConfig":
+        return cls(
+            enabled=data.get("enabled", True),
+            noise_reduce=data.get("noise_reduce", True),
+            noise_reduce_prop_decrease=data.get("noise_reduce_prop_decrease", 0.8),
+            highpass_hz=data.get("highpass_hz", 80),
+            lowshelf_hz=data.get("lowshelf_hz", 250),
+            lowshelf_db=data.get("lowshelf_db", -3.0),
+            presence_hz=data.get("presence_hz", 3500),
+            presence_db=data.get("presence_db", 2.0),
+            deesser=data.get("deesser", True),
+            deesser_hz=data.get("deesser_hz", 6500),
+            deesser_db=data.get("deesser_db", -4.0),
+            compressor_threshold_db=data.get("compressor_threshold_db", -18.0),
+            compressor_ratio=data.get("compressor_ratio", 3.0),
+            compressor_attack_ms=data.get("compressor_attack_ms", 5.0),
+            compressor_release_ms=data.get("compressor_release_ms", 50.0),
+            limiter_threshold_db=data.get("limiter_threshold_db", -1.0),
+            autogain=data.get("autogain", True),
+            autogain_target_lufs=data.get("autogain_target_lufs", -23.0),
+            normalize=data.get("normalize", False),
+            normalize_target_db=data.get("normalize_target_db", -3.0),
+            normalize_lufs=data.get("normalize_lufs"),
         )
 
 
@@ -214,18 +283,21 @@ class AppConfig:
     log_path: Path | None = None
     keep_temp: bool = False
     m4b_bitrate: str = "96k"
-    pause_line_ms: int = 400
+    pause_line_ms: int = 800
     pause_chapter_ms: int = 2000
     temp: float = 0.7  # Sampling temperature (lower = stable, higher = expressive)
     lsd_decode_steps: int = 1  # LSD decode steps (higher = better quality, slower)
     noise_clamp: float | None = None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
-    frames_after_eos: int = 0  # Frames after EoS cutoff (0=suppress trailing noise)
+    eos_threshold: float = -4.0  # EOS detection threshold; higher (→0) = later cut-off
+    frames_after_eos: int | None = None  # Frames after EoS (None = auto from text length)
     # --- Job defaults (used by CLI / headless mode) ---
     default_voice: str = "alba"  # Voice used when no per-job override
     default_chapter_preset: str = "content-only"  # Chapter filter preset for CLI
     default_output_dir: Path | None = None  # Output directory for CLI runs
     # --- Multi-voice / NLP ---
     nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
+    # --- Audio post-processing ---
+    post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -240,11 +312,13 @@ class AppConfig:
             "temp": self.temp,
             "lsd_decode_steps": self.lsd_decode_steps,
             "noise_clamp": self.noise_clamp,
+            "eos_threshold": self.eos_threshold,
             "frames_after_eos": self.frames_after_eos,
             "default_voice": self.default_voice,
             "default_chapter_preset": self.default_chapter_preset,
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
             "nlp_model": self.nlp_model,
+            "post_processing": self.post_processing.to_dict(),
         }
 
     @classmethod
@@ -256,18 +330,20 @@ class AppConfig:
             log_path=Path(data["log_path"]) if data.get("log_path") else None,
             keep_temp=data.get("keep_temp", False),
             m4b_bitrate=_normalize_bitrate(data.get("m4b_bitrate"), default="96k"),
-            pause_line_ms=data.get("pause_line_ms", 400),
+            pause_line_ms=data.get("pause_line_ms", 800),
             pause_chapter_ms=data.get("pause_chapter_ms", 2000),
             temp=data.get("temp", 0.7),
             lsd_decode_steps=data.get("lsd_decode_steps", 1),
             noise_clamp=data.get("noise_clamp"),
-            frames_after_eos=data.get("frames_after_eos", 0),
+            eos_threshold=data.get("eos_threshold", -4.0),
+            frames_after_eos=data.get("frames_after_eos"),
             default_voice=data.get("default_voice", "alba"),
             default_chapter_preset=data.get("default_chapter_preset", "content-only"),
             default_output_dir=Path(data["default_output_dir"])
             if data.get("default_output_dir")
             else None,
             nlp_model=data.get("nlp_model", "llama3.2"),
+            post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
         )
 
 
@@ -441,12 +517,15 @@ class ProcessingConfig:
     temp: float = 0.7
     lsd_decode_steps: int = 1
     noise_clamp: float | None = None
-    frames_after_eos: int = 0  # Frames after EoS cutoff (0=suppress trailing noise)
+    eos_threshold: float = -4.0  # EOS detection threshold; higher (→0) = later cut-off
+    frames_after_eos: int | None = None  # Frames after EoS (None = auto from text length)
     # --- Multi-voice fields ---
     speaker_voices: dict[str, str] = field(default_factory=dict)
     annotated_chapters_path: Path | None = None
     # Per-chapter voice override (chapter-voice mode): str(chapter_index) → voice_name
     chapter_voices: dict[str, str] = field(default_factory=dict)
+    # Audio post-processing effects chain
+    post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
     # Chapter indices to include when loading from annotated cache.
     # An empty list means "include all chapters in the cache file".
     # Set by WorkerServer._build_config() / Processor._build_config() from

@@ -126,6 +126,7 @@ class Processor:
             temp=app_config.temp,
             lsd_decode_steps=app_config.lsd_decode_steps,
             noise_clamp=app_config.noise_clamp,
+            eos_threshold=app_config.eos_threshold,
             # Multi-voice fields — mirror WorkerServer._build_config() so that
             # any legacy code path using Processor still handles multi-voice jobs.
             speaker_voices=getattr(job, "speaker_voices", {}),

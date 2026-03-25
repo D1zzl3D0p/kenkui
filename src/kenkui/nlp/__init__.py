@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
@@ -190,9 +191,22 @@ def run_analysis(
     attributed_chapters: list[Chapter] = []
     attribution_counts: dict[str, int] = defaultdict(int)
 
-    for chapter in chapters:
+    total_chapters = len(chapters)
+    attrib_start = time.monotonic()
+
+    for ch_done, chapter in enumerate(chapters):
         title = chapter.title or f"Chapter {chapter.index}"
-        _cb(f"Attributing: {title}…")
+        # Build ETA from average time per chapter so far
+        elapsed = time.monotonic() - attrib_start
+        if ch_done > 0:
+            avg = elapsed / ch_done
+            remaining = avg * (total_chapters - ch_done)
+            eta_min = int(remaining // 60)
+            eta_sec = int(remaining % 60)
+            eta_str = f"{eta_min:02d}:{eta_sec:02d}"
+            _cb(f"Attributing: {title}… (ETA {eta_str})")
+        else:
+            _cb(f"Attributing: {title}…")
 
         quotes = chapter_quotes[chapter.index]
 
@@ -269,15 +283,105 @@ def run_analysis(
 # ---------------------------------------------------------------------------
 
 
+def _split_paragraph_by_quotes(
+    para: str, para_quotes: list
+) -> list[tuple[str, str]]:
+    """Split a paragraph into (text, speaker) spans at attributed quote boundaries.
+
+    Runs the same regex used in Stage 1 directly on *para* to locate each
+    quoted span.  For every match we look up the speaker from *para_quotes*
+    (a list of ``(Quote, AttributionItem)`` pairs for this paragraph).
+    Unattributed quotes and surrounding narrative text both become NARRATOR
+    spans.  Concatenating all returned texts reconstructs *para* exactly.
+
+    Returns:
+        A list of ``(text, speaker)`` 2-tuples.  Falls back to
+        ``[(para, "NARRATOR")]`` when the paragraph is empty or no matches align.
+    """
+    from .quotes import _QUOTE_RE
+
+    if not para:
+        return [(para, "NARRATOR")]
+
+    # Build a text → speaker map from the attributed quotes in this paragraph.
+    # If the same quoted text appears more than once we keep the first attribution
+    # (edge-case; positional deduplication is not needed for correctness here).
+    text_to_speaker: dict[str, str] = {}
+    for q, attr in para_quotes:
+        if q.text not in text_to_speaker:
+            text_to_speaker[q.text] = attr.speaker
+
+    spans: list[tuple[str, str]] = []
+    last_end = 0
+
+    for match in _QUOTE_RE.finditer(para):
+        start, end = match.start(), match.end()
+        quote_text = match.group(0)
+        speaker = text_to_speaker.get(quote_text, "NARRATOR")
+
+        # Narrative text before this quoted span
+        if start > last_end:
+            narrator_text = para[last_end:start]
+            if narrator_text:
+                spans.append((narrator_text, "NARRATOR"))
+
+        # The quoted span itself
+        if quote_text:
+            spans.append((quote_text, speaker))
+
+        last_end = end
+
+    # Trailing narrative text after the last quote
+    if last_end < len(para):
+        trailing = para[last_end:]
+        if trailing:
+            spans.append((trailing, "NARRATOR"))
+
+    return spans if spans else [(para, "NARRATOR")]
+
+
+def _merge_consecutive_segments(segments: list) -> list:
+    """Merge adjacent segments that share the same speaker.
+
+    Narrator spans are joined with ``"\\n\\n"``; character spans with ``" "``.
+    Indices are rewritten to be contiguous starting from 0.
+    """
+    from ..models import Segment
+
+    if not segments:
+        return segments
+
+    merged: list[Segment] = []
+    for seg in segments:
+        if merged and merged[-1].speaker == seg.speaker:
+            prev = merged[-1]
+            sep = "\n\n" if seg.speaker == "NARRATOR" else " "
+            merged[-1] = Segment(
+                text=prev.text + sep + seg.text,
+                speaker=prev.speaker,
+                index=prev.index,
+            )
+        else:
+            merged.append(Segment(text=seg.text, speaker=seg.speaker, index=seg.index))
+
+    # Rewrite indices to be contiguous
+    for i, seg in enumerate(merged):
+        merged[i] = Segment(text=seg.text, speaker=seg.speaker, index=i)
+
+    return merged
+
+
 def _build_segments(paragraphs: list[str], quotes: list, attributions: dict) -> list:
     """Convert paragraphs + quote attributions into a flat Segment list.
 
     Strategy:
     - Walk paragraphs in order.
-    - If a paragraph contains at least one attributed quote, emit it as a
-      character Segment using the speaker of the longest quote in that para.
-    - Consecutive un-attributed paragraphs are merged into a single NARRATOR
-      Segment to minimise TTS call overhead.
+    - If a paragraph has no attributed quotes, buffer it as NARRATOR.
+    - If a paragraph has attributed quotes, split it at quote boundaries
+      (via _split_paragraph_by_quotes) so each quoted span gets its own
+      character Segment and surrounding narrative goes to the NARRATOR buffer.
+    - After the main loop, merge any consecutive same-speaker Segments to
+      reduce TTS call overhead and end-of-clip artifacts.
     """
     from ..models import Segment
 
@@ -304,14 +408,18 @@ def _build_segments(paragraphs: list[str], quotes: list, attributions: dict) -> 
         if para_idx not in para_to_attr:
             narrator_buf.append(para)
         else:
-            _flush_narrator()
-            # Pick the attribution of the longest quote in this paragraph.
-            _, best_attr = max(para_to_attr[para_idx], key=lambda x: len(x[0].text))
-            segments.append(Segment(text=para, speaker=best_attr.speaker, index=seg_idx))
-            seg_idx += 1
+            spans = _split_paragraph_by_quotes(para, para_to_attr[para_idx])
+            for span_text, speaker in spans:
+                if speaker == "NARRATOR":
+                    narrator_buf.append(span_text)
+                else:
+                    _flush_narrator()
+                    segments.append(Segment(text=span_text, speaker=speaker, index=seg_idx))
+                    seg_idx += 1
 
     _flush_narrator()
-    return segments
+
+    return _merge_consecutive_segments(segments)
 
 
 def _normalize_speaker(
@@ -358,4 +466,7 @@ __all__ = [
     "cache_result",
     "CACHE_DIR",
     "book_hash",
+    "_split_paragraph_by_quotes",
+    "_merge_consecutive_segments",
+    "_build_segments",
 ]

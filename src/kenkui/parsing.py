@@ -241,6 +241,11 @@ class AudioBuilder:
         if self.progress_callback:
             self.progress_callback(100.0, message, 0)
 
+    def _signal_phase_with_eta(self, message: str, pct: float, eta_sec: int):
+        """Send progress update during a named phase with actual percentage and ETA."""
+        if self.progress_callback:
+            self.progress_callback(pct, message, eta_sec)
+
     def _calculate_eta(self, eta_tracker: ETATracker) -> int:
         """Calculate ETA in seconds from eta_tracker."""
         try:
@@ -295,6 +300,15 @@ class AudioBuilder:
             self._stitch_files(results, output_file, narrator_label=narrator_label)
             logger.info("Phase 'stitching' completed in %.1fs", time.monotonic() - t0)
 
+            # ── Loudness normalization (optional) ────────────────────────
+            if self.cfg.post_processing.enabled and self.cfg.post_processing.normalize:
+                from .post_processing import normalize_output
+
+                self._signal_phase("Normalizing loudness…")
+                t0 = time.monotonic()
+                normalize_output(output_file, self.cfg.post_processing)
+                logger.info("Phase 'normalization' completed in %.1fs", time.monotonic() - t0)
+
             # ── Cover embedding ──────────────────────────────────────────
             self._signal_phase("Embedding cover art…")
             t0 = time.monotonic()
@@ -339,11 +353,14 @@ class AudioBuilder:
             "temp": self.cfg.temp,
             "lsd_decode_steps": self.cfg.lsd_decode_steps,
             "noise_clamp": self.cfg.noise_clamp,
+            "eos_threshold": self.cfg.eos_threshold,
             "frames_after_eos": self.cfg.frames_after_eos,
             # Multi-voice: character id → voice name mapping
             "speaker_voices": self.cfg.speaker_voices,
             # Chapter-voice mode: str(chapter_index) → voice name
             "chapter_voices": self.cfg.chapter_voices,
+            # Audio post-processing effects chain
+            "post_processing": self.cfg.post_processing.to_dict(),
         }
 
         pool: ProcessPoolExecutor | None = None
@@ -447,6 +464,8 @@ class AudioBuilder:
             for res in results:
                 f.write(f"file '{res.file_path.resolve().as_posix()}'\n")
 
+        total_ms = sum(r.duration_ms for r in results)
+
         with open(meta_file, "w", encoding="utf-8") as f:
             f.write(";FFMETADATA1\n")
             if narrator_label:
@@ -462,28 +481,44 @@ class AudioBuilder:
         cmd = [
             imageio_ffmpeg.get_ffmpeg_exe(),
             "-y",
-            "-v",
-            "error",
-            "-stats",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(file_list),
-            "-i",
-            str(meta_file),
-            "-map_metadata",
-            "1",
-            "-c:a",
-            "aac" if output_file.suffix == ".m4b" else "libmp3lame",
+            "-v", "error",
+            "-progress", "pipe:1",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(file_list),
+            "-i", str(meta_file),
+            "-map_metadata", "1",
+            "-c:a", "aac" if output_file.suffix == ".m4b" else "libmp3lame",
             "-b:a",
             _normalize_bitrate(self.cfg.m4b_bitrate) if output_file.suffix == ".m4b" else "128k",
         ]
         if output_file.suffix == ".m4b":
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(output_file))
-        subprocess.run(cmd, check=True)
+
+        stitch_start = time.monotonic()
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert proc.stdout is not None
+
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_ms="):
+                try:
+                    out_ms = int(line.split("=", 1)[1])
+                    if total_ms > 0 and out_ms > 0:
+                        pct = min(99.0, out_ms / total_ms * 100)
+                        elapsed = time.monotonic() - stitch_start
+                        rate = out_ms / elapsed if elapsed > 0 else 0
+                        remaining_ms = (total_ms - out_ms) / rate if rate > 0 else 0
+                        eta_sec = int(remaining_ms / 1000)
+                        self._signal_phase_with_eta("Stitching audio files…", pct, eta_sec)
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        proc.wait()
+        if proc.returncode != 0:
+            stderr_out = proc.stderr.read() if proc.stderr else ""
+            raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr_out)
 
     def _embed_cover(self, output_file: Path) -> None:
         """Embed cover image from ebook into the M4B file."""

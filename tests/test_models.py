@@ -96,6 +96,34 @@ class TestAppConfigRoundTrip:
         assert cfg.default_output_dir is None
         assert cfg.nlp_model == "llama3.2"  # default when field absent
 
+    def test_eos_threshold_default(self):
+        assert AppConfig().eos_threshold == -4.0
+
+    def test_eos_threshold_round_trip(self):
+        cfg = AppConfig(eos_threshold=-2.0)
+        restored = AppConfig.from_dict(cfg.to_dict())
+        assert restored.eos_threshold == -2.0
+
+    def test_frames_after_eos_default_is_none(self):
+        assert AppConfig().frames_after_eos is None
+
+    def test_frames_after_eos_none_round_trips(self):
+        cfg = AppConfig(frames_after_eos=None)
+        d = cfg.to_dict()
+        restored = AppConfig.from_dict(d)
+        assert restored.frames_after_eos is None
+
+    def test_frames_after_eos_explicit_value_round_trips(self):
+        cfg = AppConfig(frames_after_eos=10)
+        restored = AppConfig.from_dict(cfg.to_dict())
+        assert restored.frames_after_eos == 10
+
+    def test_noise_clamp_still_loads_from_legacy_config(self):
+        """noise_clamp saved in old configs must still deserialize without error."""
+        old_data = {"noise_clamp": 3.0}
+        cfg = AppConfig.from_dict(old_data)
+        assert cfg.noise_clamp == 3.0
+
 
 class TestChapterSelectionRoundTrip:
     def test_preset_round_trip(self):

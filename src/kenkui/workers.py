@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import io
 import logging
+import math
 import multiprocessing
 import os
 import traceback
@@ -49,22 +50,29 @@ DEFAULT_BATCH_SIZE = 800  # Larger → fewer TTS calls, better throughput
 _model_cache: dict[tuple, object] = {}
 
 
-def _get_or_load_model(temp: float, lsd_decode_steps: int, noise_clamp: float | None):
+def _get_or_load_model(
+    temp: float,
+    lsd_decode_steps: int,
+    noise_clamp: float | None,
+    eos_threshold: float = -4.0,
+):
     """Return a cached TTSModel, loading it on first call for this config."""
     from pocket_tts import TTSModel
 
-    key = (temp, lsd_decode_steps, noise_clamp)
+    key = (temp, lsd_decode_steps, noise_clamp, eos_threshold)
     if key not in _model_cache:
         logger.debug(
-            "Loading TTSModel: temp=%s lsd_decode_steps=%s noise_clamp=%s",
+            "Loading TTSModel: temp=%s lsd_decode_steps=%s noise_clamp=%s eos_threshold=%s",
             temp,
             lsd_decode_steps,
             noise_clamp,
+            eos_threshold,
         )
         _model_cache[key] = TTSModel.load_model(
             temp=temp,
             lsd_decode_steps=lsd_decode_steps,
             noise_clamp=noise_clamp,
+            eos_threshold=eos_threshold,
         )
         logger.debug("TTSModel loaded and cached for key %s", key)
     return _model_cache[key]
@@ -75,12 +83,36 @@ def _get_or_load_model(temp: float, lsd_decode_steps: int, noise_clamp: float | 
 # ---------------------------------------------------------------------------
 
 
+def _pause_for_segment(pause_line_ms: int, text: str) -> "AudioSegment":
+    """Return silence whose duration scales logarithmically with paragraph-break count.
+
+    With ``pause_line_ms=1000`` (the base value for a single paragraph boundary):
+    - 0 breaks (short dialogue span): 500 ms
+    - 1 break:                        1000 ms
+    - 2 breaks:                       ~1485 ms  (≈1.5 s)
+    - 3 breaks:                       ~1769 ms  (≈1.8 s)
+    - N breaks:  pause_line_ms × (1 + 0.7 × ln(N))
+    """
+    n = text.count("\n\n")
+    if n <= 0:
+        ms = pause_line_ms // 2
+    else:
+        ms = int(pause_line_ms * (1 + 0.7 * math.log(n)))
+    return AudioSegment.silent(duration=ms)
+
+
 def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[int, int]:
     """Pre-calculate batch count and total characters for progress estimation.
+
+    For multi-voice chapters (with NLP segments) the batch count is the number
+    of segments — each segment produces exactly one TTS call.
 
     Returns:
         ``(batch_count, total_characters)``
     """
+    if chapter.segments is not None:
+        total_chars = sum(len(s.text) for s in chapter.segments)
+        return len(chapter.segments), total_chars
     batch_size = FIRST_CHAPTER_BATCH_SIZE if is_first_chapter else DEFAULT_BATCH_SIZE
     batches = batch_text(chapter.paragraphs, max_chars=batch_size)
     total_chars = sum(len(b) for b in batches)
@@ -183,6 +215,7 @@ def _process_chapter_inner(
             temp=config_dict.get("temp", 0.7),
             lsd_decode_steps=config_dict.get("lsd_decode_steps", 1),
             noise_clamp=config_dict.get("noise_clamp"),
+            eos_threshold=config_dict.get("eos_threshold", -4.0),
         )
 
         # ── Multi-voice path (NLP segments present) ──────────────────────
@@ -214,17 +247,18 @@ def _process_chapter_inner(
 
         queue.put(("START", pid, chapter.title, total_batches, total_chars, is_first_chapter))
 
-        silence = AudioSegment.silent(duration=config_dict.get("pause_line_ms", 400))
+        pause_line_ms = config_dict.get("pause_line_ms", 400)
         full_audio = AudioSegment.empty()
 
-        fae = config_dict.get("frames_after_eos", 0)
+        fae = config_dict.get("frames_after_eos")
         for batch_idx, batch in enumerate(batches):
+            batch_fae = fae if fae is not None else max(3, len(batch) // 150)
             audio_seg = _render_text(
                 model, voice_state, batch, log_message, pid, batch_idx, total_batches,
-                frames_after_eos=fae,
+                frames_after_eos=batch_fae,
             )
             if audio_seg is not None:
-                full_audio += audio_seg + silence
+                full_audio += audio_seg + _pause_for_segment(pause_line_ms, batch)
             queue.put(("UPDATE", pid, 1, batch_idx + 1, total_batches, len(batch)))
 
         return _finalise_chapter(
@@ -295,24 +329,29 @@ def _render_multi_voice(
         )
     )
 
-    silence = AudioSegment.silent(duration=config_dict.get("pause_line_ms", 400))
+    pause_line_ms = config_dict.get("pause_line_ms", 400)
+    fae_cfg = config_dict.get("frames_after_eos")
 
     # Render each segment with its speaker's voice state
-    rendered: dict[int, AudioSegment] = {}
-    fae = config_dict.get("frames_after_eos", 0)
+    rendered: dict[int, tuple[AudioSegment, str]] = {}
     for seg_idx, seg in enumerate(segments):
         voice_state = speaker_states[seg.speaker]
+        seg_fae = fae_cfg if fae_cfg is not None else max(3, len(seg.text) // 150)
         audio_seg = _render_text(
             model, voice_state, seg.text, log_message, pid, seg_idx, total_segments,
-            frames_after_eos=fae,
+            frames_after_eos=seg_fae,
         )
-        rendered[seg.index] = audio_seg if audio_seg is not None else AudioSegment.empty()
+        rendered[seg.index] = (
+            audio_seg if audio_seg is not None else AudioSegment.empty(),
+            seg.text,
+        )
         queue.put(("UPDATE", pid, 1, seg_idx + 1, total_segments, len(seg.text)))
 
     # Reassemble in original index order
     full_audio = AudioSegment.empty()
     for idx in sorted(rendered):
-        full_audio += rendered[idx] + silence
+        audio_seg, seg_text = rendered[idx]
+        full_audio += audio_seg + _pause_for_segment(pause_line_ms, seg_text)
 
     return _finalise_chapter(chapter, full_audio, config_dict, temp_dir, queue, pid, log_message)
 
@@ -399,9 +438,18 @@ def _finalise_chapter(
     full_audio += AudioSegment.silent(duration=config_dict.get("pause_chapter_ms", 2000))
     filename = temp_dir / f"ch_{chapter.index:04d}.wav"
     full_audio.export(str(filename), format="wav")
+
+    # Audio post-processing effects chain (EQ, compression, noise reduction)
+    pp_data = config_dict.get("post_processing", {})
+    if pp_data and pp_data.get("enabled"):
+        from .models import PostProcessingConfig
+        from .post_processing import apply_chapter_effects
+
+        apply_chapter_effects(filename, PostProcessingConfig.from_dict(pp_data))
+
     log_message(f"[Worker {pid}] ✓ {chapter.title}: {len(full_audio)}ms saved")
     queue.put(("DONE", pid))
     return AudioResult(chapter.index, chapter.title, filename, len(full_audio))
 
 
-__all__ = ["get_batch_info", "worker_process_chapter"]
+__all__ = ["get_batch_info", "worker_process_chapter", "_pause_for_segment"]

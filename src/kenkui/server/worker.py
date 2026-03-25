@@ -322,6 +322,7 @@ class WorkerServer:
             temp=_resolve(job.job_temp, self._app_config.temp),
             lsd_decode_steps=_resolve(job.job_lsd_decode_steps, self._app_config.lsd_decode_steps),
             noise_clamp=_resolve(job.job_noise_clamp, self._app_config.noise_clamp),
+            eos_threshold=_resolve(job.job_eos_threshold, self._app_config.eos_threshold),
             frames_after_eos=_resolve(job.job_frames_after_eos, self._app_config.frames_after_eos),
             # Multi-voice fields
             speaker_voices=job.speaker_voices,
@@ -329,6 +330,8 @@ class WorkerServer:
             _included_indices=job.chapter_selection.included,
             # Chapter-voice mode
             chapter_voices=job.chapter_voices,
+            # Audio post-processing
+            post_processing=self._app_config.post_processing,
         )
         return cfg
 
