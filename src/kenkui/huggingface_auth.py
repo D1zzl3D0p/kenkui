@@ -16,12 +16,8 @@ import webbrowser
 from enum import Enum
 from pathlib import Path
 
-from huggingface_hub import HfApi, login
-from huggingface_hub.errors import (
-    GatedRepoError,
-    LocalTokenNotFoundError,
-    RepositoryNotFoundError,
-)
+# huggingface_hub is an optional dependency (kenkui[custom-voices]).
+# All imports are lazy (inside functions) so the base install works without it.
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +53,26 @@ def is_model_gated(model_id: str) -> bool:
     return GATED_MODELS.get(model_id, False)
 
 
-def is_custom_voice(voice: str, bundled_voices: list[str]) -> bool:
-    """Return True if the voice is not a built-in default."""
-    from .utils import DEFAULT_VOICES
+def is_custom_voice(voice: str) -> bool:
+    """Return True if this voice requires HuggingFace authentication.
 
-    if voice in DEFAULT_VOICES:
-        return False
-    if Path(voice).exists():
-        return True
+    - ``hf://`` URLs always require auth.
+    - Local file paths do not require auth (user owns the file).
+    - Compiled voices (``.safetensors``) do not require auth.
+    - Built-in pocket-tts voices do not require auth.
+    - Uncompiled voices (``.wav`` audio prompts) require the gated pocket-tts model.
+    - Unknown voices are treated as requiring auth (safe default).
+    """
     if voice.startswith("hf://"):
         return True
-    if f"{voice}.wav" in bundled_voices:
-        return True
-    return True
+    if Path(voice).exists():
+        return False
+
+    from .voice_registry import get_registry
+    meta = get_registry().resolve(voice)
+    if meta is None:
+        return True  # Unknown voice — be safe
+    return meta.source == "uncompiled"
 
 
 def check_auth_status(model_id: str = "kyutai/pocket-tts") -> AuthStatus:
@@ -80,6 +83,13 @@ def check_auth_status(model_id: str = "kyutai/pocket-tts") -> AuthStatus:
     """
     if not is_model_gated(model_id):
         return AuthStatus.OK
+
+    try:
+        from huggingface_hub import HfApi
+        from huggingface_hub.errors import GatedRepoError, LocalTokenNotFoundError, RepositoryNotFoundError
+    except ImportError:
+        logger.warning("huggingface_hub not installed — install kenkui[custom-voices] to use custom voices")
+        return AuthStatus.NO_TOKEN
 
     api = HfApi()
     try:
@@ -109,9 +119,12 @@ def do_login(token: str) -> tuple[bool, str]:
         logger.warning("Token does not start with 'hf_' — proceeding anyway")
 
     try:
+        from huggingface_hub import login
         login(token=token, add_to_git_credential=False)
         logger.debug("HuggingFace login succeeded")
         return True, "Token accepted."
+    except ImportError:
+        return False, "huggingface_hub not installed — run: pip install kenkui[custom-voices]"
     except Exception as exc:
         return False, f"Token validation failed: {exc}"
 
@@ -122,6 +135,12 @@ def verify_access(model_id: str = "kyutai/pocket-tts") -> tuple[bool, str]:
     Returns ``(success, message)``.  Call this after the user has accepted
     the model's terms of use on the HuggingFace website.
     """
+    try:
+        from huggingface_hub import HfApi
+        from huggingface_hub.errors import GatedRepoError
+    except ImportError:
+        return False, "huggingface_hub not installed — run: pip install kenkui[custom-voices]"
+
     api = HfApi()
     try:
         api.model_info(model_id)
@@ -264,9 +283,9 @@ def _cli_accept_terms_flow(model_id: str) -> bool:
             print("Please enter 'y' or 'n'.")
 
 
-def check_voice_access(voice: str, bundled_voices: list[str]) -> bool:
+def check_voice_access(voice: str) -> bool:
     """Check if the user has access needed for a specific voice (CLI path)."""
-    if not is_custom_voice(voice, bundled_voices):
+    if not is_custom_voice(voice):
         return True
     return ensure_huggingface_access("kyutai/pocket-tts")
 

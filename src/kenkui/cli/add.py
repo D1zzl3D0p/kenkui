@@ -127,7 +127,6 @@ def _prompt_voice(default: str = "alba", message: str = "Select voice:") -> str:
 
 def _check_hf_auth(voice: str) -> None:
     """If the voice requires HuggingFace auth, prompt for token if needed."""
-    from ..helpers import get_bundled_voices
     from ..huggingface_auth import (
         AuthStatus,
         HF_TOKEN_URL,
@@ -138,8 +137,7 @@ def _check_hf_auth(voice: str) -> None:
     )
     from InquirerPy import inquirer
 
-    bundled = get_bundled_voices()
-    if not is_custom_voice(voice, bundled):
+    if not is_custom_voice(voice):
         return
 
     status = check_auth_status("kyutai/pocket-tts")
