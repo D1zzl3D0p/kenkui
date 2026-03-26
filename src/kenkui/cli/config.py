@@ -44,18 +44,12 @@ def cmd_config(args) -> int:
     console.print()
 
     # ---- Voice choices ------------------------------------------------
-    from ..helpers import get_bundled_voices
-    from ..utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
+    from ..voice_registry import get_registry
 
+    registry = get_registry()
     voice_choices = []
-    for v in DEFAULT_VOICES:
-        desc = VOICE_DESCRIPTIONS.get(v, "")
-        voice_choices.append({"name": f"{v:<20} {desc}", "value": v})
-    for wav in get_bundled_voices():
-        if wav.lower() == "default.txt":
-            continue
-        name = wav.replace(".wav", "")
-        voice_choices.append({"name": f"{name:<20} (bundled)", "value": name})
+    for v in registry.filter(source="compiled") + registry.filter(source="builtin") + registry.filter(source="uncompiled"):
+        voice_choices.append({"name": v.display_label, "value": v.name})
 
     # ---- Prompt each field --------------------------------------------
 

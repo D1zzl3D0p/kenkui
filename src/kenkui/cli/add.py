@@ -66,20 +66,36 @@ def _gender_pool(gender_str: str | None) -> str:
 
 
 def _build_voice_choices() -> list[dict]:
-    """Return InquirerPy-compatible choice list for voice selection."""
-    from ..helpers import get_bundled_voices
-    from ..utils import DEFAULT_VOICES, VOICE_DESCRIPTIONS
+    """Return InquirerPy-compatible choice list for voice selection.
 
-    choices = []
-    for v in DEFAULT_VOICES:
-        desc = VOICE_DESCRIPTIONS.get(v, "")
-        choices.append({"name": f"{v:<20} {desc}", "value": v})
+    Groups voices by source:
+    1. Compiled voices (metadata-rich .safetensors, no HF auth needed)
+    2. Built-in pocket-tts voices
+    3. Custom/uncompiled voices (optional; only shown if installed)
+    4. Escape hatch for raw file paths and hf:// URLs
+    """
+    from ..voice_registry import get_registry
 
-    for wav in get_bundled_voices():
-        if wav.lower() == "default.txt":
-            continue
-        name = wav.replace(".wav", "")
-        choices.append({"name": f"{name:<20} (bundled)", "value": name})
+    registry = get_registry()
+    choices: list[dict] = []
+
+    compiled = registry.filter(source="compiled")
+    if compiled:
+        choices.append({"name": "── Compiled voices ──────────────────────", "value": "__sep__", "disabled": True})
+        for v in compiled:
+            choices.append({"name": v.display_label, "value": v.name})
+
+    builtins = registry.filter(source="builtin")
+    if builtins:
+        choices.append({"name": "── Built-in voices ──────────────────────", "value": "__sep__", "disabled": True})
+        for v in builtins:
+            choices.append({"name": v.display_label, "value": v.name})
+
+    uncompiled = registry.filter(source="uncompiled")
+    if uncompiled:
+        choices.append({"name": "── Custom voices ────────────────────────", "value": "__sep__", "disabled": True})
+        for v in uncompiled:
+            choices.append({"name": v.display_label, "value": v.name})
 
     choices.append({"name": "Custom path or hf:// URL…", "value": "__custom__"})
     return choices
@@ -338,8 +354,6 @@ def _top_gender_matched_voice(characters, default_voice: str) -> str:
     voice; otherwise default to a male voice. Falls back to default_voice
     if no character's gender is known.
     """
-    from ..utils import MALE_VOICES, FEMALE_VOICES
-
     by_quotes = sorted(characters, key=lambda c: c.quote_count, reverse=True)
 
     top_male_quotes = 0
@@ -353,10 +367,15 @@ def _top_gender_matched_voice(characters, default_voice: str) -> str:
             top_female_quotes = ch.quote_count
             break
 
-    if top_female_quotes > top_male_quotes and FEMALE_VOICES:
-        return FEMALE_VOICES[0]
-    if MALE_VOICES:
-        return MALE_VOICES[0]
+    from ..voice_registry import get_registry
+    registry = get_registry()
+    male_voices = [v.name for v in registry.filter(gender="Male")]
+    female_voices = [v.name for v in registry.filter(gender="Female")]
+
+    if top_female_quotes > top_male_quotes and female_voices:
+        return female_voices[0]
+    if male_voices:
+        return male_voices[0]
     return default_voice
 
 
@@ -364,17 +383,20 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     """Auto-assign voices to characters.
 
     Phase 1: Assign known-gender characters in true round-robin order.
-      - Male chars (he/him/his) → MALE_VOICES[male_idx % len(MALE_VOICES)], male_idx++
-      - Female chars (she/her) → FEMALE_VOICES[female_idx % len(FEMALE_VOICES)], female_idx++
+      - Male chars (he/him/his) → male pool (round-robin), male_idx++
+      - Female chars (she/her)  → female pool (round-robin), female_idx++
 
     Phase 2: Assign they/them chars to the pool with fewer total quotes,
       then round-robin within that pool.
     """
-    from ..utils import MALE_VOICES, FEMALE_VOICES
+    from ..voice_registry import get_registry
+    registry = get_registry()
+    male_voices = [v.name for v in registry.filter(gender="Male")]
+    female_voices = [v.name for v in registry.filter(gender="Female")]
 
     # Exclude narrator voice from character pools so it stays unique to the narrator.
-    male_pool = [v for v in MALE_VOICES if v != narrator_voice] or MALE_VOICES
-    female_pool = [v for v in FEMALE_VOICES if v != narrator_voice] or FEMALE_VOICES
+    male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
+    female_pool = [v for v in female_voices if v != narrator_voice] or female_voices
 
     male_idx, female_idx = 0, 0
     male_quotes, female_quotes = 0, 0
@@ -610,10 +632,13 @@ def _prompt_simple_voice_assignment(characters, narrator_voice: str) -> dict[str
 
     Returns speaker_voices dict (including NARRATOR).
     """
-    from ..utils import MALE_VOICES, FEMALE_VOICES
+    from ..voice_registry import get_registry
+    registry = get_registry()
+    male_voices = [v.name for v in registry.filter(gender="Male")]
+    female_voices = [v.name for v in registry.filter(gender="Female")]
 
-    male_pool = [v for v in MALE_VOICES if v != narrator_voice] or MALE_VOICES
-    female_pool = [v for v in FEMALE_VOICES if v != narrator_voice] or FEMALE_VOICES
+    male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
+    female_pool = [v for v in female_voices if v != narrator_voice] or female_voices
 
     male_voice = _prompt_voice(
         default=male_pool[0] if male_pool else "alba",
