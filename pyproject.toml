@@ -57,7 +57,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "kenkui.samples" = ["*.epub"]
-"kenkui.voices" = ["*.wav"]
+"kenkui.voices" = ["default.txt", "compiled-voices/*.safetensors", "uncompiled-voices/*.wav"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

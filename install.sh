@@ -192,6 +192,12 @@ install_kenkui() {
         return 1
     fi
 
+    if command -v git-lfs &>/dev/null; then
+        git lfs pull
+    else
+        log_warn "git-lfs not found — large voice files may not be present. Install git-lfs and re-run."
+    fi
+
     return 0
 }
 
