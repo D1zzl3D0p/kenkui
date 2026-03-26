@@ -1,20 +1,17 @@
 """Voice loading utilities shared across TTS workers and future multi-voice modules.
 
-Supports three voice source types:
-- Built-in pocket-tts voice names (e.g. ``"alba"``)
-- Bundled .wav files shipped with the package (e.g. ``"RafeBeckley"``)
-- Local file paths (e.g. ``"/home/user/my_voice.wav"``)
-- HuggingFace URLs  (e.g. ``"hf://user/repo/voice.wav"``)
+Supports four voice source types (resolved in priority order):
+1. HuggingFace URLs  (e.g. ``"hf://user/repo/voice.wav"``)
+2. Local file paths  (e.g. ``"/home/user/my_voice.wav"``)
+3. Registry voices   — compiled ``.safetensors``, uncompiled ``.wav``, or built-in names
+4. Raw string fallback → passed unchanged to pocket-tts (handles built-in names)
 """
 
 from __future__ import annotations
 
-import importlib.resources
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
-
-from .helpers import get_bundled_voices
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +22,8 @@ def load_voice(voice: str) -> str:
     Args:
         voice: One of:
             - A pocket-tts built-in name (``"alba"``, ``"cosette"``, …)
-            - A bundled voice name (with or without ``.wav``)
+            - A compiled voice name (e.g. ``"Alasdair"``)
+            - An uncompiled voice name (e.g. ``"RafeBeckley"``)
             - An absolute or relative file path that exists on disk
             - An ``hf://user/repo/filename`` URL
 
@@ -65,21 +63,20 @@ def load_voice(voice: str) -> str:
         logger.debug("Using local file: %s", voice_path)
         return str(voice_path)
 
-    # ── Bundled voice ──────────────────────────────────────────────────────
-    # Accept both "RafeBeckley" and "RafeBeckley.wav"
-    voice_filename = voice if voice.endswith(".wav") else f"{voice}.wav"
-    if voice_filename in get_bundled_voices():
-        try:
-            voice_file = importlib.resources.files("kenkui") / "voices" / voice_filename
-            resolved = str(voice_file)
-            logger.debug("Using bundled voice: %s", resolved)
-            return resolved
-        except Exception as exc:
-            logger.debug("Could not resolve bundled voice %r: %s", voice_filename, exc)
-            # Fall through to built-in name assumption
+    # ── Registry lookup (compiled / uncompiled / builtin) ─────────────────
+    from .voice_registry import get_registry
 
-    # ── Built-in pocket-tts name ───────────────────────────────────────────
-    logger.debug("Using built-in voice name: %s", voice)
+    meta = get_registry().resolve(voice)
+    if meta is not None:
+        if meta.file_path is not None:
+            logger.debug("Using registry voice: %s (%s)", voice, meta.source)
+            return str(meta.file_path)
+        # Built-in voices have no file_path — pass name to pocket-tts
+        logger.debug("Using built-in voice name: %s", meta.name)
+        return meta.name
+
+    # ── Raw fallback (unknown voice — let pocket-tts decide) ───────────────
+    logger.debug("Voice %r not in registry — passing raw string to pocket-tts", voice)
     return voice
 
 
