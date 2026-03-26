@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.resources
 import logging
 from pathlib import Path
 
@@ -32,34 +31,19 @@ def quick_count_chapters(ebook_path: Path) -> int | None:
     return _count_chapters_with_reader(ebook_path)
 
 
-def get_bundled_voices():
-    """Scans the 'voices' directory inside the package for custom voice files.
+def get_bundled_voices() -> list[str]:
+    """Return the names of all available bundled voices (compiled + uncompiled).
 
-    Returns a list of filenames.
+    Backward-compatible shim over :func:`~kenkui.voice_registry.get_registry`.
+    Returns voice *names* sorted alphabetically.
     """
-    custom_voices = []
-    try:
-        pkg_name = __package__
+    from .voice_registry import get_registry
 
-        if pkg_name:
-            voices_path = importlib.resources.files(pkg_name) / "voices"
-            if voices_path.is_dir():
-                for entry in voices_path.iterdir():
-                    if entry.is_file() and not entry.name.startswith("__"):
-                        custom_voices.append(entry.name)
-        else:
-            local_voices_path = Path(__file__).parent / "voices"
-            if local_voices_path.exists():
-                custom_voices = [
-                    f.name
-                    for f in local_voices_path.iterdir()
-                    if f.is_file() and not f.name.startswith("__")
-                ]
-
-    except Exception:
-        pass
-
-    return sorted(custom_voices)
+    return sorted(
+        v.name
+        for v in get_registry().voices
+        if v.source in ("compiled", "uncompiled")
+    )
 
 
 __all__ = [

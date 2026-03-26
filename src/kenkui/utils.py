@@ -8,42 +8,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
-# Constants
-DEFAULT_VOICES = [
-    "alba",
-    "marius",
-    "javert",
-    "jean",
-    "fantine",
-    "cosette",
-    "eponine",
-    "azelma",
-]
-
-VOICE_DESCRIPTIONS = {
-    "alba": "American Male",
-    "marius": "American Male",
-    "javert": "American Male",
-    "jean": "American Male",
-    "fantine": "British Female",
-    "cosette": "American Female",
-    "eponine": "British Female",
-    "azelma": "American Female",
-}
-
-VOICE_GENDER: dict[str, str] = {
-    "alba": "male",
-    "marius": "male",
-    "javert": "male",
-    "jean": "male",
-    "fantine": "female",
-    "cosette": "female",
-    "eponine": "female",
-    "azelma": "female",
-}
-
-MALE_VOICES = [v for v, g in VOICE_GENDER.items() if g == "male"]
-FEMALE_VOICES = [v for v, g in VOICE_GENDER.items() if g == "female"]
+# Re-export from voice_registry — the registry is the single source of truth.
+from .voice_registry import BUILTIN_VOICE_NAMES as BUILTIN_VOICE_NAMES  # noqa: F401
 
 
 def batch_text(

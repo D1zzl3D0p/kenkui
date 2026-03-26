@@ -37,3 +37,4 @@ Thumbs.db
 *.mp3
 # If you have a default output folder, ignore it too:
 # output/
+.worktrees/

@@ -148,7 +148,7 @@ def _build_bare_parser() -> argparse.ArgumentParser:
             "Pass an ebook path directly to run the interactive wizard then\n"
             "auto-start the queue with a live dashboard.  Add -c config.toml\n"
             "to skip the wizard and run headless instead.\n\n"
-            "Sub-commands: add, queue, config"
+            "Sub-commands: add, queue, config, voices"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -172,7 +172,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Pass an ebook path directly to run the interactive wizard then\n"
             "auto-start the queue with a live dashboard.  Add -c config.toml\n"
             "to skip the wizard and run headless instead.\n\n"
-            "Sub-commands: add, queue, config"
+            "Sub-commands: add, queue, config, voices"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -244,6 +244,31 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_server_flags(cfg_p)
+
+    # ---- kenkui voices -----------------------------------------------------
+    voices_p = sub.add_parser("voices", help="List and manage available voices.")
+    voices_sub = voices_p.add_subparsers(dest="voices_command")
+
+    voices_list_p = voices_sub.add_parser("list", help="List available voices.")
+    voices_list_p.add_argument("--gender", default=None, help="Filter by gender (Male/Female).")
+    voices_list_p.add_argument("--accent", default=None, help="Filter by accent (e.g. Scottish).")
+    voices_list_p.add_argument("--dataset", default=None, help="Filter by dataset (VCTK/EARS).")
+    voices_list_p.add_argument(
+        "--source",
+        default=None,
+        choices=["compiled", "builtin", "uncompiled"],
+        help="Filter by source type.",
+    )
+
+    voices_fetch_p = voices_sub.add_parser(
+        "fetch", help="Download uncompiled voices (requires kenkui[custom-voices])."
+    )
+    voices_fetch_p.add_argument(
+        "--repo",
+        default=None,
+        metavar="USER/REPO",
+        help="HuggingFace repo containing .wav voice files. Overrides KENKUI_VOICES_REPO env var.",
+    )
 
     return parser
 
@@ -323,6 +348,23 @@ def main() -> None:
         from .cli.config import cmd_config
 
         sys.exit(cmd_config(args))
+
+    elif command == "voices":
+        from .cli.voices import cmd_voices_list, cmd_voices_fetch
+
+        voices_command = getattr(args, "voices_command", None)
+        if voices_command == "list":
+            cmd_voices_list(args)
+        elif voices_command == "fetch":
+            cmd_voices_fetch(args)
+        else:
+            # No subcommand: default to list (no filters)
+            args.gender = None
+            args.accent = None
+            args.dataset = None
+            args.source = None
+            cmd_voices_list(args)
+        sys.exit(0)
 
     else:
         # ---- Bare shorthand: kenkui book.epub [-c config] ------------------
