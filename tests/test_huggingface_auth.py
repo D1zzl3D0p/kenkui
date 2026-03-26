@@ -43,7 +43,7 @@ from kenkui.huggingface_auth import (
     open_token_page,
     verify_access,
 )
-from kenkui.utils import DEFAULT_VOICES
+from kenkui.voice_registry import BUILTIN_VOICE_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -80,32 +80,21 @@ def _no_token_error() -> Exception:
 
 
 class TestIsCustomVoice:
-    def test_every_default_voice_not_custom(self):
-        for voice in DEFAULT_VOICES:
-            assert is_custom_voice(voice, []) is False, f"{voice!r} should not be custom"
-
-    def test_bundled_voice_with_wav_suffix(self):
-        assert is_custom_voice("MyVoice", ["MyVoice.wav"]) is True
-
-    def test_bundled_voice_without_wav_suffix_not_matched(self):
-        # bundled_voices list contains "MyVoice.wav"; voice without .wav won't match
-        # the bundled check but returns True anyway because unknown voices are custom
-        assert is_custom_voice("MyVoice", []) is True
+    def test_every_builtin_voice_not_custom(self):
+        for voice in BUILTIN_VOICE_NAMES:
+            assert is_custom_voice(voice) is False, f"{voice!r} should not be custom"
 
     def test_hf_url_is_custom(self):
-        assert is_custom_voice("hf://user/repo/voice.wav", []) is True
+        assert is_custom_voice("hf://user/repo/voice.wav") is True
 
-    def test_local_existing_file_is_custom(self, tmp_path):
+    def test_local_existing_file_needs_no_auth(self, tmp_path):
+        # User already has the file — no HF auth required
         wav = tmp_path / "voice.wav"
         wav.write_bytes(b"RIFF")
-        assert is_custom_voice(str(wav), []) is True
+        assert is_custom_voice(str(wav)) is False
 
-    def test_unknown_name_is_custom(self):
-        assert is_custom_voice("unknown_voice", []) is True
-
-    def test_empty_string_is_custom(self):
-        # Empty string is not in DEFAULT_VOICES, not a file → True
-        assert is_custom_voice("", []) is True
+    def test_unknown_name_needs_auth(self):
+        assert is_custom_voice("unknown_voice") is True
 
 
 # ---------------------------------------------------------------------------
@@ -153,34 +142,34 @@ class TestAuthStatus:
 class TestCheckAuthStatus:
     def test_ungated_model_returns_ok_without_network(self):
         # Should short-circuit before any HfApi call
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             status = check_auth_status("totally/unknown")
         mock_cls.assert_not_called()
         assert status == AuthStatus.OK
 
     def test_accessible_returns_ok(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.return_value = MagicMock()
             assert check_auth_status("kyutai/pocket-tts") == AuthStatus.OK
 
     def test_no_token_returns_no_token(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.side_effect = _no_token_error()
             assert check_auth_status("kyutai/pocket-tts") == AuthStatus.NO_TOKEN
 
     def test_gated_returns_needs_terms(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.side_effect = _gated_error()
             assert check_auth_status("kyutai/pocket-tts") == AuthStatus.NEEDS_TERMS
 
     def test_repo_not_found_returns_not_found(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.side_effect = _not_found_error()
             assert check_auth_status("kyutai/pocket-tts") == AuthStatus.NOT_FOUND
 
     def test_unexpected_exception_returns_no_token(self):
         # Generic exception → assume no token so user can try logging in
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.side_effect = RuntimeError("network down")
             assert check_auth_status("kyutai/pocket-tts") == AuthStatus.NO_TOKEN
 
@@ -200,7 +189,7 @@ class TestDoLogin:
         # "   " is truthy so do_login bypasses the empty-string guard and calls
         # login(); the call will fail (no real HF server) so ok must be False.
         with patch(
-            "kenkui.huggingface_auth.login",
+            "huggingface_hub.login",
             side_effect=ValueError("invalid token"),
         ):
             ok, msg = do_login("   ")
@@ -208,7 +197,7 @@ class TestDoLogin:
         assert "failed" in msg.lower()
 
     def test_valid_hf_token_succeeds(self):
-        with patch("kenkui.huggingface_auth.login") as mock_login:
+        with patch("huggingface_hub.login") as mock_login:
             mock_login.return_value = None
             ok, msg = do_login("hf_validtoken123")
         assert ok is True
@@ -217,19 +206,19 @@ class TestDoLogin:
 
     def test_non_hf_prefix_still_attempts_login(self):
         """Tokens not starting with hf_ trigger a warning but still try to login."""
-        with patch("kenkui.huggingface_auth.login") as mock_login:
+        with patch("huggingface_hub.login") as mock_login:
             mock_login.return_value = None
             ok, msg = do_login("sk_someothertoken")
         assert ok is True  # login call succeeded (mocked)
 
     def test_login_exception_returns_false_with_message(self):
-        with patch("kenkui.huggingface_auth.login", side_effect=ValueError("invalid")):
+        with patch("huggingface_hub.login", side_effect=ValueError("invalid")):
             ok, msg = do_login("hf_bad")
         assert ok is False
         assert "failed" in msg.lower()
 
     def test_login_network_error_returns_false(self):
-        with patch("kenkui.huggingface_auth.login", side_effect=ConnectionError("timeout")):
+        with patch("huggingface_hub.login", side_effect=ConnectionError("timeout")):
             ok, msg = do_login("hf_abc")
         assert ok is False
         assert len(msg) > 0
@@ -242,21 +231,21 @@ class TestDoLogin:
 
 class TestVerifyAccess:
     def test_accessible_model_ok(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.return_value = MagicMock()
             ok, msg = verify_access("kyutai/pocket-tts")
         assert ok is True
         assert "granted" in msg.lower()
 
     def test_still_gated_returns_false_with_hint(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.side_effect = _gated_error()
             ok, msg = verify_access("kyutai/pocket-tts")
         assert ok is False
         assert "processing" in msg.lower() or "not yet" in msg.lower()
 
     def test_unexpected_error_returns_false(self):
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.side_effect = RuntimeError("boom")
             ok, msg = verify_access("kyutai/pocket-tts")
         assert ok is False
@@ -264,7 +253,7 @@ class TestVerifyAccess:
 
     def test_default_model_id(self):
         """verify_access() should default to pocket-tts."""
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             mock_cls.return_value.model_info.return_value = MagicMock()
             ok, _ = verify_access()
         assert ok is True
@@ -348,7 +337,7 @@ class TestEnsureHuggingfaceAccess:
 
     def test_ungated_model_always_ok(self):
         # Should never call HfApi at all
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
+        with patch("huggingface_hub.HfApi") as mock_cls:
             result = ensure_huggingface_access("ungated/model")
         mock_cls.assert_not_called()
         assert result is True
@@ -548,29 +537,29 @@ class TestCliAcceptTermsFlow:
 
 
 class TestCheckVoiceAccess:
-    def test_default_voice_no_auth_needed(self):
-        # DEFAULT_VOICES are not custom → return True without calling HfApi
-        with patch("kenkui.huggingface_auth.HfApi") as mock_cls:
-            result = check_voice_access("alba", [])
+    def test_builtin_voice_no_auth_needed(self):
+        # Builtin voices are not custom → return True without calling HfApi
+        with patch("huggingface_hub.HfApi") as mock_cls:
+            result = check_voice_access("alba")
         mock_cls.assert_not_called()
         assert result is True
 
-    def test_bundled_voice_triggers_auth_check(self):
+    def test_unknown_voice_triggers_auth_check(self):
         with patch(
             "kenkui.huggingface_auth.ensure_huggingface_access", return_value=True
         ) as mock_efa:
-            result = check_voice_access("MyVoice", ["MyVoice.wav"])
+            result = check_voice_access("MyVoice")
         mock_efa.assert_called_once_with("kyutai/pocket-tts")
         assert result is True
 
     def test_auth_failure_propagates(self):
         with patch("kenkui.huggingface_auth.ensure_huggingface_access", return_value=False):
-            result = check_voice_access("MyVoice", ["MyVoice.wav"])
+            result = check_voice_access("MyVoice")
         assert result is False
 
     def test_hf_url_triggers_auth_check(self):
         with patch(
             "kenkui.huggingface_auth.ensure_huggingface_access", return_value=True
         ) as mock_efa:
-            check_voice_access("hf://user/repo/voice.wav", [])
+            check_voice_access("hf://user/repo/voice.wav")
         mock_efa.assert_called_once()
