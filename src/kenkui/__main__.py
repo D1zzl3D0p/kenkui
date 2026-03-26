@@ -358,8 +358,7 @@ def main() -> None:
         elif voices_command == "fetch":
             cmd_voices_fetch(args)
         else:
-            # No subcommand: default to list
-            import argparse as _argparse
+            # No subcommand: default to list (no filters)
             args.gender = None
             args.accent = None
             args.dataset = None

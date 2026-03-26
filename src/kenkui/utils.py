@@ -8,18 +8,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
-# Built-in pocket-tts voice names.
-# Metadata for these voices (gender, accent) lives in voice_registry._BUILTIN_VOICE_DATA.
-BUILTIN_VOICE_NAMES: list[str] = [
-    "alba",
-    "marius",
-    "javert",
-    "jean",
-    "fantine",
-    "cosette",
-    "eponine",
-    "azelma",
-]
+# Re-export from voice_registry — the registry is the single source of truth.
+from .voice_registry import BUILTIN_VOICE_NAMES as BUILTIN_VOICE_NAMES  # noqa: F401
 
 
 def batch_text(

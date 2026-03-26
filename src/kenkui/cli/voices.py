@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from rich.console import Console
@@ -70,7 +71,7 @@ def cmd_voices_fetch(args) -> None:
             "[red]Custom voices extra is not installed.[/red]\n"
             "Run: [bold]pip install kenkui\\[custom-voices][/bold]"
         )
-        return
+        sys.exit(1)
 
     from ..huggingface_auth import AuthStatus, check_auth_status, do_login, open_token_page, HF_TOKEN_URL
     from ..voice_registry import get_registry
@@ -95,7 +96,7 @@ def cmd_voices_fetch(args) -> None:
                 console.print("  [red]Try again.[/red]")
         else:
             console.print("[red]Authentication failed — cannot download custom voices.[/red]")
-            return
+            sys.exit(1)
 
     # ── Determine HF repo and destination ─────────────────────────────────
     hf_repo = getattr(args, "repo", None) or os.environ.get("KENKUI_VOICES_REPO", "")
@@ -104,7 +105,7 @@ def cmd_voices_fetch(args) -> None:
             "[red]No HuggingFace repo specified.[/red]\n"
             "Set KENKUI_VOICES_REPO env var or pass --repo <user/repo-name>."
         )
-        return
+        sys.exit(1)
 
     xdg_data = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
     dest_dir = Path(xdg_data) / "kenkui" / "voices" / "uncompiled"
@@ -115,18 +116,15 @@ def cmd_voices_fetch(args) -> None:
         from huggingface_hub import HfApi, hf_hub_download
 
         api = HfApi()
-        repo_files = [
-            f.rfilename
-            for f in api.list_repo_files(hf_repo)  # type: ignore[attr-defined]
-            if f.rfilename.endswith(".wav")
-        ]
+        # list_repo_files returns list[str] (plain filenames) in huggingface_hub >= 0.14
+        repo_files = [f for f in api.list_repo_files(hf_repo) if f.endswith(".wav")]
     except Exception as exc:
         console.print(f"[red]Could not list files in repo {hf_repo!r}: {exc}[/red]")
-        return
+        sys.exit(1)
 
     if not repo_files:
         console.print(f"[yellow]No .wav files found in {hf_repo!r}.[/yellow]")
-        return
+        sys.exit(1)
 
     console.print(f"Downloading {len(repo_files)} voice file(s) to [bold]{dest_dir}[/bold] …")
 
