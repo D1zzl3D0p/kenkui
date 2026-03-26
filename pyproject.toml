@@ -22,7 +22,6 @@ dependencies = [
   "rich>=13.0.0",
   "tomli-w>=1.0.0",
   "scipy>=1.17.0",
-  "huggingface_hub>=1.3.0",
   "pydub>=0.25.0",
   "pocket-tts>=1.0.0",
   "mutagen>=1.45.0",
@@ -46,6 +45,9 @@ dependencies = [
 kenkui = "kenkui.__main__:main"
 
 [project.optional-dependencies]
+# Enables uncompiled (.wav) custom voices and HuggingFace voice downloads.
+# After installing, run: kenkui voices fetch --repo <user/repo>
+custom-voices = ["huggingface_hub>=1.3.0"]
 dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
 
 [project.urls]

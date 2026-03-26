@@ -21,36 +21,6 @@ BUILTIN_VOICE_NAMES: list[str] = [
     "azelma",
 ]
 
-# ---------------------------------------------------------------------------
-# Deprecated aliases — kept for backward compatibility, will be removed
-# ---------------------------------------------------------------------------
-DEFAULT_VOICES = BUILTIN_VOICE_NAMES
-
-VOICE_DESCRIPTIONS = {
-    "alba": "American Male",
-    "marius": "American Male",
-    "javert": "American Male",
-    "jean": "American Male",
-    "fantine": "British Female",
-    "cosette": "American Female",
-    "eponine": "British Female",
-    "azelma": "American Female",
-}
-
-VOICE_GENDER: dict[str, str] = {
-    "alba": "male",
-    "marius": "male",
-    "javert": "male",
-    "jean": "male",
-    "fantine": "female",
-    "cosette": "female",
-    "eponine": "female",
-    "azelma": "female",
-}
-
-MALE_VOICES = [v for v, g in VOICE_GENDER.items() if g == "male"]
-FEMALE_VOICES = [v for v, g in VOICE_GENDER.items() if g == "female"]
-
 
 def batch_text(
     paragraphs: list[str],
