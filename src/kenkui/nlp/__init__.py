@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -37,6 +38,23 @@ from dataclasses import replace
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Scene-break helpers (duplicated from workers.py to avoid circular import)
+# ---------------------------------------------------------------------------
+
+_SCENE_BREAK_RE = re.compile(
+    r"^\s*(\*\s*){2,}\s*$"
+    r"|^\s*[-\u2014]{2,}\s*$"
+    r"|^\s*#\s*$",
+)
+
+
+def _is_scene_break(text: str) -> bool:
+    """Return True if *text* is a scene-break marker or pure whitespace."""
+    stripped = text.strip()
+    return not stripped or bool(_SCENE_BREAK_RE.match(stripped))
 
 
 # ---------------------------------------------------------------------------
@@ -353,20 +371,22 @@ def _merge_consecutive_segments(segments: list) -> list:
 
     merged: list[Segment] = []
     for seg in segments:
-        if merged and merged[-1].speaker == seg.speaker:
+        # Scene-break segments are never merged with adjacent segments
+        if merged and merged[-1].speaker == seg.speaker and not seg.is_scene_break and not merged[-1].is_scene_break:
             prev = merged[-1]
             sep = "\n\n" if seg.speaker == "NARRATOR" else " "
             merged[-1] = Segment(
                 text=prev.text + sep + seg.text,
                 speaker=prev.speaker,
                 index=prev.index,
+                is_scene_break=prev.is_scene_break,
             )
         else:
-            merged.append(Segment(text=seg.text, speaker=seg.speaker, index=seg.index))
+            merged.append(Segment(text=seg.text, speaker=seg.speaker, index=seg.index, is_scene_break=seg.is_scene_break))
 
     # Rewrite indices to be contiguous
     for i, seg in enumerate(merged):
-        merged[i] = Segment(text=seg.text, speaker=seg.speaker, index=i)
+        merged[i] = Segment(text=seg.text, speaker=seg.speaker, index=i, is_scene_break=seg.is_scene_break)
 
     return merged
 
@@ -405,7 +425,11 @@ def _build_segments(paragraphs: list[str], quotes: list, attributions: dict) -> 
             narrator_buf.clear()
 
     for para_idx, para in enumerate(paragraphs):
-        if para_idx not in para_to_attr:
+        if _is_scene_break(para):
+            _flush_narrator()
+            segments.append(Segment(text="", speaker="SCENE_BREAK", index=seg_idx, is_scene_break=True))
+            seg_idx += 1
+        elif para_idx not in para_to_attr:
             narrator_buf.append(para)
         else:
             spans = _split_paragraph_by_quotes(para, para_to_attr[para_idx])
@@ -469,4 +493,6 @@ __all__ = [
     "_split_paragraph_by_quotes",
     "_merge_consecutive_segments",
     "_build_segments",
+    "_is_scene_break",
+    "_SCENE_BREAK_RE",
 ]

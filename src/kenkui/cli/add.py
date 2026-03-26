@@ -377,6 +377,85 @@ def _top_gender_matched_voice(characters, default_voice: str) -> str:
     return default_voice
 
 
+def _get_chapter_cooccurrence(chapters) -> "dict[int, set[str]]":
+    """Return {chapter_index: set of character speaker IDs that appear in it}."""
+    from collections import defaultdict
+    result: dict[int, set[str]] = {}
+    for ch in chapters:
+        if ch.segments:
+            speakers = {
+                s.speaker for s in ch.segments
+                if s.speaker not in ("NARRATOR", "SCENE_BREAK", "Unknown")
+                and not getattr(s, "is_scene_break", False)
+            }
+            if speakers:
+                result[ch.index] = speakers
+    return result
+
+
+def _resolve_chapter_voice_conflicts(
+    speaker_voices: "dict[str, str]",
+    characters,
+    chapters,
+    male_pool: "list[str]",
+    female_pool: "list[str]",
+    narrator_voice: str,
+) -> "dict[str, str]":
+    """Ensure no two characters sharing a chapter are assigned the same voice.
+
+    Iterates until no conflicts remain.  When a conflict is found, the
+    lower-quote-count character is re-assigned to the next available voice
+    from its gender pool that is not already used in that chapter.
+    If no unused voice exists, the conflict is logged as a warning.
+    """
+    import logging
+    from collections import defaultdict
+    logger = logging.getLogger(__name__)
+
+    char_quotes: dict[str, int] = {ch.character_id: ch.quote_count for ch in characters}
+    cooccurrence = _get_chapter_cooccurrence(chapters)
+
+    changed = True
+    while changed:
+        changed = False
+        for ch_idx, ch_speakers in cooccurrence.items():
+            voice_to_chars: dict[str, list[str]] = defaultdict(list)
+            for sp in ch_speakers:
+                v = speaker_voices.get(sp)
+                if v:
+                    voice_to_chars[v].append(sp)
+
+            for voice, chars in voice_to_chars.items():
+                if len(chars) <= 1:
+                    continue
+                # Keep the highest-quote character on this voice; re-assign the rest
+                chars_sorted = sorted(chars, key=lambda c: char_quotes.get(c, 0), reverse=True)
+                chapter_voices_used = {
+                    speaker_voices[sp] for sp in ch_speakers if sp in speaker_voices
+                }
+                for char_to_reassign in chars_sorted[1:]:
+                    # Determine gender pool
+                    char_obj = next((c for c in characters if c.character_id == char_to_reassign), None)
+                    gender = _gender_pool(char_obj.gender_pronoun if char_obj else "")
+                    pool = male_pool if gender == "male" else female_pool
+
+                    new_voice = next(
+                        (v for v in pool if v not in chapter_voices_used and v != narrator_voice),
+                        None,
+                    )
+                    if new_voice:
+                        speaker_voices[char_to_reassign] = new_voice
+                        chapter_voices_used.add(new_voice)
+                        changed = True
+                    else:
+                        logger.warning(
+                            "Voice conflict: %r and %r share voice %r in chapter %d "
+                            "and no spare voice is available.",
+                            chars_sorted[0], char_to_reassign, voice, ch_idx,
+                        )
+    return speaker_voices
+
+
 def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, str]:
     """Auto-assign voices to characters.
 
@@ -542,6 +621,17 @@ def _prompt_multivoice_character_voices(nlp_result, default_voice: str) -> dict[
     # Advanced mode: auto-assign then review.
     # Step C — auto-assign character voices.
     speaker_voices = _auto_assign_character_voices(characters, narrator_voice)
+
+    # Resolve any same-voice conflicts for characters that co-appear in a chapter.
+    from ..voice_registry import get_registry
+    _reg = get_registry()
+    male_pool = [v.name for v in _reg.filter(gender="Male") if v.name != narrator_voice] or \
+                [v.name for v in _reg.filter(gender="Male")]
+    female_pool = [v.name for v in _reg.filter(gender="Female") if v.name != narrator_voice] or \
+                  [v.name for v in _reg.filter(gender="Female")]
+    speaker_voices = _resolve_chapter_voice_conflicts(
+        speaker_voices, characters, nlp_result.chapters, male_pool, female_pool, narrator_voice
+    )
 
     # Step D — review / adjust via list.
     speaker_voices = _prompt_character_voice_review(speaker_voices, characters, narrator_voice)

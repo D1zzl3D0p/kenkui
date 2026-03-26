@@ -285,6 +285,7 @@ class AppConfig:
     m4b_bitrate: str = "96k"
     pause_line_ms: int = 800
     pause_chapter_ms: int = 2000
+    pause_scene_break_ms: int = 4000
     temp: float = 0.7  # Sampling temperature (lower = stable, higher = expressive)
     lsd_decode_steps: int = 1  # LSD decode steps (higher = better quality, slower)
     noise_clamp: float | None = None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
@@ -309,6 +310,7 @@ class AppConfig:
             "m4b_bitrate": self.m4b_bitrate,
             "pause_line_ms": self.pause_line_ms,
             "pause_chapter_ms": self.pause_chapter_ms,
+            "pause_scene_break_ms": self.pause_scene_break_ms,
             "temp": self.temp,
             "lsd_decode_steps": self.lsd_decode_steps,
             "noise_clamp": self.noise_clamp,
@@ -332,6 +334,7 @@ class AppConfig:
             m4b_bitrate=_normalize_bitrate(data.get("m4b_bitrate"), default="96k"),
             pause_line_ms=data.get("pause_line_ms", 800),
             pause_chapter_ms=data.get("pause_chapter_ms", 2000),
+            pause_scene_break_ms=data.get("pause_scene_break_ms", 4000),
             temp=data.get("temp", 0.7),
             lsd_decode_steps=data.get("lsd_decode_steps", 1),
             noise_clamp=data.get("noise_clamp"),
@@ -399,12 +402,14 @@ class Segment:
     text: str
     speaker: str = "NARRATOR"  # voice name, character id, or "NARRATOR"
     index: int = 0  # original position in the chapter
+    is_scene_break: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "text": self.text,
             "speaker": self.speaker,
             "index": self.index,
+            "is_scene_break": self.is_scene_break,
         }
 
     @classmethod
@@ -413,6 +418,7 @@ class Segment:
             text=data["text"],
             speaker=data.get("speaker", "NARRATOR"),
             index=data.get("index", 0),
+            is_scene_break=data.get("is_scene_break", False),
         )
 
 
