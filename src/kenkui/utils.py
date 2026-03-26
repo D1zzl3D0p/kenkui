@@ -8,8 +8,9 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
-# Constants
-DEFAULT_VOICES = [
+# Built-in pocket-tts voice names.
+# Metadata for these voices (gender, accent) lives in voice_registry._BUILTIN_VOICE_DATA.
+BUILTIN_VOICE_NAMES: list[str] = [
     "alba",
     "marius",
     "javert",
@@ -19,6 +20,11 @@ DEFAULT_VOICES = [
     "eponine",
     "azelma",
 ]
+
+# ---------------------------------------------------------------------------
+# Deprecated aliases — kept for backward compatibility, will be removed
+# ---------------------------------------------------------------------------
+DEFAULT_VOICES = BUILTIN_VOICE_NAMES
 
 VOICE_DESCRIPTIONS = {
     "alba": "American Male",
