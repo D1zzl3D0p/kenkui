@@ -45,7 +45,7 @@ import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import replace as _replace
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -310,11 +310,15 @@ def run_attribution(
 
     Returns:
         Full ``NLPResult`` with annotated chapters and quote counts.
+
+    Note:
+        The cached ``NLPResult`` written by this function has ``mention_count=0``
+        on all characters — mention counts are a Stage 1-2 concern populated by
+        ``run_fast_scan()``. When called via ``run_analysis()``, the cache is
+        re-written with ``mention_count`` populated. Direct callers should be aware
+        of this if they read the cache independently afterward.
     """
     import spacy
-    import time
-    from collections import defaultdict
-    from dataclasses import replace as _replace
 
     from ..models import Chapter, CharacterInfo, NLPResult, Segment
     from .attribution import attribute_all_chunks
@@ -502,13 +506,16 @@ def run_analysis(
 
     # Patch mention_count from fast scan into NLP result characters
     mention_by_id = {c.character_id: c.mention_count for c in fast_result.characters}
-    from dataclasses import replace as _replace
     nlp_result = _replace(
         nlp_result,
-        characters=[
-            _replace(c, mention_count=mention_by_id.get(c.character_id, 0))
-            for c in nlp_result.characters
-        ],
+        characters=sorted(
+            [
+                _replace(c, mention_count=mention_by_id.get(c.character_id, 0))
+                for c in nlp_result.characters
+            ],
+            key=lambda c: c.prominence,
+            reverse=True,
+        ),
     )
 
     cache_result(nlp_result, book_path)
