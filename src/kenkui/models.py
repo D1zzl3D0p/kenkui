@@ -71,13 +71,20 @@ class CharacterInfo:
     character_id: str  # Canonical name, e.g. "Elizabeth Bennet"
     display_name: str  # Human-readable label shown in the UI
     quote_count: int = 0
+    mention_count: int = 0  # Name occurrences in full text; populated by fast scan
     gender_pronoun: str = ""  # "he", "she", "they", etc. (optional)
+
+    @property
+    def prominence(self) -> int:
+        """Best available count for sorting — prefer mention_count, fall back to quote_count."""
+        return self.mention_count or self.quote_count
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "character_id": self.character_id,
             "display_name": self.display_name,
             "quote_count": self.quote_count,
+            "mention_count": self.mention_count,
             "gender_pronoun": self.gender_pronoun,
         }
 
@@ -87,6 +94,7 @@ class CharacterInfo:
             character_id=data["character_id"],
             display_name=data.get("display_name", data["character_id"]),
             quote_count=data.get("quote_count", 0),
+            mention_count=data.get("mention_count", 0),
             gender_pronoun=data.get("gender_pronoun", ""),
         )
 

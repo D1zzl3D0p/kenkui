@@ -201,6 +201,34 @@ class TestCharacterInfo:
         assert c.quote_count == 0
         assert c.gender_pronoun == ""
 
+    def test_mention_count_default_zero(self):
+        c = CharacterInfo(character_id="Alice", display_name="Alice")
+        assert c.mention_count == 0
+
+    def test_mention_count_round_trip(self):
+        c = CharacterInfo(character_id="Alice", display_name="Alice", mention_count=150)
+        restored = CharacterInfo.from_dict(c.to_dict())
+        assert restored.mention_count == 150
+
+    def test_mention_count_backward_compat(self):
+        """Old cache files without mention_count should load with 0."""
+        c = CharacterInfo.from_dict({"character_id": "Alice"})
+        assert c.mention_count == 0
+
+    def test_prominence_prefers_mention_count(self):
+        c = CharacterInfo(character_id="Alice", display_name="Alice",
+                          mention_count=100, quote_count=5)
+        assert c.prominence == 100
+
+    def test_prominence_falls_back_to_quote_count(self):
+        c = CharacterInfo(character_id="Alice", display_name="Alice",
+                          mention_count=0, quote_count=42)
+        assert c.prominence == 42
+
+    def test_prominence_zero_when_both_zero(self):
+        c = CharacterInfo(character_id="Alice", display_name="Alice")
+        assert c.prominence == 0
+
 
 class TestNLPResult:
     def _make_result(self):
