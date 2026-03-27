@@ -526,7 +526,7 @@ class FastScanResult:
         from .nlp.models import CharacterRoster
         return cls(
             book_hash=data.get("book_hash", ""),
-            roster=CharacterRoster.model_validate(data["roster"]),
+            roster=CharacterRoster.model_validate(data.get("roster", {"characters": []})),
             characters=[CharacterInfo.from_dict(c) for c in data.get("characters", [])],
         )
 
