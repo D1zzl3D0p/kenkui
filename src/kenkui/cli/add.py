@@ -415,17 +415,17 @@ def _top_gender_matched_voice(characters, default_voice: str) -> str:
     voice; otherwise default to a male voice. Falls back to default_voice
     if no character's gender is known.
     """
-    by_quotes = sorted(characters, key=lambda c: c.quote_count, reverse=True)
+    by_quotes = sorted(characters, key=lambda c: c.prominence, reverse=True)
 
     top_male_quotes = 0
     top_female_quotes = 0
     for ch in by_quotes:
         g = _gender_pool(ch.gender_pronoun)
         if g == "male":
-            top_male_quotes = ch.quote_count
+            top_male_quotes = ch.prominence
             break
         if g == "female":
-            top_female_quotes = ch.quote_count
+            top_female_quotes = ch.prominence
             break
 
     from ..voice_registry import get_registry
@@ -475,7 +475,7 @@ def _resolve_chapter_voice_conflicts(
     from collections import defaultdict
     logger = logging.getLogger(__name__)
 
-    char_quotes: dict[str, int] = {ch.character_id: ch.quote_count for ch in characters}
+    char_quotes: dict[str, int] = {ch.character_id: ch.prominence for ch in characters}
     cooccurrence = _get_chapter_cooccurrence(chapters)
 
     changed = True
@@ -542,26 +542,26 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     male_quotes, female_quotes = 0, 0
     speaker_voices: dict[str, str] = {}
 
-    for ch in sorted(characters, key=lambda c: c.quote_count, reverse=True):
+    for ch in sorted(characters, key=lambda c: c.prominence, reverse=True):
         gender = _gender_pool(ch.gender_pronoun)
 
         if gender == "male":
             voice = male_pool[male_idx % len(male_pool)]
             male_idx += 1
-            male_quotes += ch.quote_count
+            male_quotes += ch.prominence
         elif gender == "female":
             voice = female_pool[female_idx % len(female_pool)]
             female_idx += 1
-            female_quotes += ch.quote_count
+            female_quotes += ch.prominence
         else:
             if male_quotes <= female_quotes:
                 voice = male_pool[male_idx % len(male_pool)]
                 male_idx += 1
-                male_quotes += ch.quote_count
+                male_quotes += ch.prominence
             else:
                 voice = female_pool[female_idx % len(female_pool)]
                 female_idx += 1
-                female_quotes += ch.quote_count
+                female_quotes += ch.prominence
 
         speaker_voices[ch.character_id] = voice
 
@@ -591,12 +591,12 @@ def _prompt_character_voice_review(
 
     # Build list of review choices — one per character + Done.
     review_choices = []
-    for ch in sorted(characters, key=lambda c: c.quote_count, reverse=True):
+    for ch in sorted(characters, key=lambda c: c.prominence, reverse=True):
         current = speaker_voices.get(ch.character_id, narrator_voice)
         gender = ch.gender_pronoun or "?"
         review_choices.append(
             {
-                "name": f"{ch.display_name} ({ch.quote_count} quotes, {gender})  →  {current}",
+                "name": f"{ch.display_name} ({ch.prominence} mentions, {gender})  →  {current}",
                 "value": ch.character_id,
             }
         )
@@ -630,7 +630,7 @@ def _prompt_character_voice_review(
                 ch = next(c for c in characters if c.character_id == chosen)
                 gender = ch.gender_pronoun or "?"
                 rc["name"] = (
-                    f"{ch.display_name} ({ch.quote_count} quotes, {gender})  →  {new_voice}"
+                    f"{ch.display_name} ({ch.prominence} mentions, {gender})  →  {new_voice}"
                 )
                 break
 
