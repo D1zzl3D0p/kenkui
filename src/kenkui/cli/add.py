@@ -529,6 +529,8 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     Phase 2: Assign they/them chars to the pool with fewer total quotes,
       then round-robin within that pool.
     """
+    import random
+
     from ..voice_registry import get_registry
     registry = get_registry()
     male_voices = [v.name for v in registry.filter(gender="Male")]
@@ -537,6 +539,10 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     # Exclude narrator voice from character pools so it stays unique to the narrator.
     male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
     female_pool = [v for v in female_voices if v != narrator_voice] or female_voices
+
+    # Shuffle so each book gets a different voice distribution, not alphabetical order.
+    random.shuffle(male_pool)
+    random.shuffle(female_pool)
 
     male_idx, female_idx = 0, 0
     male_quotes, female_quotes = 0, 0
@@ -890,8 +896,9 @@ def _prompt_quality_overrides(app_config) -> dict:
         min_allowed=0,
         max_allowed=50,
     ).execute()
-    if int(fae) != app_config.frames_after_eos:
-        overrides["job_frames_after_eos"] = int(fae)
+    fae_val = int(fae) if fae not in (None, "") else app_config.frames_after_eos
+    if fae_val != app_config.frames_after_eos:
+        overrides["job_frames_after_eos"] = fae_val
 
     bitrate_choices = [
         {"name": "64k  (small file, lower quality)", "value": "64k"},
