@@ -63,3 +63,51 @@ class TestRosterCache:
             with patch("kenkui.config.CONFIG_DIR", tmp_path):
                 result = get_cached_roster(ebook)
                 assert result is None
+
+
+class TestMentionCounting:
+    """Test the internal _count_mentions helper."""
+
+    def test_counts_canonical_occurrences(self):
+        from kenkui.nlp import _count_mentions
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Alice", aliases=["Alice", "Al"]),
+            AliasGroup(canonical="Bob", aliases=["Bob"]),
+        ])
+        text = "Alice went to the store. Al was there too. Bob walked in. Alice left."
+        counts = _count_mentions(roster, text)
+        assert counts["Alice"] == 3  # "Alice" x2 + "Al" x1
+        assert counts["Bob"] == 1
+
+    def test_case_insensitive(self):
+        from kenkui.nlp import _count_mentions
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Alice", aliases=["alice"]),
+        ])
+        counts = _count_mentions(roster, "ALICE said hello to alice.")
+        assert counts["Alice"] == 2
+
+    def test_word_boundary(self):
+        from kenkui.nlp import _count_mentions
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Al", aliases=["Al"]),
+        ])
+        # "Al" should not match inside "Alice" or "pal"
+        counts = _count_mentions(roster, "Alice and Al and pal and Al")
+        assert counts["Al"] == 2
+
+    def test_empty_text(self):
+        from kenkui.nlp import _count_mentions
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Alice", aliases=["Alice"]),
+        ])
+        counts = _count_mentions(roster, "")
+        assert counts["Alice"] == 0

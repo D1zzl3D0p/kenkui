@@ -166,6 +166,126 @@ def cache_roster(result: "FastScanResult", book_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Mention counting helper
+# ---------------------------------------------------------------------------
+
+
+def _count_mentions(roster: "CharacterRoster", full_text: str) -> dict[str, int]:
+    """Count word-boundary occurrences of each character's aliases in *full_text*.
+
+    Returns a mapping of canonical name → total mention count across all aliases.
+    """
+    import re
+
+    counts: dict[str, int] = {}
+    for group in roster.characters:
+        total = 0
+        for alias in group.aliases:
+            pattern = re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE)
+            total += len(pattern.findall(full_text))
+        counts[group.canonical] = total
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# Fast scan entry point (Stage 1-2 only)
+# ---------------------------------------------------------------------------
+
+
+def run_fast_scan(
+    chapters: list,
+    book_path: Path,
+    nlp_model: str,
+    use_cache: bool = True,
+    progress_callback: Callable[[str], None] | None = None,
+) -> "FastScanResult":
+    """Run Stage 1-2 only: quote extraction + entity clustering + mention counting.
+
+    Significantly faster than ``run_analysis()`` — no LLM attribution over
+    individual chapters. Results are cached to ``nlp_cache/{hash}-roster.json``.
+
+    Args:
+        chapters:          List of ``Chapter`` objects (paragraphs populated).
+        book_path:         Path to the source ebook (used for cache key).
+        nlp_model:         Ollama model name (e.g. ``"llama3.2"``).
+        use_cache:         Return cached result if available.
+        progress_callback: Optional callable receiving status strings.
+
+    Returns:
+        ``FastScanResult`` with characters sorted by mention_count descending.
+    """
+    import spacy
+
+    from ..models import CharacterInfo, FastScanResult
+    from .entities import build_roster_with_llm, infer_gender_pronouns
+    from .llm import LLMClient
+    from .quotes import extract_quotes
+
+    if use_cache:
+        cached = get_cached_roster(book_path)
+        if cached is not None:
+            return cached
+
+    _cb: Callable[[str], None] = progress_callback or (lambda _: None)
+
+    # Verify Ollama is reachable (needed for Stage 2 LLM cleanup passes)
+    import ollama as _ollama
+    try:
+        _ollama.list()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot reach Ollama at localhost:11434 — is it running? ({exc})"
+        ) from exc
+
+    llm = LLMClient(nlp_model)
+
+    # Load spaCy
+    _cb("Loading spaCy language model…")
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except OSError:
+        raise RuntimeError(
+            "spaCy model 'en_core_web_sm' not found. "
+            "Install it with: uv pip install https://github.com/explosion/spacy-models"
+            "/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+        )
+
+    # Stage 2: Build character roster
+    _cb("Building character roster…")
+    full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
+    roster = build_roster_with_llm(full_text, nlp, llm)
+
+    char_names = ", ".join(g.canonical for g in roster.characters[:8])
+    overflow = len(roster.characters) - 8
+    suffix = f" (+{overflow} more)" if overflow > 0 else ""
+    _cb(f"Character roster: {len(roster.characters)} characters — {char_names}{suffix}")
+
+    # Count name mentions
+    _cb("Counting character mentions…")
+    mention_counts = _count_mentions(roster, full_text)
+
+    def _resolve_gender(group) -> str:
+        if group.gender and group.gender.lower() not in ("", "unknown"):
+            return group.gender
+        return infer_gender_pronouns(group.canonical, group.aliases, full_text)
+
+    characters: list[CharacterInfo] = [
+        CharacterInfo(
+            character_id=group.canonical,
+            display_name=group.canonical,
+            mention_count=mention_counts.get(group.canonical, 0),
+            gender_pronoun=_resolve_gender(group),
+        )
+        for group in roster.characters
+    ]
+    characters.sort(key=lambda c: c.mention_count, reverse=True)
+
+    result = FastScanResult(roster=roster, characters=characters, book_hash=book_hash(book_path))
+    cache_roster(result, book_path)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -543,12 +663,14 @@ def _normalize_speaker(
 
 __all__ = [
     "run_analysis",
+    "run_fast_scan",
     "get_cached_result",
     "cache_result",
     "get_cached_roster",
     "cache_roster",
     "CACHE_DIR",
     "book_hash",
+    "_count_mentions",
     "_split_paragraph_by_quotes",
     "_merge_consecutive_segments",
     "_build_segments",
