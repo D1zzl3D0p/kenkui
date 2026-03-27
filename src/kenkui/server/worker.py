@@ -269,6 +269,14 @@ class WorkerServer:
         job = item.job
 
         try:
+            # Pre-TTS phase: for multi-voice jobs, ensure speaker attribution is cached.
+            if job.narration_mode.value == "multi" and not (
+                job.annotated_chapters_path and job.annotated_chapters_path.exists()
+            ):
+                self._run_attribution_phase(item)
+                # Reload job reference (attribution phase may have updated annotated_chapters_path)
+                job = item.job
+
             cfg = self._build_config(job)
             builder = AudioBuilder(cfg, progress_callback=self._progress_callback)
 
@@ -281,11 +289,91 @@ class WorkerServer:
                 self.fail_job(item.id, "Conversion failed")
 
         except AnnotatedChaptersCacheMissError as e:
-            # Surface the CACHE_MISS sentinel so QueueScreen can present the
-            # recovery dialog (re-analyse or fall back to single voice).
             self.fail_job(item.id, f"CACHE_MISS: {e}")
         except Exception as e:
             self.fail_job(item.id, str(e))
+
+    def _run_attribution_phase(self, item: QueueItem) -> None:
+        """Run Stage 3-4 speaker attribution and update item.job.annotated_chapters_path.
+
+        Loads the roster from ``roster_cache_path`` if available; falls back to a
+        fresh Stage 1-2 scan if not (e.g., job submitted via API without wizard).
+        """
+        from ..nlp import (
+            CACHE_DIR,
+            book_hash,
+            cache_result,
+            get_cached_result,
+            run_attribution,
+            run_fast_scan,
+        )
+        from ..readers import get_reader
+
+        job = item.job
+        book_path = job.ebook_path
+
+        # Return early if full NLP cache already exists
+        cached = get_cached_result(book_path)
+        if cached is not None:
+            h = book_hash(book_path)
+            job.annotated_chapters_path = CACHE_DIR / f"{h}.json"
+            return
+
+        def _cb(msg: str) -> None:
+            if self._progress_callback:
+                self._progress_callback(0.0, f"Analyzing speakers: {msg}", 0)
+
+        # Load chapters
+        _cb("reading ebook…")
+        try:
+            reader = get_reader(book_path, verbose=False)
+            all_chapters = reader.get_chapters()
+        except Exception as exc:
+            raise RuntimeError(f"Could not read ebook for attribution: {exc}") from exc
+
+        # Filter to selected chapters
+        included = set(job.chapter_selection.included)
+        if included:
+            chapters = [ch for ch in all_chapters if ch.index in included] or all_chapters
+        else:
+            chapters = all_chapters
+
+        # Get roster — load from roster_cache_path, or re-run fast scan as fallback
+        roster = None
+        if job.roster_cache_path and job.roster_cache_path.exists():
+            try:
+                import json
+                from ..models import FastScanResult
+                data = json.loads(job.roster_cache_path.read_text(encoding="utf-8"))
+                roster = FastScanResult.from_dict(data).roster
+            except Exception as exc:
+                logger.warning("Could not load roster cache %s: %s — re-scanning", job.roster_cache_path, exc)
+
+        if roster is None:
+            # Fallback: run fast scan to rebuild roster
+            _cb("rebuilding character roster…")
+            fast_result = run_fast_scan(
+                chapters=chapters,
+                book_path=book_path,
+                nlp_model=self._app_config.nlp_model,
+                use_cache=False,
+                progress_callback=_cb,
+            )
+            roster = fast_result.roster
+
+        # Run Stage 3-4 attribution
+        nlp_result = run_attribution(
+            roster=roster,
+            chapters=chapters,
+            book_path=book_path,
+            nlp_model=self._app_config.nlp_model,
+            use_cache=False,
+            progress_callback=_cb,
+        )
+
+        cache_file = cache_result(nlp_result, book_path)
+        job.annotated_chapters_path = cache_file
+        self._save()
 
     def _build_config(self, job: JobConfig):
         """Build ProcessingConfig from JobConfig and AppConfig."""
