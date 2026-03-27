@@ -175,8 +175,6 @@ def _count_mentions(roster: "CharacterRoster", full_text: str) -> dict[str, int]
 
     Returns a mapping of canonical name → total mention count across all aliases.
     """
-    import re
-
     counts: dict[str, int] = {}
     for group in roster.characters:
         total = 0
@@ -219,7 +217,6 @@ def run_fast_scan(
     from ..models import CharacterInfo, FastScanResult
     from .entities import build_roster_with_llm, infer_gender_pronouns
     from .llm import LLMClient
-    from .quotes import extract_quotes
 
     if use_cache:
         cached = get_cached_roster(book_path)
