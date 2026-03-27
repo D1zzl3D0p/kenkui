@@ -151,6 +151,7 @@ class JobConfig:
     narration_mode: NarrationMode = NarrationMode.SINGLE
     speaker_voices: dict[str, str] = field(default_factory=dict)  # char_id → voice
     annotated_chapters_path: Path | None = None  # NLP cache JSON path
+    roster_cache_path: Path | None = None  # Path to Stage 2 roster cache (set by wizard fast scan)
     # Per-chapter voice override (chapter-voice mode): str(chapter_index) → voice_name
     chapter_voices: dict[str, str] = field(default_factory=dict)
     # Per-job quality overrides (None = inherit from AppConfig)
@@ -179,6 +180,9 @@ class JobConfig:
             "annotated_chapters_path": str(self.annotated_chapters_path)
             if self.annotated_chapters_path
             else None,
+            "roster_cache_path": str(self.roster_cache_path)
+            if self.roster_cache_path
+            else None,
             "chapter_voices": self.chapter_voices,
         }
         # Only include per-job overrides when explicitly set (non-None)
@@ -204,6 +208,9 @@ class JobConfig:
             speaker_voices=data.get("speaker_voices") or {},
             annotated_chapters_path=Path(data["annotated_chapters_path"])
             if data.get("annotated_chapters_path")
+            else None,
+            roster_cache_path=Path(data["roster_cache_path"])
+            if data.get("roster_cache_path")
             else None,
             chapter_voices=data.get("chapter_voices") or {},
             job_temp=data.get("job_temp"),

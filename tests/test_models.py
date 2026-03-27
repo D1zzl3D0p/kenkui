@@ -303,3 +303,35 @@ class TestFastScanResult:
         )
         restored = FastScanResult.from_dict(empty.to_dict())
         assert restored.characters == []
+
+
+class TestJobConfigRosterCachePath:
+    def _make_job(self, roster_path=None):
+        from kenkui.models import JobConfig
+        return JobConfig(
+            ebook_path=Path("/tmp/book.epub"),
+            roster_cache_path=roster_path,
+        )
+
+    def test_default_is_none(self):
+        job = self._make_job()
+        assert job.roster_cache_path is None
+
+    def test_round_trip_with_path(self):
+        from kenkui.models import JobConfig
+        job = self._make_job(Path("/tmp/cache/roster.json"))
+        restored = JobConfig.from_dict(job.to_dict())
+        assert restored.roster_cache_path == Path("/tmp/cache/roster.json")
+
+    def test_round_trip_with_none(self):
+        from kenkui.models import JobConfig
+        job = self._make_job(None)
+        restored = JobConfig.from_dict(job.to_dict())
+        assert restored.roster_cache_path is None
+
+    def test_backward_compat_missing_field(self):
+        """Old queue.toml without roster_cache_path should load cleanly."""
+        from kenkui.models import JobConfig
+        old_data = {"ebook_path": "/tmp/book.epub"}
+        job = JobConfig.from_dict(old_data)
+        assert job.roster_cache_path is None
