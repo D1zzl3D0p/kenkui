@@ -585,7 +585,7 @@ def _prompt_character_voice_review(
     tbl = Table(title="Characters", show_header=True)
     tbl.add_column("Character ID", style="dim")
     tbl.add_column("Name")
-    tbl.add_column("Quotes", justify="right")
+    tbl.add_column("Mentions", justify="right")
     tbl.add_column("Gender")
     tbl.add_column("Voice", style="bold cyan")
 
