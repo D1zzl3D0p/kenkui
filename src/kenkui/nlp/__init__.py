@@ -275,15 +275,20 @@ def run_analysis(
 
     # ---- Build CharacterInfo list ------------------------------------------
     from .entities import infer_gender_pronouns
+    from .models import AliasGroup as _AliasGroup
+
+    def _resolve_gender(group: "_AliasGroup", full_text: str) -> str:
+        """Prefer BookNLP's neural gender; fall back to pronoun counting."""
+        if group.gender and group.gender.lower() not in ("", "unknown"):
+            return group.gender
+        return infer_gender_pronouns(group.canonical, group.aliases, full_text)
 
     characters: list[CharacterInfo] = [
         CharacterInfo(
             character_id=group.canonical,
             display_name=group.canonical,
             quote_count=attribution_counts.get(group.canonical, 0),
-            gender_pronoun=infer_gender_pronouns(
-                group.canonical, group.aliases, full_text
-            ),
+            gender_pronoun=_resolve_gender(group, full_text),
         )
         for group in roster.characters
     ]

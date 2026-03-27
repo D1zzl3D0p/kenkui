@@ -34,6 +34,7 @@ class AliasGroup(BaseModel):
 
     canonical: str = Field(description="Most complete / formal name form")
     aliases: list[str] = Field(description="All name variants that refer to this character")
+    gender: str = ""
 
 
 class CharacterRoster(BaseModel):
@@ -67,3 +68,25 @@ class AttributionResult(BaseModel):
     """The LLM's attributions for all quotes in one chunk."""
 
     attributions: list[AttributionItem]
+
+
+class CanonicalMergeEntry(BaseModel):
+    canonical: str
+    duplicates: list[str]
+
+class CanonicalMergeResult(BaseModel):
+    merges: list[CanonicalMergeEntry]
+
+class EpithetMapping(BaseModel):
+    epithet: str
+    canonical_name: str
+
+class EpithetResolutionResult(BaseModel):
+    mappings: list[EpithetMapping]
+
+class NameNormalizationEntry(BaseModel):
+    original: str
+    simplified: str
+
+class NameNormalizationResult(BaseModel):
+    names: list[NameNormalizationEntry]

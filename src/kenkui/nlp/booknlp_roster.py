@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,16 @@ if TYPE_CHECKING:
     from .models import CharacterRoster
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BookNLPRosterData:
+    """Output of ``build_roster_from_booknlp`` — roster plus raw common-noun phrases."""
+    roster: "CharacterRoster"
+    common_phrases: list[str]
+
+
+_MIN_COMMON_FREQ = 5
 
 
 def _apply_booknlp_transformers_compat() -> bool:
@@ -77,7 +88,7 @@ _BOOK_ID = "kenkui"
 def build_roster_from_booknlp(
     text: str,
     model_size: str = "small",
-) -> "CharacterRoster | None":
+) -> "BookNLPRosterData | None":
     """Run BookNLP on *text* and return a ``CharacterRoster``.
 
     Uses only the ``entity,coref`` pipeline components — quote attribution
@@ -137,42 +148,76 @@ def build_roster_from_booknlp(
         return None
 
     # ---- Parse .book JSON → AliasGroup list --------------------------------
-    # Collect every alias form found across all characters into a flat list,
-    # then re-run _cluster_by_heuristic as a lightweight dedup pass.
-    # (BookNLP's coref already grouped name forms correctly; the heuristic
-    # step simply ensures no near-duplicate canonical names slip through.)
-
+    name_to_gender: dict[str, str] = {}
     all_aliases: list[str] = []
     char_count = 0
 
     for char_data in data.get("characters", []):
         mentions: dict = char_data.get("mentions", {})
-        proper_names: list[dict] = mentions.get("proper", [])
+        proper_entries: list[dict] = mentions.get("proper", [])
 
-        if not proper_names:
-            # Character has no proper-name mentions (pronoun-only) — skip.
+        if not proper_entries:
             continue
 
-        # All name forms for this character.
-        aliases = [entry["n"] for entry in proper_names if entry.get("n")]
+        aliases = [entry["n"] for entry in proper_entries if entry.get("n")]
         if not aliases:
             continue
 
+        # Read BookNLP's neural gender prediction.
+        raw_gender = char_data.get("g", {}).get("argmax", "") or ""
+        if raw_gender in ("he/him", "she/her", "they/them"):
+            gender = raw_gender
+        elif raw_gender in ("he", "him", "his"):
+            gender = "he/him"
+        elif raw_gender in ("she", "her", "hers"):
+            gender = "she/her"
+        elif raw_gender in ("they", "them", "their"):
+            gender = "they/them"
+        else:
+            gender = ""
+
+        for name in aliases:
+            name_to_gender[name] = gender
         all_aliases.extend(aliases)
         char_count += 1
 
+    # Collect high-frequency common-noun mentions (epithet candidates).
+    common_phrases: list[str] = []
+    seen_phrases: set[str] = set()
+    for char_data in data.get("characters", []):
+        for entry in char_data.get("mentions", {}).get("common", []):
+            phrase = (entry.get("n") or "").strip()
+            count = entry.get("c", 0)
+            if phrase and count >= _MIN_COMMON_FREQ and phrase.lower() not in seen_phrases:
+                common_phrases.append(phrase)
+                seen_phrases.add(phrase.lower())
+
     logger.info(
-        "build_roster_from_booknlp: %d BookNLP character entries, %d alias forms",
-        char_count, len(all_aliases),
+        "build_roster_from_booknlp: %d BookNLP character entries, %d alias forms, "
+        "%d common phrases",
+        char_count, len(all_aliases), len(common_phrases),
     )
 
     if not all_aliases:
         logger.warning("build_roster_from_booknlp: no proper-name characters found")
-        return CharacterRoster(characters=[])
+        return BookNLPRosterData(roster=CharacterRoster(characters=[]), common_phrases=[])
 
     groups = _cluster_by_heuristic(all_aliases)
+
+    # Annotate each group with BookNLP's gender.
+    for group in groups:
+        group.gender = name_to_gender.get(group.canonical, "")
+        if not group.gender:
+            for alias in group.aliases:
+                if name_to_gender.get(alias):
+                    group.gender = name_to_gender[alias]
+                    break
+
     logger.info(
         "build_roster_from_booknlp: %d canonical characters after clustering",
         len(groups),
     )
-    return CharacterRoster(characters=groups)
+    return BookNLPRosterData(
+        roster=CharacterRoster(characters=groups),
+        common_phrases=common_phrases,
+    )
