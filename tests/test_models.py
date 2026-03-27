@@ -265,3 +265,41 @@ class TestNLPResult:
         restored = NLPResult.from_dict(empty.to_dict())
         assert restored.characters == []
         assert restored.chapters == []
+
+
+class TestFastScanResult:
+    def _make_result(self):
+        from kenkui.models import FastScanResult
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Alice", aliases=["Alice", "Al"], gender="she/her"),
+        ])
+        chars = [CharacterInfo(
+            character_id="Alice", display_name="Alice", mention_count=99
+        )]
+        return FastScanResult(roster=roster, characters=chars, book_hash="abc")
+
+    def test_round_trip(self):
+        from kenkui.models import FastScanResult
+        result = self._make_result()
+        restored = FastScanResult.from_dict(result.to_dict())
+        assert restored.book_hash == "abc"
+        assert restored.characters[0].mention_count == 99
+        assert restored.roster.characters[0].canonical == "Alice"
+
+    def test_roster_aliases_preserved(self):
+        from kenkui.models import FastScanResult
+        result = self._make_result()
+        restored = FastScanResult.from_dict(result.to_dict())
+        assert "Al" in restored.roster.characters[0].aliases
+
+    def test_empty_result(self):
+        from kenkui.models import FastScanResult
+        from kenkui.nlp.models import CharacterRoster
+        empty = FastScanResult(
+            roster=CharacterRoster(characters=[]),
+            characters=[],
+            book_hash="",
+        )
+        restored = FastScanResult.from_dict(empty.to_dict())
+        assert restored.characters == []

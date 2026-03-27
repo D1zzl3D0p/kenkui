@@ -502,6 +502,36 @@ class NLPResult:
 
 
 @dataclass
+class FastScanResult:
+    """Result of the Stage 1-2 fast scan (no LLM attribution).
+
+    Contains the character roster with name-mention counts. Used by the wizard
+    for voice assignment and passed to the worker via ``roster_cache_path`` so
+    Stage 3-4 attribution can use the same canonical names.
+    """
+
+    roster: "CharacterRoster"  # Pydantic model from nlp.models
+    characters: list[CharacterInfo]  # Sorted by mention_count descending
+    book_hash: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "book_hash": self.book_hash,
+            "roster": self.roster.model_dump(),
+            "characters": [c.to_dict() for c in self.characters],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FastScanResult":
+        from .nlp.models import CharacterRoster
+        return cls(
+            book_hash=data.get("book_hash", ""),
+            roster=CharacterRoster.model_validate(data["roster"]),
+            characters=[CharacterInfo.from_dict(c) for c in data.get("characters", [])],
+        )
+
+
+@dataclass
 class AudioResult:
     chapter_index: int
     title: str
