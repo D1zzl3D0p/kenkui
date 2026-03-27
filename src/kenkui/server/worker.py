@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import tomllib
@@ -342,7 +343,6 @@ class WorkerServer:
         roster = None
         if job.roster_cache_path and job.roster_cache_path.exists():
             try:
-                import json
                 from ..models import FastScanResult
                 data = json.loads(job.roster_cache_path.read_text(encoding="utf-8"))
                 roster = FastScanResult.from_dict(data).roster
