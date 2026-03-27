@@ -283,6 +283,178 @@ def run_fast_scan(
 
 
 # ---------------------------------------------------------------------------
+# Stage 3-4 entry point
+# ---------------------------------------------------------------------------
+
+
+def run_attribution(
+    roster: "CharacterRoster",
+    chapters: list,
+    book_path: Path,
+    nlp_model: str,
+    use_cache: bool = True,
+    progress_callback: Callable[[str], None] | None = None,
+) -> "NLPResult":
+    """Run Stage 3-4: LLM speaker attribution using a pre-built roster.
+
+    Cache-aware: returns a cached ``NLPResult`` from ``nlp_cache/{hash}.json``
+    if one exists and ``use_cache`` is True.
+
+    Args:
+        roster:            ``CharacterRoster`` from a prior ``run_fast_scan()`` call.
+        chapters:          List of ``Chapter`` objects (paragraphs populated).
+        book_path:         Path to the source ebook (used for cache key).
+        nlp_model:         Ollama model name (e.g. ``"llama3.2"``).
+        use_cache:         Return cached NLPResult if available.
+        progress_callback: Optional callable receiving status strings.
+
+    Returns:
+        Full ``NLPResult`` with annotated chapters and quote counts.
+    """
+    import spacy
+    import time
+    from collections import defaultdict
+    from dataclasses import replace as _replace
+
+    from ..models import Chapter, CharacterInfo, NLPResult, Segment
+    from .attribution import attribute_all_chunks
+    from .chunker import chunk_paragraphs
+    from .entities import extract_person_names, infer_gender_pronouns
+    from .llm import LLMClient
+    from .quotes import extract_quotes
+
+    if use_cache:
+        cached = get_cached_result(book_path)
+        if cached is not None:
+            return cached
+
+    _cb: Callable[[str], None] = progress_callback or (lambda _: None)
+
+    # Verify Ollama is reachable
+    import ollama as _ollama
+    try:
+        _ollama.list()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot reach Ollama at localhost:11434 — is it running? ({exc})"
+        ) from exc
+
+    llm = LLMClient(nlp_model)
+
+    # Load spaCy
+    _cb("Loading spaCy language model…")
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except OSError:
+        raise RuntimeError(
+            "spaCy model 'en_core_web_sm' not found. "
+            "Install it with: uv pip install https://github.com/explosion/spacy-models"
+            "/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+        )
+
+    full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
+
+    # Build alias → canonical lookup
+    alias_to_canonical: dict[str, str] = {}
+    for group in roster.characters:
+        alias_to_canonical[group.canonical.lower()] = group.canonical
+        for alias in group.aliases:
+            alias_to_canonical[alias.lower()] = group.canonical
+
+    roster_aliases: dict[str, list[str]] = {
+        group.canonical: group.aliases for group in roster.characters
+    }
+
+    # Stage 1: Extract quotes per chapter
+    _cb("Extracting dialogue quotes…")
+    chapter_quotes: dict[int, list] = {}
+    for chapter in chapters:
+        chapter_quotes[chapter.index] = extract_quotes(chapter.paragraphs)
+
+    # Stages 3+4: Per-chapter chunking and attribution
+    attributed_chapters: list[Chapter] = []
+    attribution_counts: dict[str, int] = defaultdict(int)
+
+    total_chapters = len(chapters)
+    attrib_start = time.monotonic()
+
+    for ch_done, chapter in enumerate(chapters):
+        title = chapter.title or f"Chapter {chapter.index}"
+        elapsed = time.monotonic() - attrib_start
+        if ch_done > 0:
+            avg = elapsed / ch_done
+            remaining = avg * (total_chapters - ch_done)
+            eta_min = int(remaining // 60)
+            eta_sec = int(remaining % 60)
+            _cb(f"Attributing: {title}… (ETA {eta_min:02d}:{eta_sec:02d})")
+        else:
+            _cb(f"Attributing: {title}…")
+
+        quotes = chapter_quotes[chapter.index]
+
+        if not quotes:
+            segments = [
+                Segment(
+                    text="\n\n".join(chapter.paragraphs),
+                    speaker="NARRATOR",
+                    index=0,
+                )
+            ]
+        else:
+            chapter_text = " ".join(chapter.paragraphs)
+            raw_names = extract_person_names(chapter_text, nlp)
+            chapter_canonicals = sorted({
+                canonical
+                for n in raw_names
+                if (canonical := alias_to_canonical.get(n.lower())) is not None
+            })
+            roster_names = chapter_canonicals + ["NARRATOR", "Unknown"]
+
+            chunks = chunk_paragraphs(chapter.paragraphs, quotes)
+            all_attributions = attribute_all_chunks(
+                chunks, quotes, roster_names, llm, roster_aliases=roster_aliases
+            )
+
+            for item in all_attributions.values():
+                item.speaker = _normalize_speaker(
+                    item.speaker, alias_to_canonical, chapter_canonicals
+                )
+
+            segments = _build_segments(chapter.paragraphs, quotes, all_attributions)
+
+            for item in all_attributions.values():
+                if item.speaker not in ("NARRATOR", "Unknown"):
+                    attribution_counts[item.speaker] += 1
+
+        attributed_chapters.append(_replace(chapter, segments=segments))
+
+    # Build CharacterInfo with quote_count
+    def _resolve_gender(group) -> str:
+        if group.gender and group.gender.lower() not in ("", "unknown"):
+            return group.gender
+        return infer_gender_pronouns(group.canonical, group.aliases, full_text)
+
+    characters: list[CharacterInfo] = [
+        CharacterInfo(
+            character_id=group.canonical,
+            display_name=group.canonical,
+            quote_count=attribution_counts.get(group.canonical, 0),
+            gender_pronoun=_resolve_gender(group),
+        )
+        for group in roster.characters
+    ]
+    characters.sort(key=lambda c: c.quote_count, reverse=True)
+
+    result = NLPResult(
+        characters=characters,
+        chapters=attributed_chapters,
+        book_hash=book_hash(book_path),
+    )
+    cache_result(result, book_path)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -295,6 +467,9 @@ def run_analysis(
 ) -> "NLPResult":
     """Run the full NLP speaker-attribution pipeline on *chapters*.
 
+    Delegates to ``run_fast_scan()`` (Stage 1-2) then ``run_attribution()``
+    (Stage 3-4), merging mention_count from the fast scan into the final result.
+
     Args:
         chapters:          List of ``Chapter`` objects (paragraphs populated).
         book_path:         Path to the source ebook (used for cache key).
@@ -302,172 +477,42 @@ def run_analysis(
         progress_callback: Optional callable receiving status strings.
 
     Returns:
-        ``NLPResult`` with ``characters`` populated and ``chapters`` having
-        ``segments`` set on every chapter.
-
-    Raises:
-        RuntimeError: If Ollama is not reachable.
+        ``NLPResult`` with both ``mention_count`` and ``quote_count`` populated.
     """
-    import spacy
-
-    from ..models import Chapter, CharacterInfo, NLPResult, Segment
-    from .attribution import attribute_all_chunks
-    from .chunker import chunk_paragraphs
-    from .entities import build_roster, build_roster_with_llm, extract_person_names
-    from .llm import LLMClient
-    from .quotes import extract_quotes
-
     _cb: Callable[[str], None] = progress_callback or (lambda _: None)
 
-    # ---- Verify Ollama is reachable ----------------------------------------
-    import ollama as _ollama
-    try:
-        _ollama.list()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Cannot reach Ollama at localhost:11434 — is it running? ({exc})"
-        ) from exc
-
-    llm = LLMClient(nlp_model)
-
-    # ---- Load spaCy --------------------------------------------------------
-    _cb("Loading spaCy language model…")
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        raise RuntimeError(
-            "spaCy model 'en_core_web_sm' not found. "
-            "Install it with: uv pip install https://github.com/explosion/spacy-models"
-            "/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-        )
-
-    # ---- Stage 1: Extract quotes from every chapter -----------------------
-    _cb("Extracting dialogue quotes…")
-    chapter_quotes: dict[int, list] = {}
-    for chapter in chapters:
-        chapter_quotes[chapter.index] = extract_quotes(chapter.paragraphs)
-
-    total_q = sum(len(qs) for qs in chapter_quotes.values())
-    _cb(f"Found {total_q} quotes across {len(chapters)} chapters")
-
-    # ---- Stage 2: Build character roster from full book text --------------
-    _cb("Building character roster…")
-    full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
-    roster = build_roster_with_llm(full_text, nlp, llm)
-
-    char_names = ", ".join(g.canonical for g in roster.characters[:8])
-    overflow = len(roster.characters) - 8
-    suffix = f" (+{overflow} more)" if overflow > 0 else ""
-    _cb(f"Character roster: {len(roster.characters)} characters — {char_names}{suffix}")
-    logger.info("Stage 2 complete: %d characters", len(roster.characters))
-
-    # Alias → canonical lookup (lower-cased for fuzzy matching)
-    alias_to_canonical: dict[str, str] = {}
-    for group in roster.characters:
-        alias_to_canonical[group.canonical.lower()] = group.canonical
-        for alias in group.aliases:
-            alias_to_canonical[alias.lower()] = group.canonical
-
-    # Roster aliases dict for LLM prompt (canonical → all aliases including itself)
-    roster_aliases: dict[str, list[str]] = {
-        group.canonical: group.aliases
-        for group in roster.characters
-    }
-
-    # ---- Stages 3 + 4: Per-chapter chunking and attribution ---------------
-    attributed_chapters: list[Chapter] = []
-    attribution_counts: dict[str, int] = defaultdict(int)
-
-    total_chapters = len(chapters)
-    attrib_start = time.monotonic()
-
-    for ch_done, chapter in enumerate(chapters):
-        title = chapter.title or f"Chapter {chapter.index}"
-        # Build ETA from average time per chapter so far
-        elapsed = time.monotonic() - attrib_start
-        if ch_done > 0:
-            avg = elapsed / ch_done
-            remaining = avg * (total_chapters - ch_done)
-            eta_min = int(remaining // 60)
-            eta_sec = int(remaining % 60)
-            eta_str = f"{eta_min:02d}:{eta_sec:02d}"
-            _cb(f"Attributing: {title}… (ETA {eta_str})")
-        else:
-            _cb(f"Attributing: {title}…")
-
-        quotes = chapter_quotes[chapter.index]
-
-        if not quotes:
-            # No dialogue — entire chapter is a single narrator segment.
-            segments = [
-                Segment(
-                    text="\n\n".join(chapter.paragraphs),
-                    speaker="NARRATOR",
-                    index=0,
-                )
-            ]
-        else:
-            # Build a chapter-local roster: spaCy finds names in this chapter,
-            # then each is resolved to its book-level canonical.  Names that
-            # spaCy surfaces but that don't appear in the book roster are
-            # discarded — keeping the per-chapter list a strict subset of the
-            # book-wide character set.
-            chapter_text = " ".join(chapter.paragraphs)
-            raw_names = extract_person_names(chapter_text, nlp)
-            chapter_canonicals = sorted({
-                canonical
-                for n in raw_names
-                if (canonical := alias_to_canonical.get(n.lower())) is not None
-            })
-            roster_names = chapter_canonicals + ["NARRATOR", "Unknown"]
-
-            # Chunk and attribute (pass aliases so the LLM prompt shows them).
-            chunks = chunk_paragraphs(chapter.paragraphs, quotes)
-            all_attributions = attribute_all_chunks(
-                chunks, quotes, roster_names, llm, roster_aliases=roster_aliases
-            )
-
-            # Normalize LLM-returned speaker names back to canonicals.
-            for item in all_attributions.values():
-                item.speaker = _normalize_speaker(
-                    item.speaker, alias_to_canonical, chapter_canonicals
-                )
-
-            # Build segments from paragraphs + attributions.
-            segments = _build_segments(chapter.paragraphs, quotes, all_attributions)
-
-            for item in all_attributions.values():
-                if item.speaker not in ("NARRATOR", "Unknown"):
-                    attribution_counts[item.speaker] += 1
-
-        attributed_chapters.append(replace(chapter, segments=segments))
-
-    # ---- Build CharacterInfo list ------------------------------------------
-    from .entities import infer_gender_pronouns
-    from .models import AliasGroup as _AliasGroup
-
-    def _resolve_gender(group: "_AliasGroup", full_text: str) -> str:
-        """Prefer BookNLP's neural gender; fall back to pronoun counting."""
-        if group.gender and group.gender.lower() not in ("", "unknown"):
-            return group.gender
-        return infer_gender_pronouns(group.canonical, group.aliases, full_text)
-
-    characters: list[CharacterInfo] = [
-        CharacterInfo(
-            character_id=group.canonical,
-            display_name=group.canonical,
-            quote_count=attribution_counts.get(group.canonical, 0),
-            gender_pronoun=_resolve_gender(group, full_text),
-        )
-        for group in roster.characters
-    ]
-    characters.sort(key=lambda c: c.quote_count, reverse=True)
-
-    return NLPResult(
-        characters=characters,
-        chapters=attributed_chapters,
-        book_hash=book_hash(book_path),
+    # Stage 1-2: fast scan (may use roster cache)
+    fast_result = run_fast_scan(
+        chapters=chapters,
+        book_path=book_path,
+        nlp_model=nlp_model,
+        use_cache=True,
+        progress_callback=_cb,
     )
+
+    # Stage 3-4: attribution (may use full NLP cache)
+    nlp_result = run_attribution(
+        roster=fast_result.roster,
+        chapters=chapters,
+        book_path=book_path,
+        nlp_model=nlp_model,
+        use_cache=True,
+        progress_callback=_cb,
+    )
+
+    # Patch mention_count from fast scan into NLP result characters
+    mention_by_id = {c.character_id: c.mention_count for c in fast_result.characters}
+    from dataclasses import replace as _replace
+    nlp_result = _replace(
+        nlp_result,
+        characters=[
+            _replace(c, mention_count=mention_by_id.get(c.character_id, 0))
+            for c in nlp_result.characters
+        ],
+    )
+
+    cache_result(nlp_result, book_path)
+    return nlp_result
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +706,7 @@ def _normalize_speaker(
 __all__ = [
     "run_analysis",
     "run_fast_scan",
+    "run_attribution",
     "get_cached_result",
     "cache_result",
     "get_cached_roster",
