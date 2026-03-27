@@ -1,7 +1,7 @@
 # Design: All-Settings-Upfront Conversion Flow
 
 **Date:** 2026-03-27
-**Status:** Approved
+**Status:** Implemented
 
 ## Problem
 
