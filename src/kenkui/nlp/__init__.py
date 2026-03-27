@@ -113,6 +113,51 @@ def cache_result(result: "NLPResult", book_path: Path) -> Path:
     return cache_file
 
 
+# CONFIG_DIR is exposed at module level so that patch("kenkui.nlp.CONFIG_DIR", ...) works in
+# tests.  The real value is populated lazily by _get_config_dir() to avoid importing
+# kenkui.config (and its tomli_w dependency) at module import time.
+CONFIG_DIR: "Path | None" = None
+
+
+def _get_config_dir() -> Path:
+    """Return CONFIG_DIR, respecting any test patches applied to this module."""
+    import sys
+    val = sys.modules[__name__].CONFIG_DIR
+    if val is not None:
+        return val  # type: ignore[return-value]
+    from ..config import CONFIG_DIR as _cfg
+    return _cfg
+
+
+def get_cached_roster(book_path: Path) -> "FastScanResult | None":
+    """Return a cached ``FastScanResult`` if a valid roster cache file exists, else None."""
+    from ..models import FastScanResult
+
+    cache_dir = _get_config_dir() / "nlp_cache"
+    cache_file = cache_dir / f"{book_hash(book_path)}-roster.json"
+    if not cache_file.exists():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        return FastScanResult.from_dict(data)
+    except Exception as exc:
+        logger.warning("Failed to load roster cache %s: %s", cache_file, exc)
+        return None
+
+
+def cache_roster(result: "FastScanResult", book_path: Path) -> Path:
+    """Serialise *result* to disk and return the roster cache file path."""
+    cache_dir = _get_config_dir() / "nlp_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"{book_hash(book_path)}-roster.json"
+    cache_file.write_text(
+        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.debug("Roster cache written: %s", cache_file)
+    return cache_file
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -493,6 +538,8 @@ __all__ = [
     "run_analysis",
     "get_cached_result",
     "cache_result",
+    "get_cached_roster",
+    "cache_roster",
     "CACHE_DIR",
     "book_hash",
     "_split_paragraph_by_quotes",
