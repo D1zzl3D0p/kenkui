@@ -351,14 +351,13 @@ def _run_fast_scan_wizard(
     chapter_selection: dict | None = None,
 ):
     """Run Stage 1-2 fast scan with a progress spinner. Returns FastScanResult or None."""
-    from ..nlp import cache_roster, get_cached_roster, run_fast_scan
+    from ..nlp import get_cached_roster, run_fast_scan
     from ..readers import get_reader
 
     # Check roster cache first
     if use_cache:
         cached = get_cached_roster(book_path)
         if cached is not None:
-            console.print("[green]Using cached character roster.[/green]")
             return cached
 
     console.print(f"[cyan]Scanning characters in '{book_path.name}'…[/cyan]")
@@ -976,6 +975,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
     )
 
     # --- Mode-specific setup ---
+    voice: str = app_config.default_voice
     speaker_voices: dict[str, str] = {}
     chapter_voices: dict[str, str] = {}
     roster_cache_path: str | None = None

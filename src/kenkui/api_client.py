@@ -90,6 +90,7 @@ class APIClient:
         speaker_voices: dict | None = None,
         annotated_chapters_path: str | None = None,
         chapter_voices: dict | None = None,
+        roster_cache_path: str | None = None,
         job_temp: float | None = None,
         job_lsd_decode_steps: int | None = None,
         job_noise_clamp: float | None = None,
@@ -116,6 +117,8 @@ class APIClient:
             payload["annotated_chapters_path"] = annotated_chapters_path
         if chapter_voices:
             payload["chapter_voices"] = chapter_voices
+        if roster_cache_path:
+            payload["roster_cache_path"] = roster_cache_path
         # Per-job quality overrides — only include when explicitly set
         for key, val in {
             "job_temp": job_temp,

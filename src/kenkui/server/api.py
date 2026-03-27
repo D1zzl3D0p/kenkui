@@ -21,6 +21,8 @@ class JobCreateRequest(BaseModel):
     annotated_chapters_path: str | None = None
     # Chapter-voice mode
     chapter_voices: dict[str, str] = {}
+    # Multi-voice roster cache
+    roster_cache_path: str | None = None
     # Per-job quality overrides (None = inherit from AppConfig)
     job_temp: float | None = None
     job_lsd_decode_steps: int | None = None
@@ -118,6 +120,9 @@ def add_job(request: JobCreateRequest):
         if request.annotated_chapters_path
         else None,
         chapter_voices=request.chapter_voices or {},
+        roster_cache_path=Path(request.roster_cache_path)
+        if request.roster_cache_path
+        else None,
         job_temp=request.job_temp,
         job_lsd_decode_steps=request.job_lsd_decode_steps,
         job_noise_clamp=request.job_noise_clamp,
