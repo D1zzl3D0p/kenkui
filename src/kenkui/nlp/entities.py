@@ -228,6 +228,223 @@ def infer_gender_pronouns(
 
 
 # ---------------------------------------------------------------------------
+# LLM roster cleanup passes
+# ---------------------------------------------------------------------------
+
+_DEDUP_PROMPT = """\
+The following character names were extracted from a novel. Some entries may
+be different surface forms of the same character (nickname, shortened form,
+contraction, or partial name).
+
+Names:
+{name_lines}
+
+TASK: Identify groups of names that refer to the same character.
+For each group with more than one entry, specify:
+- "canonical": the most complete/formal name to keep
+- "duplicates": the other names in the group that should be merged into it
+
+RULES:
+- Only merge when you are highly confident they are the same person.
+- Do NOT merge characters who merely share a first name (e.g. two different "Johns").
+- If a name stands alone with no apparent duplicate, omit it entirely.
+- Use the EXACT name strings from the list above.
+
+Return ONLY the JSON.
+"""
+
+
+def deduplicate_roster_with_llm(
+    roster: "CharacterRoster",
+    llm: "LLMClient",
+) -> "CharacterRoster":
+    """Merge canonical entries that refer to the same character via a single LLM call.
+
+    Catches nickname contractions and other alias forms that word-overlap
+    clustering misses (e.g. "Mat" → "Matrim Cauthon").  Each merged group's
+    aliases are combined under the surviving canonical; gender is taken from
+    whichever entry has a non-empty value.
+
+    Returns *roster* unchanged on any LLM error or empty result.
+    """
+    from .models import CanonicalMergeResult
+
+    if len(roster.characters) < 2:
+        return roster
+
+    name_lines = "\n".join(f"- {g.canonical}" for g in roster.characters)
+    try:
+        result: CanonicalMergeResult = llm.generate(
+            _DEDUP_PROMPT.format(name_lines=name_lines),
+            CanonicalMergeResult,
+        )
+
+        if not result.merges:
+            return roster
+
+        canonical_set = {g.canonical for g in roster.characters}
+        absorb_into: dict[str, str] = {}
+        for entry in result.merges:
+            if entry.canonical not in canonical_set:
+                continue
+            for dup in entry.duplicates:
+                if dup in canonical_set and dup != entry.canonical:
+                    absorb_into[dup] = entry.canonical
+
+        if not absorb_into:
+            return roster
+
+        group_by_canonical = {g.canonical: g for g in roster.characters}
+        merged = 0
+        for dup_canonical, survivor_canonical in absorb_into.items():
+            dup_group = group_by_canonical.get(dup_canonical)
+            survivor_group = group_by_canonical.get(survivor_canonical)
+            if not dup_group or not survivor_group:
+                continue
+            for alias in [dup_canonical] + dup_group.aliases:
+                if alias not in survivor_group.aliases:
+                    survivor_group.aliases.append(alias)
+            if not survivor_group.gender and dup_group.gender:
+                survivor_group.gender = dup_group.gender
+            merged += 1
+
+        remaining = [g for g in roster.characters if g.canonical not in absorb_into]
+        logger.info(
+            "deduplicate_roster_with_llm: merged %d duplicate(s), %d → %d characters",
+            merged, len(roster.characters), len(remaining),
+        )
+        return CharacterRoster(characters=remaining)
+    except Exception as exc:
+        logger.warning("deduplicate_roster_with_llm: LLM call failed (%s) — skipping", exc)
+        return roster
+
+
+_EPITHET_PROMPT = """\
+CHARACTER ROSTER (proper names — do not modify or invent new entries):
+{roster_lines}
+
+COMMON PHRASES found in the same book (may include epithets, titles, roles):
+{phrase_lines}
+
+TASK: For each common phrase that is clearly an epithet or alternate title
+for EXACTLY ONE named character above, return a mapping.
+
+RULES:
+- Only include phrases you are highly confident refer to exactly one character.
+- Skip generic roles: "the innkeeper", "the woman", "the soldier", etc.
+- Skip phrases that could apply to multiple characters.
+- Use the EXACT canonical name string from the roster — no variations.
+
+Return ONLY the JSON.
+"""
+
+
+def resolve_epithets_with_llm(
+    roster: "CharacterRoster",
+    common_phrases: list[str],
+    llm: "LLMClient",
+) -> "CharacterRoster":
+    """Add epithet aliases to *roster* characters via a single LLM call.
+
+    Passes canonical names and high-frequency common-noun phrases extracted
+    by BookNLP to the LLM, which maps phrases to characters.  Matched phrases
+    are appended to the relevant ``AliasGroup.aliases``.
+
+    Returns *roster* unchanged on any LLM error or when *common_phrases* is empty.
+    """
+    from .models import EpithetResolutionResult
+
+    if not common_phrases:
+        return roster
+
+    canonical_set = {g.canonical for g in roster.characters}
+    roster_lines = "\n".join(f"- {g.canonical}" for g in roster.characters)
+    phrase_lines = "\n".join(f"- {p}" for p in common_phrases)
+
+    try:
+        result: EpithetResolutionResult = llm.generate(
+            _EPITHET_PROMPT.format(roster_lines=roster_lines, phrase_lines=phrase_lines),
+            EpithetResolutionResult,
+        )
+
+        canonical_to_group = {g.canonical: g for g in roster.characters}
+        added = 0
+        for mapping in result.mappings:
+            epithet = mapping.epithet.strip()
+            target = mapping.canonical_name.strip()
+            if not epithet or target not in canonical_set:
+                continue
+            group = canonical_to_group[target]
+            if epithet not in group.aliases:
+                group.aliases.append(epithet)
+                added += 1
+
+        logger.info("resolve_epithets_with_llm: added %d epithet alias(es)", added)
+        return roster
+    except Exception as exc:
+        logger.warning("resolve_epithets_with_llm: LLM call failed (%s) — skipping", exc)
+        return roster
+
+
+_NORMALIZE_PROMPT = """\
+The following are character canonical names extracted from a novel.
+Some may contain trailing appositive phrases or non-name suffixes that
+should be stripped to leave only the character's actual name.
+
+For each name, return the simplified form. If no change is needed,
+return the name unchanged.
+
+Names:
+{name_lines}
+
+Return ONLY the JSON.
+"""
+
+
+def normalize_canonical_names_with_llm(
+    roster: "CharacterRoster",
+    llm: "LLMClient",
+) -> "CharacterRoster":
+    """Strip trailing descriptors from canonical names via a single LLM call.
+
+    e.g. "Rand al'Thor, Dragon Reborn" → "Rand al'Thor"
+
+    Keeps the original as an alias.  Returns *roster* unchanged on any LLM error.
+    """
+    from .models import NameNormalizationResult
+
+    if not roster.characters:
+        return roster
+
+    name_lines = "\n".join(f"- {g.canonical}" for g in roster.characters)
+    try:
+        result: NameNormalizationResult = llm.generate(
+            _NORMALIZE_PROMPT.format(name_lines=name_lines),
+            NameNormalizationResult,
+        )
+
+        orig_to_simplified = {e.original.strip(): e.simplified.strip() for e in result.names}
+        changed = 0
+        for group in roster.characters:
+            simplified = orig_to_simplified.get(group.canonical, group.canonical)
+            if simplified and simplified != group.canonical:
+                if group.canonical not in group.aliases:
+                    group.aliases.append(group.canonical)
+                group.canonical = simplified
+                changed += 1
+
+        logger.info(
+            "normalize_canonical_names_with_llm: simplified %d canonical name(s)", changed
+        )
+        return roster
+    except Exception as exc:
+        logger.warning(
+            "normalize_canonical_names_with_llm: LLM call failed (%s) — skipping", exc
+        )
+        return roster
+
+
+# ---------------------------------------------------------------------------
 # LLM-augmented roster building
 # ---------------------------------------------------------------------------
 
@@ -375,12 +592,17 @@ def build_roster_with_llm(
     # ── Tier 1: BookNLP ──────────────────────────────────────────────────────
     from .booknlp_roster import build_roster_from_booknlp
 
-    roster = build_roster_from_booknlp(text)
-    if roster is not None:
+    bnlp_data = build_roster_from_booknlp(text)
+    if bnlp_data is not None:
+        roster = bnlp_data.roster
+        common_phrases = bnlp_data.common_phrases
         logger.info(
             "build_roster: BookNLP path — %d canonical characters",
             len(roster.characters),
         )
+        roster = deduplicate_roster_with_llm(roster, llm)
+        roster = resolve_epithets_with_llm(roster, common_phrases, llm)
+        roster = normalize_canonical_names_with_llm(roster, llm)
         return roster
 
     logger.info("build_roster: BookNLP unavailable, trying LLM")
@@ -411,7 +633,10 @@ def build_roster_with_llm(
             "build_roster: LLM path — %d canonical characters after clustering",
             len(groups),
         )
-        return CharacterRoster(characters=groups)
+        roster_obj = CharacterRoster(characters=groups)
+        roster_obj = deduplicate_roster_with_llm(roster_obj, llm)
+        roster_obj = normalize_canonical_names_with_llm(roster_obj, llm)
+        return roster_obj
 
     except Exception as exc:
         logger.warning(
@@ -424,4 +649,6 @@ def build_roster_with_llm(
         "build_roster: heuristic path — %d canonical characters",
         len(roster.characters),
     )
+    roster = deduplicate_roster_with_llm(roster, llm)
+    roster = normalize_canonical_names_with_llm(roster, llm)
     return roster

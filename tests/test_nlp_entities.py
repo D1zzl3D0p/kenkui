@@ -467,3 +467,162 @@ class TestBuildRosterWithLLM:
         # Falls back to heuristic; spaCy found "Harry Potter"
         canonicals = {g.canonical for g in result.characters}
         assert "Harry Potter" in canonicals
+
+
+class TestDeduplicateRosterWithLLM:
+    def test_merges_nickname_into_full_name(self):
+        from kenkui.nlp.entities import deduplicate_roster_with_llm
+        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Matrim Cauthon", aliases=["Matrim Cauthon", "Matrim"]),
+            AliasGroup(canonical="Mat", aliases=["Mat"]),
+            AliasGroup(canonical="Perrin Aybara", aliases=["Perrin Aybara", "Perrin"]),
+        ])
+        llm = MagicMock()
+        llm.generate.return_value = CanonicalMergeResult(merges=[
+            CanonicalMergeEntry(canonical="Matrim Cauthon", duplicates=["Mat"]),
+        ])
+
+        result = deduplicate_roster_with_llm(roster, llm)
+
+        canonicals = {g.canonical for g in result.characters}
+        assert "Mat" not in canonicals
+        assert "Matrim Cauthon" in canonicals
+        assert "Perrin Aybara" in canonicals
+        merged = next(g for g in result.characters if g.canonical == "Matrim Cauthon")
+        assert "Mat" in merged.aliases
+
+    def test_preserves_gender_from_absorbed_entry(self):
+        from kenkui.nlp.entities import deduplicate_roster_with_llm
+        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Matrim Cauthon", aliases=["Matrim Cauthon"], gender=""),
+            AliasGroup(canonical="Mat", aliases=["Mat"], gender="he/him"),
+        ])
+        llm = MagicMock()
+        llm.generate.return_value = CanonicalMergeResult(merges=[
+            CanonicalMergeEntry(canonical="Matrim Cauthon", duplicates=["Mat"]),
+        ])
+
+        result = deduplicate_roster_with_llm(roster, llm)
+        survivor = next(g for g in result.characters if g.canonical == "Matrim Cauthon")
+        assert survivor.gender == "he/him"
+
+    def test_llm_error_returns_roster_unchanged(self):
+        from kenkui.nlp.entities import deduplicate_roster_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Alice", aliases=["Alice"]),
+        ])
+        llm = MagicMock()
+        llm.generate.side_effect = RuntimeError("ollama down")
+
+        result = deduplicate_roster_with_llm(roster, llm)
+        assert len(result.characters) == 1
+
+    def test_unknown_duplicate_canonical_ignored(self):
+        from kenkui.nlp.entities import deduplicate_roster_with_llm
+        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Alice", aliases=["Alice"]),
+        ])
+        llm = MagicMock()
+        # LLM hallucinates a name not in the roster
+        llm.generate.return_value = CanonicalMergeResult(merges=[
+            CanonicalMergeEntry(canonical="Alice", duplicates=["Alicia"]),
+        ])
+
+        result = deduplicate_roster_with_llm(roster, llm)
+        assert len(result.characters) == 1  # unchanged
+
+
+class TestResolveEpithetsWithLLM:
+    def test_adds_epithet_as_alias(self):
+        from kenkui.nlp.entities import resolve_epithets_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster, EpithetResolutionResult, EpithetMapping
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Rand al'Thor", aliases=["Rand al'Thor", "Rand"]),
+        ])
+        llm = MagicMock()
+        llm.generate.return_value = EpithetResolutionResult(mappings=[
+            EpithetMapping(epithet="the Dragon Reborn", canonical_name="Rand al'Thor"),
+        ])
+
+        result = resolve_epithets_with_llm(roster, ["the Dragon Reborn"], llm)
+        rand = result.characters[0]
+        assert "the Dragon Reborn" in rand.aliases
+
+    def test_empty_phrases_skips_llm(self):
+        from kenkui.nlp.entities import resolve_epithets_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[AliasGroup(canonical="Alice", aliases=["Alice"])])
+        llm = MagicMock()
+
+        result = resolve_epithets_with_llm(roster, [], llm)
+        llm.generate.assert_not_called()
+        assert result is roster
+
+    def test_unknown_canonical_in_mapping_ignored(self):
+        from kenkui.nlp.entities import resolve_epithets_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster, EpithetResolutionResult, EpithetMapping
+
+        roster = CharacterRoster(characters=[AliasGroup(canonical="Alice", aliases=["Alice"])])
+        llm = MagicMock()
+        llm.generate.return_value = EpithetResolutionResult(mappings=[
+            EpithetMapping(epithet="the chosen one", canonical_name="Bob"),  # Bob not in roster
+        ])
+
+        result = resolve_epithets_with_llm(roster, ["the chosen one"], llm)
+        assert "the chosen one" not in result.characters[0].aliases
+
+
+class TestNormalizeCanonicalNamesWithLLM:
+    def test_strips_appositive_suffix(self):
+        from kenkui.nlp.entities import normalize_canonical_names_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster, NameNormalizationResult, NameNormalizationEntry
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Rand al'Thor, Dragon Reborn", aliases=["Rand al'Thor, Dragon Reborn"]),
+        ])
+        llm = MagicMock()
+        llm.generate.return_value = NameNormalizationResult(names=[
+            NameNormalizationEntry(original="Rand al'Thor, Dragon Reborn", simplified="Rand al'Thor"),
+        ])
+
+        result = normalize_canonical_names_with_llm(roster, llm)
+        assert result.characters[0].canonical == "Rand al'Thor"
+        assert "Rand al'Thor, Dragon Reborn" in result.characters[0].aliases
+
+    def test_unchanged_name_not_modified(self):
+        from kenkui.nlp.entities import normalize_canonical_names_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster, NameNormalizationResult, NameNormalizationEntry
+
+        roster = CharacterRoster(characters=[
+            AliasGroup(canonical="Harry Potter", aliases=["Harry Potter"]),
+        ])
+        llm = MagicMock()
+        llm.generate.return_value = NameNormalizationResult(names=[
+            NameNormalizationEntry(original="Harry Potter", simplified="Harry Potter"),
+        ])
+
+        result = normalize_canonical_names_with_llm(roster, llm)
+        assert result.characters[0].canonical == "Harry Potter"
+        # No duplicate alias added for unchanged names
+        assert result.characters[0].aliases.count("Harry Potter") == 1
+
+    def test_llm_error_returns_unchanged(self):
+        from kenkui.nlp.entities import normalize_canonical_names_with_llm
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = CharacterRoster(characters=[AliasGroup(canonical="Alice", aliases=["Alice"])])
+        llm = MagicMock()
+        llm.generate.side_effect = RuntimeError("timeout")
+
+        result = normalize_canonical_names_with_llm(roster, llm)
+        assert result.characters[0].canonical == "Alice"
