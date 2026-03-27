@@ -19,10 +19,20 @@ and mtime.
 Public API
 ----------
 run_analysis(chapters, book_path, nlp_model, progress_callback) → NLPResult
-get_cached_result(book_path)   → NLPResult | None
+get_cached_result(book_path)    → NLPResult | None
 cache_result(result, book_path) → Path
-CACHE_DIR                       Path
-book_hash(book_path)            str
+get_cached_roster(book_path)    → FastScanResult | None
+cache_roster(result, book_path) → Path
+CACHE_DIR                        Path
+book_hash(book_path)             str
+
+CONFIG_DIR sentinel
+-------------------
+``CONFIG_DIR = None`` is a module-level test-seam.  All cache helpers call
+``_get_config_dir()``, which returns the patched value when a test sets
+``kenkui.nlp.CONFIG_DIR`` to a temporary path, and falls back to the real
+``kenkui.config.CONFIG_DIR`` in production.  This lets every cache helper be
+controlled with a single ``patch("kenkui.nlp.CONFIG_DIR", tmp_path)`` call.
 """
 
 from __future__ import annotations
@@ -31,6 +41,7 @@ import hashlib
 import json
 import logging
 import re
+import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -83,10 +94,9 @@ def book_hash(book_path: Path) -> str:
 
 def get_cached_result(book_path: Path) -> "NLPResult | None":
     """Return a cached ``NLPResult`` if a valid cache file exists, else None."""
-    from ..config import CONFIG_DIR
     from ..models import NLPResult
 
-    cache_dir = CONFIG_DIR / "nlp_cache"
+    cache_dir = _get_config_dir() / "nlp_cache"
     cache_file = cache_dir / f"{book_hash(book_path)}.json"
     if not cache_file.exists():
         return None
@@ -100,9 +110,7 @@ def get_cached_result(book_path: Path) -> "NLPResult | None":
 
 def cache_result(result: "NLPResult", book_path: Path) -> Path:
     """Serialise *result* to disk and return the cache file path."""
-    from ..config import CONFIG_DIR
-
-    cache_dir = CONFIG_DIR / "nlp_cache"
+    cache_dir = _get_config_dir() / "nlp_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f"{book_hash(book_path)}.json"
     cache_file.write_text(
@@ -121,7 +129,6 @@ CONFIG_DIR: "Path | None" = None
 
 def _get_config_dir() -> Path:
     """Return CONFIG_DIR, respecting any test patches applied to this module."""
-    import sys
     val = sys.modules[__name__].CONFIG_DIR
     if val is not None:
         return val  # type: ignore[return-value]
