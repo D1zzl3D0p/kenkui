@@ -344,6 +344,70 @@ def _run_nlp_analysis(book_path: Path, nlp_model: str, use_cache: bool = True):
     return result
 
 
+def _run_fast_scan_wizard(
+    book_path: Path,
+    nlp_model: str,
+    use_cache: bool = True,
+    chapter_selection: dict | None = None,
+):
+    """Run Stage 1-2 fast scan with a progress spinner. Returns FastScanResult or None."""
+    from ..nlp import cache_roster, get_cached_roster, run_fast_scan
+    from ..readers import get_reader
+
+    # Check roster cache first
+    if use_cache:
+        cached = get_cached_roster(book_path)
+        if cached is not None:
+            console.print("[green]Using cached character roster.[/green]")
+            return cached
+
+    console.print(f"[cyan]Scanning characters in '{book_path.name}'…[/cyan]")
+
+    try:
+        reader = get_reader(book_path, verbose=False)
+        all_chapters = reader.get_chapters()
+    except Exception as exc:
+        console.print(f"[red]Could not read ebook: {exc}[/red]")
+        return None
+
+    # Restrict to selected chapters
+    included_indices: set[int] | None = None
+    if chapter_selection:
+        raw = chapter_selection.get("included")
+        if raw:
+            included_indices = set(raw)
+
+    if included_indices:
+        chapters = [ch for ch in all_chapters if ch.index in included_indices]
+        if not chapters:
+            chapters = all_chapters
+    else:
+        chapters = all_chapters
+
+    result = None
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as prog:
+        task = prog.add_task("Scanning characters…", total=None)
+        try:
+            result = run_fast_scan(
+                chapters=chapters,
+                book_path=book_path,
+                nlp_model=nlp_model,
+                use_cache=False,  # cache already checked above
+                progress_callback=lambda msg: prog.update(task, description=msg),
+            )
+            prog.update(task, description="Character scan complete")
+        except Exception as exc:
+            console.print(f"[red]Character scan failed: {exc}[/red]")
+            return None
+
+    return result
+
+
 def _top_gender_matched_voice(characters, default_voice: str) -> str:
     """Return a voice that matches the gender dominant in the top roles.
 
@@ -574,14 +638,14 @@ def _prompt_character_voice_review(
     return speaker_voices
 
 
-def _prompt_multivoice_character_voices(nlp_result, default_voice: str) -> dict[str, str]:
+def _prompt_multivoice_character_voices(scan_result, default_voice: str) -> dict[str, str]:
     """Run the full multi-voice character assignment flow.
 
     Returns a dict mapping character_id (including "NARRATOR") to voice name.
     """
     from InquirerPy import inquirer
 
-    characters = nlp_result.characters
+    characters = scan_result.characters
     if not characters:
         console.print(
             "[yellow]No characters found by the NLP pipeline. Using narrator voice for all.[/yellow]"
@@ -629,8 +693,9 @@ def _prompt_multivoice_character_voices(nlp_result, default_voice: str) -> dict[
                 [v.name for v in _reg.filter(gender="Male")]
     female_pool = [v.name for v in _reg.filter(gender="Female") if v.name != narrator_voice] or \
                   [v.name for v in _reg.filter(gender="Female")]
+    chapters = getattr(scan_result, "chapters", None) or []
     speaker_voices = _resolve_chapter_voice_conflicts(
-        speaker_voices, characters, nlp_result.chapters, male_pool, female_pool, narrator_voice
+        speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice
     )
 
     # Step D — review / adjust via list.
@@ -895,17 +960,33 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         ],
     ).execute()
 
+    # Step 3 — Quality overrides (passive, no computation).
+    quality_overrides = _prompt_quality_overrides(app_config)
+
+    # Step 4 — Output directory (passive).
+    default_out = str(app_config.default_output_dir or book_path.parent)
+    output_dir = (
+        inquirer.text(
+            message="Output directory:",
+            default=default_out,
+        )
+        .execute()
+        .strip()
+        or default_out
+    )
+
+    # --- Mode-specific setup ---
     speaker_voices: dict[str, str] = {}
     chapter_voices: dict[str, str] = {}
-    annotated_chapters_path: str | None = None
+    roster_cache_path: str | None = None
     narration_mode = mode_val
 
     if mode_val == "multi":
         from ..config import save_app_config, DEFAULT_CONFIG_PATH
+        from ..nlp import CACHE_DIR, book_hash, get_cached_roster
         from ..nlp.setup import check_llm_available, run_setup_dialogue
-        from ..nlp import CACHE_DIR, book_hash
 
-        # Step 2a — Show requirements status and confirm readiness.
+        # Step 5a — Show requirements status and confirm readiness.
         console.print()
         if not _check_multivoice_requirements(app_config):
             console.print("[yellow]Falling back to single-voice mode.[/yellow]")
@@ -913,12 +994,12 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
             mode_val = "single"
 
         if mode_val == "multi":
-            # Step 2b — Ensure spaCy model is available.
+            # Step 5b — Ensure spaCy model is available.
             if not _ensure_spacy():
                 console.print("[red]Cannot proceed without spaCy model.[/red]")
                 return None
 
-            # Step 2c — NLP model: show current model and offer reconfigure.
+            # Step 5c — NLP model: show current model and offer reconfigure.
             console.print()
             console.print(
                 f"NLP model for speaker inference: [bold]{app_config.nlp_model}[/bold]"
@@ -944,42 +1025,43 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
                     )
 
         if narration_mode == "multi":
-            # Step 2d — Check for a cached analysis and let the user decide.
-            from ..nlp import get_cached_result
-
+            # Step 6 — Fast character scan (Stage 1-2 only, seconds).
             use_cache = True
-            if get_cached_result(book_path) is not None:
+            if get_cached_roster(book_path) is not None:
                 use_cache = inquirer.select(
-                    message="Cached NLP analysis found for this book.",
+                    message="Cached character roster found for this book.",
                     choices=[
-                        {"name": "Use cached analysis  (fast)", "value": True},
+                        {"name": "Use cached roster  (fast)", "value": True},
                         {
-                            "name": "Regenerate  (re-runs spaCy + LLM speaker attribution"
-                                    " — takes several minutes)",
+                            "name": "Regenerate  (re-runs spaCy + LLM roster building)",
                             "value": False,
                         },
                     ],
                 ).execute()
 
-            result = _run_nlp_analysis(book_path, app_config.nlp_model, use_cache=use_cache)
-            if result is None:
+            fast_result = _run_fast_scan_wizard(
+                book_path,
+                app_config.nlp_model,
+                use_cache=use_cache,
+                chapter_selection=chapter_selection,
+            )
+            if fast_result is None:
                 console.print("[yellow]Falling back to single-voice mode.[/yellow]")
                 narration_mode = "single"
             else:
-                # Step 2e — Character voice assignment (simple or advanced).
+                # Step 7 — Character voice assignment (simple or advanced).
                 speaker_voices = _prompt_multivoice_character_voices(
-                    result, app_config.default_voice
+                    fast_result, app_config.default_voice
                 )
-                annotated_chapters_path = str(CACHE_DIR / f"{book_hash(book_path)}.json")
+                roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
 
     elif mode_val == "chapter":
-        # Chapter-voice mode: load chapters already fetched in step 1, assign per chapter.
-        narration_mode = "single"  # Workers use single-voice path + chapter_voices override
+        # Chapter-voice mode: assign a voice per chapter.
+        narration_mode = "single"
         console.print()
         console.print("[bold]Voice for narrator / unassigned chapters:[/bold]")
         voice = _prompt_voice(default=app_config.default_voice, message="Default voice:")
         _check_hf_auth(voice)
-        # Load chapters for assignment
         try:
             from ..readers import get_reader
             reader = get_reader(book_path, verbose=False)
@@ -989,11 +1071,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
             console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
             chapter_voices = {}
 
-    # Step 3 — Voice.
-    # In single-voice mode: prompt for the narrator voice.
-    # In multi-voice mode: narrator voice was already selected inside
-    # _prompt_multivoice_character_voices; skip this prompt.
-    # In chapter-voice mode: voice was selected above.
+    # Step 8 — Narrator voice (single/chapter modes; multi already selected it).
     if narration_mode == "multi":
         voice = speaker_voices.get("NARRATOR", app_config.default_voice)
     elif mode_val != "chapter":
@@ -1002,22 +1080,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         voice = _prompt_voice(default=app_config.default_voice, message="Select voice:")
         _check_hf_auth(voice)
 
-    # Step 4 — Optional per-job quality overrides.
-    quality_overrides = _prompt_quality_overrides(app_config)
-
-    # Step 5 — Output directory.
-    default_out = str(app_config.default_output_dir or book_path.parent)
-    output_dir = (
-        inquirer.text(
-            message="Output directory:",
-            default=default_out,
-        )
-        .execute()
-        .strip()
-        or default_out
-    )
-
-    # Step 6 — Confirmation table.
+    # Step 9 — Confirmation table.
     console.print()
     summary = Table(title="Job Summary", show_header=False, box=None)
     summary.add_column("Field", style="bold", width=20)
@@ -1057,10 +1120,11 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         output_path=output_dir,
         narration_mode=narration_mode,
         speaker_voices=speaker_voices or None,
-        annotated_chapters_path=annotated_chapters_path,
+        annotated_chapters_path=None,     # Worker populates this during processing
+        roster_cache_path=roster_cache_path,
         chapter_voices=chapter_voices or None,
+        **quality_overrides,
     )
-    job_kwargs.update(quality_overrides)
     return job_kwargs
 
 
