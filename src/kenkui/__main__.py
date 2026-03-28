@@ -261,7 +261,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     voices_fetch_p = voices_sub.add_parser(
-        "fetch", help="Download uncompiled voices (requires kenkui[custom-voices])."
+        "fetch", help="Download custom uncompiled voices from a HuggingFace repo."
     )
     voices_fetch_p.add_argument(
         "--repo",
@@ -354,8 +354,11 @@ def main() -> None:
 
     command = getattr(args, "command", None)
 
-    # First-run voice check
-    _ensure_voices()
+    # First-run voice check — skip when the user is already running voices download
+    # to avoid a redundant download before the explicit one starts.
+    voices_cmd = getattr(args, "voices_command", None)
+    if not (command == "voices" and voices_cmd == "download"):
+        _ensure_voices()
 
     # ---- Sub-command dispatch ----------------------------------------------
     if command == "add":

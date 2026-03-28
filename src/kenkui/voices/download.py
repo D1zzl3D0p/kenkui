@@ -26,9 +26,14 @@ def download_voices(*, force: bool = False) -> None:
     """Download compiled + uncompiled voices from HuggingFace to XDG data dir.
 
     Uses huggingface_hub.snapshot_download which handles resume, progress,
-    and local caching automatically.
+    and local caching automatically.  Pass ``force=True`` to wipe the local
+    cache and re-download everything from scratch.
     """
+    import shutil
     from huggingface_hub import snapshot_download
+
+    if force and _VOICES_LOCAL_DIR.exists():
+        shutil.rmtree(_VOICES_LOCAL_DIR)
 
     _VOICES_LOCAL_DIR.mkdir(parents=True, exist_ok=True)
     snapshot_download(

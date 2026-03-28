@@ -192,8 +192,12 @@ install_kenkui() {
         return 1
     fi
 
-    log_info "Downloading voices from HuggingFace (~440 MB)…"
-    uv run kenkui voices download
+    log_info "Downloading compiled voices from HuggingFace (~440 MB)…"
+    if kenkui voices download; then
+        log_info "Voices downloaded successfully."
+    else
+        log_warn "Voice download failed. Run 'kenkui voices download' later to retry."
+    fi
 
     return 0
 }
@@ -211,13 +215,14 @@ main() {
     log_info ""
     log_info "Installation complete!"
     log_info ""
-    log_info "To add a book:"
-    log_info "  kenkui add /path/to/book.epub"
+    log_info "Quick start:"
+    log_info "  kenkui book.epub            Interactive wizard + auto-start"
+    log_info "  kenkui add book.epub        Queue a book without starting"
+    log_info "  kenkui queue --live         Live progress dashboard"
+    log_info "  kenkui voices list          Show all available voices"
     log_info ""
-    log_info "For multi-voice narration:"
-    log_info "  The spaCy language model (en_core_web_sm) is installed automatically"
-    log_info "  when kenkui is first used in multi-voice mode."
-    log_info "  BookNLP is included and used for character detection."
+    log_info "For multi-voice narration, Ollama must be running:"
+    log_info "  ollama serve  &&  ollama pull llama3.2"
 }
 
 main "$@"

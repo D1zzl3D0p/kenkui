@@ -59,10 +59,7 @@ def cmd_voices_list(args) -> None:
 
 
 def cmd_voices_fetch(args) -> None:
-    """Download uncompiled custom voices to the user data directory.
-
-    Requires ``kenkui[custom-voices]`` to be installed (``pip install kenkui[custom-voices]``).
-    """
+    """Download uncompiled custom voices from a HuggingFace repo to the user data directory."""
     # Guard: check huggingface_hub is available
     try:
         import huggingface_hub  # noqa: F401
