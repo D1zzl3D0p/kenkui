@@ -43,3 +43,4 @@ src/kenkui/voices/uncompiled-voices/
 # output/
 .worktrees/
 docs/superpowers/
+.claude
