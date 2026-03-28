@@ -56,15 +56,15 @@ def test_escape_on_first_step_stays_at_step_0():
     assert call_count[0] == 2  # ran twice: once raised GoBack, once succeeded
 
 
-def test_wizard_execute_raises_goback_on_keyboard_interrupt():
-    """_wizard_execute converts KeyboardInterrupt to GoBack."""
+def test_wizard_execute_propagates_keyboard_interrupt():
+    """_wizard_execute lets KeyboardInterrupt propagate (Ctrl-C exits immediately)."""
     from unittest.mock import MagicMock
-    from kenkui.cli.add import GoBack, _wizard_execute
+    from kenkui.cli.add import _wizard_execute
 
     mock_prompt = MagicMock()
     mock_prompt.execute.side_effect = KeyboardInterrupt
 
-    with pytest.raises(GoBack):
+    with pytest.raises(KeyboardInterrupt):
         _wizard_execute(mock_prompt)
 
 

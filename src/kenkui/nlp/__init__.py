@@ -530,52 +530,67 @@ def run_analysis(
 def _split_paragraph_by_quotes(
     para: str, para_quotes: list
 ) -> list[tuple[str, str]]:
-    """Split a paragraph into (text, speaker) spans at attributed quote boundaries.
+    """Split a paragraph into (text, speaker) spans at attributed quote/italic boundaries.
 
-    Runs the same regex used in Stage 1 directly on *para* to locate each
-    quoted span.  For every match we look up the speaker from *para_quotes*
-    (a list of ``(Quote, AttributionItem)`` pairs for this paragraph).
-    Unattributed quotes and surrounding narrative text both become NARRATOR
-    spans.  Concatenating all returned texts reconstructs *para* exactly.
+    Runs both the dialogue regex (_QUOTE_RE) and the italic regex (_ITALIC_RE)
+    on *para*, merges all matches in document order, and looks up each span's
+    speaker from *para_quotes* (a list of ``(Quote, AttributionItem)`` pairs).
+
+    Lookup key consistency:
+    - Dialogue Quote.text includes quote marks  → matches _QUOTE_RE.group(0)
+    - Italic   Quote.text is plain content      → matches _ITALIC_RE.group(1)
+
+    For italic spans the marker characters (\\x02/\\x03) are stripped from the
+    final segment text so TTS receives clean content.
+
+    Unattributed spans and surrounding narrative text both become NARRATOR.
+    Concatenating all returned texts reconstructs *para* exactly (minus the
+    \\x02/\\x03 marker characters from italic spans).
 
     Returns:
         A list of ``(text, speaker)`` 2-tuples.  Falls back to
         ``[(para, "NARRATOR")]`` when the paragraph is empty or no matches align.
     """
-    from .quotes import _QUOTE_RE
+    from .quotes import _ITALIC_RE, _QUOTE_RE
 
     if not para:
         return [(para, "NARRATOR")]
 
     # Build a text → speaker map from the attributed quotes in this paragraph.
-    # If the same quoted text appears more than once we keep the first attribution
-    # (edge-case; positional deduplication is not needed for correctness here).
+    # Dialogue key = full quoted string with marks; italic key = plain content.
+    # If the same text appears more than once we keep the first attribution.
     text_to_speaker: dict[str, str] = {}
     for q, attr in para_quotes:
         if q.text not in text_to_speaker:
             text_to_speaker[q.text] = attr.speaker
 
+    # Collect all matches from both patterns, tagged with kind and output text.
+    all_matches: list[tuple[int, int, str, str]] = []  # (start, end, out_text, lookup_key)
+    for m in _QUOTE_RE.finditer(para):
+        all_matches.append((m.start(), m.end(), m.group(0), m.group(0)))
+    for m in _ITALIC_RE.finditer(para):
+        # out_text has markers stripped; lookup_key is the plain content
+        all_matches.append((m.start(), m.end(), m.group(1), m.group(1)))
+    all_matches.sort(key=lambda t: t[0])
+
     spans: list[tuple[str, str]] = []
     last_end = 0
 
-    for match in _QUOTE_RE.finditer(para):
-        start, end = match.start(), match.end()
-        quote_text = match.group(0)
-        speaker = text_to_speaker.get(quote_text, "NARRATOR")
+    for start, end, out_text, lookup_key in all_matches:
+        speaker = text_to_speaker.get(lookup_key, "NARRATOR")
 
-        # Narrative text before this quoted span
+        # Narrative text before this span
         if start > last_end:
             narrator_text = para[last_end:start]
             if narrator_text:
                 spans.append((narrator_text, "NARRATOR"))
 
-        # The quoted span itself
-        if quote_text:
-            spans.append((quote_text, speaker))
+        if out_text:
+            spans.append((out_text, speaker))
 
         last_end = end
 
-    # Trailing narrative text after the last quote
+    # Trailing narrative text after the last span
     if last_end < len(para):
         trailing = para[last_end:]
         if trailing:

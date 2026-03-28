@@ -97,6 +97,73 @@ def batch_text(
     return result
 
 
+# ---------------------------------------------------------------------------
+# TTS text normalization
+# ---------------------------------------------------------------------------
+
+# n't contractions that are commonly mispronounced by the TTS engine.
+# Handles both straight apostrophe (') and right single quotation mark (').
+# Only n't forms are expanded — other contractions ("I'm", "we're") are left
+# alone to preserve natural speech cadence.
+_NONT_MAP: dict[str, str] = {
+    "won't": "will not",
+    "can't": "cannot",
+    "don't": "do not",
+    "doesn't": "does not",
+    "didn't": "did not",
+    "isn't": "is not",
+    "aren't": "are not",
+    "wasn't": "was not",
+    "weren't": "were not",
+    "haven't": "have not",
+    "hasn't": "has not",
+    "hadn't": "had not",
+    "couldn't": "could not",
+    "wouldn't": "would not",
+    "shouldn't": "should not",
+    "mustn't": "must not",
+    "needn't": "need not",
+    "shan't": "shall not",
+}
+
+# Build a single compiled regex that matches any contraction (case-insensitive).
+# The right single quotation mark (U+2019) is treated as an apostrophe.
+_NONT_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _NONT_MAP) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _replace_contraction(m: re.Match) -> str:
+    """Return the expansion with the same capitalisation as the matched token."""
+    token = m.group(0)
+    expansion = _NONT_MAP[token.lower().replace("\u2019", "'")]
+    if token.isupper():
+        return expansion.upper()
+    if token[0].isupper():
+        return expansion[0].upper() + expansion[1:]
+    return expansion
+
+
+def normalize_for_tts(text: str) -> str:
+    """Expand n't contractions so the TTS engine pronounces them correctly.
+
+    Examples::
+
+        >>> normalize_for_tts("He doesn't know and wasn't sure.")
+        'He does not know and was not sure.'
+        >>> normalize_for_tts("DON'T")
+        'DO NOT'
+        >>> normalize_for_tts("Don't")
+        'Do not'
+        >>> normalize_for_tts("I'm ready")   # non-n't contraction → unchanged
+        "I'm ready"
+    """
+    # Normalise curly apostrophes to straight so the pattern matches both forms.
+    text = text.replace("\u2019", "'")
+    return _NONT_PATTERN.sub(_replace_contraction, text)
+
+
 def extract_epub_cover(epub_path: Path) -> tuple[bytes | None, str | None]:
     """Extract cover image from EPUB file.
 

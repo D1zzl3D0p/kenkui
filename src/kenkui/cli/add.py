@@ -35,11 +35,42 @@ class GoBack(Exception):
 
 
 def _wizard_execute(prompt):
-    """Execute an InquirerPy prompt; raise GoBack if the user escapes."""
+    """Execute an InquirerPy prompt; raise GoBack if the user presses Escape.
+
+    InquirerPy does not bind Escape by default, so we inject the binding here
+    before every prompt execute — registering onto the prompt's live KeyBindings
+    object works for both PromptSession-based (text/number) and Application-based
+    (select/fuzzy/checkbox) prompt types.
+
+    Ctrl-C (KeyboardInterrupt) is intentionally NOT caught here — it propagates
+    to the OS and terminates the process immediately, as the user expects.
+    """
+    @prompt.register_kb("escape")
+    def _handle_escape(event):
+        event.app.exit(exception=EOFError("escape"))
+
     try:
         return prompt.execute()
-    except (KeyboardInterrupt, EOFError):
+    except EOFError:
         raise GoBack
+
+
+def _prompt_exit_confirmation() -> bool:
+    """Ask the user to confirm they want to quit kenkui.
+
+    Returns True if confirmed (exit), False if declined (stay).
+    Any interrupt (Escape or Ctrl-C) during the confirmation is treated as
+    a confirmed exit so the user is never trapped.
+    """
+    from InquirerPy import inquirer
+
+    try:
+        return inquirer.confirm(
+            message="Are you sure you want to close kenkui?",
+            default=False,
+        ).execute()
+    except (EOFError, KeyboardInterrupt):
+        return True
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -1135,6 +1166,8 @@ def _step_voice_setup(state: dict) -> dict:
             reader = get_reader(book_path, verbose=False)
             all_chapters = reader.get_chapters()
             chapter_voices = _prompt_chapter_voices(all_chapters, voice)
+        except GoBack:
+            raise
         except Exception as exc:
             console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
             chapter_voices = {}
@@ -1276,7 +1309,9 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         except GoBack:
             if i > 0:
                 i -= 1
-            # If already at step 0, absorb the GoBack (can't go further back)
+            else:
+                if _prompt_exit_confirmation():
+                    return None
 
     return None
 

@@ -458,7 +458,7 @@ class EpubReader(EbookReader):
             # Extract from section, looking at direct children first
             for child in section.children:
                 if hasattr(child, "name") and child.name:
-                    text = self._clean_text(child.get_text(" "))
+                    text = self._clean_text(self._extract_text_with_italic_markers(child))
                     if text and len(text) >= 2:
                         paragraphs.append(text)
 
@@ -484,7 +484,7 @@ class EpubReader(EbookReader):
             for elem in soup.find_all(["p", "div"]):
                 if elem.find_parent(["p", "div"]):
                     continue
-                text = self._clean_text(elem.get_text(" "))
+                text = self._clean_text(self._extract_text_with_italic_markers(elem))
                 if text and len(text) >= 2:
                     paragraphs.append(text)
 
@@ -567,7 +567,7 @@ class EpubReader(EbookReader):
                 if elem.find_parent(["p", "h1", "h2", "h3", "h4", "section"]):
                     continue
 
-                text = self._clean_text(elem.get_text(" "))
+                text = self._clean_text(self._extract_text_with_italic_markers(elem))
                 if not text or len(text) < 2:
                     continue
 
@@ -664,6 +664,33 @@ class EpubReader(EbookReader):
             class_=re.compile(r"page-?number|hidden|metadata|footnote", re.I)
         ):
             t.decompose()
+
+    def _extract_text_with_italic_markers(self, elem) -> str:
+        """Extract text from a BeautifulSoup element, wrapping <em>/<i> content
+        with STX (\\x02) / ETX (\\x03) markers so the NLP pipeline can detect
+        italicised inner monologue as a distinct speech kind.
+
+        All other markup is transparent — only <em> and <i> are wrapped.
+        The result is passed through ``_clean_text()`` by the caller.
+        """
+        from bs4 import NavigableString
+
+        parts: list[str] = []
+        for child in elem.children:
+            if isinstance(child, NavigableString):
+                s = str(child)
+                if s:
+                    parts.append(s)
+            elif hasattr(child, "name"):
+                if child.name in ("em", "i"):
+                    inner = child.get_text("").strip()
+                    if inner:
+                        parts.append(f"\x02{inner}\x03")
+                else:
+                    inner = self._extract_text_with_italic_markers(child)
+                    if inner:
+                        parts.append(inner)
+        return " ".join(parts)
 
     @staticmethod
     def _clean_text(text: str) -> str:

@@ -16,12 +16,13 @@ from pydantic import BaseModel, Field
 
 
 class Quote(BaseModel):
-    """A single dialogue quote extracted by the regex pass."""
+    """A single dialogue quote or italic span extracted by the regex pass."""
 
     id: int
-    text: str  # Full matched text including surrounding quotation marks
+    text: str  # Includes quote marks for dialogue; plain content (no markers) for italic
     para_index: int  # Which paragraph (0-based) this quote lives in
     char_offset: int  # Byte offset within the full chapter text
+    kind: str = "dialogue"  # "dialogue" | "italic"
 
 
 # ---------------------------------------------------------------------------

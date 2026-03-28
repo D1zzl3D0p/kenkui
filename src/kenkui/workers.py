@@ -491,6 +491,12 @@ def _render_text(
     """
     for attempt in range(2):
         try:
+            # Strip any italic STX/ETX markers that may have survived into this
+            # segment (e.g. in single-voice mode that bypasses the NLP pipeline).
+            text = text.replace('\x02', '').replace('\x03', '')
+            # Expand n't contractions so TTS pronounces them correctly.
+            from .utils import normalize_for_tts
+            text = normalize_for_tts(text)
             log_message(f"  Batch {batch_idx + 1}/{total_batches}: {text[:80]}…")
             tensor = model.generate_audio(
                 voice_state,

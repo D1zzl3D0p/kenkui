@@ -379,7 +379,7 @@ class MobiReader(EbookReader):
                 if elem.find_parent(["p", "h1", "h2", "h3", "h4"]):
                     continue
 
-                text = self._clean_text(elem.get_text(" "))
+                text = self._clean_text(self._extract_text_with_italic_markers(elem))
                 if not text or len(text) < 2:
                     continue
 
@@ -446,7 +446,7 @@ class MobiReader(EbookReader):
         for elem in soup.find_all(["p", "div"]):
             if elem.find_parent(["p", "div"]):
                 continue
-            text = self._clean_text(elem.get_text(" "))
+            text = self._clean_text(self._extract_text_with_italic_markers(elem))
             if text and len(text) >= 2:
                 paragraphs.append(text)
 
@@ -490,6 +490,30 @@ class MobiReader(EbookReader):
             class_=re.compile(r"page-?number|hidden|metadata|footnote", re.I)
         ):
             t.decompose()
+
+    def _extract_text_with_italic_markers(self, elem) -> str:
+        """Extract text from a BeautifulSoup element, wrapping <em>/<i> content
+        with STX (\\x02) / ETX (\\x03) markers so the NLP pipeline can detect
+        italicised inner monologue as a distinct speech kind.
+        """
+        from bs4 import NavigableString
+
+        parts: list[str] = []
+        for child in elem.children:
+            if isinstance(child, NavigableString):
+                s = str(child)
+                if s:
+                    parts.append(s)
+            elif hasattr(child, "name"):
+                if child.name in ("em", "i"):
+                    inner = child.get_text("").strip()
+                    if inner:
+                        parts.append(f"\x02{inner}\x03")
+                else:
+                    inner = self._extract_text_with_italic_markers(child)
+                    if inner:
+                        parts.append(inner)
+        return " ".join(parts)
 
     @staticmethod
     def _clean_text(text: str) -> str:

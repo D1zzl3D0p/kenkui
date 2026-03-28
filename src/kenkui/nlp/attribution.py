@@ -50,6 +50,11 @@ INSTRUCTIONS:
   Never abbreviate, nickname, or rephrase. If the text says 'said Tiffany' and the
   canonical is 'Tiffany Aching', respond with 'Tiffany Aching'.
 - "emotion": one of neutral, happy, sad, angry, fearful, surprised, disgusted.
+- A quoted span that is a title, label, scare quote, acronym, or a single word used
+  as a term is NOT dialogue — assign it to "NARRATOR".
+- Items with "kind": "italic" are italicised inner monologue or thought. Attribute
+  them to the character who is thinking, using context clues. If the thinker cannot
+  be determined, use "NARRATOR".
 
 Return ONLY the JSON — no explanation.
 """
@@ -81,7 +86,11 @@ def _format_roster(
                 continue
         lines.append(f'- "{name}"')
 
-    lines.append('- "NARRATOR"  (narration, description, or internal thought — not dialogue)')
+    lines.append(
+        '- "NARRATOR"  (narration, description, internal thought, AND any quoted text '
+        'that is NOT actual spoken dialogue — e.g. titles like "War and Peace", '
+        'words used as labels like the "lazy" one, acronyms like "UNESCO", scare quotes)'
+    )
     lines.append('- "Unknown"  (speaker cannot be determined from context)')
     return "\n".join(lines)
 
@@ -95,7 +104,7 @@ def _build_prompt(
 ) -> str:
     roster_str = _format_roster(roster_names, roster_aliases)
     last_str = ", ".join(last_speakers) if last_speakers else "(start of chapter)"
-    quotes_payload = [{"quote_id": q.id, "text": q.text} for q in chunk_quotes]
+    quotes_payload = [{"quote_id": q.id, "text": q.text, "kind": q.kind} for q in chunk_quotes]
     return _ATTRIBUTION_PROMPT.format(
         roster=roster_str,
         last_speakers=last_str,
