@@ -1,0 +1,6 @@
+prune src/kenkui/voices/compiled-voices
+prune src/kenkui/voices/uncompiled-voices
+global-exclude *.wav
+global-exclude *.safetensors
+global-exclude *.pt
+global-exclude *.bin

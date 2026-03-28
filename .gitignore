@@ -32,6 +32,7 @@ Thumbs.db
 .kenkui_cache/
 
 # --- Voice files (hosted on HuggingFace: D1zzl3D0p/kenkui-voices) ---
+src/kenkui/voices/*.wav
 src/kenkui/voices/compiled-voices/
 src/kenkui/voices/uncompiled-voices/
 
