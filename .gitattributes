@@ -1,3 +1,0 @@
-src/kenkui/voices/compiled-voices/*.safetensors filter=lfs diff=lfs merge=lfs -text
-src/kenkui/voices/uncompiled-voices/*.wav filter=lfs diff=lfs merge=lfs -text
-src/kenkui/voices/*.wav filter=lfs diff=lfs merge=lfs -text

@@ -31,6 +31,10 @@ Thumbs.db
 # --- Kenkui runtime cache ---
 .kenkui_cache/
 
+# --- Voice files (hosted on HuggingFace: D1zzl3D0p/kenkui-voices) ---
+src/kenkui/voices/compiled-voices/
+src/kenkui/voices/uncompiled-voices/
+
 # --- Your Application Outputs (Don't commit your own audiobooks!) ---
 # Assuming your script creates these, block them so your repo stays small
 *.m4b
@@ -38,3 +42,4 @@ Thumbs.db
 # If you have a default output folder, ignore it too:
 # output/
 .worktrees/
+docs/superpowers/
