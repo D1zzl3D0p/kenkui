@@ -163,4 +163,18 @@ def cmd_voices_fetch(args) -> None:
     console.print("Run [bold]kenkui voices list[/bold] to see the new voices.")
 
 
-__all__ = ["cmd_voices_list", "cmd_voices_fetch"]
+def cmd_voices_download(args) -> int:
+    """Download compiled voices from HuggingFace to the user data directory."""
+    from ..voices.download import download_voices, voices_are_present
+
+    force = getattr(args, "force", False)
+    if voices_are_present() and not force:
+        console.print("[green]Voices already present. Use --force to re-download.[/green]")
+        return 0
+    console.print("Downloading voices from HuggingFace…")
+    download_voices(force=force)
+    console.print("[green]Done.[/green]")
+    return 0
+
+
+__all__ = ["cmd_voices_list", "cmd_voices_fetch", "cmd_voices_download"]

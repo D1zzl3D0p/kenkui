@@ -320,9 +320,15 @@ class WorkerServer:
             job.annotated_chapters_path = CACHE_DIR / f"{h}.json"
             return
 
+        _attrib_step: list[int] = [0]
+
         def _cb(msg: str) -> None:
             if self._progress_callback:
-                self._progress_callback(0.0, f"Analyzing speakers: {msg}", 0)
+                _attrib_step[0] += 1
+                # Each callback call = one chunk processed; cap at 14.9% (TTS starts at 0%)
+                # Assume ~50 chunks typical; adjust estimate conservatively
+                pct = min(_attrib_step[0] * 0.3, 14.9)
+                self._progress_callback(pct, f"[Attribution] {msg}", 0)
 
         # Load chapters
         _cb("reading ebook…")

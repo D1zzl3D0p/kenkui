@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._filters import _is_proper_name  # noqa: F401 (re-exported for tests)
+
 if TYPE_CHECKING:
     from .models import CharacterRoster
 
@@ -39,25 +41,6 @@ class BookNLPRosterData:
 
 
 _MIN_COMMON_FREQ = 5
-
-# Proper-name mention filtering: reject entries that look like noun phrases
-# rather than names. BookNLP's "proper" field can include long descriptive
-# spans when coreference resolution links a character to a sentence fragment.
-_MAX_NAME_WORDS = 5
-_PHRASE_STARTERS = frozenset({"a", "an", "the", "any", "all", "some", "no", "every"})
-_RELATIVE_WORDS = frozenset({"who", "whom", "whose", "which", "that", "when", "where"})
-
-
-def _is_proper_name(text: str) -> bool:
-    """Return True if *text* looks like a character name rather than a phrase."""
-    words = text.split()
-    if len(words) > _MAX_NAME_WORDS:
-        return False
-    if words and words[0].lower() in _PHRASE_STARTERS:
-        return False
-    if any(w.lower() in _RELATIVE_WORDS for w in words):
-        return False
-    return True
 
 
 def _apply_booknlp_transformers_compat() -> bool:
@@ -178,15 +161,12 @@ def build_roster_from_booknlp(
         if not proper_entries:
             continue
 
-        aliases = [
-            entry["n"] for entry in proper_entries
-            if entry.get("n") and _is_proper_name(entry["n"])
-        ]
+        aliases = [entry["n"] for entry in proper_entries if entry.get("n") and _is_proper_name(entry["n"])]
         if not aliases:
             continue
 
         # Read BookNLP's neural gender prediction.
-        raw_gender = (char_data.get("g") or {}).get("argmax", "") or ""
+        raw_gender = char_data.get("g", {}).get("argmax", "") or ""
         if raw_gender in ("he/him", "she/her", "they/them"):
             gender = raw_gender
         elif raw_gender in ("he", "him", "his"):

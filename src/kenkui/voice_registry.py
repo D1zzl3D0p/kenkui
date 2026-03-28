@@ -207,6 +207,13 @@ class VoiceRegistry:
                         voices.append(parse_compiled_filename(Path(str(entry))))
         except Exception as exc:
             logger.debug("Could not scan compiled voices: %s", exc)
+        # Also scan user-downloaded compiled voices
+        user_compiled = Path.home() / ".local" / "share" / "kenkui" / "voices" / "compiled"
+        if user_compiled.exists():
+            for p in sorted(user_compiled.glob("*.safetensors")):
+                meta = parse_compiled_filename(p)
+                if meta:
+                    voices.append(meta)
         return voices
 
     def _scan_uncompiled_pkg(self) -> list[VoiceMetadata]:

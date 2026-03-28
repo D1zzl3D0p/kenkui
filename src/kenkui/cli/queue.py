@@ -114,8 +114,15 @@ def _build_progress_bar(queue_info) -> Progress | None:
         TextColumn("{task.description}"),
         expand=True,
     )
-    desc = (active.current_chapter or "")[:60]
+    raw_desc = (active.current_chapter or "")
     progress_capped = min(active.progress or 0, 100)
+
+    if raw_desc.startswith("[Attribution]"):
+        clean = raw_desc.removeprefix("[Attribution]").strip()
+        desc = f"[yellow]Attribution[/yellow]  {clean}"[:80]
+    else:
+        desc = raw_desc[:60]
+
     prog.add_task(desc, total=100, completed=progress_capped)
     return prog
 

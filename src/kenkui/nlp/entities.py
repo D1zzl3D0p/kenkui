@@ -40,6 +40,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from ._filters import _is_proper_name
 from .models import AliasGroup, CharacterRoster
 
 if TYPE_CHECKING:
@@ -142,7 +143,7 @@ def extract_person_names(text: str, nlp) -> list[str]:
     seen: set[str] = set()
     names: list[str] = []
     for ent in doc.ents:
-        if ent.label_ == "PERSON" and ent.text not in seen:
+        if ent.label_ == "PERSON" and ent.text not in seen and _is_proper_name(ent.text):
             seen.add(ent.text)
             names.append(ent.text)
     return names

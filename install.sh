@@ -192,11 +192,8 @@ install_kenkui() {
         return 1
     fi
 
-    if command -v git-lfs &>/dev/null; then
-        git lfs pull
-    else
-        log_warn "git-lfs not found — large voice files may not be present. Install git-lfs and re-run."
-    fi
+    log_info "Downloading voices from HuggingFace (~440 MB)…"
+    uv run kenkui voices download
 
     return 0
 }

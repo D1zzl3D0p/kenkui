@@ -270,12 +270,44 @@ def _build_parser() -> argparse.ArgumentParser:
         help="HuggingFace repo containing .wav voice files. Overrides KENKUI_VOICES_REPO env var.",
     )
 
+    voices_download_p = voices_sub.add_parser(
+        "download", help="Download compiled voices from HuggingFace."
+    )
+    voices_download_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download voices even if already present.",
+    )
+
     return parser
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+
+def _ensure_voices() -> None:
+    """Download voices on first run if not present."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from .voices.download import voices_are_present, download_voices
+
+    console = Console()
+    try:
+        if not voices_are_present():
+            console.print(Panel(
+                "[bold]Voice files not found.[/bold]\n"
+                "Downloading compiled voices from HuggingFace (~440 MB)…\n"
+                "[dim]This only happens once. Use 'kenkui voices download' to re-download.[/dim]",
+                title="First Run Setup",
+                border_style="cyan",
+            ))
+            download_voices()
+            console.print("[green]✓ Voices downloaded successfully.[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]Warning: Could not download voices: {exc}[/yellow]")
+        console.print("[dim]8 built-in voices are still available. Run 'kenkui voices download' later.[/dim]")
 
 
 def _is_bare_book_invocation() -> bool:
@@ -322,6 +354,9 @@ def main() -> None:
 
     command = getattr(args, "command", None)
 
+    # First-run voice check
+    _ensure_voices()
+
     # ---- Sub-command dispatch ----------------------------------------------
     if command == "add":
         from .cli.add import cmd_add
@@ -350,13 +385,15 @@ def main() -> None:
         sys.exit(cmd_config(args))
 
     elif command == "voices":
-        from .cli.voices import cmd_voices_list, cmd_voices_fetch
+        from .cli.voices import cmd_voices_list, cmd_voices_fetch, cmd_voices_download
 
         voices_command = getattr(args, "voices_command", None)
         if voices_command == "list":
             cmd_voices_list(args)
         elif voices_command == "fetch":
             cmd_voices_fetch(args)
+        elif voices_command == "download":
+            sys.exit(cmd_voices_download(args))
         else:
             # No subcommand: default to list (no filters)
             args.gender = None

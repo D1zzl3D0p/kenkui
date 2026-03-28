@@ -24,6 +24,23 @@ import sys
 import time
 from pathlib import Path
 
+
+# ---------------------------------------------------------------------------
+# Back-navigation support
+# ---------------------------------------------------------------------------
+
+
+class GoBack(Exception):
+    """Raised by a wizard step when the user presses Escape to go back."""
+
+
+def _wizard_execute(prompt):
+    """Execute an InquirerPy prompt; raise GoBack if the user escapes."""
+    try:
+        return prompt.execute()
+    except (KeyboardInterrupt, EOFError):
+        raise GoBack
+
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
@@ -106,21 +123,19 @@ def _prompt_voice(default: str = "alba", message: str = "Select voice:") -> str:
     from InquirerPy import inquirer
 
     choices = _build_voice_choices()
-    voice = inquirer.fuzzy(
+    voice = _wizard_execute(inquirer.fuzzy(
         message=message,
         choices=choices,
         default=default,
         max_height="40%",
-    ).execute()
+    ))
 
     if voice == "__custom__":
-        voice = (
+        voice = _wizard_execute(
             inquirer.text(
                 message="Enter file path or hf:// URL:",
             )
-            .execute()
-            .strip()
-        )
+        ).strip()
 
     return voice
 
@@ -150,7 +165,7 @@ def _check_hf_auth(voice: str) -> None:
     console.print()
 
     for attempt in range(3):
-        token = inquirer.secret(message="Paste your HuggingFace token (hf_…):").execute().strip()
+        token = _wizard_execute(inquirer.secret(message="Paste your HuggingFace token (hf_…):")).strip()
         ok, msg = do_login(token)
         if ok:
             console.print(f"[green]{msg}[/green]")
@@ -177,10 +192,10 @@ def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
         {"name": "None  (skip all chapters)", "value": "none"},
     ]
 
-    preset_val = inquirer.select(
+    preset_val = _wizard_execute(inquirer.select(
         message="Chapter selection:",
         choices=preset_choices,
-    ).execute()
+    ))
 
     try:
         preset_enum = ChapterPreset(preset_val)
@@ -219,11 +234,11 @@ def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
         for ch in chapters
     ]
 
-    included = inquirer.checkbox(
+    included = _wizard_execute(inquirer.checkbox(
         message=f"Select chapters to include (preset: {preset_val}):",
         choices=chapter_choices,
         instruction="(Space to toggle, Enter to confirm)",
-    ).execute()
+    ))
 
     return ChapterSelection(
         preset=ChapterPreset.MANUAL if set(included) != default_included else preset_enum,
@@ -529,8 +544,6 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     Phase 2: Assign they/them chars to the pool with fewer total quotes,
       then round-robin within that pool.
     """
-    import random
-
     from ..voice_registry import get_registry
     registry = get_registry()
     male_voices = [v.name for v in registry.filter(gender="Male")]
@@ -539,10 +552,6 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     # Exclude narrator voice from character pools so it stays unique to the narrator.
     male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
     female_pool = [v for v in female_voices if v != narrator_voice] or female_voices
-
-    # Shuffle so each book gets a different voice distribution, not alphabetical order.
-    random.shuffle(male_pool)
-    random.shuffle(female_pool)
 
     male_idx, female_idx = 0, 0
     male_quotes, female_quotes = 0, 0
@@ -579,6 +588,8 @@ def _prompt_character_voice_review(
     speaker_voices: dict[str, str], characters, narrator_voice: str
 ) -> dict[str, str]:
     """Show a reference table, then review each character via an InquirerPy list."""
+    from collections import defaultdict
+
     from InquirerPy import inquirer
 
     # Exclude narrator voice from per-character assignment choices
@@ -595,49 +606,85 @@ def _prompt_character_voice_review(
     tbl.add_column("Gender")
     tbl.add_column("Voice", style="bold cyan")
 
-    # Build list of review choices — one per character + Done.
+    def _make_choice_label(ch, current_voice: str) -> str:
+        """Build voice-first label: voice (20-char col)  CharName  (mentions, gender)."""
+        gender = ch.gender_pronoun or "?"
+        return f"{current_voice:<20}  {ch.display_name}  ({ch.prominence} mentions, {gender})"
+
+    def _build_voice_users() -> dict[str, list[str]]:
+        """Build inverse map: voice_name → list of character display names using it."""
+        users: dict[str, list[str]] = defaultdict(list)
+        for cid, v in speaker_voices.items():
+            if cid == "NARRATOR":
+                continue
+            char = next((c for c in characters if c.character_id == cid), None)
+            label = char.display_name if char else cid
+            users[v].append(label)
+        return users
+
+    def _annotated_voice_choices(exclude_char_name: str | None = None) -> list[dict]:
+        """Return voice choices annotated with which other chars already use each voice."""
+        voice_users = _build_voice_users()
+        result = []
+        for c in voice_choices:
+            if c.get("value") == "__custom__":
+                result.append(c)
+                continue
+            v = c["value"]
+            users = [u for u in voice_users.get(v, []) if u != exclude_char_name]
+            suffix = f"  ← {', '.join(users[:2])}" if users else ""
+            result.append({**c, "name": c["name"] + suffix})
+        return result
+
+    # Build list of review choices — one per character (voice-first format).
     review_choices = []
     for ch in sorted(characters, key=lambda c: c.prominence, reverse=True):
         current = speaker_voices.get(ch.character_id, narrator_voice)
-        gender = ch.gender_pronoun or "?"
         review_choices.append(
             {
-                "name": f"{ch.display_name} ({ch.prominence} mentions, {gender})  →  {current}",
+                "name": _make_choice_label(ch, current),
                 "value": ch.character_id,
             }
         )
-    review_choices.append({"name": "Done — accept assignments", "value": "__done__"})
 
     while True:
-        chosen = inquirer.select(
-            message="Select a character to re-assign (or Done to accept):",
-            choices=review_choices,
-            max_height="40%",
-        ).execute()
-
-        if chosen == "__done__":
+        # Task 3B: confirm-based loop instead of "Done" sentinel.
+        accept = _wizard_execute(inquirer.confirm(
+            message="Accept these voice assignments?",
+            default=True,
+        ))
+        if accept:
             break
 
-        new_voice = inquirer.fuzzy(
+        # User said No — let them pick a character to re-assign.
+        chosen = _wizard_execute(inquirer.select(
+            message="Select a character to re-assign:",
+            choices=review_choices,
+            max_height="40%",
+        ))
+
+        ch = next((c for c in characters if c.character_id == chosen), None)
+        exclude_name = ch.display_name if ch else chosen
+
+        new_voice = _wizard_execute(inquirer.fuzzy(
             message=f"Voice for {chosen}:",
-            choices=voice_choices,
+            choices=_annotated_voice_choices(exclude_char_name=exclude_name),
             default=speaker_voices.get(chosen, narrator_voice),
             max_height="40%",
-        ).execute()
+        ))
 
         if new_voice == "__custom__":
-            new_voice = inquirer.text(message="Enter path or hf:// URL:").execute().strip()
+            new_voice = _wizard_execute(
+                inquirer.text(message="Enter path or hf:// URL:")
+            ).strip()
 
         speaker_voices[chosen] = new_voice
 
-        # Update the display name of the choice in the list.
+        # Update the display label in the list (voice-first format).
         for rc in review_choices:
             if rc["value"] == chosen:
-                ch = next(c for c in characters if c.character_id == chosen)
-                gender = ch.gender_pronoun or "?"
-                rc["name"] = (
-                    f"{ch.display_name} ({ch.prominence} mentions, {gender})  →  {new_voice}"
-                )
+                if ch is not None:
+                    rc["name"] = _make_choice_label(ch, new_voice)
                 break
 
     return speaker_voices
@@ -670,7 +717,7 @@ def _prompt_multivoice_character_voices(scan_result, default_voice: str) -> dict
     _check_hf_auth(narrator_voice)
 
     # Step B — choose simple or advanced assignment mode.
-    assignment_mode = inquirer.select(
+    assignment_mode = _wizard_execute(inquirer.select(
         message="Character voice assignment mode:",
         choices=[
             {
@@ -682,7 +729,7 @@ def _prompt_multivoice_character_voices(scan_result, default_voice: str) -> dict
                 "value": "advanced",
             },
         ],
-    ).execute()
+    ))
 
     if assignment_mode == "simple":
         return _prompt_simple_voice_assignment(characters, narrator_voice)
@@ -778,10 +825,10 @@ def _check_multivoice_requirements(app_config) -> bool:
     if all_ok:
         return True
 
-    proceed = inquirer.confirm(
+    proceed = _wizard_execute(inquirer.confirm(
         message="Continue anyway? (the wizard will attempt to install missing requirements)",
         default=False,
-    ).execute()
+    ))
     return proceed
 
 
@@ -850,55 +897,54 @@ def _prompt_quality_overrides(app_config) -> dict:
     """
     from InquirerPy import inquirer
 
-    want = inquirer.confirm(
+    want = _wizard_execute(inquirer.confirm(
         message="Customize audio quality for this job? (defaults come from your config)",
         default=False,
-    ).execute()
+    ))
     if not want:
         return {}
 
     overrides: dict = {}
 
-    temp = inquirer.number(
+    temp = _wizard_execute(inquirer.number(
         message=f"Temperature (0.0–1.5, current default {app_config.temp}):",
         default=app_config.temp,
         float_allowed=True,
         min_allowed=0.0,
         max_allowed=1.5,
-    ).execute()
+    ))
     if float(temp) != app_config.temp:
         overrides["job_temp"] = float(temp)
 
-    lsd = inquirer.number(
+    lsd = _wizard_execute(inquirer.number(
         message=f"LSD decode steps (1–50, current default {app_config.lsd_decode_steps}):",
         default=app_config.lsd_decode_steps,
         min_allowed=1,
         max_allowed=50,
-    ).execute()
+    ))
     if int(lsd) != app_config.lsd_decode_steps:
         overrides["job_lsd_decode_steps"] = int(lsd)
 
     noise_default = app_config.noise_clamp or 0.0
-    noise = inquirer.number(
+    noise = _wizard_execute(inquirer.number(
         message=f"Noise clamp (0=off, ~3.0=reduce glitches, current default {noise_default}):",
         default=noise_default,
         float_allowed=True,
         min_allowed=0.0,
         max_allowed=10.0,
-    ).execute()
+    ))
     noise_val = float(noise)
     if noise_val != noise_default:
         overrides["job_noise_clamp"] = noise_val if noise_val > 0 else None
 
-    fae = inquirer.number(
+    fae = _wizard_execute(inquirer.number(
         message=f"Frames after EoS cutoff (0=suppress noise, current default {app_config.frames_after_eos}):",
         default=app_config.frames_after_eos,
         min_allowed=0,
         max_allowed=50,
-    ).execute()
-    fae_val = int(fae) if fae not in (None, "") else app_config.frames_after_eos
-    if fae_val != app_config.frames_after_eos:
-        overrides["job_frames_after_eos"] = fae_val
+    ))
+    if int(fae) != app_config.frames_after_eos:
+        overrides["job_frames_after_eos"] = int(fae)
 
     bitrate_choices = [
         {"name": "64k  (small file, lower quality)", "value": "64k"},
@@ -907,29 +953,29 @@ def _prompt_quality_overrides(app_config) -> dict:
         {"name": "192k", "value": "192k"},
         {"name": "256k  (large file, higher quality)", "value": "256k"},
     ]
-    bitrate = inquirer.select(
+    bitrate = _wizard_execute(inquirer.select(
         message=f"Output bitrate (current default {app_config.m4b_bitrate}):",
         choices=bitrate_choices,
         default=app_config.m4b_bitrate,
-    ).execute()
+    ))
     if bitrate != app_config.m4b_bitrate:
         overrides["job_m4b_bitrate"] = bitrate
 
-    pause_line = inquirer.number(
+    pause_line = _wizard_execute(inquirer.number(
         message=f"Silence between lines in ms (current default {app_config.pause_line_ms}):",
         default=app_config.pause_line_ms,
         min_allowed=0,
         max_allowed=5000,
-    ).execute()
+    ))
     if int(pause_line) != app_config.pause_line_ms:
         overrides["job_pause_line_ms"] = int(pause_line)
 
-    pause_chapter = inquirer.number(
+    pause_chapter = _wizard_execute(inquirer.number(
         message=f"Silence between chapters in ms (current default {app_config.pause_chapter_ms}):",
         default=app_config.pause_chapter_ms,
         min_allowed=0,
         max_allowed=30000,
-    ).execute()
+    ))
     if int(pause_chapter) != app_config.pause_chapter_ms:
         overrides["job_pause_chapter_ms"] = int(pause_chapter)
 
@@ -941,47 +987,66 @@ def _prompt_quality_overrides(app_config) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _run_wizard(book_path: Path, app_config) -> dict | None:
-    """Run the interactive wizard.
+# ---------------------------------------------------------------------------
+# Wizard step functions (each accepts state dict, returns updated state dict)
+# ---------------------------------------------------------------------------
 
-    Returns a kwargs dict suitable for client.add_job(), or None if the user
-    cancels.
-    """
+
+def _step_chapters(state: dict) -> dict:
+    """Step 1: chapter preset + selection."""
+    book_path: Path = state["_book_path"]
+    chapter_selection = _prompt_chapter_preset_and_selection(book_path)
+    return {**state, "chapter_selection": chapter_selection}
+
+
+def _step_mode(state: dict) -> dict:
+    """Step 2: narration mode select."""
     from InquirerPy import inquirer
 
-    from ..models import NarrationMode
-
-    console.rule(f"[bold]kenkui — {book_path.name}[/bold]")
-
-    # Step 1 — Chapter preset / custom selection.
-    chapter_selection = _prompt_chapter_preset_and_selection(book_path)
-
-    # Step 2 — Narration mode.
-    mode_val = inquirer.select(
+    mode_val = _wizard_execute(inquirer.select(
         message="Narration mode:",
         choices=[
             {"name": "Single Voice", "value": "single"},
             {"name": "Multi-Voice  (per-character, requires local LLM)", "value": "multi"},
             {"name": "Chapter Voice  (assign a voice per chapter)", "value": "chapter"},
         ],
-    ).execute()
+    ))
+    return {**state, "mode": mode_val}
 
-    # Step 3 — Quality overrides (passive, no computation).
+
+def _step_quality(state: dict) -> dict:
+    """Step 3: quality overrides."""
+    app_config = state["_app_config"]
     quality_overrides = _prompt_quality_overrides(app_config)
+    return {**state, "quality_overrides": quality_overrides}
 
-    # Step 4 — Output directory (passive).
+
+def _step_output_dir(state: dict) -> dict:
+    """Step 4: output directory."""
+    from InquirerPy import inquirer
+
+    app_config = state["_app_config"]
+    book_path: Path = state["_book_path"]
     default_out = str(app_config.default_output_dir or book_path.parent)
     output_dir = (
-        inquirer.text(
+        _wizard_execute(inquirer.text(
             message="Output directory:",
             default=default_out,
-        )
-        .execute()
-        .strip()
+        )).strip()
         or default_out
     )
+    return {**state, "output_dir": output_dir}
 
-    # --- Mode-specific setup ---
+
+def _step_voice_setup(state: dict) -> dict:
+    """Step 5: mode-specific voice setup (multi / chapter / single)."""
+    from InquirerPy import inquirer
+
+    mode_val: str = state["mode"]
+    app_config = state["_app_config"]
+    book_path: Path = state["_book_path"]
+    chapter_selection: dict = state["chapter_selection"]
+
     voice: str = app_config.default_voice
     speaker_voices: dict[str, str] = {}
     chapter_voices: dict[str, str] = {}
@@ -993,7 +1058,6 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         from ..nlp import CACHE_DIR, book_hash, get_cached_roster
         from ..nlp.setup import check_llm_available, run_setup_dialogue
 
-        # Step 5a — Show requirements status and confirm readiness.
         console.print()
         if not _check_multivoice_requirements(app_config):
             console.print("[yellow]Falling back to single-voice mode.[/yellow]")
@@ -1001,23 +1065,23 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
             mode_val = "single"
 
         if mode_val == "multi":
-            # Step 5b — Ensure spaCy model is available.
             if not _ensure_spacy():
                 console.print("[red]Cannot proceed without spaCy model.[/red]")
-                return None
+                return {**state, "voice": voice, "speaker_voices": speaker_voices,
+                        "chapter_voices": chapter_voices, "roster_cache_path": roster_cache_path,
+                        "narration_mode": narration_mode, "_abort": True}
 
-            # Step 5c — NLP model: show current model and offer reconfigure.
             console.print()
             console.print(
                 f"NLP model for speaker inference: [bold]{app_config.nlp_model}[/bold]"
             )
-            reconfigure_action = inquirer.select(
+            reconfigure_action = _wizard_execute(inquirer.select(
                 message="Continue with this model or reconfigure?",
                 choices=[
                     {"name": f"Continue with {app_config.nlp_model}", "value": "continue"},
                     {"name": "Reconfigure NLP model…", "value": "reconfigure"},
                 ],
-            ).execute()
+            ))
 
             if reconfigure_action == "reconfigure" or not check_llm_available(app_config):
                 updated = run_setup_dialogue(app_config)
@@ -1032,10 +1096,9 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
                     )
 
         if narration_mode == "multi":
-            # Step 6 — Fast character scan (Stage 1-2 only, seconds).
             use_cache = True
             if get_cached_roster(book_path) is not None:
-                use_cache = inquirer.select(
+                use_cache = _wizard_execute(inquirer.select(
                     message="Cached character roster found for this book.",
                     choices=[
                         {"name": "Use cached roster  (fast)", "value": True},
@@ -1044,7 +1107,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
                             "value": False,
                         },
                     ],
-                ).execute()
+                ))
 
             fast_result = _run_fast_scan_wizard(
                 book_path,
@@ -1056,14 +1119,12 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
                 console.print("[yellow]Falling back to single-voice mode.[/yellow]")
                 narration_mode = "single"
             else:
-                # Step 7 — Character voice assignment (simple or advanced).
                 speaker_voices = _prompt_multivoice_character_voices(
                     fast_result, app_config.default_voice
                 )
                 roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
 
     elif mode_val == "chapter":
-        # Chapter-voice mode: assign a voice per chapter.
         narration_mode = "single"
         console.print()
         console.print("[bold]Voice for narrator / unassigned chapters:[/bold]")
@@ -1078,7 +1139,26 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
             console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
             chapter_voices = {}
 
-    # Step 8 — Narrator voice (single/chapter modes; multi already selected it).
+    return {
+        **state,
+        "_app_config": app_config,  # may have been updated during multi setup
+        "voice": voice,
+        "speaker_voices": speaker_voices,
+        "chapter_voices": chapter_voices,
+        "roster_cache_path": roster_cache_path,
+        "narration_mode": narration_mode,
+        "mode": mode_val,
+    }
+
+
+def _step_narrator_voice(state: dict) -> dict:
+    """Step 6: narrator voice for single mode (no-op for multi/chapter)."""
+    narration_mode: str = state["narration_mode"]
+    mode_val: str = state["mode"]
+    app_config = state["_app_config"]
+    speaker_voices: dict = state["speaker_voices"]
+    voice: str = state["voice"]
+
     if narration_mode == "multi":
         voice = speaker_voices.get("NARRATOR", app_config.default_voice)
     elif mode_val != "chapter":
@@ -1087,7 +1167,24 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         voice = _prompt_voice(default=app_config.default_voice, message="Select voice:")
         _check_hf_auth(voice)
 
-    # Step 9 — Confirmation table.
+    return {**state, "voice": voice}
+
+
+def _step_confirm(state: dict) -> dict:
+    """Step 7: confirmation table + submit."""
+    from InquirerPy import inquirer
+
+    book_path: Path = state["_book_path"]
+    chapter_selection: dict = state["chapter_selection"]
+    mode_val: str = state["mode"]
+    narration_mode: str = state["narration_mode"]
+    voice: str = state["voice"]
+    speaker_voices: dict = state["speaker_voices"]
+    chapter_voices: dict = state["chapter_voices"]
+    quality_overrides: dict = state["quality_overrides"]
+    output_dir: str = state["output_dir"]
+    roster_cache_path = state["roster_cache_path"]
+
     console.print()
     summary = Table(title="Job Summary", show_header=False, box=None)
     summary.add_column("Field", style="bold", width=20)
@@ -1115,10 +1212,10 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
     console.print(summary)
     console.print()
 
-    confirmed = inquirer.confirm(message="Queue this job?", default=True).execute()
+    confirmed = _wizard_execute(inquirer.confirm(message="Queue this job?", default=True))
     if not confirmed:
         console.print("Cancelled.")
-        return None
+        return {**state, "_cancelled": True}
 
     job_kwargs = dict(
         ebook_path=str(book_path),
@@ -1127,12 +1224,61 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         output_path=output_dir,
         narration_mode=narration_mode,
         speaker_voices=speaker_voices or None,
-        annotated_chapters_path=None,     # Worker populates this during processing
+        annotated_chapters_path=None,
         roster_cache_path=roster_cache_path,
         chapter_voices=chapter_voices or None,
         **quality_overrides,
     )
-    return job_kwargs
+    return {**state, "_job_kwargs": job_kwargs}
+
+
+def _run_wizard(book_path: Path, app_config) -> dict | None:
+    """Run the interactive wizard using a step-stack state machine.
+
+    Returns a kwargs dict suitable for client.add_job(), or None if the user
+    cancels.
+    """
+    console.rule(f"[bold]kenkui — {book_path.name}[/bold]")
+
+    state: dict = {
+        "_book_path": book_path,
+        "_app_config": app_config,
+        # Defaults for step outputs
+        "voice": app_config.default_voice,
+        "speaker_voices": {},
+        "chapter_voices": {},
+        "roster_cache_path": None,
+        "quality_overrides": {},
+    }
+
+    steps = [
+        _step_chapters,
+        _step_mode,
+        _step_quality,
+        _step_output_dir,
+        _step_voice_setup,
+        _step_narrator_voice,
+        _step_confirm,
+    ]
+
+    i = 0
+    while i < len(steps):
+        try:
+            state = steps[i](state)
+            # Check for abort signals from step functions
+            if state.get("_abort"):
+                return None
+            if state.get("_cancelled"):
+                return None
+            if "_job_kwargs" in state:
+                return state["_job_kwargs"]
+            i += 1
+        except GoBack:
+            if i > 0:
+                i -= 1
+            # If already at step 0, absorb the GoBack (can't go further back)
+
+    return None
 
 
 # ---------------------------------------------------------------------------
