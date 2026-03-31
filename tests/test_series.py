@@ -12,7 +12,29 @@ from kenkui.series import (
     list_series,
     slugify,
     series_dir,
+    match_characters,
 )
+from kenkui.models import CharacterInfo, FastScanResult
+from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+
+def _make_fast_result(canonical_aliases: dict[str, list[str]]) -> FastScanResult:
+    """Build a minimal FastScanResult from a {canonical: [aliases]} dict."""
+    groups = [
+        AliasGroup(canonical=c, aliases=a) for c, a in canonical_aliases.items()
+    ]
+    roster = CharacterRoster(characters=groups)
+    characters = [
+        CharacterInfo(character_id=c, display_name=c)
+        for c in canonical_aliases
+    ]
+    return FastScanResult(roster=roster, characters=characters, book_hash="test")
+
+
+def _make_manifest(entries: list[tuple[str, list[str], str]]) -> SeriesManifest:
+    """Build a SeriesManifest from [(canonical, aliases, voice)] tuples."""
+    chars = [SeriesCharacter(canonical=c, aliases=a, voice=v) for c, a, v in entries]
+    return SeriesManifest(name="Test", slug="test", updated_at="", characters=chars)
 
 
 class TestSlugify:
@@ -78,3 +100,54 @@ class TestSeriesManifestRoundTrip:
     def test_list_series_empty_dir(self, tmp_path, monkeypatch):
         monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
         assert list_series() == []
+
+
+class TestMatchCharacters:
+    def test_exact_canonical_match(self):
+        roster = _make_fast_result({"Hermione Granger": ["Hermione"]})
+        manifest = _make_manifest([("Hermione Granger", ["Hermione"], "cosette")])
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert inherited["Hermione Granger"] == "cosette"
+        assert "Hermione Granger" in pinned
+
+    def test_alias_exact_match(self):
+        roster = _make_fast_result({"Mat": []})
+        manifest = _make_manifest([("Matrim Cauthon", ["Mat", "Mat Cauthon"], "jean")])
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert inherited["Mat"] == "jean"
+
+    def test_word_overlap_match(self):
+        # "Mat" in new book; "Matrim Cauthon" in manifest (no shared alias yet)
+        roster = _make_fast_result({"Mat": []})
+        manifest = _make_manifest([("Matrim Cauthon", [], "jean")])
+        # "mat" has 1 word; "matrim cauthon" has 2 words — overlap 1/1 = 1.0
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert inherited.get("Mat") == "jean"
+
+    def test_no_match_below_threshold(self):
+        roster = _make_fast_result({"Alice": []})
+        manifest = _make_manifest([("Robert Johnson", [], "alba")])
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert "Alice" not in inherited
+        assert len(pinned) == 0
+
+    def test_unmatched_characters_excluded(self):
+        roster = _make_fast_result({"Rand": [], "Newguy": []})
+        manifest = _make_manifest([("Rand al'Thor", ["Rand"], "alba")])
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert "Rand" in pinned
+        assert "Newguy" not in pinned
+
+    def test_empty_manifest(self):
+        roster = _make_fast_result({"Alice": ["Ali"]})
+        manifest = _make_manifest([])
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert inherited == {}
+        assert pinned == set()
+
+    def test_short_prefix_does_not_match_unrelated_name(self):
+        # "Ed" (2 chars) must not inherit a voice from "Edward Norton" — different character
+        roster = _make_fast_result({"Ed": []})
+        manifest = _make_manifest([("Edward Norton", [], "alba")])
+        inherited, pinned = match_characters(roster.characters, roster, manifest)
+        assert "Ed" not in inherited

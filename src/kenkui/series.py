@@ -116,3 +116,78 @@ def list_series() -> list[SeriesManifest]:
         if m is not None:
             results.append(m)
     return results
+
+
+def match_characters(
+    characters: list["CharacterInfo"],
+    roster: "FastScanResult",
+    manifest: SeriesManifest,
+) -> tuple[dict[str, str], set[str]]:
+    """Match new-book characters to series manifest entries via alias-overlap.
+
+    Returns:
+        inherited_voices: char_id → voice for matched characters
+        pinned: set of char_ids that received an inherited voice
+    """
+    alias_map: dict[str, list[str]] = {
+        g.canonical: g.aliases for g in roster.roster.characters
+    }
+
+    inherited_voices: dict[str, str] = {}
+    pinned: set[str] = set()
+
+    for char in characters:
+        aliases = alias_map.get(char.character_id, [])
+        char_names = {char.character_id.lower()} | {a.lower() for a in aliases}
+
+        best_score = 0.0
+        best_entry: SeriesCharacter | None = None
+
+        for entry in manifest.characters:
+            entry_names = {entry.canonical.lower()} | {a.lower() for a in entry.aliases}
+            score = _score_names(char_names, entry_names)
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+
+        if best_score >= 0.7 and best_entry is not None and best_entry.voice:
+            inherited_voices[char.character_id] = best_entry.voice
+            pinned.add(char.character_id)
+
+    return inherited_voices, pinned
+
+
+def _score_names(a_names: set[str], b_names: set[str]) -> float:
+    """Score similarity between two sets of name strings. Returns 0.0–1.0."""
+    if a_names & b_names:
+        return 1.0
+    best = 0.0
+    for a in a_names:
+        for b in b_names:
+            s = _word_overlap(a, b)
+            if s > best:
+                best = s
+    return best
+
+
+def _word_overlap(a: str, b: str) -> float:
+    """Fraction of words in the shorter string that appear in the longer string.
+
+    Exact word match scores full credit. A word scores credit if it is a
+    prefix of a longer word AND is at least 3 characters (to avoid false
+    positives from single-letter or two-letter abbreviations).
+    """
+    a_words = set(a.lower().split())
+    b_words = set(b.lower().split())
+    if not a_words or not b_words:
+        return 0.0
+    if len(a_words) <= len(b_words):
+        shorter, longer = a_words, b_words
+    else:
+        shorter, longer = b_words, a_words
+    matched = sum(
+        1
+        for w in shorter
+        if w in longer or (len(w) >= 3 and any(lw.startswith(w) for lw in longer))
+    )
+    return matched / len(shorter)
