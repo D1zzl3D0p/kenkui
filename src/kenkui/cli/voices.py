@@ -9,6 +9,9 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from ..voice_registry import get_registry
+from ..config import load_app_config, save_app_config, DEFAULT_CONFIG_PATH
+
 console = Console()
 
 
@@ -174,4 +177,55 @@ def cmd_voices_download(args) -> int:
     return 0
 
 
-__all__ = ["cmd_voices_list", "cmd_voices_fetch", "cmd_voices_download"]
+def cmd_voices_exclude(args) -> None:
+    """Add a voice to the global excluded-from-auto-assignment list."""
+    voice_name: str = args.voice
+    registry = get_registry()
+
+    if registry.resolve(voice_name) is None:
+        console.print(f"[yellow]Warning: '{voice_name}' is not in the voice registry. "
+                      f"Excluding anyway.[/yellow]")
+
+    config = load_app_config()
+    if voice_name in config.excluded_voices:
+        console.print(f"[yellow]'{voice_name}' is already excluded.[/yellow]")
+        return
+
+    config.excluded_voices = list(config.excluded_voices) + [voice_name]
+
+    # Warn if excluding this voice empties a gender pool
+    male_names = {v.name for v in registry.filter(gender="Male")}
+    female_names = {v.name for v in registry.filter(gender="Female")}
+    excluded_set = set(config.excluded_voices)
+    if male_names and male_names <= excluded_set:
+        console.print("[yellow]Warning: all Male voices are now excluded. "
+                      "Auto-assignment will fall back to the full pool.[/yellow]")
+    if female_names and female_names <= excluded_set:
+        console.print("[yellow]Warning: all Female voices are now excluded. "
+                      "Auto-assignment will fall back to the full pool.[/yellow]")
+
+    save_app_config(config, DEFAULT_CONFIG_PATH)
+    console.print(f"[green]'{voice_name}' excluded from auto-assignment pool.[/green]")
+
+
+def cmd_voices_include(args) -> None:
+    """Remove a voice from the excluded list, restoring it to auto-assignment."""
+    voice_name: str = args.voice
+    config = load_app_config()
+
+    if voice_name not in config.excluded_voices:
+        console.print(f"[yellow]'{voice_name}' is not in the excluded list.[/yellow]")
+        return
+
+    config.excluded_voices = [v for v in config.excluded_voices if v != voice_name]
+    save_app_config(config, DEFAULT_CONFIG_PATH)
+    console.print(f"[green]'{voice_name}' restored to auto-assignment pool.[/green]")
+
+
+__all__ = [
+    "cmd_voices_list",
+    "cmd_voices_fetch",
+    "cmd_voices_download",
+    "cmd_voices_exclude",
+    "cmd_voices_include",
+]

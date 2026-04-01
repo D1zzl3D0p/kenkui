@@ -279,6 +279,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Re-download voices even if already present.",
     )
 
+    voices_exclude_p = voices_sub.add_parser(
+        "exclude", help="Exclude a voice from the auto-assignment pool."
+    )
+    voices_exclude_p.add_argument("voice", help="Voice name to exclude.")
+
+    voices_include_p = voices_sub.add_parser(
+        "include", help="Re-add a previously excluded voice to the pool."
+    )
+    voices_include_p.add_argument("voice", help="Voice name to re-include.")
+
     return parser
 
 
@@ -388,7 +398,13 @@ def main() -> None:
         sys.exit(cmd_config(args))
 
     elif command == "voices":
-        from .cli.voices import cmd_voices_list, cmd_voices_fetch, cmd_voices_download
+        from .cli.voices import (
+            cmd_voices_list,
+            cmd_voices_fetch,
+            cmd_voices_download,
+            cmd_voices_exclude,
+            cmd_voices_include,
+        )
 
         voices_command = getattr(args, "voices_command", None)
         if voices_command == "list":
@@ -397,6 +413,10 @@ def main() -> None:
             cmd_voices_fetch(args)
         elif voices_command == "download":
             sys.exit(cmd_voices_download(args))
+        elif voices_command == "exclude":
+            cmd_voices_exclude(args)
+        elif voices_command == "include":
+            cmd_voices_include(args)
         else:
             # No subcommand: default to list (no filters)
             args.gender = None
