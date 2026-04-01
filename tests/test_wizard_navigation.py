@@ -110,6 +110,199 @@ class TestConflictResolutionPinning:
         assert result["Rand"] == "alba"
         assert result["Mat"] != "alba"
 
+    def test_pinned_conflict_recorded_in_unresolved(self):
+        """When both chars in a conflict are pinned, the pair is returned in unresolved."""
+        from kenkui.cli.add import _resolve_chapter_voice_conflicts
+        from kenkui.models import CharacterInfo, Chapter, Segment
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+            CharacterInfo(character_id="Mat", display_name="Mat", mention_count=50),
+        ]
+        speaker_voices = {"Rand": "alba", "Mat": "alba"}
+        pinned = {"Rand", "Mat"}  # Both pinned — cannot reassign either
+        chapters = [
+            Chapter(
+                index=0,
+                title="Ch1",
+                paragraphs=[],
+                segments=[
+                    Segment(text="x", speaker="Rand"),
+                    Segment(text="y", speaker="Mat"),
+                ],
+            )
+        ]
+        result, unresolved = _resolve_chapter_voice_conflicts(
+            speaker_voices,
+            characters,
+            chapters,
+            male_pool=["alba", "jean"],
+            female_pool=["cosette"],
+            narrator_voice="cosette",
+            pinned=pinned,
+        )
+        assert result["Rand"] == "alba"
+        assert result["Mat"] == "alba"
+        assert len(unresolved) == 1
+        assert set(unresolved[0]) == {"Rand", "Mat"}
+
+    def test_no_spare_voice_conflict_recorded_in_unresolved(self):
+        """When no spare voice is available, conflict is recorded in unresolved."""
+        from kenkui.cli.add import _resolve_chapter_voice_conflicts
+        from kenkui.models import CharacterInfo, Chapter, Segment
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+            CharacterInfo(character_id="Mat", display_name="Mat", mention_count=50),
+        ]
+        # Only one male voice available — no spare exists
+        speaker_voices = {"Rand": "alba", "Mat": "alba"}
+        chapters = [
+            Chapter(
+                index=0,
+                title="Ch1",
+                paragraphs=[],
+                segments=[
+                    Segment(text="x", speaker="Rand"),
+                    Segment(text="y", speaker="Mat"),
+                ],
+            )
+        ]
+        result, unresolved = _resolve_chapter_voice_conflicts(
+            speaker_voices,
+            characters,
+            chapters,
+            male_pool=["alba"],  # Only one voice — no spare
+            female_pool=["cosette"],
+            narrator_voice="cosette",
+            pinned=None,
+        )
+        assert len(unresolved) == 1
+        assert set(unresolved[0]) == {"Rand", "Mat"}
+
+    def test_no_conflict_returns_empty_unresolved(self):
+        """When no conflict exists, unresolved is empty."""
+        from kenkui.cli.add import _resolve_chapter_voice_conflicts
+        from kenkui.models import CharacterInfo, Chapter, Segment
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+            CharacterInfo(character_id="Mat", display_name="Mat", mention_count=50),
+        ]
+        speaker_voices = {"Rand": "alba", "Mat": "jean"}
+        chapters = [
+            Chapter(
+                index=0,
+                title="Ch1",
+                paragraphs=[],
+                segments=[
+                    Segment(text="x", speaker="Rand"),
+                    Segment(text="y", speaker="Mat"),
+                ],
+            )
+        ]
+        result, unresolved = _resolve_chapter_voice_conflicts(
+            speaker_voices,
+            characters,
+            chapters,
+            male_pool=["alba", "jean"],
+            female_pool=["cosette"],
+            narrator_voice="cosette",
+            pinned=None,
+        )
+        assert unresolved == []
+
+
+class TestConflictWarningsInReview:
+    def test_warnings_printed_for_unresolved_conflicts(self, capsys):
+        """_prompt_character_voice_review prints warnings for unresolved conflicts."""
+        import sys
+        from unittest.mock import MagicMock
+
+        # Patch InquirerPy before importing
+        mock_inquirer = MagicMock()
+        mock_confirm = MagicMock()
+        mock_confirm.execute.return_value = True  # Accept immediately
+        mock_inquirer.confirm.return_value = mock_confirm
+        mock_inquirerpy = MagicMock()
+        mock_inquirerpy.inquirer = mock_inquirer
+
+        sys.modules.setdefault("InquirerPy", mock_inquirerpy)
+        sys.modules.setdefault("InquirerPy.inquirer", mock_inquirer)
+
+        from kenkui.cli.add import _prompt_character_voice_review
+        from kenkui.models import CharacterInfo
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+        ]
+        speaker_voices = {"Rand": "alba"}
+        unresolved = [("Rand", "Mat")]
+
+        # Capture rich console output
+        from io import StringIO
+        from rich.console import Console
+        import kenkui.cli.add as add_mod
+        buf = StringIO()
+        orig_console = add_mod.console
+        add_mod.console = Console(file=buf, highlight=False)
+        try:
+            _prompt_character_voice_review(
+                speaker_voices,
+                characters,
+                narrator_voice="cosette",
+                unresolved_conflicts=unresolved,
+            )
+        finally:
+            add_mod.console = orig_console
+
+        output = buf.getvalue()
+        assert "Rand" in output
+        assert "Mat" in output
+        assert "same voice" in output
+
+    def test_no_warnings_when_no_conflicts(self, capsys):
+        """_prompt_character_voice_review prints no warnings when unresolved_conflicts is empty."""
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_inquirer = MagicMock()
+        mock_confirm = MagicMock()
+        mock_confirm.execute.return_value = True
+        mock_inquirer.confirm.return_value = mock_confirm
+        mock_inquirerpy = MagicMock()
+        mock_inquirerpy.inquirer = mock_inquirer
+
+        sys.modules.setdefault("InquirerPy", mock_inquirerpy)
+        sys.modules.setdefault("InquirerPy.inquirer", mock_inquirer)
+
+        from kenkui.cli.add import _prompt_character_voice_review
+        from kenkui.models import CharacterInfo
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+        ]
+        speaker_voices = {"Rand": "alba"}
+
+        from io import StringIO
+        from rich.console import Console
+        import kenkui.cli.add as add_mod
+        buf = StringIO()
+        orig_console = add_mod.console
+        add_mod.console = Console(file=buf, highlight=False)
+        try:
+            _prompt_character_voice_review(
+                speaker_voices,
+                characters,
+                narrator_voice="cosette",
+                unresolved_conflicts=[],
+            )
+        finally:
+            add_mod.console = orig_console
+
+        output = buf.getvalue()
+        assert "same voice" not in output
+
 
 class TestReviewShowsSeriesMarker:
     def test_inherited_label_shown(self):

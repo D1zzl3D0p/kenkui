@@ -472,20 +472,21 @@ def _resolve_chapter_voice_conflicts(
     female_pool: "list[str]",
     narrator_voice: str,
     pinned: "set[str] | None" = None,
-) -> "tuple[dict[str, str], list]":
+) -> "tuple[dict[str, str], list[tuple[str, str]]]":
     """Ensure no two characters sharing a chapter are assigned the same voice.
 
-    Iterates until no conflicts remain.  When a conflict is found, the
-    lower-quote-count character is re-assigned to the next available voice
-    from its gender pool that is not already used in that chapter.
-    If no unused voice exists, the conflict is logged as a warning.
+    Returns (speaker_voices, unresolved_conflicts).
+    unresolved_conflicts lists (char_a, char_b) pairs that could not be
+    resolved because both parties are pinned or no spare voice exists.
     """
     import logging
     from collections import defaultdict
     logger = logging.getLogger(__name__)
 
+    _pinned = pinned or set()
     char_quotes: dict[str, int] = {ch.character_id: ch.prominence for ch in characters}
     cooccurrence = _get_chapter_cooccurrence(chapters)
+    unresolved: list[tuple[str, str]] = []
 
     changed = True
     while changed:
@@ -500,19 +501,15 @@ def _resolve_chapter_voice_conflicts(
             for voice, chars in voice_to_chars.items():
                 if len(chars) <= 1:
                     continue
-                # Keep the highest-quote character on this voice; re-assign the rest
                 chars_sorted = sorted(chars, key=lambda c: char_quotes.get(c, 0), reverse=True)
                 chapter_voices_used = {
                     speaker_voices[sp] for sp in ch_speakers if sp in speaker_voices
                 }
-                _pinned = pinned or set()
                 reassignable = [c for c in chars_sorted[1:] if c not in _pinned]
                 for char_to_reassign in reassignable:
-                    # Determine gender pool
                     char_obj = next((c for c in characters if c.character_id == char_to_reassign), None)
                     gender = _gender_pool(char_obj.gender_pronoun if char_obj else "")
                     pool = male_pool if gender == "male" else female_pool
-
                     new_voice = next(
                         (v for v in pool if v not in chapter_voices_used and v != narrator_voice),
                         None,
@@ -522,12 +519,22 @@ def _resolve_chapter_voice_conflicts(
                         chapter_voices_used.add(new_voice)
                         changed = True
                     else:
+                        conflict_pair = (chars_sorted[0], char_to_reassign)
+                        if conflict_pair not in unresolved:
+                            unresolved.append(conflict_pair)
                         logger.warning(
                             "Voice conflict: %r and %r share voice %r in chapter %d "
                             "and no spare voice is available.",
                             chars_sorted[0], char_to_reassign, voice, ch_idx,
                         )
-    return speaker_voices, []
+                # Pinned characters in conflict — record but don't reassign
+                for pinned_char in chars_sorted[1:]:
+                    if pinned_char in _pinned:
+                        conflict_pair = (chars_sorted[0], pinned_char)
+                        if conflict_pair not in unresolved:
+                            unresolved.append(conflict_pair)
+
+    return speaker_voices, unresolved
 
 
 def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, str]:
@@ -603,11 +610,20 @@ def _prompt_character_voice_review(
     narrator_voice: str,
     pinned: "set[str] | None" = None,
     series_name: "str | None" = None,
+    unresolved_conflicts: "list[tuple[str, str]] | None" = None,
 ) -> dict[str, str]:
     """Show a reference table, then review each character via an InquirerPy list."""
     from collections import defaultdict
 
     from InquirerPy import inquirer
+
+    if unresolved_conflicts:
+        for char_a, char_b in unresolved_conflicts:
+            console.print(
+                f"[yellow]⚠ {char_a!r} and {char_b!r} share a chapter with the same voice. "
+                f"One of these is inherited from the series — change it below if needed.[/yellow]"
+            )
+        console.print()
 
     # Exclude narrator voice from per-character assignment choices
     all_voice_choices = _build_voice_choices()
@@ -770,7 +786,7 @@ def _prompt_multivoice_character_voices(
     female_pool = [v.name for v in _reg.filter(gender="Female") if v.name != narrator_voice] or \
                   [v.name for v in _reg.filter(gender="Female")]
     chapters = getattr(scan_result, "chapters", None) or []
-    speaker_voices, _unresolved = _resolve_chapter_voice_conflicts(
+    speaker_voices, unresolved_conflicts = _resolve_chapter_voice_conflicts(
         speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
         pinned=pinned or set(),
     )
@@ -780,6 +796,7 @@ def _prompt_multivoice_character_voices(
         speaker_voices, characters, narrator_voice,
         pinned=pinned or set(),
         series_name=series_name,
+        unresolved_conflicts=unresolved_conflicts,
     )
 
     return speaker_voices
