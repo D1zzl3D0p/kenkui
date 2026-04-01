@@ -73,3 +73,61 @@ class TestSeriesStepNewSeries:
         )
         assert manifest is not None
         assert manifest.name == "Wheel of Time"
+
+
+class TestConflictResolutionPinning:
+    def test_pinned_char_not_reassigned(self):
+        from kenkui.cli.add import _resolve_chapter_voice_conflicts
+        from kenkui.models import CharacterInfo
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+            CharacterInfo(character_id="Mat", display_name="Mat", mention_count=50),
+        ]
+        speaker_voices = {"Rand": "alba", "Mat": "alba"}
+        pinned = {"Rand"}
+        from kenkui.models import Chapter, Segment
+        chapters = [
+            Chapter(
+                index=0,
+                title="Ch1",
+                paragraphs=[],
+                segments=[
+                    Segment(text="x", speaker="Rand"),
+                    Segment(text="y", speaker="Mat"),
+                ],
+            )
+        ]
+        result, _ = _resolve_chapter_voice_conflicts(
+            speaker_voices,
+            characters,
+            chapters,
+            male_pool=["alba", "jean", "marius"],
+            female_pool=["cosette", "fantine"],
+            narrator_voice="cosette",
+            pinned=pinned,
+        )
+        assert result["Rand"] == "alba"
+        assert result["Mat"] != "alba"
+
+
+class TestReviewShowsSeriesMarker:
+    def test_inherited_label_shown(self):
+        from kenkui.cli.add import _make_character_review_label
+        from kenkui.models import CharacterInfo
+
+        char = CharacterInfo(character_id="Rand", display_name="Rand al'Thor", mention_count=100)
+        label = _make_character_review_label(
+            char, voice="alba", pinned={"Rand"}, series_name="Wheel of Time"
+        )
+        assert "Wheel of Time" in label
+
+    def test_non_inherited_no_marker(self):
+        from kenkui.cli.add import _make_character_review_label
+        from kenkui.models import CharacterInfo
+
+        char = CharacterInfo(character_id="Newguy", display_name="New Guy", mention_count=10)
+        label = _make_character_review_label(
+            char, voice="jean", pinned=set(), series_name="Wheel of Time"
+        )
+        assert "Wheel of Time" not in label

@@ -471,7 +471,8 @@ def _resolve_chapter_voice_conflicts(
     male_pool: "list[str]",
     female_pool: "list[str]",
     narrator_voice: str,
-) -> "dict[str, str]":
+    pinned: "set[str] | None" = None,
+) -> "tuple[dict[str, str], list]":
     """Ensure no two characters sharing a chapter are assigned the same voice.
 
     Iterates until no conflicts remain.  When a conflict is found, the
@@ -504,7 +505,9 @@ def _resolve_chapter_voice_conflicts(
                 chapter_voices_used = {
                     speaker_voices[sp] for sp in ch_speakers if sp in speaker_voices
                 }
-                for char_to_reassign in chars_sorted[1:]:
+                _pinned = pinned or set()
+                reassignable = [c for c in chars_sorted[1:] if c not in _pinned]
+                for char_to_reassign in reassignable:
                     # Determine gender pool
                     char_obj = next((c for c in characters if c.character_id == char_to_reassign), None)
                     gender = _gender_pool(char_obj.gender_pronoun if char_obj else "")
@@ -524,7 +527,7 @@ def _resolve_chapter_voice_conflicts(
                             "and no spare voice is available.",
                             chars_sorted[0], char_to_reassign, voice, ch_idx,
                         )
-    return speaker_voices
+    return speaker_voices, []
 
 
 def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, str]:
@@ -577,8 +580,29 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     return speaker_voices
 
 
+def _make_character_review_label(
+    ch,
+    voice: str,
+    pinned: "set[str]",
+    series_name: "str | None" = None,
+) -> str:
+    """Build a display label for the character review list.
+
+    Format: voice (20 chars)  CharName  (N mentions, gender)  [series: Name]
+    """
+    gender = ch.gender_pronoun or "?"
+    base = f"{voice:<20}  {ch.display_name}  ({ch.prominence} mentions, {gender})"
+    if ch.character_id in pinned and series_name:
+        base += f"  [series: {series_name}]"
+    return base
+
+
 def _prompt_character_voice_review(
-    speaker_voices: dict[str, str], characters, narrator_voice: str
+    speaker_voices: dict[str, str],
+    characters,
+    narrator_voice: str,
+    pinned: "set[str] | None" = None,
+    series_name: "str | None" = None,
 ) -> dict[str, str]:
     """Show a reference table, then review each character via an InquirerPy list."""
     from collections import defaultdict
@@ -599,10 +623,7 @@ def _prompt_character_voice_review(
     tbl.add_column("Gender")
     tbl.add_column("Voice", style="bold cyan")
 
-    def _make_choice_label(ch, current_voice: str) -> str:
-        """Build voice-first label: voice (20-char col)  CharName  (mentions, gender)."""
-        gender = ch.gender_pronoun or "?"
-        return f"{current_voice:<20}  {ch.display_name}  ({ch.prominence} mentions, {gender})"
+    _pinned = pinned or set()
 
     def _build_voice_users() -> dict[str, list[str]]:
         """Build inverse map: voice_name → list of character display names using it."""
@@ -635,7 +656,7 @@ def _prompt_character_voice_review(
         current = speaker_voices.get(ch.character_id, narrator_voice)
         review_choices.append(
             {
-                "name": _make_choice_label(ch, current),
+                "name": _make_character_review_label(ch, current, _pinned, series_name),
                 "value": ch.character_id,
             }
         )
@@ -677,7 +698,7 @@ def _prompt_character_voice_review(
         for rc in review_choices:
             if rc["value"] == chosen:
                 if ch is not None:
-                    rc["name"] = _make_choice_label(ch, new_voice)
+                    rc["name"] = _make_character_review_label(ch, new_voice, _pinned, series_name)
                 break
 
     return speaker_voices
@@ -737,6 +758,10 @@ def _prompt_multivoice_character_voices(
     # Step C — auto-assign character voices.
     speaker_voices = _auto_assign_character_voices(characters, narrator_voice)
 
+    # Pre-populate with inherited series voices (override auto-assigned ones)
+    if inherited_voices:
+        speaker_voices.update(inherited_voices)
+
     # Resolve any same-voice conflicts for characters that co-appear in a chapter.
     from ..voice_registry import get_registry
     _reg = get_registry()
@@ -745,12 +770,17 @@ def _prompt_multivoice_character_voices(
     female_pool = [v.name for v in _reg.filter(gender="Female") if v.name != narrator_voice] or \
                   [v.name for v in _reg.filter(gender="Female")]
     chapters = getattr(scan_result, "chapters", None) or []
-    speaker_voices = _resolve_chapter_voice_conflicts(
-        speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice
+    speaker_voices, _unresolved = _resolve_chapter_voice_conflicts(
+        speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
+        pinned=pinned or set(),
     )
 
     # Step D — review / adjust via list.
-    speaker_voices = _prompt_character_voice_review(speaker_voices, characters, narrator_voice)
+    speaker_voices = _prompt_character_voice_review(
+        speaker_voices, characters, narrator_voice,
+        pinned=pinned or set(),
+        series_name=series_name,
+    )
 
     return speaker_voices
 
