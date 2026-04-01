@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -151,3 +152,77 @@ class TestMatchCharacters:
         manifest = _make_manifest([("Edward Norton", [], "alba")])
         inherited, pinned = match_characters(roster.characters, roster, manifest)
         assert "Ed" not in inherited
+
+
+from kenkui.series import (
+    build_manifest_from_predecessor,
+    update_manifest,
+)
+
+
+class TestBuildManifestFromPredecessor:
+    def test_builds_from_roster_and_voices(self, tmp_path):
+        roster = _make_fast_result({"Rand al'Thor": ["Rand"], "Mat": ["Matrim"]})
+        roster_path = tmp_path / "abc123-roster.json"
+        roster_path.write_text(
+            json.dumps(roster.to_dict(), ensure_ascii=False), encoding="utf-8"
+        )
+        candidate = {
+            "hash": "abc123",
+            "title": "Eye of the World",
+            "speaker_voices": {"Rand al'Thor": "alba", "Mat": "jean"},
+            "roster_path": roster_path,
+        }
+        manifest = build_manifest_from_predecessor(candidate, "Wheel of Time")
+        assert manifest.name == "Wheel of Time"
+        assert manifest.slug == "wheel-of-time"
+        rand = next(c for c in manifest.characters if c.canonical == "Rand al'Thor")
+        assert rand.voice == "alba"
+        assert "Rand" in rand.aliases
+
+    def test_skips_chars_without_voice(self, tmp_path):
+        roster = _make_fast_result({"Rand": [], "Background": []})
+        roster_path = tmp_path / "abc123-roster.json"
+        roster_path.write_text(json.dumps(roster.to_dict()), encoding="utf-8")
+        candidate = {
+            "hash": "abc123",
+            "title": "Book",
+            "speaker_voices": {"Rand": "alba"},
+            "roster_path": roster_path,
+        }
+        manifest = build_manifest_from_predecessor(candidate, "Test")
+        assert len(manifest.characters) == 1
+
+
+class TestUpdateManifest:
+    def test_new_character_appended(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
+        manifest = _make_manifest([("Rand", [], "alba")])
+        roster = _make_fast_result({"Rand": [], "Mat": []})
+        speaker_voices = {"Rand": "alba", "Mat": "jean"}
+        pinned = {"Rand"}
+        updated = update_manifest(manifest, roster.characters, roster, speaker_voices, pinned)
+        canonicals = [c.canonical for c in updated.characters]
+        assert "Rand" in canonicals
+        assert "Mat" in canonicals
+        mat = next(c for c in updated.characters if c.canonical == "Mat")
+        assert mat.voice == "jean"
+
+    def test_modified_pinned_voice_updated(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
+        manifest = _make_manifest([("Rand", [], "alba")])
+        roster = _make_fast_result({"Rand": []})
+        speaker_voices = {"Rand": "cosette"}
+        pinned = {"Rand"}
+        updated = update_manifest(manifest, roster.characters, roster, speaker_voices, pinned)
+        rand = next(c for c in updated.characters if c.canonical == "Rand")
+        assert rand.voice == "cosette"
+
+    def test_duplicate_not_appended(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
+        manifest = _make_manifest([("Rand al'Thor", ["Rand"], "alba")])
+        roster = _make_fast_result({"Rand al'Thor": ["Rand"]})
+        speaker_voices = {"Rand al'Thor": "alba"}
+        pinned = {"Rand al'Thor"}
+        updated = update_manifest(manifest, roster.characters, roster, speaker_voices, pinned)
+        assert len(updated.characters) == 1

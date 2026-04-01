@@ -8,6 +8,7 @@ character always gets the same voice in subsequent installments.
 """
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 
@@ -191,3 +192,160 @@ def _word_overlap(a: str, b: str) -> float:
         if w in longer or (len(w) >= 3 and any(lw.startswith(w) for lw in longer))
     )
     return matched / len(shorter)
+
+
+def list_roster_candidates() -> list[dict]:
+    """Return books with cached roster files, sorted by mtime descending.
+
+    Each entry: {hash, title, path, speaker_voices, roster_path}
+    Scans nlp_cache for roster files; cross-references queue.toml for names
+    and voice assignments from completed multi-voice jobs.
+    """
+    from .config import CONFIG_DIR
+    cache_dir = CONFIG_DIR / "nlp_cache"
+    if not cache_dir.exists():
+        return []
+
+    roster_files = sorted(
+        cache_dir.glob("*-roster.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    queue_file = CONFIG_DIR / "queue.toml"
+    job_by_hash: dict[str, dict] = {}
+    if queue_file.exists():
+        try:
+            data = tomllib.loads(queue_file.read_text(encoding="utf-8"))
+            from .models import JobStatus, QueueItem
+            from .nlp import book_hash as _book_hash
+            for item_data in data.get("items", []):
+                item = QueueItem.from_dict(item_data)
+                if item.status != JobStatus.COMPLETED:
+                    continue
+                try:
+                    h = _book_hash(Path(item.job.ebook_path))
+                    job_by_hash[h] = {
+                        "title": item.job.name,
+                        "path": str(item.job.ebook_path),
+                        "speaker_voices": item.job.speaker_voices,
+                    }
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+    candidates = []
+    for f in roster_files:
+        h = f.stem.replace("-roster", "")
+        info = job_by_hash.get(h, {})
+        candidates.append({
+            "hash": h,
+            "title": info.get("title") or h[:8],
+            "path": info.get("path", ""),
+            "speaker_voices": info.get("speaker_voices", {}),
+            "roster_path": f,
+        })
+    return candidates
+
+
+def build_manifest_from_predecessor(candidate: dict, name: str) -> SeriesManifest:
+    """Create a new SeriesManifest seeded from a previously processed book.
+
+    ``candidate`` is a dict from ``list_roster_candidates()``.
+    Characters without an assigned voice are omitted.
+    """
+    from .models import FastScanResult
+
+    data = json.loads(Path(candidate["roster_path"]).read_text(encoding="utf-8"))
+    roster = FastScanResult.from_dict(data)
+    alias_map = {g.canonical: g.aliases for g in roster.roster.characters}
+    speaker_voices: dict[str, str] = candidate.get("speaker_voices", {})
+
+    characters = []
+    for char in roster.characters:
+        voice = speaker_voices.get(char.character_id, "")
+        if not voice:
+            continue
+        characters.append(
+            SeriesCharacter(
+                canonical=char.character_id,
+                aliases=alias_map.get(char.character_id, []),
+                voice=voice,
+                gender=char.gender_pronoun,
+            )
+        )
+
+    return SeriesManifest(
+        name=name,
+        slug=slugify(name),
+        updated_at="",
+        characters=characters,
+    )
+
+
+def update_manifest(
+    manifest: SeriesManifest,
+    characters: list["CharacterInfo"],
+    roster: "FastScanResult",
+    speaker_voices: dict[str, str],
+    pinned: set[str],
+) -> SeriesManifest:
+    """Return an updated copy of *manifest* incorporating new book's assignments.
+
+    - Pinned characters with changed voices → existing entry updated
+    - New characters (not pinned) → appended if not already present
+    Does not mutate the original manifest.
+    """
+    alias_map = {g.canonical: g.aliases for g in roster.roster.characters}
+
+    updated_chars = [
+        SeriesCharacter(
+            canonical=c.canonical,
+            aliases=list(c.aliases),
+            voice=c.voice,
+            gender=c.gender,
+        )
+        for c in manifest.characters
+    ]
+
+    for char in characters:
+        voice = speaker_voices.get(char.character_id, "")
+        if not voice:
+            continue
+        aliases = alias_map.get(char.character_id, [])
+
+        if char.character_id in pinned:
+            for entry in updated_chars:
+                if entry.canonical.lower() == char.character_id.lower():
+                    entry.voice = voice
+                    existing_lower = {a.lower() for a in entry.aliases}
+                    for a in aliases:
+                        if a.lower() not in existing_lower:
+                            entry.aliases.append(a)
+                    break
+        else:
+            char_names = {char.character_id.lower()} | {a.lower() for a in aliases}
+            already_present = any(
+                _score_names(
+                    char_names,
+                    {e.canonical.lower()} | {a.lower() for a in e.aliases},
+                ) >= 0.7
+                for e in updated_chars
+            )
+            if not already_present:
+                updated_chars.append(
+                    SeriesCharacter(
+                        canonical=char.character_id,
+                        aliases=aliases,
+                        voice=voice,
+                        gender=char.gender_pronoun,
+                    )
+                )
+
+    return SeriesManifest(
+        name=manifest.name,
+        slug=manifest.slug,
+        updated_at=manifest.updated_at,
+        characters=updated_chars,
+    )
