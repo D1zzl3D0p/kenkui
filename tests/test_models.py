@@ -335,3 +335,23 @@ class TestJobConfigRosterCachePath:
         old_data = {"ebook_path": "/tmp/book.epub"}
         job = JobConfig.from_dict(old_data)
         assert job.roster_cache_path is None
+
+
+class TestAppConfigExcludedVoices:
+    def test_default_is_empty_list(self):
+        assert AppConfig().excluded_voices == []
+
+    def test_round_trip(self):
+        cfg = AppConfig(excluded_voices=["alba", "cosette"])
+        restored = AppConfig.from_dict(cfg.to_dict())
+        assert restored.excluded_voices == ["alba", "cosette"]
+
+    def test_missing_key_backward_compat(self):
+        # Existing config files with no excluded_voices key must not crash
+        cfg = AppConfig.from_dict({"name": "legacy"})
+        assert cfg.excluded_voices == []
+
+    def test_null_value_backward_compat(self):
+        # Hand-edited TOML: excluded_voices = null
+        cfg = AppConfig.from_dict({"excluded_voices": None})
+        assert cfg.excluded_voices == []

@@ -312,6 +312,7 @@ class AppConfig:
     default_output_dir: Path | None = None  # Output directory for CLI runs
     # --- Multi-voice / NLP ---
     nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
+    excluded_voices: list[str] = field(default_factory=list)
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
 
@@ -335,6 +336,7 @@ class AppConfig:
             "default_chapter_preset": self.default_chapter_preset,
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
             "nlp_model": self.nlp_model,
+            "excluded_voices": list(self.excluded_voices),
             "post_processing": self.post_processing.to_dict(),
         }
 
@@ -361,6 +363,7 @@ class AppConfig:
             if data.get("default_output_dir")
             else None,
             nlp_model=data.get("nlp_model", "llama3.2"),
+            excluded_voices=list(data.get("excluded_voices") or []),
             post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
         )
 
