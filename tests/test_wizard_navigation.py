@@ -190,7 +190,8 @@ class TestManifestWritebackOnConfirm:
 
         saved = load_series("wheel-of-time")
         assert saved is not None
-        assert any(c.canonical == "Rand" for c in saved.characters)
+        rand_entry = next(c for c in saved.characters if c.canonical == "Rand")
+        assert rand_entry.voice == "alba"
 
     def test_manifest_not_saved_on_cancel(self, tmp_path, monkeypatch):
         self._patch_inquirer(monkeypatch)
