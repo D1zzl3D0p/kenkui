@@ -1384,6 +1384,32 @@ def _step_confirm(state: dict) -> dict:
         console.print("Cancelled.")
         return {**state, "_cancelled": True}
 
+    # Write back series manifest with updated/new character voices
+    series_manifest = state.get("_series_manifest")
+    if series_manifest is not None:
+        fast_result = state.get("_fast_result")
+        pinned = state.get("_pinned") or set()
+        if fast_result is not None:
+            from ..series import save_series, update_manifest
+            updated = update_manifest(
+                series_manifest,
+                fast_result.characters,
+                fast_result,
+                speaker_voices,
+                pinned,
+            )
+            save_series(updated)
+            inherited_count = len(pinned)
+            modified_count = sum(
+                1 for cid in pinned
+                if speaker_voices.get(cid) != state.get("_inherited_voices", {}).get(cid)
+            )
+            if inherited_count > 0:
+                msg = f"{inherited_count} voice(s) inherited from '{series_manifest.name}'"
+                if modified_count:
+                    msg += f", {modified_count} modified"
+                console.print(f"[dim]{msg}[/dim]")
+
     job_kwargs = dict(
         ebook_path=str(book_path),
         voice=voice,
