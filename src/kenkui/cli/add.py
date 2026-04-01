@@ -810,12 +810,23 @@ def _prompt_multivoice_character_voices(
     from ..voice_registry import get_registry
     _reg = get_registry()
     _excluded = set(excluded_voices or [])
-    male_pool = [v.name for v in _reg.filter(gender="Male")
-                 if v.name != narrator_voice and v.name not in _excluded] or \
-                [v.name for v in _reg.filter(gender="Male") if v.name not in _excluded]
-    female_pool = [v.name for v in _reg.filter(gender="Female")
-                   if v.name != narrator_voice and v.name not in _excluded] or \
-                  [v.name for v in _reg.filter(gender="Female") if v.name not in _excluded]
+    _all_male = [v.name for v in _reg.filter(gender="Male")]
+    _all_female = [v.name for v in _reg.filter(gender="Female")]
+    _male_non_excl = [v for v in _all_male if v not in _excluded]
+    _female_non_excl = [v for v in _all_female if v not in _excluded]
+    # Narrator excluded first; if that empties the pool fall back to non-excluded;
+    # if exclusions emptied the pool entirely fall back to the full unfiltered pool
+    # (mirrors the fallback logic in _auto_assign_character_voices).
+    male_pool = (
+        [v for v in _male_non_excl if v != narrator_voice]
+        or _male_non_excl
+        or _all_male
+    )
+    female_pool = (
+        [v for v in _female_non_excl if v != narrator_voice]
+        or _female_non_excl
+        or _all_female
+    )
     chapters = getattr(scan_result, "chapters", None) or []
     speaker_voices, unresolved_conflicts = _resolve_chapter_voice_conflicts(
         speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
