@@ -1,92 +1,75 @@
-"""Tests for wizard back-navigation (Task 2)."""
+"""Tests for wizard prompt execution."""
 
-import pytest
+from unittest.mock import MagicMock
 
-
-def test_goback_moves_to_previous_step():
-    """GoBack from step 1 re-runs step 0."""
-    call_log = []
-
-    def step0(state):
-        call_log.append("step0")
-        return {**state, "a": 1}
-
-    def step1(state):
-        call_log.append("step1")
-        if len([x for x in call_log if x == "step1"]) == 1:
-            raise GoBack  # First call raises GoBack
-        return {**state, "b": 2}
-
-    from kenkui.cli.add import GoBack
-    steps = [step0, step1]
-    state = {}
-    i = 0
-    while i < len(steps):
-        try:
-            state = steps[i](state)
-            i += 1
-        except GoBack:
-            i = max(0, i - 1)
-
-    assert call_log == ["step0", "step1", "step0", "step1"]
-    assert state == {"a": 1, "b": 2}
-
-
-def test_escape_on_first_step_stays_at_step_0():
-    """GoBack at step 0 stays at step 0, not negative index."""
-    from kenkui.cli.add import GoBack
-    call_count = [0]
-
-    def step0(state):
-        call_count[0] += 1
-        if call_count[0] == 1:
-            raise GoBack
-        return state
-
-    steps = [step0]
-    state = {}
-    i = 0
-    while i < len(steps):
-        try:
-            state = steps[i](state)
-            i += 1
-        except GoBack:
-            i = max(0, i - 1)
-
-    assert call_count[0] == 2  # ran twice: once raised GoBack, once succeeded
-
-
-def test_wizard_execute_propagates_keyboard_interrupt():
-    """_wizard_execute lets KeyboardInterrupt propagate (Ctrl-C exits immediately)."""
-    from unittest.mock import MagicMock
-    from kenkui.cli.add import _wizard_execute
-
-    mock_prompt = MagicMock()
-    mock_prompt.execute.side_effect = KeyboardInterrupt
-
-    with pytest.raises(KeyboardInterrupt):
-        _wizard_execute(mock_prompt)
-
-
-def test_wizard_execute_raises_goback_on_eoferror():
-    """_wizard_execute converts EOFError to GoBack."""
-    from unittest.mock import MagicMock
-    from kenkui.cli.add import GoBack, _wizard_execute
-
-    mock_prompt = MagicMock()
-    mock_prompt.execute.side_effect = EOFError
-
-    with pytest.raises(GoBack):
-        _wizard_execute(mock_prompt)
+from kenkui.cli.add import _wizard_execute
 
 
 def test_wizard_execute_returns_value_on_success():
     """_wizard_execute returns the result of prompt.execute() on success."""
-    from unittest.mock import MagicMock
-    from kenkui.cli.add import _wizard_execute
-
     mock_prompt = MagicMock()
     mock_prompt.execute.return_value = "cosette"
 
     result = _wizard_execute(mock_prompt)
     assert result == "cosette"
+
+
+class TestSeriesStepSkipped:
+    """Series step is a no-op when mode is not multi."""
+
+    def test_single_mode_skips_series(self):
+        from kenkui.cli.add import _run_series_setup
+        from kenkui.models import FastScanResult
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        roster = FastScanResult(
+            roster=CharacterRoster(characters=[]),
+            characters=[],
+            book_hash="test",
+        )
+        manifest, inherited, pinned = _run_series_setup(
+            fast_result=roster,
+            mode="single",
+            prompts=[],
+        )
+        assert manifest is None
+        assert inherited == {}
+        assert pinned == set()
+
+
+class TestSeriesStepNewSeries:
+    """User picks 'new series' and names it."""
+
+    def test_creates_manifest_from_candidate(self, tmp_path, monkeypatch):
+        import json
+        monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
+
+        from kenkui.cli.add import _run_series_setup
+        from kenkui.models import CharacterInfo, FastScanResult
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        roster = FastScanResult(
+            roster=CharacterRoster(characters=[
+                AliasGroup(canonical="Rand al'Thor", aliases=["Rand"]),
+            ]),
+            characters=[CharacterInfo(character_id="Rand al'Thor", display_name="Rand al'Thor")],
+            book_hash="abc",
+        )
+        roster_path = tmp_path / "abc-roster.json"
+        roster_path.write_text(json.dumps(roster.to_dict()), encoding="utf-8")
+
+        # Simulate: yes to series, pick "new", pick candidate[0], name="Wheel of Time"
+        prompts = ["yes", "new", 0, "Wheel of Time"]
+        manifest, inherited, pinned = _run_series_setup(
+            fast_result=roster,
+            mode="multi",
+            prompts=prompts,
+            _roster_candidates=[{
+                "hash": "abc",
+                "title": "Eye of the World",
+                "speaker_voices": {"Rand al'Thor": "alba"},
+                "roster_path": roster_path,
+                "path": "",
+            }],
+        )
+        assert manifest is not None
+        assert manifest.name == "Wheel of Time"

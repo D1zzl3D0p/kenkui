@@ -30,47 +30,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 
-class GoBack(Exception):
-    """Raised by a wizard step when the user presses Escape to go back."""
-
-
 def _wizard_execute(prompt):
-    """Execute an InquirerPy prompt; raise GoBack if the user presses Escape.
-
-    InquirerPy does not bind Escape by default, so we inject the binding here
-    before every prompt execute — registering onto the prompt's live KeyBindings
-    object works for both PromptSession-based (text/number) and Application-based
-    (select/fuzzy/checkbox) prompt types.
-
-    Ctrl-C (KeyboardInterrupt) is intentionally NOT caught here — it propagates
-    to the OS and terminates the process immediately, as the user expects.
-    """
-    @prompt.register_kb("escape")
-    def _handle_escape(event):
-        event.app.exit(exception=EOFError("escape"))
-
-    try:
-        return prompt.execute()
-    except EOFError:
-        raise GoBack
-
-
-def _prompt_exit_confirmation() -> bool:
-    """Ask the user to confirm they want to quit kenkui.
-
-    Returns True if confirmed (exit), False if declined (stay).
-    Any interrupt (Escape or Ctrl-C) during the confirmation is treated as
-    a confirmed exit so the user is never trapped.
-    """
-    from InquirerPy import inquirer
-
-    try:
-        return inquirer.confirm(
-            message="Are you sure you want to close kenkui?",
-            default=False,
-        ).execute()
-    except (EOFError, KeyboardInterrupt):
-        return True
+    """Execute an InquirerPy prompt and return its value."""
+    return prompt.execute()
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -721,7 +683,13 @@ def _prompt_character_voice_review(
     return speaker_voices
 
 
-def _prompt_multivoice_character_voices(scan_result, default_voice: str) -> dict[str, str]:
+def _prompt_multivoice_character_voices(
+    scan_result,
+    default_voice: str,
+    inherited_voices: "dict[str, str] | None" = None,
+    pinned: "set[str] | None" = None,
+    series_name: "str | None" = None,
+) -> dict[str, str]:
     """Run the full multi-voice character assignment flow.
 
     Returns a dict mapping character_id (including "NARRATOR") to voice name.
@@ -785,6 +753,128 @@ def _prompt_multivoice_character_voices(scan_result, default_voice: str) -> dict
     speaker_voices = _prompt_character_voice_review(speaker_voices, characters, narrator_voice)
 
     return speaker_voices
+
+
+def _run_series_setup(
+    fast_result,
+    mode: str,
+    prompts: "list | None" = None,
+    _roster_candidates: "list | None" = None,
+) -> "tuple":
+    """Prompt for series selection and compute inherited voice assignments.
+
+    Returns (manifest, inherited_voices, pinned):
+        manifest        — loaded/created SeriesManifest, or None if skipped
+        inherited_voices — char_id → voice for characters matched to series
+        pinned          — set of char_ids with inherited voices
+
+    ``prompts`` and ``_roster_candidates`` are test seams (leave as None in production).
+    """
+    from ..series import (
+        SeriesManifest,
+        build_manifest_from_predecessor,
+        list_roster_candidates,
+        list_series,
+        load_series,
+        match_characters,
+        save_series,
+        slugify,
+    )
+
+    if mode != "multi":
+        return None, {}, set()
+
+    if prompts is None:
+        # --- Production path: live InquirerPy prompts ---
+        from InquirerPy import inquirer
+
+        console.print()
+        wants_series = _wizard_execute(inquirer.confirm(
+            message="Is this book part of a series?",
+            instruction=(
+                "(Say yes to reuse character voices across books. "
+                "Skip if converting a standalone book or not planning to process the full series.)"
+            ),
+            default=False,
+        ))
+        if not wants_series:
+            return None, {}, set()
+
+        existing = list_series()
+        series_choices = [{"name": s.name, "value": s.slug} for s in existing]
+        series_choices.append({"name": "[ + New series ]", "value": "__new__"})
+
+        chosen_slug = _wizard_execute(inquirer.select(
+            message="Select series:",
+            choices=series_choices,
+        ))
+
+        if chosen_slug != "__new__":
+            manifest = load_series(chosen_slug)
+        else:
+            candidates = list_roster_candidates()
+            if not candidates:
+                console.print("[yellow]No previously processed books found. Starting a fresh series.[/yellow]")
+                series_name = _wizard_execute(inquirer.text(
+                    message="Series name:",
+                    instruction="(This name identifies the series in future books.)",
+                )).strip()
+                manifest = SeriesManifest(
+                    name=series_name,
+                    slug=slugify(series_name),
+                    updated_at="",
+                    characters=[],
+                )
+            else:
+                candidate_choices = [
+                    {"name": c["title"] or c["hash"][:8], "value": i}
+                    for i, c in enumerate(candidates)
+                ]
+                idx = _wizard_execute(inquirer.select(
+                    message="Seed the series from which previously processed book?",
+                    instruction="(Pick the most recent or most complete book in the series.)",
+                    choices=candidate_choices,
+                ))
+                candidate = candidates[idx]
+                series_name = _wizard_execute(inquirer.text(
+                    message="Series name:",
+                    instruction="(This name identifies the series in future books. You can use any name you like.)",
+                    default=candidate.get("title", ""),
+                )).strip()
+                manifest = build_manifest_from_predecessor(candidate, series_name)
+
+        save_series(manifest)
+
+    else:
+        # --- Test seam: replay scripted prompt answers ---
+        _p = iter(prompts)
+        wants_series_val = next(_p, None)
+        if wants_series_val != "yes":
+            return None, {}, set()
+
+        chosen = next(_p, None)
+        if chosen == "new":
+            candidates = _roster_candidates or list_roster_candidates()
+            idx = next(_p, 0)
+            series_name = next(_p, "Test Series")
+            if candidates:
+                manifest = build_manifest_from_predecessor(candidates[idx], series_name)
+            else:
+                manifest = SeriesManifest(
+                    name=series_name,
+                    slug=slugify(series_name),
+                    updated_at="",
+                    characters=[],
+                )
+        else:
+            manifest = load_series(chosen)
+
+        if manifest is None:
+            return None, {}, set()
+        save_series(manifest)
+
+    inherited_voices, pinned = match_characters(fast_result.characters, fast_result, manifest)
+    return manifest, inherited_voices, pinned
 
 
 # ---------------------------------------------------------------------------
@@ -1083,6 +1173,10 @@ def _step_voice_setup(state: dict) -> dict:
     chapter_voices: dict[str, str] = {}
     roster_cache_path: str | None = None
     narration_mode = mode_val
+    fast_result = None
+    series_manifest = None
+    inherited_voices: dict[str, str] = {}
+    pinned: set[str] = set()
 
     if mode_val == "multi":
         from ..config import save_app_config, DEFAULT_CONFIG_PATH
@@ -1150,8 +1244,16 @@ def _step_voice_setup(state: dict) -> dict:
                 console.print("[yellow]Falling back to single-voice mode.[/yellow]")
                 narration_mode = "single"
             else:
+                series_manifest, inherited_voices, pinned = _run_series_setup(
+                    fast_result=fast_result,
+                    mode="multi",
+                )
                 speaker_voices = _prompt_multivoice_character_voices(
-                    fast_result, app_config.default_voice
+                    fast_result,
+                    app_config.default_voice,
+                    inherited_voices=inherited_voices,
+                    pinned=pinned,
+                    series_name=series_manifest.name if series_manifest else None,
                 )
                 roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
 
@@ -1166,8 +1268,6 @@ def _step_voice_setup(state: dict) -> dict:
             reader = get_reader(book_path, verbose=False)
             all_chapters = reader.get_chapters()
             chapter_voices = _prompt_chapter_voices(all_chapters, voice)
-        except GoBack:
-            raise
         except Exception as exc:
             console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
             chapter_voices = {}
@@ -1181,6 +1281,10 @@ def _step_voice_setup(state: dict) -> dict:
         "roster_cache_path": roster_cache_path,
         "narration_mode": narration_mode,
         "mode": mode_val,
+        "_fast_result": fast_result if narration_mode == "multi" else None,
+        "_series_manifest": series_manifest if narration_mode == "multi" else None,
+        "_inherited_voices": inherited_voices if narration_mode == "multi" else {},
+        "_pinned": pinned if narration_mode == "multi" else set(),
     }
 
 
@@ -1296,22 +1400,14 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
 
     i = 0
     while i < len(steps):
-        try:
-            state = steps[i](state)
-            # Check for abort signals from step functions
-            if state.get("_abort"):
-                return None
-            if state.get("_cancelled"):
-                return None
-            if "_job_kwargs" in state:
-                return state["_job_kwargs"]
-            i += 1
-        except GoBack:
-            if i > 0:
-                i -= 1
-            else:
-                if _prompt_exit_confirmation():
-                    return None
+        state = steps[i](state)
+        if state.get("_abort"):
+            return None
+        if state.get("_cancelled"):
+            return None
+        if "_job_kwargs" in state:
+            return state["_job_kwargs"]
+        i += 1
 
     return None
 
@@ -1438,6 +1534,10 @@ def cmd_add(args) -> int:
         console.print("Run [bold]kenkui queue start --live[/bold] to watch progress.")
         return 0
 
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return 0
+
     finally:
         client.close()
 
@@ -1476,6 +1576,10 @@ def cmd_bare(args) -> int:
         from .queue import _live_dashboard
 
         return _live_dashboard(client)
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[dim]Cancelled.[/dim]")
+        return 0
 
     finally:
         client.close()
