@@ -294,6 +294,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     voices_cast_p.add_argument("title", help="Book title (fuzzy matched).")
 
+    voices_audition_p = voices_sub.add_parser(
+        "audition", help="Synthesize a voice preview and open it in the system player."
+    )
+    voices_audition_p.add_argument("voice", help="Voice name to audition.")
+    voices_audition_p.add_argument(
+        "--text", default=None, metavar="TEXT",
+        help="Text to synthesize (default: built-in sample phrase).",
+    )
+
     return parser
 
 
@@ -410,6 +419,7 @@ def main() -> None:
             cmd_voices_exclude,
             cmd_voices_include,
             cmd_voices_cast,
+            cmd_voices_audition,
         )
 
         voices_command = getattr(args, "voices_command", None)
@@ -425,6 +435,8 @@ def main() -> None:
             cmd_voices_include(args)
         elif voices_command == "cast":
             cmd_voices_cast(args)
+        elif voices_command == "audition":
+            cmd_voices_audition(args)
         else:
             # No subcommand: default to list (no filters)
             args.gender = None

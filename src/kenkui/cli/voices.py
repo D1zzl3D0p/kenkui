@@ -12,6 +12,8 @@ from rich.table import Table
 from ..voice_registry import get_registry
 from ..config import load_app_config, save_app_config, DEFAULT_CONFIG_PATH
 from ..queue import QueueManager
+from ..workers import _get_or_load_model, _render_text
+from ..voice_loader import load_voice
 
 console = Console()
 
@@ -288,6 +290,85 @@ def cmd_voices_cast(args) -> None:
         console.print(f"\n[dim]Job ID: {item.id} | Output: {item.output_path}[/dim]")
 
 
+DEFAULT_AUDITION_TEXT = (
+    "The rain in Spain stays mainly in the plain. "
+    "How wonderful it is to simply speak and be heard."
+)
+
+
+def _player_command() -> str:
+    """Return the system audio player command for the current platform."""
+    return "open" if sys.platform == "darwin" else "xdg-open"
+
+
+def _preview_path(voice_name: str) -> Path:
+    """Return the temp path for an audition preview file."""
+    return Path(f"/tmp/kenkui-{voice_name}-preview.wav")
+
+
+def cmd_voices_audition(args) -> None:
+    """Synthesize a short voice preview and open it in the system audio player."""
+    import subprocess
+
+    voice_name: str = args.voice
+    text: str = getattr(args, "text", None) or DEFAULT_AUDITION_TEXT
+    out_path = _preview_path(voice_name)
+
+    # Validate voice exists (warn only — don't block)
+    if get_registry().resolve(voice_name) is None:
+        console.print(
+            f"[yellow]Warning: '{voice_name}' not found in registry. Attempting anyway.[/yellow]"
+        )
+
+    console.print(
+        "[yellow]Loading TTS model — this may take 10–30 seconds on first use…[/yellow]"
+    )
+
+    config = load_app_config()
+    try:
+        model = _get_or_load_model(
+            config.temp,
+            config.lsd_decode_steps,
+            config.noise_clamp,
+            config.eos_threshold,
+        )
+    except Exception as exc:
+        console.print(f"[red]Failed to load TTS model: {exc}[/red]")
+        sys.exit(1)
+
+    try:
+        voice_resolved = load_voice(voice_name)
+        voice_state = model.get_state_for_audio_prompt(voice_resolved)
+    except Exception as exc:
+        console.print(f"[red]Failed to load voice '{voice_name}': {exc}[/red]")
+        sys.exit(1)
+
+    preview_text = text[:60] + ("…" if len(text) > 60 else "")
+    console.print(
+        f"Synthesizing preview for [bold]{voice_name}[/bold]: [dim]\"{preview_text}\"[/dim]"
+    )
+
+    seg = _render_text(
+        model, voice_state, text,
+        log_message=lambda _: None,
+        pid=0, batch_idx=0, total_batches=1,
+        frames_after_eos=0,
+    )
+    if seg is None:
+        console.print("[red]Synthesis returned no audio.[/red]")
+        sys.exit(1)
+
+    seg.export(str(out_path), format="wav")
+    console.print(f"[green]Preview saved to {out_path}[/green]")
+
+    try:
+        subprocess.Popen([_player_command(), str(out_path)])
+    except Exception as exc:
+        console.print(
+            f"[yellow]Could not open system player ({exc}). Play manually: {out_path}[/yellow]"
+        )
+
+
 __all__ = [
     "cmd_voices_list",
     "cmd_voices_fetch",
@@ -295,5 +376,9 @@ __all__ = [
     "cmd_voices_exclude",
     "cmd_voices_include",
     "cmd_voices_cast",
+    "cmd_voices_audition",
+    "DEFAULT_AUDITION_TEXT",
     "_sort_cast",
+    "_player_command",
+    "_preview_path",
 ]

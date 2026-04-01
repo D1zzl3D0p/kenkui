@@ -154,3 +154,101 @@ class TestVoicesCast:
         voices = {"NARRATOR": "cosette", "Rand": "alba", "Mat": "jean"}
         keys = [k for k, _ in _sort_cast(voices)]
         assert keys[-1] == "NARRATOR"
+
+
+class TestVoicesAudition:
+    def _make_args(self, voice="jean", text=None):
+        from argparse import Namespace
+        return Namespace(voice=voice, text=text)
+
+    def test_happy_path_saves_and_opens(self, tmp_path, monkeypatch):
+        from kenkui.cli.voices import cmd_voices_audition
+        from pydub import AudioSegment
+
+        mock_model = MagicMock()
+        mock_model.get_state_for_audio_prompt.return_value = object()
+
+        monkeypatch.setattr("kenkui.cli.voices._get_or_load_model",
+                            lambda *a, **kw: mock_model)
+        monkeypatch.setattr("kenkui.cli.voices.load_voice", lambda v: v)
+        monkeypatch.setattr("kenkui.cli.voices._render_text",
+                            lambda *a, **kw: AudioSegment.silent(duration=500))
+        monkeypatch.setattr("kenkui.cli.voices.load_app_config", lambda *a, **kw: MagicMock(
+            temp=0.7, lsd_decode_steps=1, noise_clamp=None, eos_threshold=-4.0,
+        ))
+        monkeypatch.setattr("kenkui.cli.voices.get_registry",
+                            lambda: MagicMock(resolve=lambda v: MagicMock()))
+
+        out_path = tmp_path / "kenkui-jean-preview.wav"
+        monkeypatch.setattr("kenkui.cli.voices._preview_path", lambda v: out_path)
+
+        opened = []
+        monkeypatch.setattr("subprocess.Popen", lambda cmd: opened.append(cmd))
+
+        cmd_voices_audition(self._make_args())
+        assert out_path.exists()
+        assert len(opened) == 1
+
+    def test_synthesis_failure_exits(self, monkeypatch):
+        from kenkui.cli.voices import cmd_voices_audition
+        import pytest
+
+        mock_model = MagicMock()
+        mock_model.get_state_for_audio_prompt.return_value = object()
+
+        monkeypatch.setattr("kenkui.cli.voices._get_or_load_model",
+                            lambda *a, **kw: mock_model)
+        monkeypatch.setattr("kenkui.cli.voices.load_voice", lambda v: v)
+        monkeypatch.setattr("kenkui.cli.voices._render_text",
+                            lambda *a, **kw: None)  # simulate failure
+        monkeypatch.setattr("kenkui.cli.voices.load_app_config", lambda *a, **kw: MagicMock(
+            temp=0.7, lsd_decode_steps=1, noise_clamp=None, eos_threshold=-4.0,
+        ))
+        monkeypatch.setattr("kenkui.cli.voices.get_registry",
+                            lambda: MagicMock(resolve=lambda v: MagicMock()))
+        monkeypatch.setattr("kenkui.cli.voices._preview_path",
+                            lambda v: MagicMock(__str__=lambda s: "/tmp/x.wav"))
+
+        with pytest.raises(SystemExit) as exc:
+            cmd_voices_audition(self._make_args())
+        assert exc.value.code == 1
+
+    def test_custom_text_used(self, tmp_path, monkeypatch):
+        from kenkui.cli.voices import cmd_voices_audition, DEFAULT_AUDITION_TEXT
+        from pydub import AudioSegment
+
+        captured = {}
+
+        def fake_render(model, voice_state, text, **kwargs):
+            captured["text"] = text
+            return AudioSegment.silent(duration=100)
+
+        mock_model = MagicMock()
+        mock_model.get_state_for_audio_prompt.return_value = object()
+
+        monkeypatch.setattr("kenkui.cli.voices._get_or_load_model",
+                            lambda *a, **kw: mock_model)
+        monkeypatch.setattr("kenkui.cli.voices.load_voice", lambda v: v)
+        monkeypatch.setattr("kenkui.cli.voices._render_text", fake_render)
+        monkeypatch.setattr("kenkui.cli.voices.load_app_config", lambda *a, **kw: MagicMock(
+            temp=0.7, lsd_decode_steps=1, noise_clamp=None, eos_threshold=-4.0,
+        ))
+        monkeypatch.setattr("kenkui.cli.voices.get_registry",
+                            lambda: MagicMock(resolve=lambda v: MagicMock()))
+        out_path = tmp_path / "preview.wav"
+        monkeypatch.setattr("kenkui.cli.voices._preview_path", lambda v: out_path)
+        monkeypatch.setattr("subprocess.Popen", lambda cmd: None)
+
+        cmd_voices_audition(self._make_args(text="Hello world"))
+        assert captured["text"] == "Hello world"
+        assert captured["text"] != DEFAULT_AUDITION_TEXT
+
+    def test_system_player_platform(self, monkeypatch):
+        import sys as _sys
+        from kenkui.cli.voices import _player_command
+
+        monkeypatch.setattr(_sys, "platform", "darwin")
+        assert _player_command() == "open"
+
+        monkeypatch.setattr(_sys, "platform", "linux")
+        assert _player_command() == "xdg-open"
