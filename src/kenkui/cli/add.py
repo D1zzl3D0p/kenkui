@@ -486,6 +486,7 @@ def _resolve_chapter_voice_conflicts(
     _pinned = pinned or set()
     char_quotes: dict[str, int] = {ch.character_id: ch.prominence for ch in characters}
     cooccurrence = _get_chapter_cooccurrence(chapters)
+    unresolved_seen: set[frozenset] = set()
     unresolved: list[tuple[str, str]] = []
 
     changed = True
@@ -520,7 +521,9 @@ def _resolve_chapter_voice_conflicts(
                         changed = True
                     else:
                         conflict_pair = (chars_sorted[0], char_to_reassign)
-                        if conflict_pair not in unresolved:
+                        pair_key = frozenset({chars_sorted[0], char_to_reassign})
+                        if pair_key not in unresolved_seen:
+                            unresolved_seen.add(pair_key)
                             unresolved.append(conflict_pair)
                         logger.warning(
                             "Voice conflict: %r and %r share voice %r in chapter %d "
@@ -531,7 +534,9 @@ def _resolve_chapter_voice_conflicts(
                 for pinned_char in chars_sorted[1:]:
                     if pinned_char in _pinned:
                         conflict_pair = (chars_sorted[0], pinned_char)
-                        if conflict_pair not in unresolved:
+                        pair_key = frozenset({chars_sorted[0], pinned_char})
+                        if pair_key not in unresolved_seen:
+                            unresolved_seen.add(pair_key)
                             unresolved.append(conflict_pair)
 
     return speaker_voices, unresolved
@@ -618,11 +623,24 @@ def _prompt_character_voice_review(
     from InquirerPy import inquirer
 
     if unresolved_conflicts:
+        _pinned = pinned or set()
         for char_a, char_b in unresolved_conflicts:
-            console.print(
-                f"[yellow]⚠ {char_a!r} and {char_b!r} share a chapter with the same voice. "
-                f"One of these is inherited from the series — change it below if needed.[/yellow]"
-            )
+            if char_a in _pinned:
+                inherited, other = char_a, char_b
+            elif char_b in _pinned:
+                inherited, other = char_b, char_a
+            else:
+                inherited = other = None
+            if inherited:
+                console.print(
+                    f"[yellow]⚠ {char_a!r} and {char_b!r} share a chapter with the same voice. "
+                    f"{inherited!r} is inherited from the series — change the other if needed.[/yellow]"
+                )
+            else:
+                console.print(
+                    f"[yellow]⚠ {char_a!r} and {char_b!r} share a chapter with the same voice "
+                    f"and no spare voice exists.[/yellow]"
+                )
         console.print()
 
     # Exclude narrator voice from per-character assignment choices

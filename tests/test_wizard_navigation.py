@@ -180,6 +180,51 @@ class TestConflictResolutionPinning:
         assert len(unresolved) == 1
         assert set(unresolved[0]) == {"Rand", "Mat"}
 
+    def test_same_conflict_in_multiple_chapters_deduped(self):
+        """Same conflict pair in two chapters produces only one unresolved entry."""
+        from kenkui.cli.add import _resolve_chapter_voice_conflicts
+        from kenkui.models import CharacterInfo, Chapter, Segment
+
+        characters = [
+            CharacterInfo(character_id="Rand", display_name="Rand", mention_count=100),
+            CharacterInfo(character_id="Mat", display_name="Mat", mention_count=50),
+        ]
+        # Same voice conflict in TWO chapters
+        speaker_voices = {"Rand": "alba", "Mat": "alba"}
+        pinned = {"Rand", "Mat"}  # both pinned — cannot reassign either
+        chapters = [
+            Chapter(
+                index=0,
+                title="Ch1",
+                paragraphs=[],
+                segments=[
+                    Segment(text="x", speaker="Rand"),
+                    Segment(text="y", speaker="Mat"),
+                ],
+            ),
+            Chapter(
+                index=1,
+                title="Ch2",
+                paragraphs=[],
+                segments=[
+                    Segment(text="x", speaker="Rand"),
+                    Segment(text="y", speaker="Mat"),
+                ],
+            ),
+        ]
+        _, unresolved = _resolve_chapter_voice_conflicts(
+            speaker_voices,
+            characters,
+            chapters,
+            male_pool=["alba", "jean"],
+            female_pool=["cosette"],
+            narrator_voice="cosette",
+            pinned=pinned,
+        )
+        # Should be exactly 1 conflict entry, not 2
+        assert len(unresolved) == 1
+        assert set(unresolved[0]) == {"Rand", "Mat"}
+
     def test_no_conflict_returns_empty_unresolved(self):
         """When no conflict exists, unresolved is empty."""
         from kenkui.cli.add import _resolve_chapter_voice_conflicts
@@ -214,7 +259,7 @@ class TestConflictResolutionPinning:
 
 
 class TestConflictWarningsInReview:
-    def test_warnings_printed_for_unresolved_conflicts(self, capsys):
+    def test_warnings_printed_for_unresolved_conflicts(self, capsys, monkeypatch):
         """_prompt_character_voice_review prints warnings for unresolved conflicts."""
         import sys
         from unittest.mock import MagicMock
@@ -227,8 +272,8 @@ class TestConflictWarningsInReview:
         mock_inquirerpy = MagicMock()
         mock_inquirerpy.inquirer = mock_inquirer
 
-        sys.modules.setdefault("InquirerPy", mock_inquirerpy)
-        sys.modules.setdefault("InquirerPy.inquirer", mock_inquirer)
+        monkeypatch.setitem(sys.modules, "InquirerPy", mock_inquirerpy)
+        monkeypatch.setitem(sys.modules, "InquirerPy.inquirer", mock_inquirer)
 
         from kenkui.cli.add import _prompt_character_voice_review
         from kenkui.models import CharacterInfo
@@ -261,7 +306,7 @@ class TestConflictWarningsInReview:
         assert "Mat" in output
         assert "same voice" in output
 
-    def test_no_warnings_when_no_conflicts(self, capsys):
+    def test_no_warnings_when_no_conflicts(self, capsys, monkeypatch):
         """_prompt_character_voice_review prints no warnings when unresolved_conflicts is empty."""
         import sys
         from unittest.mock import MagicMock
@@ -273,8 +318,8 @@ class TestConflictWarningsInReview:
         mock_inquirerpy = MagicMock()
         mock_inquirerpy.inquirer = mock_inquirer
 
-        sys.modules.setdefault("InquirerPy", mock_inquirerpy)
-        sys.modules.setdefault("InquirerPy.inquirer", mock_inquirer)
+        monkeypatch.setitem(sys.modules, "InquirerPy", mock_inquirerpy)
+        monkeypatch.setitem(sys.modules, "InquirerPy.inquirer", mock_inquirer)
 
         from kenkui.cli.add import _prompt_character_voice_review
         from kenkui.models import CharacterInfo
