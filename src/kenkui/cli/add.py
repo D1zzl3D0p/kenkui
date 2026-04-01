@@ -543,7 +543,11 @@ def _resolve_chapter_voice_conflicts(
     return speaker_voices, unresolved
 
 
-def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, str]:
+def _auto_assign_character_voices(
+    characters,
+    narrator_voice: str,
+    excluded_voices: "list[str] | None" = None,
+) -> dict[str, str]:
     """Auto-assign voices to characters.
 
     Phase 1: Assign known-gender characters in true round-robin order.
@@ -555,8 +559,11 @@ def _auto_assign_character_voices(characters, narrator_voice: str) -> dict[str, 
     """
     from ..voice_registry import get_registry
     registry = get_registry()
-    male_voices = [v.name for v in registry.filter(gender="Male")]
-    female_voices = [v.name for v in registry.filter(gender="Female")]
+    excluded = set(excluded_voices or [])
+    _all_male = [v.name for v in registry.filter(gender="Male")]
+    _all_female = [v.name for v in registry.filter(gender="Female")]
+    male_voices = [v for v in _all_male if v not in excluded] or _all_male
+    female_voices = [v for v in _all_female if v not in excluded] or _all_female
 
     # Exclude narrator voice from character pools so it stays unique to the narrator.
     male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
@@ -745,6 +752,7 @@ def _prompt_multivoice_character_voices(
     inherited_voices: "dict[str, str] | None" = None,
     pinned: "set[str] | None" = None,
     series_name: "str | None" = None,
+    excluded_voices: "list[str] | None" = None,
 ) -> dict[str, str]:
     """Run the full multi-voice character assignment flow.
 
@@ -791,7 +799,8 @@ def _prompt_multivoice_character_voices(
 
     # Advanced mode: auto-assign then review.
     # Step C — auto-assign character voices.
-    speaker_voices = _auto_assign_character_voices(characters, narrator_voice)
+    speaker_voices = _auto_assign_character_voices(characters, narrator_voice,
+                                                   excluded_voices=excluded_voices)
 
     # Pre-populate with inherited series voices (override auto-assigned ones)
     if inherited_voices:
@@ -800,10 +809,13 @@ def _prompt_multivoice_character_voices(
     # Resolve any same-voice conflicts for characters that co-appear in a chapter.
     from ..voice_registry import get_registry
     _reg = get_registry()
-    male_pool = [v.name for v in _reg.filter(gender="Male") if v.name != narrator_voice] or \
-                [v.name for v in _reg.filter(gender="Male")]
-    female_pool = [v.name for v in _reg.filter(gender="Female") if v.name != narrator_voice] or \
-                  [v.name for v in _reg.filter(gender="Female")]
+    _excluded = set(excluded_voices or [])
+    male_pool = [v.name for v in _reg.filter(gender="Male")
+                 if v.name != narrator_voice and v.name not in _excluded] or \
+                [v.name for v in _reg.filter(gender="Male") if v.name not in _excluded]
+    female_pool = [v.name for v in _reg.filter(gender="Female")
+                   if v.name != narrator_voice and v.name not in _excluded] or \
+                  [v.name for v in _reg.filter(gender="Female") if v.name not in _excluded]
     chapters = getattr(scan_result, "chapters", None) or []
     speaker_voices, unresolved_conflicts = _resolve_chapter_voice_conflicts(
         speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
@@ -1320,6 +1332,7 @@ def _step_voice_setup(state: dict) -> dict:
                     inherited_voices=inherited_voices,
                     pinned=pinned,
                     series_name=series_manifest.name if series_manifest else None,
+                    excluded_voices=app_config.excluded_voices,
                 )
                 roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
 
