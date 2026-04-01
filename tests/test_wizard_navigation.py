@@ -75,6 +75,46 @@ class TestSeriesStepNewSeries:
         assert manifest.name == "Wheel of Time"
 
 
+class TestSeriesStepExistingSeries:
+    def test_loads_existing_series_and_matches(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
+
+        from kenkui.series import SeriesCharacter, SeriesManifest, save_series
+        from kenkui.cli.add import _run_series_setup
+        from kenkui.models import CharacterInfo, FastScanResult
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+
+        # Pre-save an existing series manifest
+        manifest = SeriesManifest(
+            name="Wheel of Time",
+            slug="wheel-of-time",
+            updated_at="",
+            characters=[
+                SeriesCharacter(canonical="Rand al'Thor", aliases=["Rand"], voice="alba", gender="he/him"),
+            ],
+        )
+        save_series(manifest)
+
+        roster = FastScanResult(
+            roster=CharacterRoster(characters=[AliasGroup(canonical="Rand al'Thor", aliases=["Rand"])]),
+            characters=[CharacterInfo(character_id="Rand al'Thor", display_name="Rand al'Thor")],
+            book_hash="xyz",
+        )
+
+        # User says yes, picks "wheel-of-time" (existing slug)
+        prompts = ["yes", "wheel-of-time"]
+        result_manifest, inherited, pinned = _run_series_setup(
+            fast_result=roster,
+            mode="multi",
+            prompts=prompts,
+        )
+        assert result_manifest is not None
+        assert result_manifest.name == "Wheel of Time"
+        assert "Rand al'Thor" in inherited
+        assert inherited["Rand al'Thor"] == "alba"
+        assert "Rand al'Thor" in pinned
+
+
 class TestConflictResolutionPinning:
     def test_pinned_char_not_reassigned(self):
         from kenkui.cli.add import _resolve_chapter_voice_conflicts

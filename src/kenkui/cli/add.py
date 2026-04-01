@@ -530,7 +530,8 @@ def _resolve_chapter_voice_conflicts(
                             "and no spare voice is available.",
                             chars_sorted[0], char_to_reassign, voice, ch_idx,
                         )
-                # Pinned characters in conflict — record but don't reassign
+                # Pinned characters in conflict — record but don't reassign.
+                # frozenset key prevents duplicates with the no-spare-voice branch above.
                 for pinned_char in chars_sorted[1:]:
                     if pinned_char in _pinned:
                         conflict_pair = (chars_sorted[0], pinned_char)
@@ -1477,6 +1478,10 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
         "chapter_voices": {},
         "roster_cache_path": None,
         "quality_overrides": {},
+        "_series_manifest": None,
+        "_fast_result": None,
+        "_inherited_voices": {},
+        "_pinned": set(),
     }
 
     steps = [
