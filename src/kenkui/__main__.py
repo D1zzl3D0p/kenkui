@@ -289,6 +289,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     voices_include_p.add_argument("voice", help="Voice name to re-include.")
 
+    voices_cast_p = voices_sub.add_parser(
+        "cast", help="Show character→voice cast for a completed book."
+    )
+    voices_cast_p.add_argument("title", help="Book title (fuzzy matched).")
+
     return parser
 
 
@@ -404,6 +409,7 @@ def main() -> None:
             cmd_voices_download,
             cmd_voices_exclude,
             cmd_voices_include,
+            cmd_voices_cast,
         )
 
         voices_command = getattr(args, "voices_command", None)
@@ -417,6 +423,8 @@ def main() -> None:
             cmd_voices_exclude(args)
         elif voices_command == "include":
             cmd_voices_include(args)
+        elif voices_command == "cast":
+            cmd_voices_cast(args)
         else:
             # No subcommand: default to list (no filters)
             args.gender = None

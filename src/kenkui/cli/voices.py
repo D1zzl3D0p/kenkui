@@ -11,6 +11,7 @@ from rich.table import Table
 
 from ..voice_registry import get_registry
 from ..config import load_app_config, save_app_config, DEFAULT_CONFIG_PATH
+from ..queue import QueueManager
 
 console = Console()
 
@@ -222,10 +223,77 @@ def cmd_voices_include(args) -> None:
     console.print(f"[green]'{voice_name}' restored to auto-assignment pool.[/green]")
 
 
+def _sort_cast(speaker_voices: dict) -> list:
+    """Sort cast alphabetically with NARRATOR pinned last."""
+    return sorted(
+        speaker_voices.items(),
+        key=lambda kv: ("~" if kv[0] == "NARRATOR" else kv[0].lower()),
+    )
+
+
+def cmd_voices_cast(args) -> None:
+    """Display the character→voice cast for a completed multi-voice book."""
+    import difflib
+    from ..models import NarrationMode
+
+    title_query: str = args.title
+    qm = QueueManager()
+
+    candidates = [
+        item for item in qm.completed_items
+        if item.job.narration_mode == NarrationMode.MULTI
+        and item.job.speaker_voices
+    ]
+
+    if not candidates:
+        console.print("[yellow]No completed multi-voice jobs found in queue.[/yellow]")
+        return
+
+    job_names = [item.job.name for item in candidates]
+
+    # Case-insensitive fuzzy match
+    job_names_lower = [n.lower() for n in job_names]
+    close_lower = difflib.get_close_matches(title_query.lower(), job_names_lower, n=5, cutoff=0.4)
+    close = [job_names[job_names_lower.index(n)] for n in close_lower]
+    # Substring fallback
+    substring = [n for n in job_names if title_query.lower() in n.lower()]
+    matched_names = close or substring
+
+    if not matched_names:
+        console.print(f"[yellow]No jobs matching '{title_query}'.[/yellow]")
+        if job_names:
+            console.print("Available: " + ", ".join(job_names[:8]))
+        return
+
+    matched_items = [item for item in candidates if item.job.name in matched_names]
+
+    if len(matched_items) > 1:
+        console.print(f"[yellow]Multiple jobs match '{title_query}':[/yellow]")
+        for item in matched_items:
+            console.print(f"  • {item.job.name}  [dim](id: {item.id})[/dim]")
+        console.print("Re-run with a more specific title.")
+        return
+
+    item = matched_items[0]
+    table = Table(title=f"Cast — {item.job.name}", show_header=True, box=None)
+    table.add_column("Character", style="bold", min_width=30)
+    table.add_column("Voice", min_width=20)
+
+    for char_id, voice_name in _sort_cast(item.job.speaker_voices):
+        display = "Narrator" if char_id == "NARRATOR" else char_id
+        table.add_row(display, voice_name)
+
+    console.print(table)
+    if item.output_path:
+        console.print(f"\n[dim]Job ID: {item.id} | Output: {item.output_path}[/dim]")
+
+
 __all__ = [
     "cmd_voices_list",
     "cmd_voices_fetch",
     "cmd_voices_download",
     "cmd_voices_exclude",
     "cmd_voices_include",
+    "cmd_voices_cast",
+    "_sort_cast",
 ]
