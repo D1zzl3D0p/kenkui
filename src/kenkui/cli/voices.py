@@ -377,8 +377,247 @@ __all__ = [
     "cmd_voices_include",
     "cmd_voices_cast",
     "cmd_voices_audition",
+    "cmd_voices_tui",
     "DEFAULT_AUDITION_TEXT",
     "_sort_cast",
     "_player_command",
     "_preview_path",
+    "_tui_execute",
 ]
+
+
+# ---------------------------------------------------------------------------
+# TUI — interactive voice manager
+# ---------------------------------------------------------------------------
+
+
+def _tui_execute(prompt):
+    """Execute an InquirerPy prompt. Extracted for test monkeypatching."""
+    return prompt.execute()
+
+
+def _do_tui_audition(voice_name: str, config) -> None:
+    """Synthesize a preview from within the TUI. Returns on failure (no sys.exit)."""
+    import subprocess
+
+    out_path = _preview_path(voice_name)
+    console.print("\n[yellow]Loading TTS model — may take 10–30 s on first use…[/yellow]")
+
+    try:
+        model = _get_or_load_model(
+            config.temp, config.lsd_decode_steps, config.noise_clamp, config.eos_threshold,
+        )
+    except Exception as exc:
+        console.print(f"[red]Failed to load TTS model: {exc}[/red]")
+        return
+
+    try:
+        voice_resolved = load_voice(voice_name)
+        voice_state = model.get_state_for_audio_prompt(voice_resolved)
+    except Exception as exc:
+        console.print(f"[red]Failed to load voice '{voice_name}': {exc}[/red]")
+        return
+
+    console.print(f"Synthesizing [bold]{voice_name}[/bold]…")
+    seg = _render_text(
+        model, voice_state, DEFAULT_AUDITION_TEXT,
+        log_message=lambda _: None,
+        pid=0, batch_idx=0, total_batches=1,
+        frames_after_eos=0,
+    )
+    if seg is None:
+        console.print("[red]Synthesis returned no audio.[/red]")
+        return
+
+    seg.export(str(out_path), format="wav")
+    console.print(f"[green]Saved to {out_path}[/green]")
+
+    try:
+        subprocess.Popen([_player_command(), str(out_path)])
+    except Exception as exc:
+        console.print(f"[yellow]Could not open player: {exc}. Play manually: {out_path}[/yellow]")
+
+
+def _tui_voice_actions(voice_name: str) -> None:
+    """Per-voice action sub-menu. Loops until user chooses Back.
+
+    Audition fires and returns to the browse list (caller re-shows browse).
+    Exclude/Include toggles and stays here so the user can see the updated status.
+    """
+    from InquirerPy import inquirer
+
+    auditioned = False
+    while True:
+        config = load_app_config()
+        excluded = set(config.excluded_voices)
+        registry = get_registry()
+        meta = registry.resolve(voice_name)
+
+        # Details header
+        console.print()
+        console.rule(f"[bold]{voice_name}[/bold]", style="dim")
+        if meta:
+            table = Table(show_header=False, box=None, padding=(0, 2))
+            table.add_column("Field", style="dim", width=14)
+            table.add_column("Value")
+            table.add_row("Source", meta.source)
+            table.add_row("Gender", meta.gender or "?")
+            table.add_row("Accent", meta.accent or "?")
+            if meta.dataset:
+                table.add_row("Dataset", meta.dataset)
+            if meta.speaker_id:
+                table.add_row("Speaker ID", meta.speaker_id)
+            pool_status = "[yellow]excluded[/yellow]" if voice_name in excluded else "[green]in pool[/green]"
+            table.add_row("Pool status", pool_status)
+            console.print(table)
+        console.print()
+
+        in_pool = voice_name not in excluded
+        pool_label = "Exclude from pool" if in_pool else "Include in pool"
+
+        choices = [
+            {"name": "Audition  (play preview)", "value": "audition"},
+            {"name": pool_label, "value": "toggle"},
+            {"name": "← Back to browse list", "value": "back"},
+        ]
+
+        action = _tui_execute(inquirer.select(
+            message=f"Action for {voice_name}",
+            choices=choices,
+            instruction="(↑↓ to move, Enter to confirm)",
+        ))
+
+        if action == "audition":
+            _do_tui_audition(voice_name, config)
+            # Return so browse list re-shows — user picks next voice to compare
+            return
+
+        elif action == "toggle":
+            if in_pool:
+                config.excluded_voices = list(config.excluded_voices) + [voice_name]
+                save_app_config(config, DEFAULT_CONFIG_PATH)
+                console.print(f"[yellow]'{voice_name}' excluded from pool.[/yellow]")
+            else:
+                config.excluded_voices = [v for v in config.excluded_voices if v != voice_name]
+                save_app_config(config, DEFAULT_CONFIG_PATH)
+                console.print(f"[green]'{voice_name}' restored to pool.[/green]")
+            # Stay in sub-menu — loop refreshes with updated status
+
+        elif action == "back":
+            return
+
+
+def _tui_browse() -> None:
+    """Browse all voices with fuzzy search; drill into action sub-menu on select."""
+    from InquirerPy import inquirer
+
+    while True:
+        config = load_app_config()
+        excluded_set = set(config.excluded_voices)
+        registry = get_registry()
+
+        choices = []
+        for meta in sorted(registry.voices, key=lambda v: v.name.lower()):
+            pool_tag = " [excl]" if meta.name in excluded_set else ""
+            label = f"{meta.name:<22} {meta.description}{pool_tag}"
+            choices.append({"name": label, "value": meta.name})
+        choices.append({"name": "← Back to main menu", "value": "__back__"})
+
+        selected = _tui_execute(inquirer.fuzzy(
+            message="Browse voices  (type to filter by name / accent / gender)",
+            choices=choices,
+            instruction="(type to filter, Enter to select, Ctrl-C to cancel)",
+        ))
+
+        if selected == "__back__":
+            return
+
+        _tui_voice_actions(selected)
+        # Loop: re-show browse list after returning from actions
+
+
+def _tui_pool() -> None:
+    """Show excluded voices and offer bulk-restore via checkbox."""
+    from InquirerPy import inquirer
+
+    config = load_app_config()
+    excluded = list(config.excluded_voices)
+
+    console.print()
+    if not excluded:
+        console.print("[green]No voices are currently excluded from the pool.[/green]")
+        console.print("[dim]Use Browse & audition to exclude individual voices.[/dim]")
+        console.print()
+        return
+
+    console.print(f"[bold]Excluded voices ({len(excluded)}):[/bold]")
+    for v in excluded:
+        console.print(f"  • {v}")
+    console.print()
+
+    choices = [{"name": v, "value": v, "enabled": False} for v in excluded]
+    to_restore = _tui_execute(inquirer.checkbox(
+        message="Select voices to restore to pool (Space to toggle, Enter to confirm):",
+        choices=choices,
+        instruction="(Space=toggle, Enter=confirm, Ctrl-C=cancel)",
+    ))
+
+    if not to_restore:
+        return
+
+    restore_set = set(to_restore)
+    config.excluded_voices = [v for v in config.excluded_voices if v not in restore_set]
+    save_app_config(config, DEFAULT_CONFIG_PATH)
+    for v in sorted(restore_set):
+        console.print(f"[green]'{v}' restored to pool.[/green]")
+    console.print()
+
+
+def _tui_cast_lookup() -> None:
+    """Interactive cast lookup — prompt for title, display cast table."""
+    from InquirerPy import inquirer
+    from argparse import Namespace
+
+    title_query = _tui_execute(inquirer.text(
+        message="Book title (or part of it):",
+        instruction="(fuzzy matched against completed multi-voice jobs)",
+    )).strip()
+
+    if not title_query:
+        return
+
+    console.print()
+    cmd_voices_cast(Namespace(title=title_query))
+    console.print()
+
+
+def cmd_voices_tui(args) -> None:
+    """Interactive TUI for voice management (launched by `kenkui voices` with no subcommand)."""
+    from InquirerPy import inquirer
+
+    console.rule("[bold]kenkui — Voice Manager[/bold]")
+    console.print()
+
+    while True:
+        action = _tui_execute(inquirer.select(
+            message="What would you like to do?",
+            choices=[
+                {"name": "Browse & audition voices", "value": "browse"},
+                {"name": "Manage exclusion pool", "value": "pool"},
+                {"name": "Look up book cast", "value": "cast"},
+                {"name": "Exit", "value": "exit"},
+            ],
+            instruction="(↑↓ to move, Enter to select)",
+        ))
+
+        if action == "browse":
+            _tui_browse()
+        elif action == "pool":
+            _tui_pool()
+        elif action == "cast":
+            _tui_cast_lookup()
+        elif action == "exit":
+            break
+
+    console.print()
+    console.print("[dim]Bye.[/dim]")

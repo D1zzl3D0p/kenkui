@@ -252,3 +252,175 @@ class TestVoicesAudition:
 
         monkeypatch.setattr(_sys, "platform", "linux")
         assert _player_command() == "xdg-open"
+
+
+class TestVoicesTUI:
+    """Tests for the interactive voice management TUI."""
+
+    @staticmethod
+    def _stub_inquirerpy(monkeypatch):
+        """Stub InquirerPy in sys.modules so lazy imports inside TUI functions succeed.
+
+        _tui_execute is monkeypatched separately to drive the prompts.
+        The inquirer object returned here is a MagicMock — its .select/.fuzzy/.etc
+        calls produce MagicMock objects that _tui_execute ignores entirely.
+        """
+        import sys
+        from unittest.mock import MagicMock
+        mock_inq = MagicMock()
+        monkeypatch.setitem(sys.modules, "InquirerPy", mock_inq)
+        monkeypatch.setitem(sys.modules, "InquirerPy.inquirer", mock_inq.inquirer)
+
+    # Autouse fixture: stubs InquirerPy for every test in this class.
+    import pytest
+
+    @pytest.fixture(autouse=True)
+    def _stub_inq(self, monkeypatch):
+        self._stub_inquirerpy(monkeypatch)
+
+    def _make_meta(self, name, gender="Male", accent="American", source="builtin"):
+        from kenkui.voice_registry import VoiceMetadata
+        return VoiceMetadata(
+            name=name, file_path=None, source=source,
+            gender=gender, dataset=None, speaker_id=None, accent=accent,
+        )
+
+    def test_tui_exit_immediately(self, monkeypatch):
+        """Main menu: selecting Exit breaks the loop cleanly."""
+        from kenkui.cli.voices import cmd_voices_tui
+        from argparse import Namespace
+
+        prompts = iter(["exit"])
+        monkeypatch.setattr(
+            "kenkui.cli.voices._tui_execute",
+            lambda p: next(prompts),
+        )
+        cmd_voices_tui(Namespace())  # should not raise
+
+    def test_tui_browse_back_then_exit(self, monkeypatch):
+        """Browse → Back → Exit exercises the browse return path."""
+        from kenkui.cli.voices import cmd_voices_tui
+        from argparse import Namespace
+
+        mock_reg = MagicMock()
+        mock_reg.voices = [self._make_meta("alba"), self._make_meta("jean")]
+        monkeypatch.setattr("kenkui.cli.voices.get_registry", lambda: mock_reg)
+        monkeypatch.setattr(
+            "kenkui.cli.voices.load_app_config",
+            lambda *a, **kw: MagicMock(excluded_voices=[]),
+        )
+
+        # Main: browse → browse list: __back__ → main: exit
+        prompts = iter(["browse", "__back__", "exit"])
+        monkeypatch.setattr(
+            "kenkui.cli.voices._tui_execute",
+            lambda p: next(prompts),
+        )
+        cmd_voices_tui(Namespace())
+
+    def test_tui_browse_audition_returns_to_browse(self, monkeypatch):
+        """Browse → select voice → Audition → returns to browse list."""
+        from kenkui.cli.voices import cmd_voices_tui
+        from argparse import Namespace
+        from pydub import AudioSegment
+
+        mock_reg = MagicMock()
+        mock_reg.voices = [self._make_meta("jean")]
+        mock_reg.resolve.return_value = self._make_meta("jean")
+        monkeypatch.setattr("kenkui.cli.voices.get_registry", lambda: mock_reg)
+        monkeypatch.setattr(
+            "kenkui.cli.voices.load_app_config",
+            lambda *a, **kw: MagicMock(
+                excluded_voices=[],
+                temp=0.7, lsd_decode_steps=1, noise_clamp=None, eos_threshold=-4.0,
+            ),
+        )
+
+        mock_model = MagicMock()
+        mock_model.get_state_for_audio_prompt.return_value = object()
+        monkeypatch.setattr("kenkui.cli.voices._get_or_load_model", lambda *a, **kw: mock_model)
+        monkeypatch.setattr("kenkui.cli.voices.load_voice", lambda v: v)
+        monkeypatch.setattr(
+            "kenkui.cli.voices._render_text",
+            lambda *a, **kw: AudioSegment.silent(duration=100),
+        )
+        monkeypatch.setattr("subprocess.Popen", lambda cmd: None)
+        monkeypatch.setattr("kenkui.cli.voices._preview_path", lambda v: MagicMock(
+            __str__=lambda s: f"/tmp/{v}.wav",
+            exists=lambda: False,
+        ))
+
+        # main: browse → voice list: jean → action: audition →
+        # back in browse (loop): __back__ → main: exit
+        prompts = iter(["browse", "jean", "audition", "__back__", "exit"])
+        monkeypatch.setattr(
+            "kenkui.cli.voices._tui_execute",
+            lambda p: next(prompts),
+        )
+        cmd_voices_tui(Namespace())
+
+    def test_tui_browse_toggle_exclude(self, monkeypatch, tmp_path):
+        """Browse → voice → Exclude from pool → Back → exit."""
+        from kenkui.cli.voices import cmd_voices_tui
+        from kenkui.models import AppConfig
+        from argparse import Namespace
+
+        config = AppConfig(excluded_voices=[])
+        saved = {}
+
+        mock_reg = MagicMock()
+        mock_reg.voices = [self._make_meta("jean")]
+        mock_reg.resolve.return_value = self._make_meta("jean")
+        monkeypatch.setattr("kenkui.cli.voices.get_registry", lambda: mock_reg)
+        monkeypatch.setattr("kenkui.cli.voices.load_app_config", lambda *a, **kw: config)
+        monkeypatch.setattr(
+            "kenkui.cli.voices.save_app_config",
+            lambda cfg, path: saved.update({"cfg": cfg}),
+        )
+
+        # main: browse → voice: jean → toggle → back → browse: __back__ → exit
+        prompts = iter(["browse", "jean", "toggle", "back", "__back__", "exit"])
+        monkeypatch.setattr(
+            "kenkui.cli.voices._tui_execute",
+            lambda p: next(prompts),
+        )
+        cmd_voices_tui(Namespace())
+        assert "jean" in saved["cfg"].excluded_voices
+
+    def test_tui_pool_no_exclusions(self, monkeypatch):
+        """Pool menu shows a message and returns when nothing is excluded."""
+        from kenkui.cli.voices import cmd_voices_tui
+        from argparse import Namespace
+
+        monkeypatch.setattr(
+            "kenkui.cli.voices.load_app_config",
+            lambda *a, **kw: MagicMock(excluded_voices=[]),
+        )
+
+        # main: pool → main: exit
+        prompts = iter(["pool", "exit"])
+        monkeypatch.setattr(
+            "kenkui.cli.voices._tui_execute",
+            lambda p: next(prompts),
+        )
+        cmd_voices_tui(Namespace())
+
+    def test_tui_cast_lookup(self, monkeypatch):
+        """Cast lookup fires cmd_voices_cast with the typed title."""
+        from kenkui.cli.voices import cmd_voices_tui
+        from argparse import Namespace
+
+        cast_calls = []
+        monkeypatch.setattr(
+            "kenkui.cli.voices.cmd_voices_cast",
+            lambda args: cast_calls.append(args.title),
+        )
+
+        # main: cast → (text prompt returns "Dune") → main: exit
+        prompts = iter(["cast", "Dune", "exit"])
+        monkeypatch.setattr(
+            "kenkui.cli.voices._tui_execute",
+            lambda p: next(prompts),
+        )
+        cmd_voices_tui(Namespace())
+        assert cast_calls == ["Dune"]

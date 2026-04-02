@@ -420,6 +420,7 @@ def main() -> None:
             cmd_voices_include,
             cmd_voices_cast,
             cmd_voices_audition,
+            cmd_voices_tui,
         )
 
         voices_command = getattr(args, "voices_command", None)
@@ -438,12 +439,8 @@ def main() -> None:
         elif voices_command == "audition":
             cmd_voices_audition(args)
         else:
-            # No subcommand: default to list (no filters)
-            args.gender = None
-            args.accent = None
-            args.dataset = None
-            args.source = None
-            cmd_voices_list(args)
+            # No subcommand: launch interactive TUI
+            cmd_voices_tui(args)
         sys.exit(0)
 
     else:
