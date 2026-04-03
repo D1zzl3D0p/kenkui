@@ -170,6 +170,31 @@ class TestFilterChapters:
 
         assert result.estimated_word_count == 500
 
+    def test_none_preset_returns_empty(self):
+        # ChapterPreset.NONE is an explicit "empty selection by design" — not a bug.
+        summaries = [_make_summary(i, f"Chapter {i}", tags=ChapterTags(is_chapter=True)) for i in range(3)]
+        entry = _make_entry(summaries, book_hash="h9")
+        cache = _mock_cache(entry)
+
+        result = filter_chapters("h9", ChapterSelection(preset=ChapterPreset.NONE), cache)
+
+        assert result.chapter_count == 0
+        assert result.included_indices == []
+        assert result.estimated_word_count == 0
+        assert result.chapters == []
+
+    def test_manual_preset_returns_ascending_order(self):
+        # Documents the contract: included_indices are always in ascending order
+        # regardless of the order passed in selection.included.
+        summaries = [_make_summary(i, f"Chapter {i}") for i in range(5)]
+        entry = _make_entry(summaries, book_hash="h10")
+        cache = _mock_cache(entry)
+
+        selection = ChapterSelection(preset=ChapterPreset.MANUAL, included=[3, 1, 0])
+        result = filter_chapters("h10", selection, cache)
+
+        assert result.included_indices == [0, 1, 3]
+
 
 # ---------------------------------------------------------------------------
 # parse_book — integration tests (real epub, real cache)

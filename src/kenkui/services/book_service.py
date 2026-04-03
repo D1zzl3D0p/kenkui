@@ -2,7 +2,7 @@
 
 Public API:
   parse_book(ebook_path, cache) -> BookParseResult
-  filter_chapters(book_hash, selection, cache) -> ChapterFilterResult
+  filter_chapters(book_hash_key, selection, cache) -> ChapterFilterResult
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from kenkui.nlp import book_hash
 from kenkui.readers import get_reader
 
 from .book_cache import BookCache, ChapterSummary
@@ -47,10 +48,10 @@ def parse_book(ebook_path: str, cache: BookCache) -> BookParseResult:
         raise FileNotFoundError(f"Ebook not found: {ebook_path}")
 
     # Compute hash (sha256 of path + mtime → 32-char hex).
-    from kenkui.nlp import book_hash
     book_hash_value = book_hash(path)
 
-    # Return from cache if we have a fresh entry for this file.
+    # Extra guard: same mtime hash collision between different file paths is
+    # astronomically unlikely, but the path check is a cheap extra sanity check.
     entry = cache.get(book_hash_value)
     if entry is not None and entry.ebook_path == str(path.resolve()):
         return BookParseResult(
@@ -79,23 +80,30 @@ def parse_book(ebook_path: str, cache: BookCache) -> BookParseResult:
 
 
 def filter_chapters(
-    book_hash: str,
+    book_hash_key: str,
     selection: "ChapterSelection",  # noqa: F821 – imported below
     cache: BookCache,
 ) -> ChapterFilterResult:
-    """Apply a ChapterSelection to the cached chapters for *book_hash*.
+    """Apply a ChapterSelection to the cached chapters for *book_hash_key*.
+
+    If `selection.preset` is `ChapterPreset.NONE`, returns an empty result by design.
 
     Raises:
-        KeyError: if *book_hash* is not present in *cache*.
+        KeyError: if *book_hash_key* is not present in *cache*.
     """
     from kenkui.models import Chapter, ChapterPreset
     from kenkui.chapter_filter import ChapterFilter, FilterOperation
 
-    entry = cache.get(book_hash)
+    if selection.preset == ChapterPreset.NONE:
+        # "none" means empty selection by design — return early
+        return ChapterFilterResult(included_indices=[], chapter_count=0, estimated_word_count=0, chapters=[])
+
+    entry = cache.get(book_hash_key)
     if entry is None:
         raise KeyError("Book not found in cache. Call parse_book first.")
 
-    # Reconstruct lightweight Chapter objects (no paragraph text needed).
+    # ChapterFilter only inspects ch.tags and ch.title — paragraphs are not
+    # needed here and are intentionally omitted to avoid re-reading the ebook.
     chapters = [
         Chapter(
             index=s.index,
@@ -120,6 +128,9 @@ def filter_chapters(
 
     # Apply operations.
     filtered = ChapterFilter(operations).apply(chapters)
+
+    # Returned indices are always in ascending order (ChapterFilter.apply sorts them).
+    # selection.included order is NOT preserved.
 
     # Apply explicit exclusions.
     if selection.excluded:
