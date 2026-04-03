@@ -191,9 +191,11 @@ def _task_to_response(task) -> "TaskResponse":
     """Convert a Task to a TaskResponse."""
     result_dict = None
     if task.result is not None:
-        try:
+        if hasattr(task.result, "model_dump"):
+            result_dict = task.result.model_dump()
+        elif hasattr(task.result, "__dict__"):
             result_dict = task.result.__dict__
-        except AttributeError:
+        else:
             result_dict = {"value": str(task.result)}
     return TaskResponse(
         task_id=task.task_id,
@@ -503,6 +505,8 @@ def audition_voice(request: AuditionRequest):
     return _task_to_response(task)
 
 
+# NOTE: /voices/audition routes must be registered before /voices/{name} to prevent
+# the {name} wildcard from shadowing the literal 'audition' path segment.
 @app.get("/voices/audition/{task_id}.wav")
 def get_audition_audio(task_id: str):
     """Download the audio file for a completed audition task."""
@@ -584,6 +588,7 @@ def login_hf(request: HFTokenRequest):
         authenticated=status.authenticated,
         username=status.username,
         has_pocket_tts_access=status.has_pocket_tts_access,
+        error=None,
     )
 
 

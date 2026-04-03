@@ -151,6 +151,24 @@ def test_get_hf_auth_returns_status(client):
     assert "authenticated" in data
 
 
+def test_login_hf_success(client):
+    """POST /auth/huggingface with valid token returns authenticated status."""
+    mock_login_result = MagicMock()
+    mock_login_result.authenticated = True
+    mock_login_result.error = None
+    mock_status = MagicMock()
+    mock_status.authenticated = True
+    mock_status.username = "testuser"
+    mock_status.has_pocket_tts_access = True
+    with patch("kenkui.services.auth_service.login", return_value=mock_login_result), \
+         patch("kenkui.services.auth_service.get_hf_status", return_value=mock_status):
+        response = client.post("/auth/huggingface", json={"token": "hf_testtoken"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["authenticated"] is True
+    assert data["error"] is None
+
+
 # ---------------------------------------------------------------------------
 # Audition
 # ---------------------------------------------------------------------------
