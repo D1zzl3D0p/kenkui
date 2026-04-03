@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from kenkui.server.tasks import (
     Task,
     TaskRegistry,
