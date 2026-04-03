@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from kenkui.huggingface_auth import AuthStatus
 from kenkui.services.auth_service import (
     HFAuthStatus,
@@ -122,6 +120,7 @@ def test_login_failure():
         result = login("hf_badtoken")
 
     assert result.authenticated is False
+    assert result.username is None
     assert result.error == error_msg
 
 
@@ -142,7 +141,6 @@ def test_login_no_username_on_failure():
 
 
 def test_get_username_returns_none_on_import_error():
-    with patch("huggingface_hub.whoami", side_effect=ImportError("no module")):
+    with patch.dict("sys.modules", {"huggingface_hub": None}):
         result = _get_username()
-
     assert result is None
