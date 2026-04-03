@@ -1,10 +1,10 @@
 """Download service wrapping voices/download.py."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from kenkui.voices.download import download_voices, fetch_uncompiled_voices
+from kenkui.voices.download import download_voices, fetch_uncompiled_voices, _VOICES_LOCAL_DIR
 
 
 @dataclass
@@ -19,7 +19,6 @@ def download_compiled(
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> DownloadResult:
     """Download compiled voices from HuggingFace."""
-    from kenkui.voices.download import _VOICES_LOCAL_DIR
     try:
         download_voices(force=force, progress_callback=progress_callback)
         return DownloadResult(success=True, path=str(_VOICES_LOCAL_DIR), message="Download complete")
@@ -33,7 +32,6 @@ def fetch_uncompiled(
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> DownloadResult:
     """Fetch uncompiled voice sources from HuggingFace."""
-    from kenkui.voices.download import _VOICES_LOCAL_DIR
     try:
         fetch_uncompiled_voices(repo_id=repo_id, patterns=patterns, progress_callback=progress_callback)
         return DownloadResult(success=True, path=str(_VOICES_LOCAL_DIR), message="Fetch complete")

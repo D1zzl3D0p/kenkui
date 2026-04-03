@@ -1,8 +1,8 @@
 """First-run voice download from HuggingFace Hub."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from ..voice_registry import get_registry
 
@@ -35,7 +35,8 @@ def download_voices(
     cache and re-download everything from scratch.
 
     ``progress_callback`` receives coarse-grained (percent, message) tuples:
-    (0, "Starting download"), (50, "Downloading voices"), (100, "Download complete").
+    (0, "Starting download"), (10, "Downloading from HuggingFace"),
+    (90, "Updating voice registry"), (100, "Download complete").
     Pass ``None`` (default) for silent operation.
     """
     import shutil
@@ -48,6 +49,10 @@ def download_voices(
         shutil.rmtree(_VOICES_LOCAL_DIR)
 
     _VOICES_LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+
+    if progress_callback is not None:
+        progress_callback(10, "Downloading from HuggingFace")
+
     snapshot_download(
         repo_id=HF_VOICES_REPO,
         repo_type=HF_REPO_TYPE,
@@ -56,7 +61,7 @@ def download_voices(
     )
 
     if progress_callback is not None:
-        progress_callback(50, "Downloading voices")
+        progress_callback(90, "Updating voice registry")
 
     get_registry().invalidate()
 
@@ -65,6 +70,7 @@ def download_voices(
 
 
 def fetch_uncompiled_voices(
+    *,
     repo_id: str | None = None,
     patterns: list[str] | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
@@ -75,28 +81,32 @@ def fetch_uncompiled_voices(
     ``patterns`` is forwarded to ``snapshot_download`` as ``allow_patterns``.
 
     ``progress_callback`` receives coarse-grained (percent, message) tuples:
-    (0, "Starting download"), (50, "Downloading voices"), (100, "Download complete").
+    (0, "Starting download"), (10, "Downloading from HuggingFace"),
+    (90, "Updating voice registry"), (100, "Download complete").
     Pass ``None`` (default) for silent operation.
     """
     from huggingface_hub import snapshot_download
-
-    effective_repo_id = repo_id or HF_VOICES_REPO
 
     if progress_callback is not None:
         progress_callback(0, "Starting download")
 
     _VOICES_LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-    kwargs: dict = dict(
-        repo_id=effective_repo_id,
-        repo_type=HF_REPO_TYPE,
-        local_dir=str(_VOICES_LOCAL_DIR),
-    )
-    if patterns is not None:
+
+    if progress_callback is not None:
+        progress_callback(10, "Downloading from HuggingFace")
+
+    kwargs: dict[str, object] = {
+        "repo_id": repo_id or HF_VOICES_REPO,
+        "repo_type": HF_REPO_TYPE,
+        "local_dir": str(_VOICES_LOCAL_DIR),
+        "ignore_patterns": ["*.md", "*.gitattributes", ".gitattributes"],
+    }
+    if patterns:
         kwargs["allow_patterns"] = patterns
     snapshot_download(**kwargs)
 
     if progress_callback is not None:
-        progress_callback(50, "Downloading voices")
+        progress_callback(90, "Updating voice registry")
 
     get_registry().invalidate()
 

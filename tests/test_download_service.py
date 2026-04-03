@@ -9,14 +9,17 @@ from unittest.mock import MagicMock, patch, call
 # ---------------------------------------------------------------------------
 
 
-def test_download_compiled_success():
-    with patch("kenkui.services.download_service.download_voices") as mock_dv:
+def test_download_compiled_success(tmp_path):
+    with (
+        patch("kenkui.services.download_service.download_voices") as mock_dv,
+        patch("kenkui.services.download_service._VOICES_LOCAL_DIR", tmp_path),
+    ):
         from kenkui.services.download_service import download_compiled
         result = download_compiled()
 
     mock_dv.assert_called_once()
     assert result.success is True
-    assert "kenkui" in result.path
+    assert result.path == str(tmp_path)
     assert result.message == "Download complete"
 
 
@@ -100,7 +103,7 @@ def test_fetch_uncompiled_passes_repo_and_patterns(tmp_path):
 
 
 def test_download_voices_callback_called(tmp_path):
-    """download_voices() should call progress_callback at 0, 50, and 100."""
+    """download_voices() should call progress_callback at 0, 10, 90, and 100."""
     calls: list[tuple[int, str]] = []
 
     def cb(percent: int, message: str) -> None:
@@ -116,11 +119,12 @@ def test_download_voices_callback_called(tmp_path):
         dl.download_voices(progress_callback=cb)
 
     percents = [p for p, _ in calls]
-    assert percents == [0, 50, 100], f"Expected [0, 50, 100], got {percents}"
+    assert percents == [0, 10, 90, 100], f"Expected [0, 10, 90, 100], got {percents}"
     # Verify ordering is strictly ascending
     assert calls[0][0] == 0
-    assert calls[1][0] == 50
-    assert calls[2][0] == 100
+    assert calls[1][0] == 10
+    assert calls[2][0] == 90
+    assert calls[3][0] == 100
 
 
 def test_download_voices_no_callback_is_silent(tmp_path):
@@ -136,7 +140,7 @@ def test_download_voices_no_callback_is_silent(tmp_path):
 
 
 def test_fetch_uncompiled_voices_callback_called(tmp_path):
-    """fetch_uncompiled_voices() should call progress_callback at 0, 50, and 100."""
+    """fetch_uncompiled_voices() should call progress_callback at 0, 10, 90, and 100."""
     calls: list[tuple[int, str]] = []
 
     def cb(percent: int, message: str) -> None:
@@ -152,7 +156,7 @@ def test_fetch_uncompiled_voices_callback_called(tmp_path):
         dl.fetch_uncompiled_voices(repo_id="org/repo", patterns=["*.wav"], progress_callback=cb)
 
     percents = [p for p, _ in calls]
-    assert percents == [0, 50, 100], f"Expected [0, 50, 100], got {percents}"
+    assert percents == [0, 10, 90, 100], f"Expected [0, 10, 90, 100], got {percents}"
 
 
 def test_fetch_uncompiled_voices_uses_default_repo(tmp_path):
