@@ -43,8 +43,9 @@ def test_fast_scan_delegates_to_run_fast_scan(tmp_path):
     mock_reader.get_chapters.assert_called_once()
 
     call_args = mock_run.call_args
-    assert call_args[0][0] is fake_chapters  # chapters positional arg
-    assert call_args[0][2] == "llama3.2"     # nlp_model positional arg
+    assert call_args[0][0] is fake_chapters              # chapters positional arg
+    assert call_args[0][1] == Path(str(fake_epub))       # book_path positional arg
+    assert call_args[0][2] == "llama3.2"                 # nlp_model positional arg
     assert result is mock_result
 
 
@@ -165,12 +166,97 @@ def test_full_analysis_delegates_to_run_analysis(tmp_path):
     mock_reader.get_chapters.assert_called_once()
 
     call_args = mock_run.call_args
-    assert call_args[0][0] is fake_chapters  # chapters positional arg
-    assert call_args[0][2] == "llama3.2"     # nlp_model positional arg
+    assert call_args[0][0] is fake_chapters              # chapters positional arg
+    assert call_args[0][1] == Path(str(fake_epub))       # book_path positional arg
+    assert call_args[0][2] == "llama3.2"                 # nlp_model positional arg
     assert result is mock_result
+
+
+def test_full_analysis_uses_config_nlp_model(tmp_path):
+    """When nlp_model=None, full_analysis should read nlp_model from AppConfig."""
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [MagicMock()]
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = fake_chapters
+
+    mock_config = MagicMock()
+    mock_config.nlp_model = "mistral"
+
+    mock_result = MagicMock()
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.run_analysis", return_value=mock_result) as mock_run,
+        patch("kenkui.services.nlp_service.load_app_config", return_value=mock_config) as mock_cfg,
+    ):
+        result = full_analysis(str(fake_epub), nlp_model=None)
+
+    mock_cfg.assert_called_once_with(None)
+    call_args = mock_run.call_args
+    assert call_args[0][2] == "mistral"
+    assert result is mock_result
+
+
+def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
+    """Progress callback should receive (int, str) tuples with increasing percents."""
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = [MagicMock()]
+
+    received: list[tuple[int, str]] = []
+
+    def _cb(pct: int, msg: str) -> None:
+        received.append((pct, msg))
+
+    # Simulate run_analysis calling the string-only adapter 3 times
+    def _fake_run_analysis(chapters, book_path, nlp_model, progress_callback=None, **kwargs):
+        if progress_callback:
+            progress_callback("Extracting quotes…")
+            progress_callback("Clustering entities…")
+            progress_callback("Attributing speakers…")
+        return MagicMock()
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.run_analysis", side_effect=_fake_run_analysis),
+    ):
+        full_analysis(str(fake_epub), nlp_model="llama3.2", progress_callback=_cb)
+
+    # Should have received: 0 (Parsing ebook), 5 (Starting NLP analysis),
+    # 13, 21, 29 (3 adapter calls: 5+8, 13+8, 21+8), 100 (Analysis complete)
+    assert len(received) == 6
+
+    percents = [p for p, _ in received]
+    messages = [m for _, m in received]
+
+    assert percents[0] == 0
+    assert messages[0] == "Parsing ebook"
+    assert percents[1] == 5
+    assert messages[1] == "Starting NLP analysis"
+    # Adapter bumps: start=5, bump=8 → 5+8=13, 13+8=21, 21+8=29
+    assert percents[2] == 13
+    assert percents[3] == 21
+    assert percents[4] == 29
+    assert percents[5] == 100
+    assert messages[5] == "Analysis complete"
+
+    # All percents are ints
+    for p, _ in received:
+        assert isinstance(p, int)
+    # All messages are strings
+    for _, m in received:
+        assert isinstance(m, str)
+
+    # Percents are non-decreasing
+    for i in range(1, len(percents)):
+        assert percents[i] >= percents[i - 1]
 
 
 @pytest.mark.skip(reason="Requires real spaCy / Ollama — integration-only")
 def test_full_analysis_real_pipeline():
     """Placeholder: full pipeline test requiring spaCy + Ollama."""
-    pass
+    # Would test: real epub file → full NLP pipeline → NLPResult with characters and quotes

@@ -19,6 +19,14 @@ from kenkui.models import FastScanResult, NLPResult
 from kenkui.nlp import run_analysis, run_fast_scan
 from kenkui.readers import get_reader
 
+# Adapter constants for progress-callback translation (NLP string-only → int+str).
+_FAST_SCAN_START_PCT = 10
+_FAST_SCAN_BUMP = 15
+_FAST_SCAN_CAP = 90
+_FULL_ANALYSIS_START_PCT = 5
+_FULL_ANALYSIS_BUMP = 8
+_FULL_ANALYSIS_CAP = 95
+
 
 def fast_scan(
     ebook_path: str,
@@ -53,12 +61,12 @@ def fast_scan(
     chapters = reader.get_chapters()
 
     if progress_callback:
-        progress_callback(10, "Starting NLP scan")
+        progress_callback(_FAST_SCAN_START_PCT, "Starting NLP scan")
 
-    _pct = [10]
+    _pct = [_FAST_SCAN_START_PCT]
 
     def _adapt(msg: str) -> None:
-        _pct[0] = min(90, _pct[0] + 15)
+        _pct[0] = min(_FAST_SCAN_CAP, _pct[0] + _FAST_SCAN_BUMP)
         if progress_callback:
             progress_callback(_pct[0], msg)
 
@@ -103,12 +111,12 @@ def full_analysis(
     chapters = reader.get_chapters()
 
     if progress_callback:
-        progress_callback(5, "Starting NLP analysis")
+        progress_callback(_FULL_ANALYSIS_START_PCT, "Starting NLP analysis")
 
-    _pct = [5]
+    _pct = [_FULL_ANALYSIS_START_PCT]
 
     def _adapt(msg: str) -> None:
-        _pct[0] = min(95, _pct[0] + 8)
+        _pct[0] = min(_FULL_ANALYSIS_CAP, _pct[0] + _FULL_ANALYSIS_BUMP)
         if progress_callback:
             progress_callback(_pct[0], msg)
 
