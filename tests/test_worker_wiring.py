@@ -1,6 +1,6 @@
 """Tests that WorkerServer wires up BookCache, TaskRegistry, and TaskRunner."""
 from unittest.mock import patch
-import pytest
+
 
 def test_worker_server_has_book_cache():
     from kenkui.server.worker import WorkerServer
