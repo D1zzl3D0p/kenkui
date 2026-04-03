@@ -13,6 +13,7 @@ Public API:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def list_voices(
     accent: str | None = None,
     dataset: str | None = None,
     source: str | None = None,
-    config_path=None,
+    config_path: str | None = None,
 ) -> list[VoiceInfo]:
     """Return all voices matching the given filters, with excluded flag set.
 
@@ -109,7 +110,7 @@ def list_voices(
     return [_voice_metadata_to_info(v, v.name in excluded_set) for v in voices]
 
 
-def get_voice(name: str, config_path=None) -> VoiceInfo | None:
+def get_voice(name: str, config_path: str | None = None) -> VoiceInfo | None:
     """Look up a single voice by name. Returns None if not found."""
     meta = get_registry().resolve(name)
     if meta is None:
@@ -120,7 +121,7 @@ def get_voice(name: str, config_path=None) -> VoiceInfo | None:
     return _voice_metadata_to_info(meta, meta.name in excluded_set)
 
 
-def exclude_voice(name: str, config_path=None) -> ExcludeResult:
+def exclude_voice(name: str, config_path: str | None = None) -> ExcludeResult:
     """Add a voice to the excluded-from-auto-assignment list.
 
     Does not raise if the voice is not in the registry.
@@ -138,18 +139,18 @@ def exclude_voice(name: str, config_path=None) -> ExcludeResult:
     female_names = {v.name for v in registry.filter(gender="Female")}
     excluded_set = set(config.excluded_voices)
 
+    warnings = []
     if male_names and male_names <= excluded_set:
-        warning = "All Male voices are now excluded from auto-assignment"
-    elif female_names and female_names <= excluded_set:
-        warning = "All Female voices are now excluded from auto-assignment"
-    else:
-        warning = None
+        warnings.append("All Male voices are now excluded from auto-assignment")
+    if female_names and female_names <= excluded_set:
+        warnings.append("All Female voices are now excluded from auto-assignment")
+    warning = "; ".join(warnings) if warnings else None
 
     save_app_config(config, dest)
     return ExcludeResult(excluded_voices=list(config.excluded_voices), warning=warning)
 
 
-def include_voice(name: str, config_path=None) -> IncludeResult:
+def include_voice(name: str, config_path: str | None = None) -> IncludeResult:
     """Remove a voice from the excluded list, restoring it to auto-assignment.
 
     If the voice is not in the excluded list, returns unchanged list (no-op).
@@ -168,13 +169,16 @@ def include_voice(name: str, config_path=None) -> IncludeResult:
 def synthesize_preview(
     voice_name: str,
     text: str | None = None,
-    config_path=None,
-    progress_callback=None,
+    config_path: str | None = None,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> AudioPreviewResult:
     """Synthesize a short audio preview for a voice and save it to disk.
 
     Saves output to ~/.cache/kenkui/previews/{voice_name}.wav.
     Raises on failure (model load error, voice load error, synthesis failure).
+
+    Preview files are saved to ``~/.cache/kenkui/previews/`` (persistent, unlike /tmp)
+    so repeated calls for the same voice reuse the file.
 
     Progress callback receives (percent: int, message: str) tuples:
       (0, "Loading model"), (40, "Loading voice"),

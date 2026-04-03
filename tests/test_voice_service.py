@@ -13,6 +13,7 @@ from kenkui.services.voice_service import (
     VoiceInfo,
     exclude_voice,
     gender_from_pronoun,
+    get_voice,
     include_voice,
     list_voices,
     sort_cast,
@@ -101,6 +102,46 @@ def test_list_voices_filters_by_gender():
     mock_registry.filter.assert_called_once_with(
         gender="Female", accent=None, dataset=None, source=None
     )
+
+
+# ---------------------------------------------------------------------------
+# get_voice
+# ---------------------------------------------------------------------------
+
+
+def test_get_voice_found():
+    """get_voice returns a VoiceInfo with correct fields and excluded flag."""
+    meta = _make_meta("alba", gender="Male", accent="American")
+
+    mock_registry = MagicMock()
+    mock_registry.resolve.return_value = meta
+
+    mock_config = _make_app_config(excluded_voices=[])
+
+    with (
+        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
+        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
+    ):
+        result = get_voice("alba")
+
+    assert result is not None
+    assert isinstance(result, VoiceInfo)
+    assert result.name == "alba"
+    assert result.gender == "Male"
+    assert result.accent == "American"
+    assert result.excluded is False
+    mock_registry.resolve.assert_called_once_with("alba")
+
+
+def test_get_voice_not_found():
+    """get_voice returns None when the registry does not recognise the name."""
+    mock_registry = MagicMock()
+    mock_registry.resolve.return_value = None
+
+    with patch("kenkui.services.voice_service.get_registry", return_value=mock_registry):
+        result = get_voice("nonexistent_voice")
+
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +315,30 @@ def test_top_gender_matched_voice_falls_back_to_default():
         result = top_gender_matched_voice(chars, excluded=[], default_voice="fallback")
 
     assert result == "fallback"
+
+
+def test_top_gender_matched_voice_respects_excluded():
+    """Excluded voices are not returned even when they match the dominant gender."""
+    # Two male characters with equal prominence — only "marius" is not excluded.
+    chars = [
+        FakeCharacter(gender_pronoun="he/him", prominence=80),
+        FakeCharacter(gender_pronoun="he/him", prominence=80),
+    ]
+
+    meta_excluded = _make_meta("alba", gender="Male")
+    meta_available = _make_meta("marius", gender="Male")
+
+    mock_registry = MagicMock()
+    mock_registry.filter.side_effect = lambda gender=None, **_: (
+        [meta_excluded, meta_available] if gender == "Male" else []
+    )
+
+    with patch("kenkui.services.voice_service.get_registry", return_value=mock_registry):
+        result = top_gender_matched_voice(
+            chars, excluded=["alba"], default_voice="fallback"
+        )
+
+    assert result == "marius"
 
 
 # ---------------------------------------------------------------------------
