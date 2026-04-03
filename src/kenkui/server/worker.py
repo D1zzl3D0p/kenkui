@@ -53,6 +53,13 @@ class WorkerServer:
         self._progress_callback: Callable[[float, str, int], None] | None = None
         self._load()
 
+        from ..services.book_cache import BookCache
+        from .tasks import TaskRegistry, TaskRunner
+
+        self.book_cache = BookCache()
+        self.task_registry = TaskRegistry()
+        self.task_runner = TaskRunner(self.task_registry)
+
     def _load(self):
         # Auto-migrate from legacy queue.yaml if queue.toml does not exist yet.
         if not QUEUE_FILE.exists() and _LEGACY_QUEUE_FILE.exists():
