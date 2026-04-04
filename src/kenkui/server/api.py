@@ -163,6 +163,26 @@ class TaskResponse(BaseModel):
     error: str | None = None
 
 
+# --- Series ---
+class SeriesCharacterModel(BaseModel):
+    canonical: str
+    aliases: list[str] = []
+    voice: str = ""
+    gender: str = ""
+
+
+class SeriesModel(BaseModel):
+    slug: str
+    name: str
+    updated_at: str = ""
+    characters: list[SeriesCharacterModel] = []
+
+
+class SeriesListResponse(BaseModel):
+    series: list[SeriesModel]
+    total: int
+
+
 # --- Auth ---
 class HFTokenRequest(BaseModel):
     token: str
@@ -593,6 +613,67 @@ def get_task(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return _task_to_response(task)
+
+
+@app.get("/series", response_model=SeriesListResponse)
+def list_series_route():
+    """List all series manifests."""
+    from ..services.series_service import list_series as _list_series
+    result = _list_series()
+    return SeriesListResponse(
+        series=[
+            SeriesModel(
+                slug=e.slug,
+                name=e.name,
+                updated_at=e.updated_at,
+                characters=[
+                    SeriesCharacterModel(
+                        canonical=c.canonical,
+                        aliases=c.aliases,
+                        voice=c.voice,
+                        gender=c.gender,
+                    )
+                    for c in e.characters
+                ],
+            )
+            for e in result.series
+        ],
+        total=result.total,
+    )
+
+
+@app.get("/series/{slug}", response_model=SeriesModel)
+def get_series_route(slug: str):
+    """Get a single series manifest by slug."""
+    from ..services.series_service import load_series as _load_series
+    try:
+        entry = _load_series(slug)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Series not found: {slug}")
+    return SeriesModel(
+        slug=entry.slug,
+        name=entry.name,
+        updated_at=entry.updated_at,
+        characters=[
+            SeriesCharacterModel(
+                canonical=c.canonical,
+                aliases=c.aliases,
+                voice=c.voice,
+                gender=c.gender,
+            )
+            for c in entry.characters
+        ],
+    )
+
+
+@app.delete("/series/{slug}")
+def delete_series_route(slug: str):
+    """Delete a series manifest by slug."""
+    from ..services.series_service import delete_series as _delete_series
+    found = _delete_series(slug)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Series not found: {slug}")
+    return {"status": "deleted", "slug": slug}
 
 
 @app.get("/auth/huggingface", response_model=HFAuthResponse)
