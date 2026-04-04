@@ -66,6 +66,12 @@ class AudioPreviewResult:
     duration_ms: int
 
 
+@dataclass
+class SuggestCastResult:
+    speaker_voices: dict[str, str]   # character_name → voice_name
+    warnings: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -296,12 +302,227 @@ def sort_cast(speaker_voices: dict) -> list[tuple[str, str]]:
     )
 
 
+# ---------------------------------------------------------------------------
+# suggest_cast helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_chapter_cooccurrence_from_paragraphs(chapters) -> "dict[int, set[str]]":
+    """Build {chapter_index: set of speaker names} from chapter paragraphs.
+
+    Accepts chapter objects that expose either a `paragraphs` attribute
+    (each paragraph having .speaker and .is_spoken) or a `segments` attribute
+    (each segment having .speaker).
+    """
+    result: dict[int, set[str]] = {}
+    EXCLUDED = {"NARRATOR", "SCENE_BREAK", "Unknown"}
+    for idx, ch in enumerate(chapters):
+        speakers: set[str] = set()
+        if hasattr(ch, "paragraphs"):
+            for p in ch.paragraphs:
+                sp = getattr(p, "speaker", None)
+                is_spoken = getattr(p, "is_spoken", False)
+                if sp and is_spoken and sp not in EXCLUDED:
+                    speakers.add(sp)
+        elif hasattr(ch, "segments"):
+            for s in ch.segments:
+                sp = getattr(s, "speaker", None)
+                if sp and sp not in EXCLUDED and not getattr(s, "is_scene_break", False):
+                    speakers.add(sp)
+        if speakers:
+            result[idx] = speakers
+    return result
+
+
+def _resolve_cast_conflicts(
+    speaker_voices: "dict[str, str]",
+    character_ids: "list[str]",
+    char_prominence: "dict[str, int]",
+    char_gender: "dict[str, str]",
+    chapters,
+    male_pool: "list[str]",
+    female_pool: "list[str]",
+    narrator_voice: str,
+) -> "tuple[dict[str, str], list[str]]":
+    """Ensure no two characters sharing a chapter are assigned the same voice.
+
+    Returns (updated_speaker_voices, warnings).
+    """
+    import logging
+    from collections import defaultdict
+    logger = logging.getLogger(__name__)
+
+    cooccurrence = _get_chapter_cooccurrence_from_paragraphs(chapters)
+    warnings: list[str] = []
+    unresolved_seen: set[frozenset] = set()
+
+    changed = True
+    while changed:
+        changed = False
+        for ch_idx, ch_speakers in cooccurrence.items():
+            voice_to_chars: dict[str, list[str]] = defaultdict(list)
+            for sp in ch_speakers:
+                v = speaker_voices.get(sp)
+                if v:
+                    voice_to_chars[v].append(sp)
+
+            for voice, chars in voice_to_chars.items():
+                if len(chars) <= 1:
+                    continue
+                chars_sorted = sorted(chars, key=lambda c: char_prominence.get(c, 0), reverse=True)
+                chapter_voices_used = {
+                    speaker_voices[sp] for sp in ch_speakers if sp in speaker_voices
+                }
+                for char_to_reassign in chars_sorted[1:]:
+                    gender = char_gender.get(char_to_reassign, "they")
+                    pool = male_pool if gender == "male" else female_pool
+                    new_voice = next(
+                        (v for v in pool if v not in chapter_voices_used and v != narrator_voice),
+                        None,
+                    )
+                    if new_voice:
+                        speaker_voices[char_to_reassign] = new_voice
+                        chapter_voices_used.add(new_voice)
+                        changed = True
+                    else:
+                        pair_key = frozenset({chars_sorted[0], char_to_reassign})
+                        if pair_key not in unresolved_seen:
+                            unresolved_seen.add(pair_key)
+                            warnings.append(
+                                f"Voice conflict: {chars_sorted[0]!r} and "
+                                f"{char_to_reassign!r} share voice {voice!r} in chapter "
+                                f"{ch_idx} — no spare voice available."
+                            )
+                            logger.warning(
+                                "Voice conflict: %r and %r share voice %r in chapter %d "
+                                "and no spare voice is available.",
+                                chars_sorted[0], char_to_reassign, voice, ch_idx,
+                            )
+
+    return speaker_voices, warnings
+
+
+def suggest_cast(
+    *,
+    roster: list,
+    excluded_voices: list[str],
+    default_voice: str,
+    chapters: list | None = None,
+    config_path: str | None = None,
+) -> SuggestCastResult:
+    """Assign voices to characters using round-robin pool + conflict resolution.
+
+    Pure function — no I/O, no Rich, no sys.exit.
+    Moved from cli/add.py._auto_assign_character_voices and
+    _resolve_chapter_voice_conflicts.
+
+    Each item in ``roster`` must have:
+      - .character_id  (str) — used as key in the returned speaker_voices dict
+      - .gender_pronoun (str | None)
+      - .prominence    (int property) — used for sorting
+
+    Returns SuggestCastResult(speaker_voices, warnings).
+    """
+    warnings: list[str] = []
+
+    # Fetch all voices from registry (respects config excluded list internally,
+    # but we apply our own excluded_voices filter on top).
+    all_voices = list_voices(config_path=config_path)
+    excluded_set = set(excluded_voices or [])
+
+    # Build gender pools.
+    _all_male = [v.name for v in all_voices if (v.gender or "").lower() == "male"]
+    _all_female = [v.name for v in all_voices if (v.gender or "").lower() == "female"]
+
+    male_voices = [v for v in _all_male if v not in excluded_set] or _all_male
+    female_voices = [v for v in _all_female if v not in excluded_set] or _all_female
+
+    # Exclude narrator voice from character pools.
+    male_pool = [v for v in male_voices if v != default_voice] or male_voices
+    female_pool = [v for v in female_voices if v != default_voice] or female_voices
+
+    if not male_pool and not female_pool:
+        warnings.append(
+            "No voices available in the pool; all characters assigned to default_voice."
+        )
+
+    male_idx, female_idx = 0, 0
+    male_quotes, female_quotes = 0, 0
+    speaker_voices: dict[str, str] = {}
+
+    char_prominence: dict[str, int] = {}
+    char_gender: dict[str, str] = {}
+
+    for ch in sorted(roster, key=lambda c: c.prominence, reverse=True):
+        gender = gender_from_pronoun(ch.gender_pronoun)
+        char_prominence[ch.character_id] = ch.prominence
+        char_gender[ch.character_id] = gender
+
+        if gender == "male":
+            if male_pool:
+                voice = male_pool[male_idx % len(male_pool)]
+                male_idx += 1
+            else:
+                voice = default_voice
+                warnings.append(f"No male voices available; assigned default to {ch.character_id!r}.")
+            male_quotes += ch.prominence
+        elif gender == "female":
+            if female_pool:
+                voice = female_pool[female_idx % len(female_pool)]
+                female_idx += 1
+            else:
+                voice = default_voice
+                warnings.append(f"No female voices available; assigned default to {ch.character_id!r}.")
+            female_quotes += ch.prominence
+        else:
+            # they/them — pick the pool with fewer total quotes so far
+            if male_quotes <= female_quotes:
+                if male_pool:
+                    voice = male_pool[male_idx % len(male_pool)]
+                    male_idx += 1
+                elif female_pool:
+                    voice = female_pool[female_idx % len(female_pool)]
+                    female_idx += 1
+                else:
+                    voice = default_voice
+                male_quotes += ch.prominence
+            else:
+                if female_pool:
+                    voice = female_pool[female_idx % len(female_pool)]
+                    female_idx += 1
+                elif male_pool:
+                    voice = male_pool[male_idx % len(male_pool)]
+                    male_idx += 1
+                else:
+                    voice = default_voice
+                female_quotes += ch.prominence
+
+        speaker_voices[ch.character_id] = voice
+
+    # Resolve chapter co-occurrence conflicts if chapters provided.
+    if chapters:
+        speaker_voices, conflict_warnings = _resolve_cast_conflicts(
+            speaker_voices=speaker_voices,
+            character_ids=list(char_prominence.keys()),
+            char_prominence=char_prominence,
+            char_gender=char_gender,
+            chapters=chapters,
+            male_pool=male_pool,
+            female_pool=female_pool,
+            narrator_voice=default_voice,
+        )
+        warnings.extend(conflict_warnings)
+
+    return SuggestCastResult(speaker_voices=speaker_voices, warnings=warnings)
+
+
 __all__ = [
     "DEFAULT_AUDITION_TEXT",
     "VoiceInfo",
     "ExcludeResult",
     "IncludeResult",
     "AudioPreviewResult",
+    "SuggestCastResult",
     "list_voices",
     "get_voice",
     "exclude_voice",
@@ -310,4 +531,5 @@ __all__ = [
     "gender_from_pronoun",
     "top_gender_matched_voice",
     "sort_cast",
+    "suggest_cast",
 ]

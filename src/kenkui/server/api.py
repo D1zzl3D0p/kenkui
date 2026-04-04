@@ -133,6 +133,25 @@ class FetchRequest(BaseModel):
     patterns: list[str] | None = None
 
 
+# --- Suggest Cast ---
+class CharacterInfoModel(BaseModel):
+    name: str
+    pronoun: str | None = None
+    quote_count: int = 0
+    mention_count: int = 0
+
+
+class SuggestCastRequest(BaseModel):
+    roster: list[CharacterInfoModel]
+    excluded_voices: list[str] = []
+    default_voice: str = "narrator"
+
+
+class SuggestCastResponse(BaseModel):
+    speaker_voices: dict[str, str]
+    warnings: list[str]
+
+
 # --- Tasks ---
 class TaskResponse(BaseModel):
     task_id: str
@@ -463,6 +482,23 @@ def list_voices(gender: str | None = None, accent: str | None = None,
         voices=[VoiceResponse(**v.__dict__) for v in voices],
         total=len(voices),
     )
+
+
+@app.post("/voices/suggest-cast", response_model=SuggestCastResponse)
+def voices_suggest_cast(req: SuggestCastRequest):
+    """Suggest a voice cast for a roster of characters."""
+    from kenkui.services.voice_service import suggest_cast
+    from kenkui.models import CharacterInfo
+    roster = [CharacterInfo(character_id=c.name, display_name=c.name,
+                            gender_pronoun=c.pronoun or "",
+                            quote_count=c.quote_count, mention_count=c.mention_count)
+              for c in req.roster]
+    result = suggest_cast(
+        roster=roster,
+        excluded_voices=req.excluded_voices,
+        default_voice=req.default_voice,
+    )
+    return SuggestCastResponse(speaker_voices=result.speaker_voices, warnings=result.warnings)
 
 
 @app.get("/voices/{name}", response_model=VoiceResponse)
