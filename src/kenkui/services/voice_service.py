@@ -13,6 +13,8 @@ Public API:
 
 from __future__ import annotations
 
+import logging
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -336,7 +338,6 @@ def _get_chapter_cooccurrence_from_paragraphs(chapters) -> "dict[int, set[str]]"
 
 def _resolve_cast_conflicts(
     speaker_voices: "dict[str, str]",
-    character_ids: "list[str]",
     char_prominence: "dict[str, int]",
     char_gender: "dict[str, str]",
     chapters,
@@ -348,8 +349,6 @@ def _resolve_cast_conflicts(
 
     Returns (updated_speaker_voices, warnings).
     """
-    import logging
-    from collections import defaultdict
     logger = logging.getLogger(__name__)
 
     cooccurrence = _get_chapter_cooccurrence_from_paragraphs(chapters)
@@ -412,7 +411,8 @@ def suggest_cast(
 ) -> SuggestCastResult:
     """Assign voices to characters using round-robin pool + conflict resolution.
 
-    Pure function — no I/O, no Rich, no sys.exit.
+    No interactive I/O, no print/Rich/sys.exit. File reads occur via list_voices
+    (voice registry + config).
     Moved from cli/add.py._auto_assign_character_voices and
     _resolve_chapter_voice_conflicts.
 
@@ -503,7 +503,6 @@ def suggest_cast(
     if chapters:
         speaker_voices, conflict_warnings = _resolve_cast_conflicts(
             speaker_voices=speaker_voices,
-            character_ids=list(char_prominence.keys()),
             char_prominence=char_prominence,
             char_gender=char_gender,
             chapters=chapters,

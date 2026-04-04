@@ -32,12 +32,13 @@ def test_suggest_cast_excludes_excluded_voices():
     assert result.speaker_voices.get("Alice") != "alice"
 
 
-def test_suggest_cast_result_has_warnings():
+def test_suggest_cast_empty_pool_falls_back_to_default_voice():
     voices = []  # empty pool forces fallback to default_voice
     roster = _make_roster([("Alice", "she/her")])
     with patch("kenkui.services.voice_service.list_voices", return_value=voices):
         result = suggest_cast(roster=roster, excluded_voices=[], default_voice="narrator")
     assert result.speaker_voices.get("Alice") == "narrator"
+    assert len(result.warnings) > 0
 
 
 def test_suggest_cast_resolves_chapter_conflicts():
