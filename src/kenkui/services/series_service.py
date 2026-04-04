@@ -118,10 +118,11 @@ def delete_series(slug: str) -> bool:
     Returns True if the file existed and was deleted; False if not found.
     """
     path = _series_path(slug)
-    if not path.exists():
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
         return False
-    path.unlink()
-    return True
 
 
 __all__ = [
