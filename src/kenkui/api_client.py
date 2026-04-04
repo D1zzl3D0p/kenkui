@@ -46,6 +46,8 @@ class APIClient:
     """HTTP client for the kenkui worker server API."""
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
+        self._host = host
+        self._port = port
         self.base_url = f"http://{host}:{port}"
         self._client = httpx.Client(timeout=30.0)
 
@@ -187,6 +189,207 @@ class APIClient:
     def clear_queue(self) -> dict:
         """Clear all jobs from the queue."""
         return self._request("DELETE", "/queue")
+
+    # --- Books ---
+
+    def parse_book(self, ebook_path: str) -> dict:
+        """Parse an ebook and return chapter metadata."""
+        resp = self._client.post(f"{self.base_url}/books/parse", json={"ebook_path": ebook_path})
+        resp.raise_for_status()
+        return resp.json()
+
+    def filter_chapters(self, book_hash: str, chapter_selection: dict) -> dict:
+        """Filter chapters by selection criteria."""
+        resp = self._client.post(
+            f"{self.base_url}/books/chapters/filter",
+            json={"book_hash": book_hash, "chapter_selection": chapter_selection},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def scan_book(self, ebook_path: str, nlp_model: str | None = None) -> dict:
+        """Start async NLP scan of an ebook. Returns a task dict."""
+        body: dict = {"ebook_path": ebook_path}
+        if nlp_model:
+            body["nlp_model"] = nlp_model
+        resp = self._client.post(f"{self.base_url}/books/scan", json=body)
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Voices ---
+
+    def list_voices(
+        self,
+        gender: str | None = None,
+        accent: str | None = None,
+        dataset: str | None = None,
+        source: str | None = None,
+    ) -> dict:
+        """List available voices with optional filters."""
+        params = {
+            k: v
+            for k, v in {"gender": gender, "accent": accent, "dataset": dataset, "source": source}.items()
+            if v is not None
+        }
+        resp = self._client.get(f"{self.base_url}/voices", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_voice(self, name: str) -> dict:
+        """Get a single voice by name."""
+        resp = self._client.get(f"{self.base_url}/voices/{name}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def exclude_voice(self, name: str) -> dict:
+        """Exclude a voice from the pool."""
+        resp = self._client.post(f"{self.base_url}/voices/{name}/exclude")
+        resp.raise_for_status()
+        return resp.json()
+
+    def include_voice(self, name: str) -> dict:
+        """Re-include a previously excluded voice."""
+        resp = self._client.delete(f"{self.base_url}/voices/{name}/exclude")
+        resp.raise_for_status()
+        return resp.json()
+
+    def audition_voice(self, voice_name: str, text: str | None = None) -> dict:
+        """Start async voice preview synthesis. Returns a task dict."""
+        resp = self._client.post(
+            f"{self.base_url}/voices/audition",
+            json={"voice_name": voice_name, "text": text},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_audition_wav_url(self, task_id: str) -> str:
+        """Return the URL to download a completed audition WAV."""
+        return f"http://{self._host}:{self._port}/voices/audition/{task_id}.wav"
+
+    def download_compiled_voices(self, force: bool = False) -> dict:
+        """Start async download of compiled voices from HuggingFace."""
+        resp = self._client.post(f"{self.base_url}/voices/download/compiled", json={"force": force})
+        resp.raise_for_status()
+        return resp.json()
+
+    def fetch_uncompiled_voices(
+        self,
+        repo_id: str | None = None,
+        patterns: list[str] | None = None,
+    ) -> dict:
+        """Start async fetch of uncompiled voice sources from HuggingFace."""
+        resp = self._client.post(
+            f"{self.base_url}/voices/download/uncompiled",
+            json={"repo_id": repo_id, "patterns": patterns},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def suggest_cast(
+        self,
+        roster: list[dict],
+        excluded_voices: list[str],
+        default_voice: str,
+    ) -> dict:
+        """Suggest a voice cast for a roster of characters."""
+        resp = self._client.post(
+            f"{self.base_url}/voices/suggest-cast",
+            json={
+                "roster": roster,
+                "excluded_voices": excluded_voices,
+                "default_voice": default_voice,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Tasks ---
+
+    def get_task(self, task_id: str) -> dict:
+        """Poll an async task by ID."""
+        resp = self._client.get(f"{self.base_url}/tasks/{task_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def poll_task(
+        self,
+        task_id: str,
+        *,
+        interval: float = 0.5,
+        timeout: float = 300.0,
+        progress_callback=None,
+    ) -> dict:
+        """Poll a task until it completes or times out."""
+        import time
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            task = self.get_task(task_id)
+            if progress_callback:
+                progress_callback(task.get("progress", 0), task.get("message", ""))
+            status = task.get("status")
+            if status in ("completed", "failed"):
+                return task
+            time.sleep(interval)
+        raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
+
+    # --- Auth ---
+
+    def get_hf_status(self) -> dict:
+        """Check HuggingFace authentication status."""
+        resp = self._client.get(f"{self.base_url}/auth/huggingface")
+        resp.raise_for_status()
+        return resp.json()
+
+    def login_hf(self, token: str) -> dict:
+        """Log in to HuggingFace with a token."""
+        resp = self._client.post(f"{self.base_url}/auth/huggingface", json={"token": token})
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Status ---
+
+    def get_multivoice_status(self) -> dict:
+        """Check multi-voice readiness (spaCy + Ollama)."""
+        resp = self._client.get(f"{self.base_url}/status/multivoice")
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Series ---
+
+    def list_series(self) -> dict:
+        """List all series manifests."""
+        resp = self._client.get(f"{self.base_url}/series")
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_series(self, slug: str) -> dict:
+        """Get a single series manifest by slug."""
+        resp = self._client.get(f"{self.base_url}/series/{slug}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_series(self, slug: str) -> dict:
+        """Delete a series manifest by slug."""
+        resp = self._client.delete(f"{self.base_url}/series/{slug}")
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Queue Cast ---
+
+    def get_queue_cast(self, job_id: str) -> dict:
+        """Get the voice cast for a queued job."""
+        resp = self._client.get(f"{self.base_url}/queue/{job_id}/cast")
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- Context manager ---
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._client.close()
 
 
 _client: APIClient | None = None

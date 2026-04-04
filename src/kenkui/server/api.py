@@ -709,6 +709,60 @@ def login_hf(request: HFTokenRequest):
     )
 
 
+class MultivoiceStatusResponse(BaseModel):
+    spacy_ok: bool
+    spacy_model: str | None
+    ollama_ok: bool
+    ollama_url: str | None
+    message: str
+
+
+@app.get("/status/multivoice", response_model=MultivoiceStatusResponse)
+def multivoice_status():
+    """Check multi-voice readiness: spaCy NLP model and Ollama availability."""
+    spacy_ok = False
+    spacy_model = None
+    try:
+        import spacy
+        server = get_server()
+        model_name = server.app_config.nlp_model or "en_core_web_trf"
+        spacy.load(model_name)
+        spacy_ok = True
+        spacy_model = model_name
+    except Exception:
+        pass
+
+    ollama_ok = False
+    ollama_url = None
+    try:
+        import httpx as _httpx
+        server = get_server()
+        url = getattr(server.app_config, "ollama_url", "http://localhost:11434")
+        resp = _httpx.get(f"{url}/api/tags", timeout=2.0)
+        if resp.status_code == 200:
+            ollama_ok = True
+            ollama_url = url
+    except Exception:
+        pass
+
+    if spacy_ok and ollama_ok:
+        message = "Multi-voice ready"
+    elif not spacy_ok and not ollama_ok:
+        message = "spaCy and Ollama not available"
+    elif not spacy_ok:
+        message = "spaCy not available"
+    else:
+        message = "Ollama not available"
+
+    return MultivoiceStatusResponse(
+        spacy_ok=spacy_ok,
+        spacy_model=spacy_model,
+        ollama_ok=ollama_ok,
+        ollama_url=ollama_url,
+        message=message,
+    )
+
+
 @app.get("/queue/{job_id}/cast", response_model=CastResponse)
 def get_cast(job_id: str):
     """Get the voice cast for a job (requires NLP analysis to have been run)."""
