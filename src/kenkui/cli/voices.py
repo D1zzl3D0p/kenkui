@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
-from ..voice_registry import get_registry
-from ..config import load_app_config, save_app_config, DEFAULT_CONFIG_PATH
-from ..queue import QueueManager
-from ..workers import _get_or_load_model, _render_text
-from ..voice_loader import load_voice
+from ..api_client import APIClient
 
 console = Console()
 
@@ -23,15 +18,14 @@ def cmd_voices_list(args) -> None:
 
     Accepts optional filter flags: ``--gender``, ``--accent``, ``--dataset``, ``--source``.
     """
-    from ..voice_registry import get_registry
-
-    registry = get_registry()
-    voices = registry.filter(
-        gender=getattr(args, "gender", None),
-        accent=getattr(args, "accent", None),
-        dataset=getattr(args, "dataset", None),
-        source=getattr(args, "source", None),
-    )
+    with APIClient() as client:
+        data = client.list_voices(
+            gender=getattr(args, "gender", None),
+            accent=getattr(args, "accent", None),
+            dataset=getattr(args, "dataset", None),
+            source=getattr(args, "source", None),
+        )
+    voices = data["voices"]
 
     if not voices:
         console.print("[yellow]No voices match the specified filters.[/yellow]")
@@ -51,13 +45,14 @@ def cmd_voices_list(args) -> None:
     }
 
     for v in voices:
-        style = source_style.get(v.source, "")
+        src = v.get("source", "")
+        style = source_style.get(src, "")
         table.add_row(
-            v.name,
-            f"[{style}]{v.source}[/{style}]" if style else v.source,
-            v.gender or "—",
-            v.accent or "—",
-            v.dataset or "—",
+            v.get("name", ""),
+            f"[{style}]{src}[/{style}]" if style else src,
+            v.get("gender") or "—",
+            v.get("accent") or "—",
+            v.get("dataset") or "—",
         )
 
     console.print(table)
@@ -65,43 +60,9 @@ def cmd_voices_list(args) -> None:
 
 
 def cmd_voices_fetch(args) -> None:
-    """Download uncompiled custom voices from a HuggingFace repo to the user data directory."""
-    # Guard: check huggingface_hub is available
-    try:
-        import huggingface_hub  # noqa: F401
-    except ImportError:
-        console.print(
-            "[red]Custom voices extra is not installed.[/red]\n"
-            "Run: [bold]pip install kenkui\\[custom-voices][/bold]"
-        )
-        sys.exit(1)
+    """Download uncompiled custom voices from a HuggingFace repo (via server)."""
+    import os
 
-    from ..huggingface_auth import AuthStatus, check_auth_status, do_login, open_token_page, HF_TOKEN_URL
-    from ..voice_registry import get_registry
-    from InquirerPy import inquirer
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-
-    # ── Auth check ────────────────────────────────────────────────────────
-    status = check_auth_status("kyutai/pocket-tts")
-    if status != AuthStatus.OK:
-        console.print()
-        console.print("[yellow]HuggingFace authentication required for custom voices.[/yellow]")
-        console.print(f"  Token page: [link={HF_TOKEN_URL}]{HF_TOKEN_URL}[/link]")
-        console.print()
-
-        for attempt in range(3):
-            token = inquirer.secret(message="Paste your HuggingFace token (hf_…):").execute().strip()
-            ok, msg = do_login(token)
-            console.print(f"  {msg}")
-            if ok:
-                break
-            if attempt < 2:
-                console.print("  [red]Try again.[/red]")
-        else:
-            console.print("[red]Authentication failed — cannot download custom voices.[/red]")
-            sys.exit(1)
-
-    # ── Determine HF repo and destination ─────────────────────────────────
     hf_repo = getattr(args, "repo", None) or os.environ.get("KENKUI_VOICES_REPO", "")
     if not hf_repo:
         console.print(
@@ -110,72 +71,45 @@ def cmd_voices_fetch(args) -> None:
         )
         sys.exit(1)
 
-    xdg_data = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
-    dest_dir = Path(xdg_data) / "kenkui" / "voices" / "uncompiled"
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    patterns = getattr(args, "patterns", None)
+    with APIClient() as client:
+        result = client.fetch_uncompiled_voices(repo_id=hf_repo, patterns=patterns)
 
-    # ── Download ──────────────────────────────────────────────────────────
-    try:
-        from huggingface_hub import HfApi, hf_hub_download
-
-        api = HfApi()
-        # list_repo_files returns list[str] (plain filenames) in huggingface_hub >= 0.14
-        repo_files = [f for f in api.list_repo_files(hf_repo) if f.endswith(".wav")]
-    except Exception as exc:
-        console.print(f"[red]Could not list files in repo {hf_repo!r}: {exc}[/red]")
+    task_id = result.get("task_id")
+    if not task_id:
+        console.print(f"[red]Server error: {result}[/red]")
         sys.exit(1)
 
-    if not repo_files:
-        console.print(f"[yellow]No .wav files found in {hf_repo!r}.[/yellow]")
+    console.print(f"Fetching voices from [bold]{hf_repo}[/bold] (task {task_id})…")
+    with APIClient() as client:
+        final = client.poll_task(task_id, timeout=300.0)
+
+    if final.get("status") == "failed":
+        console.print(f"[red]Download failed: {final.get('error')}[/red]")
         sys.exit(1)
 
-    console.print(f"Downloading {len(repo_files)} voice file(s) to [bold]{dest_dir}[/bold] …")
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Downloading…", total=len(repo_files))
-        failed = []
-        for filename in repo_files:
-            try:
-                local_path = hf_hub_download(
-                    repo_id=hf_repo,
-                    filename=filename,
-                    local_dir=str(dest_dir),
-                )
-                progress.advance(task)
-                progress.update(task, description=f"Downloaded {Path(local_path).name}")
-            except Exception as exc:
-                failed.append((filename, str(exc)))
-                progress.advance(task)
-
-    if failed:
-        console.print(f"[red]{len(failed)} file(s) failed to download:[/red]")
-        for fname, err in failed:
-            console.print(f"  [dim]{fname}:[/dim] {err}")
-
-    # Invalidate registry so new voices appear immediately
-    get_registry().invalidate()
-
-    downloaded = len(repo_files) - len(failed)
-    console.print(f"[green]Done! {downloaded} voice(s) downloaded to {dest_dir}[/green]")
-    console.print("Run [bold]kenkui voices list[/bold] to see the new voices.")
+    console.print(f"[green]Done! Run [bold]kenkui voices list[/bold] to see the new voices.[/green]")
 
 
 def cmd_voices_download(args) -> int:
-    """Download compiled voices from HuggingFace to the user data directory."""
-    from ..voices.download import download_voices, voices_are_present
-
+    """Download compiled voices from HuggingFace (via server)."""
     force = getattr(args, "force", False)
-    if voices_are_present() and not force:
-        console.print("[green]Voices already present. Use --force to re-download.[/green]")
-        return 0
+    with APIClient() as client:
+        result = client.download_compiled_voices(force=force)
+
+    task_id = result.get("task_id")
+    if not task_id:
+        console.print(f"[red]Server error: {result}[/red]")
+        return 1
+
     console.print("Downloading voices from HuggingFace…")
-    download_voices(force=force)
+    with APIClient() as client:
+        final = client.poll_task(task_id, timeout=300.0)
+
+    if final.get("status") == "failed":
+        console.print(f"[red]Download failed: {final.get('error')}[/red]")
+        return 1
+
     console.print("[green]Done.[/green]")
     return 0
 
@@ -183,45 +117,20 @@ def cmd_voices_download(args) -> int:
 def cmd_voices_exclude(args) -> None:
     """Add a voice to the global excluded-from-auto-assignment list."""
     voice_name: str = args.voice
-    registry = get_registry()
-
-    if registry.resolve(voice_name) is None:
-        console.print(f"[yellow]Warning: '{voice_name}' is not in the voice registry. "
-                      f"Excluding anyway.[/yellow]")
-
-    config = load_app_config()
-    if voice_name in config.excluded_voices:
-        console.print(f"[yellow]'{voice_name}' is already excluded.[/yellow]")
-        return
-
-    config.excluded_voices = list(config.excluded_voices) + [voice_name]
-
-    # Warn if excluding this voice empties a gender pool
-    male_names = {v.name for v in registry.filter(gender="Male")}
-    female_names = {v.name for v in registry.filter(gender="Female")}
-    excluded_set = set(config.excluded_voices)
-    if male_names and male_names <= excluded_set:
-        console.print("[yellow]Warning: all Male voices are now excluded. "
-                      "Auto-assignment will fall back to the full pool.[/yellow]")
-    if female_names and female_names <= excluded_set:
-        console.print("[yellow]Warning: all Female voices are now excluded. "
-                      "Auto-assignment will fall back to the full pool.[/yellow]")
-
-    save_app_config(config, DEFAULT_CONFIG_PATH)
+    with APIClient() as client:
+        result = client.exclude_voice(voice_name)
+    if result.get("warning"):
+        console.print(f"[yellow]Warning: {result['warning']}[/yellow]")
     console.print(f"[green]'{voice_name}' excluded from auto-assignment pool.[/green]")
 
 
 def cmd_voices_include(args) -> None:
     """Remove a voice from the excluded list, restoring it to auto-assignment."""
     voice_name: str = args.voice
-    config = load_app_config()
-
-    if voice_name not in config.excluded_voices:
-        console.print(f"[yellow]'{voice_name}' is not in the excluded list.[/yellow]")
-        return
-
-    config.excluded_voices = [v for v in config.excluded_voices if v != voice_name]
-    save_app_config(config, DEFAULT_CONFIG_PATH)
+    with APIClient() as client:
+        result = client.include_voice(voice_name)
+    if result.get("warning"):
+        console.print(f"[yellow]Warning: {result['warning']}[/yellow]")
     console.print(f"[green]'{voice_name}' restored to auto-assignment pool.[/green]")
 
 
@@ -235,59 +144,35 @@ def _sort_cast(speaker_voices: dict) -> list:
 
 def cmd_voices_cast(args) -> None:
     """Display the character→voice cast for a completed multi-voice book."""
-    import difflib
-    from ..models import NarrationMode
+    job_id: str = args.job_id
+    with APIClient() as client:
+        cast_data = client.get_queue_cast(job_id)
 
-    title_query: str = args.title
-    qm = QueueManager()
+    cast_entries = cast_data.get("cast", [])
+    book_name = cast_data.get("book_name", job_id)
 
-    candidates = [
-        item for item in qm.completed_items
-        if item.job.narration_mode == NarrationMode.MULTI
-        and item.job.speaker_voices
-    ]
-
-    if not candidates:
-        console.print("[yellow]No completed multi-voice jobs found in queue.[/yellow]")
+    if not cast_entries:
+        console.print(f"[yellow]No cast information found for job '{job_id}'.[/yellow]")
         return
 
-    job_names = [item.job.name for item in candidates]
-
-    # Case-insensitive fuzzy match
-    job_names_lower = [n.lower() for n in job_names]
-    close_lower = difflib.get_close_matches(title_query.lower(), job_names_lower, n=5, cutoff=0.4)
-    close = [job_names[job_names_lower.index(n)] for n in close_lower]
-    # Substring fallback
-    substring = [n for n in job_names if title_query.lower() in n.lower()]
-    matched_names = close or substring
-
-    if not matched_names:
-        console.print(f"[yellow]No jobs matching '{title_query}'.[/yellow]")
-        if job_names:
-            console.print("Available: " + ", ".join(job_names[:8]))
-        return
-
-    matched_items = [item for item in candidates if item.job.name in matched_names]
-
-    if len(matched_items) > 1:
-        console.print(f"[yellow]Multiple jobs match '{title_query}':[/yellow]")
-        for item in matched_items:
-            console.print(f"  • {item.job.name}  [dim](id: {item.id})[/dim]")
-        console.print("Re-run with a more specific title.")
-        return
-
-    item = matched_items[0]
-    table = Table(title=f"Cast — {item.job.name}", show_header=True, box=None)
+    table = Table(title=f"Cast — {book_name}", show_header=True, box=None)
     table.add_column("Character", style="bold", min_width=30)
     table.add_column("Voice", min_width=20)
 
-    for char_id, voice_name in _sort_cast(item.job.speaker_voices):
-        display = "Narrator" if char_id == "NARRATOR" else char_id
-        table.add_row(display, voice_name)
+    # Sort with NARRATOR last
+    sorted_entries = sorted(
+        cast_entries,
+        key=lambda e: ("~" if e.get("character_id") == "NARRATOR" else (e.get("display_name") or e.get("character_id") or "").lower()),
+    )
+    for entry in sorted_entries:
+        char_id = entry.get("character_id", "")
+        display = entry.get("display_name") or char_id
+        if char_id == "NARRATOR":
+            display = "Narrator"
+        table.add_row(display, entry.get("voice_name", ""))
 
     console.print(table)
-    if item.output_path:
-        console.print(f"\n[dim]Job ID: {item.id} | Output: {item.output_path}[/dim]")
+    console.print(f"\n[dim]Job ID: {job_id}[/dim]")
 
 
 DEFAULT_AUDITION_TEXT = (
@@ -308,64 +193,47 @@ def _preview_path(voice_name: str) -> Path:
 
 def cmd_voices_audition(args) -> None:
     """Synthesize a short voice preview and open it in the system audio player."""
+    import httpx
     import subprocess
+    import tempfile
 
     voice_name: str = args.voice
     text: str = getattr(args, "text", None) or DEFAULT_AUDITION_TEXT
-    out_path = _preview_path(voice_name)
-
-    # Validate voice exists (warn only — don't block)
-    if get_registry().resolve(voice_name) is None:
-        console.print(
-            f"[yellow]Warning: '{voice_name}' not found in registry. Attempting anyway.[/yellow]"
-        )
 
     console.print(
-        "[yellow]Loading TTS model — this may take 10–30 seconds on first use…[/yellow]"
+        "[yellow]Submitting audition request to server…[/yellow]"
     )
 
-    config = load_app_config()
-    try:
-        model = _get_or_load_model(
-            config.temp,
-            config.lsd_decode_steps,
-            config.noise_clamp,
-            config.eos_threshold,
+    with APIClient() as client:
+        task_data = client.audition_voice(voice_name, text=text)
+        task_id = task_data["task_id"]
+
+        preview_text = text[:60] + ("…" if len(text) > 60 else "")
+        console.print(
+            f"Synthesizing preview for [bold]{voice_name}[/bold]: [dim]\"{preview_text}\"[/dim]"
         )
-    except Exception as exc:
-        console.print(f"[red]Failed to load TTS model: {exc}[/red]")
-        sys.exit(1)
 
+        result = client.poll_task(task_id, timeout=120.0)
+
+        if result["status"] == "failed":
+            console.print(f"[red]Audition failed: {result.get('error')}[/red]")
+            return
+
+        wav_url = client.get_audition_wav_url(task_id)
+
+    wav_data = httpx.get(wav_url).content
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        f.write(wav_data)
+        wav_path = f.name
+
+    console.print(f"[green]Preview saved to {wav_path}[/green]")
+
+    player = _player_command()
     try:
-        voice_resolved = load_voice(voice_name)
-        voice_state = model.get_state_for_audio_prompt(voice_resolved)
-    except Exception as exc:
-        console.print(f"[red]Failed to load voice '{voice_name}': {exc}[/red]")
-        sys.exit(1)
-
-    preview_text = text[:60] + ("…" if len(text) > 60 else "")
-    console.print(
-        f"Synthesizing preview for [bold]{voice_name}[/bold]: [dim]\"{preview_text}\"[/dim]"
-    )
-
-    seg = _render_text(
-        model, voice_state, text,
-        log_message=lambda _: None,
-        pid=0, batch_idx=0, total_batches=1,
-        frames_after_eos=0,
-    )
-    if seg is None:
-        console.print("[red]Synthesis returned no audio.[/red]")
-        sys.exit(1)
-
-    seg.export(str(out_path), format="wav")
-    console.print(f"[green]Preview saved to {out_path}[/green]")
-
-    try:
-        subprocess.Popen([_player_command(), str(out_path)])
+        subprocess.run([player, wav_path], check=False)
     except Exception as exc:
         console.print(
-            f"[yellow]Could not open system player ({exc}). Play manually: {out_path}[/yellow]"
+            f"[yellow]Could not open system player ({exc}). Play manually: {wav_path}[/yellow]"
         )
 
 
@@ -396,49 +264,39 @@ def _tui_execute(prompt):
     return prompt.execute()
 
 
-def _do_tui_audition(voice_name: str, config) -> None:
-    """Synthesize a preview from within the TUI. Returns on failure (no sys.exit)."""
+def _do_tui_audition(voice_name: str, client) -> None:
+    """Synthesize a preview from within the TUI using an open APIClient."""
+    import httpx
     import subprocess
+    import tempfile
 
-    out_path = _preview_path(voice_name)
-    console.print("\n[yellow]Loading TTS model — may take 10–30 s on first use…[/yellow]")
-
+    console.print("\n[yellow]Submitting audition request to server…[/yellow]")
     try:
-        model = _get_or_load_model(
-            config.temp, config.lsd_decode_steps, config.noise_clamp, config.eos_threshold,
-        )
+        task_data = client.audition_voice(voice_name, text=DEFAULT_AUDITION_TEXT)
+        task_id = task_data["task_id"]
+        console.print(f"Synthesizing [bold]{voice_name}[/bold]…")
+        result = client.poll_task(task_id, timeout=120.0)
     except Exception as exc:
-        console.print(f"[red]Failed to load TTS model: {exc}[/red]")
+        console.print(f"[red]Audition failed: {exc}[/red]")
+        return
+
+    if result.get("status") == "failed":
+        console.print(f"[red]Synthesis failed: {result.get('error')}[/red]")
         return
 
     try:
-        voice_resolved = load_voice(voice_name)
-        voice_state = model.get_state_for_audio_prompt(voice_resolved)
+        wav_url = client.get_audition_wav_url(task_id)
+        wav_data = httpx.get(wav_url).content
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(wav_data)
+            wav_path = f.name
+        console.print(f"[green]Saved to {wav_path}[/green]")
+        subprocess.run([_player_command(), wav_path], check=False)
     except Exception as exc:
-        console.print(f"[red]Failed to load voice '{voice_name}': {exc}[/red]")
-        return
-
-    console.print(f"Synthesizing [bold]{voice_name}[/bold]…")
-    seg = _render_text(
-        model, voice_state, DEFAULT_AUDITION_TEXT,
-        log_message=lambda _: None,
-        pid=0, batch_idx=0, total_batches=1,
-        frames_after_eos=0,
-    )
-    if seg is None:
-        console.print("[red]Synthesis returned no audio.[/red]")
-        return
-
-    seg.export(str(out_path), format="wav")
-    console.print(f"[green]Saved to {out_path}[/green]")
-
-    try:
-        subprocess.Popen([_player_command(), str(out_path)])
-    except Exception as exc:
-        console.print(f"[yellow]Could not open player: {exc}. Play manually: {out_path}[/yellow]")
+        console.print(f"[yellow]Could not play audio: {exc}[/yellow]")
 
 
-def _tui_voice_actions(voice_name: str) -> None:
+def _tui_voice_actions(voice_name: str, client) -> None:
     """Per-voice action sub-menu. Loops until user chooses Back.
 
     Audition fires and returns to the browse list (caller re-shows browse).
@@ -446,12 +304,13 @@ def _tui_voice_actions(voice_name: str) -> None:
     """
     from InquirerPy import inquirer
 
-    auditioned = False
     while True:
-        config = load_app_config()
-        excluded = set(config.excluded_voices)
-        registry = get_registry()
-        meta = registry.resolve(voice_name)
+        try:
+            meta = client.get_voice(voice_name)
+        except Exception:
+            meta = None
+
+        excluded = meta.get("excluded", False) if meta else False
 
         # Details header
         console.print()
@@ -460,19 +319,19 @@ def _tui_voice_actions(voice_name: str) -> None:
             table = Table(show_header=False, box=None, padding=(0, 2))
             table.add_column("Field", style="dim", width=14)
             table.add_column("Value")
-            table.add_row("Source", meta.source)
-            table.add_row("Gender", meta.gender or "?")
-            table.add_row("Accent", meta.accent or "?")
-            if meta.dataset:
-                table.add_row("Dataset", meta.dataset)
-            if meta.speaker_id:
-                table.add_row("Speaker ID", meta.speaker_id)
-            pool_status = "[yellow]excluded[/yellow]" if voice_name in excluded else "[green]in pool[/green]"
+            table.add_row("Source", meta.get("source", "?"))
+            table.add_row("Gender", meta.get("gender") or "?")
+            table.add_row("Accent", meta.get("accent") or "?")
+            if meta.get("dataset"):
+                table.add_row("Dataset", meta["dataset"])
+            if meta.get("speaker_id"):
+                table.add_row("Speaker ID", meta["speaker_id"])
+            pool_status = "[yellow]excluded[/yellow]" if excluded else "[green]in pool[/green]"
             table.add_row("Pool status", pool_status)
             console.print(table)
         console.print()
 
-        in_pool = voice_name not in excluded
+        in_pool = not excluded
         pool_label = "Exclude from pool" if in_pool else "Include in pool"
 
         choices = [
@@ -488,39 +347,47 @@ def _tui_voice_actions(voice_name: str) -> None:
         ))
 
         if action == "audition":
-            _do_tui_audition(voice_name, config)
+            _do_tui_audition(voice_name, client)
             # Return so browse list re-shows — user picks next voice to compare
             return
 
         elif action == "toggle":
             if in_pool:
-                config.excluded_voices = list(config.excluded_voices) + [voice_name]
-                save_app_config(config, DEFAULT_CONFIG_PATH)
-                console.print(f"[yellow]'{voice_name}' excluded from pool.[/yellow]")
+                try:
+                    client.exclude_voice(voice_name)
+                    console.print(f"[yellow]'{voice_name}' excluded from pool.[/yellow]")
+                except Exception as exc:
+                    console.print(f"[red]Failed to exclude: {exc}[/red]")
             else:
-                config.excluded_voices = [v for v in config.excluded_voices if v != voice_name]
-                save_app_config(config, DEFAULT_CONFIG_PATH)
-                console.print(f"[green]'{voice_name}' restored to pool.[/green]")
+                try:
+                    client.include_voice(voice_name)
+                    console.print(f"[green]'{voice_name}' restored to pool.[/green]")
+                except Exception as exc:
+                    console.print(f"[red]Failed to include: {exc}[/red]")
             # Stay in sub-menu — loop refreshes with updated status
 
         elif action == "back":
             return
 
 
-def _tui_browse() -> None:
+def _tui_browse(client) -> None:
     """Browse all voices with fuzzy search; drill into action sub-menu on select."""
     from InquirerPy import inquirer
 
     while True:
-        config = load_app_config()
-        excluded_set = set(config.excluded_voices)
-        registry = get_registry()
+        try:
+            data = client.list_voices()
+        except Exception as exc:
+            console.print(f"[red]Failed to load voices: {exc}[/red]")
+            return
 
+        voices = data.get("voices", [])
         choices = []
-        for meta in sorted(registry.voices, key=lambda v: v.name.lower()):
-            pool_tag = " [excl]" if meta.name in excluded_set else ""
-            label = f"{meta.name:<22} {meta.description}{pool_tag}"
-            choices.append({"name": label, "value": meta.name})
+        for v in sorted(voices, key=lambda x: x.get("name", "").lower()):
+            pool_tag = " [excl]" if v.get("excluded") else ""
+            desc = v.get("description") or f"{v.get('gender', '?')} · {v.get('accent', '?')}"
+            label = f"{v.get('name', ''):<22} {desc}{pool_tag}"
+            choices.append({"name": label, "value": v.get("name")})
         choices.append({"name": "← Back to main menu", "value": "__back__"})
 
         selected = _tui_execute(inquirer.fuzzy(
@@ -532,16 +399,21 @@ def _tui_browse() -> None:
         if selected == "__back__":
             return
 
-        _tui_voice_actions(selected)
+        _tui_voice_actions(selected, client)
         # Loop: re-show browse list after returning from actions
 
 
-def _tui_pool() -> None:
+def _tui_pool(client) -> None:
     """Show excluded voices and offer bulk-restore via checkbox."""
     from InquirerPy import inquirer
 
-    config = load_app_config()
-    excluded = list(config.excluded_voices)
+    try:
+        data = client.list_voices()
+    except Exception as exc:
+        console.print(f"[red]Failed to load voices: {exc}[/red]")
+        return
+
+    excluded = [v["name"] for v in data.get("voices", []) if v.get("excluded")]
 
     console.print()
     if not excluded:
@@ -565,29 +437,30 @@ def _tui_pool() -> None:
     if not to_restore:
         return
 
-    restore_set = set(to_restore)
-    config.excluded_voices = [v for v in config.excluded_voices if v not in restore_set]
-    save_app_config(config, DEFAULT_CONFIG_PATH)
-    for v in sorted(restore_set):
-        console.print(f"[green]'{v}' restored to pool.[/green]")
+    for v in sorted(to_restore):
+        try:
+            client.include_voice(v)
+            console.print(f"[green]'{v}' restored to pool.[/green]")
+        except Exception as exc:
+            console.print(f"[red]Failed to restore '{v}': {exc}[/red]")
     console.print()
 
 
 def _tui_cast_lookup() -> None:
-    """Interactive cast lookup — prompt for title, display cast table."""
+    """Interactive cast lookup — prompt for job ID, display cast table."""
     from InquirerPy import inquirer
     from argparse import Namespace
 
-    title_query = _tui_execute(inquirer.text(
-        message="Book title (or part of it):",
-        instruction="(fuzzy matched against completed multi-voice jobs)",
+    job_id = _tui_execute(inquirer.text(
+        message="Job ID:",
+        instruction="(enter the job ID for the completed multi-voice book)",
     )).strip()
 
-    if not title_query:
+    if not job_id:
         return
 
     console.print()
-    cmd_voices_cast(Namespace(title=title_query))
+    cmd_voices_cast(Namespace(job_id=job_id))
     console.print()
 
 
@@ -598,26 +471,27 @@ def cmd_voices_tui(args) -> None:
     console.rule("[bold]kenkui — Voice Manager[/bold]")
     console.print()
 
-    while True:
-        action = _tui_execute(inquirer.select(
-            message="What would you like to do?",
-            choices=[
-                {"name": "Browse & audition voices", "value": "browse"},
-                {"name": "Manage exclusion pool", "value": "pool"},
-                {"name": "Look up book cast", "value": "cast"},
-                {"name": "Exit", "value": "exit"},
-            ],
-            instruction="(↑↓ to move, Enter to select)",
-        ))
+    with APIClient() as client:
+        while True:
+            action = _tui_execute(inquirer.select(
+                message="What would you like to do?",
+                choices=[
+                    {"name": "Browse & audition voices", "value": "browse"},
+                    {"name": "Manage exclusion pool", "value": "pool"},
+                    {"name": "Look up book cast", "value": "cast"},
+                    {"name": "Exit", "value": "exit"},
+                ],
+                instruction="(↑↓ to move, Enter to select)",
+            ))
 
-        if action == "browse":
-            _tui_browse()
-        elif action == "pool":
-            _tui_pool()
-        elif action == "cast":
-            _tui_cast_lookup()
-        elif action == "exit":
-            break
+            if action == "browse":
+                _tui_browse(client)
+            elif action == "pool":
+                _tui_pool(client)
+            elif action == "cast":
+                _tui_cast_lookup()
+            elif action == "exit":
+                break
 
     console.print()
     console.print("[dim]Bye.[/dim]")
