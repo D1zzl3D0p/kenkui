@@ -135,37 +135,37 @@ def _prompt_voice(default: str = "alba", message: str = "Select voice:") -> str:
 
 def _check_hf_auth(voice: str) -> None:
     """If the voice requires HuggingFace auth, prompt for token if needed."""
-    from ..huggingface_auth import (
-        AuthStatus,
-        HF_TOKEN_URL,
-        check_auth_status,
-        do_login,
-        is_custom_voice,
-        open_token_page,
-    )
+    from ..huggingface_auth import is_custom_voice
     from InquirerPy import inquirer
 
     if not is_custom_voice(voice):
         return
 
-    status = check_auth_status("kyutai/pocket-tts")
-    if status == AuthStatus.OK:
-        return
+    from ..api_client import APIClient
 
-    console.print()
-    console.print("[yellow]This voice requires a free HuggingFace account.[/yellow]")
-    console.print(f"  Token page: [link={HF_TOKEN_URL}]{HF_TOKEN_URL}[/link]")
-    console.print()
+    HF_TOKEN_URL = "https://huggingface.co/settings/tokens"
 
-    for attempt in range(3):
-        token = _wizard_execute(inquirer.secret(message="Paste your HuggingFace token (hf_…):")).strip()
-        ok, msg = do_login(token)
-        if ok:
-            console.print(f"[green]{msg}[/green]")
+    with APIClient() as client:
+        status = client.get_hf_status()
+        if status.get("authenticated"):
             return
-        console.print(f"[red]{msg}[/red]")
-        if attempt < 2:
-            console.print("Please try again.")
+
+        console.print()
+        console.print("[yellow]This voice requires a free HuggingFace account.[/yellow]")
+        console.print(f"  Token page: [link={HF_TOKEN_URL}]{HF_TOKEN_URL}[/link]")
+        console.print()
+
+        for attempt in range(3):
+            token = _wizard_execute(inquirer.secret(message="Paste your HuggingFace token (hf_…):")).strip()
+            result = client.login_hf(token)
+            if result.get("authenticated"):
+                username = result.get("username", "")
+                console.print(f"[green]Logged in as {username}[/green]")
+                return
+            err = result.get("error", "Authentication failed.")
+            console.print(f"[red]{err}[/red]")
+            if attempt < 2:
+                console.print("Please try again.")
 
     console.print("[red]Could not authenticate. Custom voices may not work.[/red]")
 
@@ -239,180 +239,89 @@ def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
     ).to_dict()
 
 
-def _pip_install(package_spec: str) -> None:
-    """Install *package_spec* using the first available package manager.
-
-    Tries, in order:
-      1. ``python -m pip``          — standard pip in any virtualenv
-      2. ``uv pip install``         — uv-managed envs where pip is absent
-      3. ``pip install``            — pip on PATH (pipx, conda, system)
-      4. ``pip3 install``           — alternate pip entry point
-
-    Raises ``RuntimeError`` if every strategy fails.
-    """
-    import shutil
-    import subprocess
-    import sys
-
-    strategies: list[list[str]] = [
-        [sys.executable, "-m", "pip", "install", package_spec],
-    ]
-    if shutil.which("uv"):
-        strategies.append(["uv", "pip", "install", "--python", sys.executable, package_spec])
-    if shutil.which("pip"):
-        strategies.append(["pip", "install", package_spec])
-    if shutil.which("pip3"):
-        strategies.append(["pip3", "install", package_spec])
-
-    last_exc: Exception | None = None
-    for cmd in strategies:
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-            return
-        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-            last_exc = exc
-
-    raise RuntimeError(
-        f"Could not install '{package_spec}' — tried pip, uv, pip3. "
-        f"Last error: {last_exc}"
-    )
 
 
-def _ensure_spacy() -> bool:
-    """Download spaCy model if missing. Returns True when ready."""
-    import spacy  # type: ignore[import]
-
-    if spacy.util.is_package("en_core_web_sm"):
-        return True
-
-    console.print("[cyan]spaCy model (en_core_web_sm) not found. Downloading (~12 MB)…[/cyan]")
-    _whl = (
-        "https://github.com/explosion/spacy-models/releases/download/"
-        "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-    )
-    try:
-        _pip_install(_whl)
-        return True
-    except Exception as exc:
-        console.print(f"[red]spaCy model download failed: {exc}[/red]")
-        console.print("[red]Cannot proceed without spaCy model.[/red]")
-        return False
-
-
-def _run_nlp_analysis(book_path: Path, nlp_model: str, use_cache: bool = True):
-    """Run the NLP attribution pipeline with a spinner. Returns NLPResult or None."""
-    from ..nlp import cache_result, get_cached_result, run_analysis
-    from ..readers import get_reader
-
-    if use_cache:
-        cached = get_cached_result(book_path)
-        if cached is not None:
-            console.print("[green]Using cached NLP analysis.[/green]")
-            return cached
-    else:
-        console.print("[yellow]Cache skipped — running fresh NLP analysis…[/yellow]")
-
+def _run_nlp_analysis(client, book_path: Path, nlp_model: str):
+    """Run the NLP attribution pipeline via server task. Returns result dict or None."""
     console.print(f"[cyan]Running NLP analysis on '{book_path.name}'…[/cyan]")
 
     try:
-        reader = get_reader(book_path, verbose=False)
-        chapters = reader.get_chapters()
+        task_info = client.scan_book(str(book_path), nlp_model=nlp_model)
+        task_id = task_info["task_id"]
     except Exception as exc:
-        console.print(f"[red]Could not read ebook: {exc}[/red]")
+        console.print(f"[red]Could not start NLP analysis: {exc}[/red]")
         return None
 
-    last_msg: list[str] = []
-
-    def _cb(msg: str) -> None:
-        last_msg.append(msg)
-
-    result = None
     with Progress(
         SpinnerColumn(),
         TextColumn("{task.description}"),
         TimeElapsedColumn(),
         console=console,
     ) as prog:
-        task = prog.add_task("Analysing…", total=None)
+        prog_task = prog.add_task("Analysing…", total=None)
         try:
-            result = run_analysis(
-                chapters=chapters,
-                book_path=book_path,
-                nlp_model=nlp_model,
-                progress_callback=lambda msg: prog.update(task, description=msg),
+            result = client.poll_task(
+                task_id,
+                timeout=600.0,
+                progress_callback=lambda pct, msg: prog.update(prog_task, description=msg or "Analysing…"),
             )
-            prog.update(task, description="Analysis complete")
+            prog.update(prog_task, description="Analysis complete")
+        except TimeoutError:
+            console.print("[red]NLP analysis timed out.[/red]")
+            return None
         except Exception as exc:
             console.print(f"[red]NLP analysis failed: {exc}[/red]")
             return None
 
-    if result:
-        cache_result(result, book_path)
+    if result.get("status") == "failed":
+        console.print(f"[red]NLP analysis failed: {result.get('error')}[/red]")
+        return None
 
-    return result
+    return result.get("result")
 
 
 def _run_fast_scan_wizard(
+    client,
     book_path: Path,
     nlp_model: str,
-    use_cache: bool = True,
     chapter_selection: dict | None = None,
 ):
-    """Run Stage 1-2 fast scan with a progress spinner. Returns FastScanResult or None."""
-    from ..nlp import get_cached_roster, run_fast_scan
-    from ..readers import get_reader
-
-    # Check roster cache first
-    if use_cache:
-        cached = get_cached_roster(book_path)
-        if cached is not None:
-            return cached
-
+    """Run Stage 1-2 fast scan via server task. Returns result dict or None."""
     console.print(f"[cyan]Scanning characters in '{book_path.name}'…[/cyan]")
 
     try:
-        reader = get_reader(book_path, verbose=False)
-        all_chapters = reader.get_chapters()
+        task_info = client.scan_book(str(book_path), nlp_model=nlp_model)
+        task_id = task_info["task_id"]
     except Exception as exc:
-        console.print(f"[red]Could not read ebook: {exc}[/red]")
+        console.print(f"[red]Could not start character scan: {exc}[/red]")
         return None
 
-    # Restrict to selected chapters
-    included_indices: set[int] | None = None
-    if chapter_selection:
-        raw = chapter_selection.get("included")
-        if raw:
-            included_indices = set(raw)
-
-    if included_indices:
-        chapters = [ch for ch in all_chapters if ch.index in included_indices]
-        if not chapters:
-            chapters = all_chapters
-    else:
-        chapters = all_chapters
-
-    result = None
     with Progress(
         SpinnerColumn(),
         TextColumn("{task.description}"),
         TimeElapsedColumn(),
         console=console,
     ) as prog:
-        task = prog.add_task("Scanning characters…", total=None)
+        prog_task = prog.add_task("Scanning characters…", total=None)
         try:
-            result = run_fast_scan(
-                chapters=chapters,
-                book_path=book_path,
-                nlp_model=nlp_model,
-                use_cache=False,  # cache already checked above
-                progress_callback=lambda msg: prog.update(task, description=msg),
+            result = client.poll_task(
+                task_id,
+                timeout=300.0,
+                progress_callback=lambda pct, msg: prog.update(prog_task, description=msg or "Scanning characters…"),
             )
-            prog.update(task, description="Character scan complete")
+            prog.update(prog_task, description="Character scan complete")
+        except TimeoutError:
+            console.print("[red]Fast scan timed out.[/red]")
+            return None
         except Exception as exc:
             console.print(f"[red]Character scan failed: {exc}[/red]")
             return None
 
-    return result
+    if result.get("status") == "failed":
+        console.print(f"[red]Character scan failed: {result.get('error')}[/red]")
+        return None
+
+    return result.get("result")
 
 
 def _top_gender_matched_voice(characters, default_voice: str) -> str:
@@ -971,72 +880,57 @@ def _run_series_setup(
 # ---------------------------------------------------------------------------
 
 
-def _check_multivoice_requirements(app_config) -> bool:
-    """Show a requirements status table for multi-voice mode.
+def _check_multivoice_requirements(client) -> bool:
+    """Check multivoice readiness via server and show status table.
 
     Returns True if all requirements are met or the user chooses to continue
-    anyway (wizard will attempt fixes inline).
+    anyway.
     """
     from InquirerPy import inquirer
     from rich.table import Table
     from rich.text import Text
 
-    checks: list[tuple[str, bool, str]] = []
-
-    # Check 1: spaCy model
     try:
-        import spacy
-        spacy_ok = spacy.util.is_package("en_core_web_sm")
-    except Exception:
-        spacy_ok = False
-    checks.append((
-        "spaCy model (en_core_web_sm)",
-        spacy_ok,
-        "python -m spacy download en_core_web_sm" if not spacy_ok else "",
-    ))
+        status = client.get_multivoice_status()
+    except Exception as exc:
+        console.print(f"[red]Could not check multivoice requirements: {exc}[/red]")
+        return False
 
-    # Check 2: Ollama server running
-    try:
-        import ollama
-        ollama.list()
-        ollama_ok = True
-    except Exception:
-        ollama_ok = False
-    checks.append((
-        "Ollama server",
-        ollama_ok,
-        "Start with: ollama serve" if not ollama_ok else "",
-    ))
+    spacy_ok = status.get("spacy_ok", False)
+    ollama_ok = status.get("ollama_ok", False)
+    message = status.get("message", "")
 
-    # Check 3: NLP model pulled (only if Ollama is up)
-    if ollama_ok:
-        try:
-            import ollama
-            ollama.show(app_config.nlp_model)
-            model_ok = True
-        except Exception:
-            model_ok = False
-        checks.append((
-            f"NLP model ({app_config.nlp_model})",
-            model_ok,
-            f"ollama pull {app_config.nlp_model}" if not model_ok else "",
-        ))
+    checks: list[tuple[str, bool, str]] = [
+        (
+            "spaCy model (en_core_web_sm)",
+            spacy_ok,
+            "python -m spacy download en_core_web_sm" if not spacy_ok else "",
+        ),
+        (
+            "Ollama server",
+            ollama_ok,
+            "Start with: ollama serve" if not ollama_ok else "",
+        ),
+    ]
 
     tbl = Table(title="Multi-Voice Requirements", show_header=True, header_style="bold")
     tbl.add_column("Requirement", min_width=30)
     tbl.add_column("Status", width=10)
     tbl.add_column("Fix", overflow="fold")
     for name, ok, fix in checks:
-        status = Text("✓ Ready", style="green") if ok else Text("✗ Missing", style="red bold")
-        tbl.add_row(name, status, fix)
+        row_status = Text("✓ Ready", style="green") if ok else Text("✗ Missing", style="red bold")
+        tbl.add_row(name, row_status, fix)
     console.print(tbl)
+
+    if message:
+        console.print(f"[dim]{message}[/dim]")
 
     all_ok = all(ok for _, ok, _ in checks)
     if all_ok:
         return True
 
     proceed = _wizard_execute(inquirer.confirm(
-        message="Continue anyway? (the wizard will attempt to install missing requirements)",
+        message="Continue anyway? (the server will attempt to satisfy missing requirements)",
         default=False,
     ))
     return proceed
@@ -1268,84 +1162,67 @@ def _step_voice_setup(state: dict) -> dict:
     pinned: set[str] = set()
 
     if mode_val == "multi":
+        from ..api_client import APIClient
         from ..config import save_app_config, DEFAULT_CONFIG_PATH
-        from ..nlp import CACHE_DIR, book_hash, get_cached_roster
         from ..nlp.setup import check_llm_available, run_setup_dialogue
 
         console.print()
-        if not _check_multivoice_requirements(app_config):
-            console.print("[yellow]Falling back to single-voice mode.[/yellow]")
-            narration_mode = "single"
-            mode_val = "single"
+        with APIClient() as client:
+            if not _check_multivoice_requirements(client):
+                console.print("[yellow]Falling back to single-voice mode.[/yellow]")
+                narration_mode = "single"
+                mode_val = "single"
 
-        if mode_val == "multi":
-            if not _ensure_spacy():
-                console.print("[red]Cannot proceed without spaCy model.[/red]")
-                return {**state, "voice": voice, "speaker_voices": speaker_voices,
-                        "chapter_voices": chapter_voices, "roster_cache_path": roster_cache_path,
-                        "narration_mode": narration_mode, "_abort": True}
-
-            console.print()
-            console.print(
-                f"NLP model for speaker inference: [bold]{app_config.nlp_model}[/bold]"
-            )
-            reconfigure_action = _wizard_execute(inquirer.select(
-                message="Continue with this model or reconfigure?",
-                choices=[
-                    {"name": f"Continue with {app_config.nlp_model}", "value": "continue"},
-                    {"name": "Reconfigure NLP model…", "value": "reconfigure"},
-                ],
-            ))
-
-            if reconfigure_action == "reconfigure" or not check_llm_available(app_config):
-                updated = run_setup_dialogue(app_config)
-                if updated is None:
-                    console.print("[yellow]Falling back to single-voice mode.[/yellow]")
-                    narration_mode = "single"
-                else:
-                    app_config = updated
-                    save_app_config(app_config, DEFAULT_CONFIG_PATH)
-                    console.print(
-                        f"[green]NLP model set to [bold]{app_config.nlp_model}[/bold][/green]"
-                    )
-
-        if narration_mode == "multi":
-            use_cache = True
-            if get_cached_roster(book_path) is not None:
-                use_cache = _wizard_execute(inquirer.select(
-                    message="Cached character roster found for this book.",
+            if mode_val == "multi":
+                console.print()
+                console.print(
+                    f"NLP model for speaker inference: [bold]{app_config.nlp_model}[/bold]"
+                )
+                reconfigure_action = _wizard_execute(inquirer.select(
+                    message="Continue with this model or reconfigure?",
                     choices=[
-                        {"name": "Use cached roster  (fast)", "value": True},
-                        {
-                            "name": "Regenerate  (re-runs spaCy + LLM roster building)",
-                            "value": False,
-                        },
+                        {"name": f"Continue with {app_config.nlp_model}", "value": "continue"},
+                        {"name": "Reconfigure NLP model…", "value": "reconfigure"},
                     ],
                 ))
 
-            fast_result = _run_fast_scan_wizard(
-                book_path,
-                app_config.nlp_model,
-                use_cache=use_cache,
-                chapter_selection=chapter_selection,
-            )
-            if fast_result is None:
-                console.print("[yellow]Falling back to single-voice mode.[/yellow]")
-                narration_mode = "single"
-            else:
-                series_manifest, inherited_voices, pinned = _run_series_setup(
-                    fast_result=fast_result,
-                    mode="multi",
+                if reconfigure_action == "reconfigure" or not check_llm_available(app_config):
+                    updated = run_setup_dialogue(app_config)
+                    if updated is None:
+                        console.print("[yellow]Falling back to single-voice mode.[/yellow]")
+                        narration_mode = "single"
+                    else:
+                        app_config = updated
+                        save_app_config(app_config, DEFAULT_CONFIG_PATH)
+                        console.print(
+                            f"[green]NLP model set to [bold]{app_config.nlp_model}[/bold][/green]"
+                        )
+
+            if narration_mode == "multi":
+                from ..nlp import CACHE_DIR, book_hash
+                fast_result = _run_fast_scan_wizard(
+                    client,
+                    book_path,
+                    app_config.nlp_model,
+                    chapter_selection=chapter_selection,
                 )
-                speaker_voices = _prompt_multivoice_character_voices(
-                    fast_result,
-                    app_config.default_voice,
-                    inherited_voices=inherited_voices,
-                    pinned=pinned,
-                    series_name=series_manifest.name if series_manifest else None,
-                    excluded_voices=app_config.excluded_voices,
-                )
-                roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
+                if fast_result is None:
+                    console.print("[yellow]Falling back to single-voice mode.[/yellow]")
+                    narration_mode = "single"
+                else:
+                    series_manifest, inherited_voices, pinned = _run_series_setup(
+                        fast_result=fast_result,
+                        mode="multi",
+                    )
+                    speaker_voices = _prompt_multivoice_character_voices(
+                        fast_result,
+                        app_config.default_voice,
+                        inherited_voices=inherited_voices,
+                        pinned=pinned,
+                        series_name=series_manifest.name if series_manifest else None,
+                        excluded_voices=app_config.excluded_voices,
+                    )
+                    roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
 
     elif mode_val == "chapter":
         narration_mode = "single"
