@@ -75,7 +75,7 @@ def _gender_pool(gender_str: str | None) -> str:
     return "they"
 
 
-def _build_voice_choices() -> list[dict]:
+def _build_voice_choices(client=None) -> list[dict]:
     """Return InquirerPy-compatible choice list for voice selection.
 
     Groups voices by source:
@@ -83,39 +83,60 @@ def _build_voice_choices() -> list[dict]:
     2. Built-in pocket-tts voices
     3. Custom/uncompiled voices (optional; only shown if installed)
     4. Escape hatch for raw file paths and hf:// URLs
-    """
-    from ..voice_registry import get_registry
 
-    registry = get_registry()
+    When ``client`` is provided, fetches voices via the API.
+    Falls back to the local registry if ``client`` is None.
+    """
     choices: list[dict] = []
 
-    compiled = registry.filter(source="compiled")
-    if compiled:
-        choices.append({"name": "── Compiled voices ──────────────────────", "value": "__sep__", "disabled": True})
-        for v in compiled:
-            choices.append({"name": v.display_label, "value": v.name})
+    if client is not None:
+        for source_key, sep_label in [
+            ("compiled", "── Compiled voices ──────────────────────"),
+            ("builtin", "── Built-in voices ──────────────────────"),
+            ("uncompiled", "── Custom voices ────────────────────────"),
+        ]:
+            try:
+                data = client.list_voices(source=source_key)
+                voices = data.get("voices") or []
+            except Exception:
+                voices = []
+            if voices:
+                choices.append({"name": sep_label, "value": "__sep__", "disabled": True})
+                for v in voices:
+                    label = v.get("display_label") or v.get("name", "")
+                    choices.append({"name": label, "value": v["name"]})
+    else:
+        from ..voice_registry import get_registry
 
-    builtins = registry.filter(source="builtin")
-    if builtins:
-        choices.append({"name": "── Built-in voices ──────────────────────", "value": "__sep__", "disabled": True})
-        for v in builtins:
-            choices.append({"name": v.display_label, "value": v.name})
+        registry = get_registry()
 
-    uncompiled = registry.filter(source="uncompiled")
-    if uncompiled:
-        choices.append({"name": "── Custom voices ────────────────────────", "value": "__sep__", "disabled": True})
-        for v in uncompiled:
-            choices.append({"name": v.display_label, "value": v.name})
+        compiled = registry.filter(source="compiled")
+        if compiled:
+            choices.append({"name": "── Compiled voices ──────────────────────", "value": "__sep__", "disabled": True})
+            for v in compiled:
+                choices.append({"name": v.display_label, "value": v.name})
+
+        builtins = registry.filter(source="builtin")
+        if builtins:
+            choices.append({"name": "── Built-in voices ──────────────────────", "value": "__sep__", "disabled": True})
+            for v in builtins:
+                choices.append({"name": v.display_label, "value": v.name})
+
+        uncompiled = registry.filter(source="uncompiled")
+        if uncompiled:
+            choices.append({"name": "── Custom voices ────────────────────────", "value": "__sep__", "disabled": True})
+            for v in uncompiled:
+                choices.append({"name": v.display_label, "value": v.name})
 
     choices.append({"name": "Custom path or hf:// URL…", "value": "__custom__"})
     return choices
 
 
-def _prompt_voice(default: str = "alba", message: str = "Select voice:") -> str:
+def _prompt_voice(default: str = "alba", message: str = "Select voice:", client=None) -> str:
     """Prompt the user to select a voice; returns voice string."""
     from InquirerPy import inquirer
 
-    choices = _build_voice_choices()
+    choices = _build_voice_choices(client=client)
     voice = _wizard_execute(inquirer.fuzzy(
         message=message,
         choices=choices,
@@ -175,11 +196,15 @@ def _check_hf_auth(voice: str, args=None) -> None:
         console.print(f"[yellow]HuggingFace auth check failed ({exc}). Continuing without auth.[/yellow]")
 
 
-def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
-    """Return a ChapterSelection.to_dict() based on user input."""
+def _prompt_chapter_preset_and_selection(book_path: Path, client=None) -> dict:
+    """Return a ChapterSelection.to_dict() based on user input.
+
+    When ``client`` is provided, parses the book and filters chapters via the
+    server API.  Falls back to local ``get_reader`` / ``ChapterFilter`` when
+    ``client`` is None (e.g. in tests that don't spin up a server).
+    """
     from InquirerPy import inquirer
 
-    from ..chapter_filter import ChapterFilter
     from ..models import ChapterPreset, ChapterSelection
 
     preset_choices = [
@@ -200,48 +225,93 @@ def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
     except ValueError:
         preset_enum = ChapterPreset.CONTENT_ONLY
 
-    # Load chapters from the ebook for finetuning.
-    console.print("Loading chapters…", end=" ")
-    try:
-        from ..readers import get_reader
+    if client is not None:
+        # --- Server path ---
+        console.print("Loading chapters…", end=" ")
+        try:
+            parse_result = client.parse_book(str(book_path))
+            book_hash = parse_result.get("book_hash", "")
+            chapters_raw = parse_result.get("chapters", [])
+            console.print(f"[green]{len(chapters_raw)} found[/green]")
+        except Exception as exc:
+            console.print(f"[red]Failed to load chapters: {exc}[/red]")
+            return ChapterSelection(preset=preset_enum).to_dict()
 
-        reader = get_reader(book_path, verbose=False)
-        chapters = reader.get_chapters()
-        console.print(f"[green]{len(chapters)} found[/green]")
-    except Exception as exc:
-        console.print(f"[red]Failed to load chapters: {exc}[/red]")
-        return ChapterSelection(preset=preset_enum).to_dict()
+        if preset_val == "none":
+            default_included: set[int] = set()
+        else:
+            try:
+                filter_result = client.filter_chapters(book_hash, {"preset": preset_val, "included": []})
+                default_included = set(filter_result.get("included_indices", []))
+            except Exception:
+                default_included = set()
 
-    # Determine which chapters are included by the preset (for checkbox defaults).
-    if preset_val == "none":
-        default_included: set[int] = set()
+        chapter_choices = [
+            {
+                "name": f"[{ch.get('index', i):>3}]  {ch.get('title') or '(untitled)'}",
+                "value": ch.get("index", i),
+                "enabled": ch.get("index", i) in default_included,
+            }
+            for i, ch in enumerate(chapters_raw)
+        ]
+
+        included = _wizard_execute(inquirer.checkbox(
+            message=f"Select chapters to include (preset: {preset_val}):",
+            choices=chapter_choices,
+            instruction="(Space to toggle, Enter to confirm)",
+        ))
+
+        return ChapterSelection(
+            preset=ChapterPreset.MANUAL if set(included) != default_included else preset_enum,
+            included=included,
+        ).to_dict()
+
     else:
-        filtered = ChapterFilter.apply_preset(chapters, preset_val)
-        default_included = {ch.index for ch in filtered}
+        # --- Local fallback path ---
+        from ..chapter_filter import ChapterFilter
 
-    # Choice values use the reader's chapter index so the returned 'included'
-    # list is compatible with ChapterFilter and the worker.
-    # InquirerPy checkbox uses per-choice 'enabled' for pre-selection in multiselect
-    # mode — the 'default=' kwarg is silently ignored for checkboxes.
-    chapter_choices = [
-        {
-            "name": f"[{ch.index:>3}]  {ch.title or '(untitled)'}",
-            "value": ch.index,
-            "enabled": ch.index in default_included,
-        }
-        for ch in chapters
-    ]
+        # Load chapters from the ebook for finetuning.
+        console.print("Loading chapters…", end=" ")
+        try:
+            from ..readers import get_reader
 
-    included = _wizard_execute(inquirer.checkbox(
-        message=f"Select chapters to include (preset: {preset_val}):",
-        choices=chapter_choices,
-        instruction="(Space to toggle, Enter to confirm)",
-    ))
+            reader = get_reader(book_path, verbose=False)
+            chapters = reader.get_chapters()
+            console.print(f"[green]{len(chapters)} found[/green]")
+        except Exception as exc:
+            console.print(f"[red]Failed to load chapters: {exc}[/red]")
+            return ChapterSelection(preset=preset_enum).to_dict()
 
-    return ChapterSelection(
-        preset=ChapterPreset.MANUAL if set(included) != default_included else preset_enum,
-        included=included,
-    ).to_dict()
+        # Determine which chapters are included by the preset (for checkbox defaults).
+        if preset_val == "none":
+            default_included = set()
+        else:
+            filtered = ChapterFilter.apply_preset(chapters, preset_val)
+            default_included = {ch.index for ch in filtered}
+
+        # Choice values use the reader's chapter index so the returned 'included'
+        # list is compatible with ChapterFilter and the worker.
+        # InquirerPy checkbox uses per-choice 'enabled' for pre-selection in multiselect
+        # mode — the 'default=' kwarg is silently ignored for checkboxes.
+        chapter_choices = [
+            {
+                "name": f"[{ch.index:>3}]  {ch.title or '(untitled)'}",
+                "value": ch.index,
+                "enabled": ch.index in default_included,
+            }
+            for ch in chapters
+        ]
+
+        included = _wizard_execute(inquirer.checkbox(
+            message=f"Select chapters to include (preset: {preset_val}):",
+            choices=chapter_choices,
+            instruction="(Space to toggle, Enter to confirm)",
+        ))
+
+        return ChapterSelection(
+            preset=ChapterPreset.MANUAL if set(included) != default_included else preset_enum,
+            included=included,
+        ).to_dict()
 
 
 
@@ -334,13 +404,15 @@ def _run_fast_scan_wizard(
     return result.get("result")
 
 
-def _top_gender_matched_voice(characters, default_voice: str) -> str:
+def _top_gender_matched_voice(characters, default_voice: str, client=None) -> str:
     """Return a voice that matches the gender dominant in the top roles.
 
     The narrator should sound like a main character. If the top female
     character has more quotes than the top male character, default to a female
     voice; otherwise default to a male voice. Falls back to default_voice
     if no character's gender is known.
+
+    When ``client`` is provided, fetches voice lists via the API.
     """
     by_quotes = sorted(characters, key=lambda c: c.prominence, reverse=True)
 
@@ -355,10 +427,18 @@ def _top_gender_matched_voice(characters, default_voice: str) -> str:
             top_female_quotes = ch.prominence
             break
 
-    from ..voice_registry import get_registry
-    registry = get_registry()
-    male_voices = [v.name for v in registry.filter(gender="Male")]
-    female_voices = [v.name for v in registry.filter(gender="Female")]
+    if client is not None:
+        try:
+            male_voices = [v["name"] for v in (client.list_voices(gender="Male").get("voices") or [])]
+            female_voices = [v["name"] for v in (client.list_voices(gender="Female").get("voices") or [])]
+        except Exception:
+            male_voices = []
+            female_voices = []
+    else:
+        from ..voice_registry import get_registry
+        registry = get_registry()
+        male_voices = [v.name for v in registry.filter(gender="Male")]
+        female_voices = [v.name for v in registry.filter(gender="Female")]
 
     if top_female_quotes > top_male_quotes and female_voices:
         return female_voices[0]
@@ -519,6 +599,40 @@ def _auto_assign_character_voices(
     return speaker_voices
 
 
+def _auto_assign_voices(
+    client,
+    characters,
+    narrator_voice: str,
+    excluded_voices: "list[str] | None" = None,
+) -> "tuple[dict[str, str], list[tuple[str, str]]]":
+    """Auto-assign voices via the server suggest-cast API.
+
+    Returns (speaker_voices, unresolved_conflicts).
+    Falls back gracefully if the server call fails.
+    """
+    roster_payload = [
+        {
+            "name": c.character_id,
+            "pronoun": c.gender_pronoun or None,
+            "quote_count": c.quote_count,
+            "mention_count": c.mention_count,
+        }
+        for c in characters
+    ]
+    try:
+        result = client.suggest_cast(
+            roster=roster_payload,
+            excluded_voices=excluded_voices or [],
+            default_voice=narrator_voice,
+        )
+        for w in result.get("warnings", []):
+            console.print(f"[yellow]Warning:[/yellow] {w}")
+        return result.get("speaker_voices", {}), []
+    except Exception as exc:
+        console.print(f"[yellow]Auto-assign via server failed ({exc}); falling back to local.[/yellow]")
+        return _auto_assign_character_voices(characters, narrator_voice, excluded_voices=excluded_voices), []
+
+
 def _make_character_review_label(
     ch,
     voice: str,
@@ -543,6 +657,7 @@ def _prompt_character_voice_review(
     pinned: "set[str] | None" = None,
     series_name: "str | None" = None,
     unresolved_conflicts: "list[tuple[str, str]] | None" = None,
+    client=None,
 ) -> dict[str, str]:
     """Show a reference table, then review each character via an InquirerPy list."""
     from collections import defaultdict
@@ -571,7 +686,7 @@ def _prompt_character_voice_review(
         console.print()
 
     # Exclude narrator voice from per-character assignment choices
-    all_voice_choices = _build_voice_choices()
+    all_voice_choices = _build_voice_choices(client=client)
     voice_choices = [c for c in all_voice_choices if c.get("value") != narrator_voice]
     if not voice_choices:  # Safety: if all voices are narrator, allow all
         voice_choices = all_voice_choices
@@ -669,6 +784,7 @@ def _prompt_multivoice_character_voices(
     scan_result,
     default_voice: str,
     args=None,
+    client=None,
     inherited_voices: "dict[str, str] | None" = None,
     pinned: "set[str] | None" = None,
     series_name: "str | None" = None,
@@ -677,6 +793,9 @@ def _prompt_multivoice_character_voices(
     """Run the full multi-voice character assignment flow.
 
     Returns a dict mapping character_id (including "NARRATOR") to voice name.
+
+    When ``client`` is provided, auto-assignment is delegated to the server
+    via ``suggest_cast``.  ``args`` is kept for HF auth checks.
     """
     from InquirerPy import inquirer
 
@@ -686,16 +805,17 @@ def _prompt_multivoice_character_voices(
             "[yellow]No characters found by the NLP pipeline. Using narrator voice for all.[/yellow]"
         )
         narrator_voice = _prompt_voice(
-            default=default_voice, message="Fallback voice for NARRATOR:"
+            default=default_voice, message="Fallback voice for NARRATOR:", client=client
         )
         return {"NARRATOR": narrator_voice}
 
     # Step A — pick NARRATOR fallback voice (defaults to top gender-matched lead).
     console.print("[bold]Select fallback voice for NARRATOR:[/bold]")
-    narrator_default = _top_gender_matched_voice(characters, default_voice)
+    narrator_default = _top_gender_matched_voice(characters, default_voice, client=client)
     narrator_voice = _prompt_voice(
         default=narrator_default,
         message="NARRATOR fallback voice:",
+        client=client,
     )
     _check_hf_auth(narrator_voice, args)
 
@@ -715,43 +835,44 @@ def _prompt_multivoice_character_voices(
     ))
 
     if assignment_mode == "simple":
-        return _prompt_simple_voice_assignment(characters, narrator_voice)
+        return _prompt_simple_voice_assignment(characters, narrator_voice, client=client)
 
     # Advanced mode: auto-assign then review.
-    # Step C — auto-assign character voices.
-    speaker_voices = _auto_assign_character_voices(characters, narrator_voice,
-                                                   excluded_voices=excluded_voices)
+    # Step C — auto-assign character voices via server suggest-cast (or local fallback).
+    if client is not None:
+        speaker_voices, unresolved_conflicts = _auto_assign_voices(
+            client, characters, narrator_voice, excluded_voices=excluded_voices
+        )
+    else:
+        speaker_voices = _auto_assign_character_voices(
+            characters, narrator_voice, excluded_voices=excluded_voices
+        )
+        chapters = getattr(scan_result, "chapters", None) or []
+        from ..voice_registry import get_registry
+        _reg = get_registry()
+        _excluded = set(excluded_voices or [])
+        _all_male = [v.name for v in _reg.filter(gender="Male")]
+        _all_female = [v.name for v in _reg.filter(gender="Female")]
+        _male_non_excl = [v for v in _all_male if v not in _excluded]
+        _female_non_excl = [v for v in _all_female if v not in _excluded]
+        male_pool = (
+            [v for v in _male_non_excl if v != narrator_voice]
+            or _male_non_excl
+            or _all_male
+        )
+        female_pool = (
+            [v for v in _female_non_excl if v != narrator_voice]
+            or _female_non_excl
+            or _all_female
+        )
+        speaker_voices, unresolved_conflicts = _resolve_chapter_voice_conflicts(
+            speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
+            pinned=pinned or set(),
+        )
 
     # Pre-populate with inherited series voices (override auto-assigned ones)
     if inherited_voices:
         speaker_voices.update(inherited_voices)
-
-    # Resolve any same-voice conflicts for characters that co-appear in a chapter.
-    from ..voice_registry import get_registry
-    _reg = get_registry()
-    _excluded = set(excluded_voices or [])
-    _all_male = [v.name for v in _reg.filter(gender="Male")]
-    _all_female = [v.name for v in _reg.filter(gender="Female")]
-    _male_non_excl = [v for v in _all_male if v not in _excluded]
-    _female_non_excl = [v for v in _all_female if v not in _excluded]
-    # Narrator excluded first; if that empties the pool fall back to non-excluded;
-    # if exclusions emptied the pool entirely fall back to the full unfiltered pool
-    # (mirrors the fallback logic in _auto_assign_character_voices).
-    male_pool = (
-        [v for v in _male_non_excl if v != narrator_voice]
-        or _male_non_excl
-        or _all_male
-    )
-    female_pool = (
-        [v for v in _female_non_excl if v != narrator_voice]
-        or _female_non_excl
-        or _all_female
-    )
-    chapters = getattr(scan_result, "chapters", None) or []
-    speaker_voices, unresolved_conflicts = _resolve_chapter_voice_conflicts(
-        speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
-        pinned=pinned or set(),
-    )
 
     # Step D — review / adjust via list.
     speaker_voices = _prompt_character_voice_review(
@@ -759,6 +880,7 @@ def _prompt_multivoice_character_voices(
         pinned=pinned or set(),
         series_name=series_name,
         unresolved_conflicts=unresolved_conflicts,
+        client=client,
     )
 
     return speaker_voices
@@ -769,6 +891,7 @@ def _run_series_setup(
     mode: str,
     prompts: "list | None" = None,
     _roster_candidates: "list | None" = None,
+    client=None,
 ) -> "tuple":
     """Prompt for series selection and compute inherited voice assignments.
 
@@ -778,12 +901,13 @@ def _run_series_setup(
         pinned          — set of char_ids with inherited voices
 
     ``prompts`` and ``_roster_candidates`` are test seams (leave as None in production).
+    When ``client`` is provided the production path uses API calls; otherwise
+    it falls back to local series functions.
     """
     from ..series import (
         SeriesManifest,
         build_manifest_from_predecessor,
         list_roster_candidates,
-        list_series,
         load_series,
         match_characters,
         save_series,
@@ -809,8 +933,18 @@ def _run_series_setup(
         if not wants_series:
             return None, {}, set()
 
-        existing = list_series()
-        series_choices = [{"name": s.name, "value": s.slug} for s in existing]
+        # Fetch the series list via API if client is available, else local.
+        if client is not None:
+            try:
+                series_data = client.list_series()
+                series_entries = series_data.get("series", [])
+                series_choices = [{"name": s["name"], "value": s["slug"]} for s in series_entries]
+            except Exception:
+                series_choices = []
+        else:
+            from ..series import list_series as _local_list_series
+            series_choices = [{"name": s.name, "value": s.slug} for s in _local_list_series()]
+
         series_choices.append({"name": "[ + New series ]", "value": "__new__"})
 
         chosen_slug = _wizard_execute(inquirer.select(
@@ -819,7 +953,14 @@ def _run_series_setup(
         ))
 
         if chosen_slug != "__new__":
-            manifest = load_series(chosen_slug)
+            if client is not None:
+                try:
+                    series_dict = client.get_series(chosen_slug)
+                    manifest = SeriesManifest.from_dict(series_dict)
+                except Exception:
+                    manifest = load_series(chosen_slug)
+            else:
+                manifest = load_series(chosen_slug)
         else:
             candidates = list_roster_candidates()
             if not candidates:
@@ -947,15 +1088,25 @@ def _check_multivoice_requirements(client) -> bool:
     return proceed
 
 
-def _prompt_simple_voice_assignment(characters, narrator_voice: str) -> dict[str, str]:
+def _prompt_simple_voice_assignment(characters, narrator_voice: str, client=None) -> dict[str, str]:
     """Simple mode: all males → one voice, all females → another.
 
     Returns speaker_voices dict (including NARRATOR).
+
+    When ``client`` is provided, fetches voice defaults via the API.
     """
-    from ..voice_registry import get_registry
-    registry = get_registry()
-    male_voices = [v.name for v in registry.filter(gender="Male")]
-    female_voices = [v.name for v in registry.filter(gender="Female")]
+    if client is not None:
+        try:
+            male_voices = [v["name"] for v in (client.list_voices(gender="Male").get("voices") or [])]
+            female_voices = [v["name"] for v in (client.list_voices(gender="Female").get("voices") or [])]
+        except Exception:
+            male_voices = []
+            female_voices = []
+    else:
+        from ..voice_registry import get_registry
+        registry = get_registry()
+        male_voices = [v.name for v in registry.filter(gender="Male")]
+        female_voices = [v.name for v in registry.filter(gender="Female")]
 
     male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
     female_pool = [v for v in female_voices if v != narrator_voice] or female_voices
@@ -963,10 +1114,12 @@ def _prompt_simple_voice_assignment(characters, narrator_voice: str) -> dict[str
     male_voice = _prompt_voice(
         default=male_pool[0] if male_pool else "alba",
         message="Voice for all male characters:",
+        client=client,
     )
     female_voice = _prompt_voice(
         default=female_pool[0] if female_pool else "alba",
         message="Voice for all female characters:",
+        client=client,
     )
 
     speaker_voices: dict[str, str] = {"NARRATOR": narrator_voice}
@@ -1110,7 +1263,12 @@ def _prompt_quality_overrides(app_config) -> dict:
 def _step_chapters(state: dict) -> dict:
     """Step 1: chapter preset + selection."""
     book_path: Path = state["_book_path"]
-    chapter_selection = _prompt_chapter_preset_and_selection(book_path)
+    args = state.get("_args")
+    if args is not None:
+        with _get_client(args) as client:
+            chapter_selection = _prompt_chapter_preset_and_selection(book_path, client=client)
+    else:
+        chapter_selection = _prompt_chapter_preset_and_selection(book_path)
     return {**state, "chapter_selection": chapter_selection}
 
 
@@ -1223,11 +1381,13 @@ def _step_voice_setup(state: dict) -> dict:
                     series_manifest, inherited_voices, pinned = _run_series_setup(
                         fast_result=fast_result,
                         mode="multi",
+                        client=client,
                     )
                     speaker_voices = _prompt_multivoice_character_voices(
                         fast_result,
                         app_config.default_voice,
                         args=args,
+                        client=client,
                         inherited_voices=inherited_voices,
                         pinned=pinned,
                         series_name=series_manifest.name if series_manifest else None,
@@ -1239,16 +1399,26 @@ def _step_voice_setup(state: dict) -> dict:
         narration_mode = "single"
         console.print()
         console.print("[bold]Voice for narrator / unassigned chapters:[/bold]")
-        voice = _prompt_voice(default=app_config.default_voice, message="Default voice:")
-        _check_hf_auth(voice, args)
-        try:
-            from ..readers import get_reader
-            reader = get_reader(book_path, verbose=False)
-            all_chapters = reader.get_chapters()
-            chapter_voices = _prompt_chapter_voices(all_chapters, voice)
-        except Exception as exc:
-            console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
-            chapter_voices = {}
+        with _get_client(args) as _chap_client:
+            voice = _prompt_voice(default=app_config.default_voice, message="Default voice:", client=_chap_client)
+            _check_hf_auth(voice, args)
+            try:
+                parse_result = _chap_client.parse_book(str(book_path))
+                from ..models import Chapter
+                all_chapters = [
+                    Chapter(index=ch.get("index", i), title=ch.get("title", ""), paragraphs=[])
+                    for i, ch in enumerate(parse_result.get("chapters", []))
+                ]
+                chapter_voices = _prompt_chapter_voices(all_chapters, voice)
+            except Exception:
+                try:
+                    from ..readers import get_reader
+                    reader = get_reader(book_path, verbose=False)
+                    all_chapters = reader.get_chapters()
+                    chapter_voices = _prompt_chapter_voices(all_chapters, voice)
+                except Exception as exc:
+                    console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
+                    chapter_voices = {}
 
     return {
         **state,
@@ -1280,7 +1450,8 @@ def _step_narrator_voice(state: dict) -> dict:
     elif mode_val != "chapter":
         console.print()
         console.print("[bold]Voice:[/bold]")
-        voice = _prompt_voice(default=app_config.default_voice, message="Select voice:")
+        with _get_client(args) as _voice_client:
+            voice = _prompt_voice(default=app_config.default_voice, message="Select voice:", client=_voice_client)
         _check_hf_auth(voice, args)
 
     return {**state, "voice": voice}
