@@ -241,7 +241,11 @@ def _prompt_chapter_preset_and_selection(book_path: Path, client=None) -> dict:
             default_included: set[int] = set()
         else:
             try:
-                filter_result = client.filter_chapters(book_hash, {"preset": preset_val, "included": []})
+                filter_result = client.filter_chapters(book_hash, {
+                        "preset": preset_val,
+                        "included": [],
+                        "excluded": [],
+                    })
                 default_included = set(filter_result.get("included_indices", []))
             except Exception:
                 default_included = set()
@@ -761,7 +765,8 @@ def _run_series_setup(
                 series_data = client.list_series()
                 series_entries = series_data.get("series", [])
                 series_choices = [{"name": s["name"], "value": s["slug"]} for s in series_entries]
-            except Exception:
+            except Exception as exc:
+                console.print(f"[yellow]Could not load series list: {exc}[/yellow]")
                 series_choices = []
         else:
             from ..series import list_series as _local_list_series
@@ -778,7 +783,21 @@ def _run_series_setup(
             if client is not None:
                 try:
                     series_dict = client.get_series(chosen_slug)
-                    manifest = SeriesManifest.from_dict(series_dict)
+                    characters = [
+                        SeriesCharacter(
+                            canonical=c["canonical"],
+                            aliases=c.get("aliases", []),
+                            voice=c.get("voice", ""),
+                            gender=c.get("gender", ""),
+                        )
+                        for c in series_dict.get("characters", [])
+                    ]
+                    manifest = SeriesManifest(
+                        name=series_dict.get("name", chosen_slug),
+                        slug=series_dict.get("slug", chosen_slug),
+                        updated_at=series_dict.get("updated_at", ""),
+                        characters=characters,
+                    )
                 except Exception as exc:
                     console.print(f"[red]Could not load series '{chosen_slug}': {exc}[/red]")
                     return None, {}, set()
