@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import multiprocessing
 
+import httpx
 from rich.console import Console
 from rich.table import Table
 
@@ -27,13 +28,20 @@ def cmd_config(args) -> int:
     from InquirerPy.validator import NumberValidator
 
     # ---- Fetch current config and available voices from server -----------
-    with APIClient() as client:
-        cfg = client.get_config()
-        voices_data = client.list_voices()
+    try:
+        with APIClient() as client:
+            cfg = client.get_config()
+            voices_data = client.list_voices()
+    except httpx.ConnectError:
+        console.print("[red]Cannot connect to kenkui server. Is it running?[/red]")
+        return 1
+    except Exception as exc:
+        console.print(f"[red]Error fetching config: {exc}[/red]")
+        return 1
 
     # ---- Voice choices ------------------------------------------------
     voice_choices = []
-    for v in voices_data.get("voices", []):
+    for v in voices_data.get("voices") or []:
         label = v.get("description") or v["name"]
         voice_choices.append({"name": label, "value": v["name"]})
 
@@ -380,8 +388,15 @@ def cmd_config(args) -> int:
         "post_processing": post_processing,
     }
 
-    with APIClient() as client:
-        client.update_config(updated)
+    try:
+        with APIClient() as client:
+            client.update_config(updated)
+    except httpx.ConnectError:
+        console.print("[red]Cannot connect to server to save config.[/red]")
+        return 1
+    except Exception as exc:
+        console.print(f"[red]Error saving config: {exc}[/red]")
+        return 1
 
     console.print("[green]Config updated on server.[/green]")
     return 0

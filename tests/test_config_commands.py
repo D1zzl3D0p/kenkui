@@ -350,3 +350,43 @@ class TestCmdConfig:
         pp = payload["post_processing"]
         assert pp["enabled"] is True
         assert pp["noise_reduce"] is True
+
+    def test_server_not_running_returns_error(self, capsys):
+        """When server is not running, cmd_config returns 1 with a helpful message."""
+        import httpx
+        from kenkui.cli.config import cmd_config
+
+        with patch("kenkui.cli.config.APIClient") as MockClient:
+            MockClient.return_value.__enter__.side_effect = httpx.ConnectError("refused")
+            result = cmd_config(Namespace())
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "connect" in captured.out.lower() or "server" in captured.out.lower()
+
+    def test_post_processing_disabled_preserves_existing_fields(self, monkeypatch):
+        """When enable_pp=False, payload has enabled=False and retains other pp keys from server."""
+        # Server config has custom pp fields
+        custom_pp = {
+            **_DEFAULT_PP,
+            "highpass_hz": 120,
+            "compressor_ratio": 5.0,
+        }
+        cfg = {**_DEFAULT_CONFIG, "post_processing": custom_pp}
+        api_cm = _make_client(get_config=cfg)
+
+        # Wizard answers: enable_pp=False (skips all pp prompts), then confirm
+        answers = [
+            4, "", "alba", "content-only", "96k",
+            800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
+            False,  # enable_pp -> skip pp block
+            True,   # confirm
+        ]
+        self._run_wizard(monkeypatch, api_cm, answers=answers)
+
+        call_args = api_cm.__enter__.return_value.update_config.call_args
+        payload = call_args[0][0]
+        pp = payload["post_processing"]
+        assert pp["enabled"] is False
+        # Existing fields from server config must be preserved
+        assert pp["highpass_hz"] == 120
+        assert pp["compressor_ratio"] == 5.0
