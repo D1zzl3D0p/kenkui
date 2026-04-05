@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import httpx
 from rich.console import Console
 from rich.table import Table
 
@@ -18,13 +19,17 @@ def cmd_voices_list(args) -> None:
 
     Accepts optional filter flags: ``--gender``, ``--accent``, ``--dataset``, ``--source``.
     """
-    with APIClient() as client:
-        data = client.list_voices(
-            gender=getattr(args, "gender", None),
-            accent=getattr(args, "accent", None),
-            dataset=getattr(args, "dataset", None),
-            source=getattr(args, "source", None),
-        )
+    try:
+        with APIClient() as client:
+            data = client.list_voices(
+                gender=getattr(args, "gender", None),
+                accent=getattr(args, "accent", None),
+                dataset=getattr(args, "dataset", None),
+                source=getattr(args, "source", None),
+            )
+    except httpx.ConnectError:
+        console.print("[red]Cannot connect to kenkui server. Is it running?[/red]")
+        return
     voices = data["voices"]
 
     if not voices:
@@ -131,8 +136,12 @@ def cmd_voices_download(args) -> int:
 def cmd_voices_exclude(args) -> None:
     """Add a voice to the global excluded-from-auto-assignment list."""
     voice_name: str = args.voice
-    with APIClient() as client:
-        result = client.exclude_voice(voice_name)
+    try:
+        with APIClient() as client:
+            result = client.exclude_voice(voice_name)
+    except httpx.ConnectError:
+        console.print("[red]Cannot connect to kenkui server. Is it running?[/red]")
+        return
     if result.get("warning"):
         console.print(f"[yellow]Warning: {result['warning']}[/yellow]")
     else:
@@ -142,8 +151,12 @@ def cmd_voices_exclude(args) -> None:
 def cmd_voices_include(args) -> None:
     """Remove a voice from the excluded list, restoring it to auto-assignment."""
     voice_name: str = args.voice
-    with APIClient() as client:
-        result = client.include_voice(voice_name)
+    try:
+        with APIClient() as client:
+            result = client.include_voice(voice_name)
+    except httpx.ConnectError:
+        console.print("[red]Cannot connect to kenkui server. Is it running?[/red]")
+        return
     if result.get("warning"):
         console.print(f"[yellow]Warning: {result['warning']}[/yellow]")
     else:
@@ -153,9 +166,12 @@ def cmd_voices_include(args) -> None:
 def cmd_voices_cast(args) -> None:
     """Display the character→voice cast for a completed multi-voice book."""
     job_id: str = args.job_id
-    with APIClient() as client:
-        cast_data = client.get_queue_cast(job_id)
-
+    try:
+        with APIClient() as client:
+            cast_data = client.get_queue_cast(job_id)
+    except httpx.ConnectError:
+        console.print("[red]Cannot connect to kenkui server. Is it running?[/red]")
+        return
     cast_entries = cast_data.get("cast", [])
     book_name = cast_data.get("book_name", job_id)
 
