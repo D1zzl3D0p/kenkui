@@ -1,5 +1,6 @@
 """HTTP API client for connecting to kenkui worker server."""
 
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -194,27 +195,22 @@ class APIClient:
 
     def parse_book(self, ebook_path: str) -> dict:
         """Parse an ebook and return chapter metadata."""
-        resp = self._client.post(f"{self.base_url}/books/parse", json={"ebook_path": ebook_path})
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", "/books/parse", json={"ebook_path": ebook_path})
 
     def filter_chapters(self, book_hash: str, chapter_selection: dict) -> dict:
         """Filter chapters by selection criteria."""
-        resp = self._client.post(
-            f"{self.base_url}/books/chapters/filter",
+        return self._request(
+            "POST",
+            "/books/chapters/filter",
             json={"book_hash": book_hash, "chapter_selection": chapter_selection},
         )
-        resp.raise_for_status()
-        return resp.json()
 
     def scan_book(self, ebook_path: str, nlp_model: str | None = None) -> dict:
         """Start async NLP scan of an ebook. Returns a task dict."""
         body: dict = {"ebook_path": ebook_path}
         if nlp_model:
             body["nlp_model"] = nlp_model
-        resp = self._client.post(f"{self.base_url}/books/scan", json=body)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", "/books/scan", json=body)
 
     # --- Voices ---
 
@@ -231,36 +227,23 @@ class APIClient:
             for k, v in {"gender": gender, "accent": accent, "dataset": dataset, "source": source}.items()
             if v is not None
         }
-        resp = self._client.get(f"{self.base_url}/voices", params=params)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", "/voices", params=params)
 
     def get_voice(self, name: str) -> dict:
         """Get a single voice by name."""
-        resp = self._client.get(f"{self.base_url}/voices/{name}")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", f"/voices/{name}")
 
     def exclude_voice(self, name: str) -> dict:
         """Exclude a voice from the pool."""
-        resp = self._client.post(f"{self.base_url}/voices/{name}/exclude")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", f"/voices/{name}/exclude")
 
     def include_voice(self, name: str) -> dict:
         """Re-include a previously excluded voice."""
-        resp = self._client.delete(f"{self.base_url}/voices/{name}/exclude")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("DELETE", f"/voices/{name}/exclude")
 
     def audition_voice(self, voice_name: str, text: str | None = None) -> dict:
         """Start async voice preview synthesis. Returns a task dict."""
-        resp = self._client.post(
-            f"{self.base_url}/voices/audition",
-            json={"voice_name": voice_name, "text": text},
-        )
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", "/voices/audition", json={"voice_name": voice_name, "text": text})
 
     def get_audition_wav_url(self, task_id: str) -> str:
         """Return the URL to download a completed audition WAV."""
@@ -268,9 +251,7 @@ class APIClient:
 
     def download_compiled_voices(self, force: bool = False) -> dict:
         """Start async download of compiled voices from HuggingFace."""
-        resp = self._client.post(f"{self.base_url}/voices/download/compiled", json={"force": force})
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", "/voices/download/compiled", json={"force": force})
 
     def fetch_uncompiled_voices(
         self,
@@ -278,12 +259,11 @@ class APIClient:
         patterns: list[str] | None = None,
     ) -> dict:
         """Start async fetch of uncompiled voice sources from HuggingFace."""
-        resp = self._client.post(
-            f"{self.base_url}/voices/download/uncompiled",
+        return self._request(
+            "POST",
+            "/voices/download/uncompiled",
             json={"repo_id": repo_id, "patterns": patterns},
         )
-        resp.raise_for_status()
-        return resp.json()
 
     def suggest_cast(
         self,
@@ -292,24 +272,21 @@ class APIClient:
         default_voice: str,
     ) -> dict:
         """Suggest a voice cast for a roster of characters."""
-        resp = self._client.post(
-            f"{self.base_url}/voices/suggest-cast",
+        return self._request(
+            "POST",
+            "/voices/suggest-cast",
             json={
                 "roster": roster,
                 "excluded_voices": excluded_voices,
                 "default_voice": default_voice,
             },
         )
-        resp.raise_for_status()
-        return resp.json()
 
     # --- Tasks ---
 
     def get_task(self, task_id: str) -> dict:
         """Poll an async task by ID."""
-        resp = self._client.get(f"{self.base_url}/tasks/{task_id}")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", f"/tasks/{task_id}")
 
     def poll_task(
         self,
@@ -320,8 +297,6 @@ class APIClient:
         progress_callback=None,
     ) -> dict:
         """Poll a task until it completes or times out."""
-        import time
-
         deadline = time.time() + timeout
         while time.time() < deadline:
             task = self.get_task(task_id)
@@ -337,51 +312,37 @@ class APIClient:
 
     def get_hf_status(self) -> dict:
         """Check HuggingFace authentication status."""
-        resp = self._client.get(f"{self.base_url}/auth/huggingface")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", "/auth/huggingface")
 
     def login_hf(self, token: str) -> dict:
         """Log in to HuggingFace with a token."""
-        resp = self._client.post(f"{self.base_url}/auth/huggingface", json={"token": token})
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", "/auth/huggingface", json={"token": token})
 
     # --- Status ---
 
     def get_multivoice_status(self) -> dict:
         """Check multi-voice readiness (spaCy + Ollama)."""
-        resp = self._client.get(f"{self.base_url}/status/multivoice")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", "/status/multivoice")
 
     # --- Series ---
 
     def list_series(self) -> dict:
         """List all series manifests."""
-        resp = self._client.get(f"{self.base_url}/series")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", "/series")
 
     def get_series(self, slug: str) -> dict:
         """Get a single series manifest by slug."""
-        resp = self._client.get(f"{self.base_url}/series/{slug}")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", f"/series/{slug}")
 
     def delete_series(self, slug: str) -> dict:
         """Delete a series manifest by slug."""
-        resp = self._client.delete(f"{self.base_url}/series/{slug}")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("DELETE", f"/series/{slug}")
 
     # --- Queue Cast ---
 
     def get_queue_cast(self, job_id: str) -> dict:
         """Get the voice cast for a queued job."""
-        resp = self._client.get(f"{self.base_url}/queue/{job_id}/cast")
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", f"/queue/{job_id}/cast")
 
     # --- Context manager ---
 
@@ -389,7 +350,7 @@ class APIClient:
         return self
 
     def __exit__(self, *args):
-        self._client.close()
+        self.close()
 
 
 _client: APIClient | None = None
