@@ -447,157 +447,6 @@ def _top_gender_matched_voice(characters, default_voice: str, client=None) -> st
     return default_voice
 
 
-def _get_chapter_cooccurrence(chapters) -> "dict[int, set[str]]":
-    """Return {chapter_index: set of character speaker IDs that appear in it}."""
-    from collections import defaultdict
-    result: dict[int, set[str]] = {}
-    for ch in chapters:
-        if ch.segments:
-            speakers = {
-                s.speaker for s in ch.segments
-                if s.speaker not in ("NARRATOR", "SCENE_BREAK", "Unknown")
-                and not getattr(s, "is_scene_break", False)
-            }
-            if speakers:
-                result[ch.index] = speakers
-    return result
-
-
-def _resolve_chapter_voice_conflicts(
-    speaker_voices: "dict[str, str]",
-    characters,
-    chapters,
-    male_pool: "list[str]",
-    female_pool: "list[str]",
-    narrator_voice: str,
-    pinned: "set[str] | None" = None,
-) -> "tuple[dict[str, str], list[tuple[str, str]]]":
-    """Ensure no two characters sharing a chapter are assigned the same voice.
-
-    Returns (speaker_voices, unresolved_conflicts).
-    unresolved_conflicts lists (char_a, char_b) pairs that could not be
-    resolved because both parties are pinned or no spare voice exists.
-    """
-    import logging
-    from collections import defaultdict
-    logger = logging.getLogger(__name__)
-
-    _pinned = pinned or set()
-    char_quotes: dict[str, int] = {ch.character_id: ch.prominence for ch in characters}
-    cooccurrence = _get_chapter_cooccurrence(chapters)
-    unresolved_seen: set[frozenset] = set()
-    unresolved: list[tuple[str, str]] = []
-
-    changed = True
-    while changed:
-        changed = False
-        for ch_idx, ch_speakers in cooccurrence.items():
-            voice_to_chars: dict[str, list[str]] = defaultdict(list)
-            for sp in ch_speakers:
-                v = speaker_voices.get(sp)
-                if v:
-                    voice_to_chars[v].append(sp)
-
-            for voice, chars in voice_to_chars.items():
-                if len(chars) <= 1:
-                    continue
-                chars_sorted = sorted(chars, key=lambda c: char_quotes.get(c, 0), reverse=True)
-                chapter_voices_used = {
-                    speaker_voices[sp] for sp in ch_speakers if sp in speaker_voices
-                }
-                reassignable = [c for c in chars_sorted[1:] if c not in _pinned]
-                for char_to_reassign in reassignable:
-                    char_obj = next((c for c in characters if c.character_id == char_to_reassign), None)
-                    gender = _gender_pool(char_obj.gender_pronoun if char_obj else "")
-                    pool = male_pool if gender == "male" else female_pool
-                    new_voice = next(
-                        (v for v in pool if v not in chapter_voices_used and v != narrator_voice),
-                        None,
-                    )
-                    if new_voice:
-                        speaker_voices[char_to_reassign] = new_voice
-                        chapter_voices_used.add(new_voice)
-                        changed = True
-                    else:
-                        conflict_pair = (chars_sorted[0], char_to_reassign)
-                        pair_key = frozenset({chars_sorted[0], char_to_reassign})
-                        if pair_key not in unresolved_seen:
-                            unresolved_seen.add(pair_key)
-                            unresolved.append(conflict_pair)
-                        logger.warning(
-                            "Voice conflict: %r and %r share voice %r in chapter %d "
-                            "and no spare voice is available.",
-                            chars_sorted[0], char_to_reassign, voice, ch_idx,
-                        )
-                # Pinned characters in conflict — record but don't reassign.
-                # frozenset key prevents duplicates with the no-spare-voice branch above.
-                for pinned_char in chars_sorted[1:]:
-                    if pinned_char in _pinned:
-                        conflict_pair = (chars_sorted[0], pinned_char)
-                        pair_key = frozenset({chars_sorted[0], pinned_char})
-                        if pair_key not in unresolved_seen:
-                            unresolved_seen.add(pair_key)
-                            unresolved.append(conflict_pair)
-
-    return speaker_voices, unresolved
-
-
-def _auto_assign_character_voices(
-    characters,
-    narrator_voice: str,
-    excluded_voices: "list[str] | None" = None,
-) -> dict[str, str]:
-    """Auto-assign voices to characters.
-
-    Phase 1: Assign known-gender characters in true round-robin order.
-      - Male chars (he/him/his) → male pool (round-robin), male_idx++
-      - Female chars (she/her)  → female pool (round-robin), female_idx++
-
-    Phase 2: Assign they/them chars to the pool with fewer total quotes,
-      then round-robin within that pool.
-    """
-    from ..voice_registry import get_registry
-    registry = get_registry()
-    excluded = set(excluded_voices or [])
-    _all_male = [v.name for v in registry.filter(gender="Male")]
-    _all_female = [v.name for v in registry.filter(gender="Female")]
-    male_voices = [v for v in _all_male if v not in excluded] or _all_male
-    female_voices = [v for v in _all_female if v not in excluded] or _all_female
-
-    # Exclude narrator voice from character pools so it stays unique to the narrator.
-    male_pool = [v for v in male_voices if v != narrator_voice] or male_voices
-    female_pool = [v for v in female_voices if v != narrator_voice] or female_voices
-
-    male_idx, female_idx = 0, 0
-    male_quotes, female_quotes = 0, 0
-    speaker_voices: dict[str, str] = {}
-
-    for ch in sorted(characters, key=lambda c: c.prominence, reverse=True):
-        gender = _gender_pool(ch.gender_pronoun)
-
-        if gender == "male":
-            voice = male_pool[male_idx % len(male_pool)]
-            male_idx += 1
-            male_quotes += ch.prominence
-        elif gender == "female":
-            voice = female_pool[female_idx % len(female_pool)]
-            female_idx += 1
-            female_quotes += ch.prominence
-        else:
-            if male_quotes <= female_quotes:
-                voice = male_pool[male_idx % len(male_pool)]
-                male_idx += 1
-                male_quotes += ch.prominence
-            else:
-                voice = female_pool[female_idx % len(female_pool)]
-                female_idx += 1
-                female_quotes += ch.prominence
-
-        speaker_voices[ch.character_id] = voice
-
-    speaker_voices["NARRATOR"] = narrator_voice
-    return speaker_voices
-
 
 def _auto_assign_voices(
     client,
@@ -608,7 +457,7 @@ def _auto_assign_voices(
     """Auto-assign voices via the server suggest-cast API.
 
     Returns (speaker_voices, unresolved_conflicts).
-    Falls back gracefully if the server call fails.
+    Returns ({}, []) on failure so the caller falls through to manual review.
     """
     roster_payload = [
         {
@@ -629,8 +478,8 @@ def _auto_assign_voices(
             console.print(f"[yellow]Warning:[/yellow] {w}")
         return result.get("speaker_voices", {}), []
     except Exception as exc:
-        console.print(f"[yellow]Auto-assign via server failed ({exc}); falling back to local.[/yellow]")
-        return _auto_assign_character_voices(characters, narrator_voice, excluded_voices=excluded_voices), []
+        console.print(f"[red]Could not auto-assign voices: {exc}[/red]")
+        return {}, []   # return empty, caller will prompt manually
 
 
 def _make_character_review_label(
@@ -838,37 +687,10 @@ def _prompt_multivoice_character_voices(
         return _prompt_simple_voice_assignment(characters, narrator_voice, client=client)
 
     # Advanced mode: auto-assign then review.
-    # Step C — auto-assign character voices via server suggest-cast (or local fallback).
-    if client is not None:
-        speaker_voices, unresolved_conflicts = _auto_assign_voices(
-            client, characters, narrator_voice, excluded_voices=excluded_voices
-        )
-    else:
-        speaker_voices = _auto_assign_character_voices(
-            characters, narrator_voice, excluded_voices=excluded_voices
-        )
-        chapters = getattr(scan_result, "chapters", None) or []
-        from ..voice_registry import get_registry
-        _reg = get_registry()
-        _excluded = set(excluded_voices or [])
-        _all_male = [v.name for v in _reg.filter(gender="Male")]
-        _all_female = [v.name for v in _reg.filter(gender="Female")]
-        _male_non_excl = [v for v in _all_male if v not in _excluded]
-        _female_non_excl = [v for v in _all_female if v not in _excluded]
-        male_pool = (
-            [v for v in _male_non_excl if v != narrator_voice]
-            or _male_non_excl
-            or _all_male
-        )
-        female_pool = (
-            [v for v in _female_non_excl if v != narrator_voice]
-            or _female_non_excl
-            or _all_female
-        )
-        speaker_voices, unresolved_conflicts = _resolve_chapter_voice_conflicts(
-            speaker_voices, characters, chapters, male_pool, female_pool, narrator_voice,
-            pinned=pinned or set(),
-        )
+    # Step C — auto-assign character voices via server suggest-cast.
+    speaker_voices, unresolved_conflicts = _auto_assign_voices(
+        client, characters, narrator_voice, excluded_voices=excluded_voices
+    )
 
     # Pre-populate with inherited series voices (override auto-assigned ones)
     if inherited_voices:
@@ -957,8 +779,9 @@ def _run_series_setup(
                 try:
                     series_dict = client.get_series(chosen_slug)
                     manifest = SeriesManifest.from_dict(series_dict)
-                except Exception:
-                    manifest = load_series(chosen_slug)
+                except Exception as exc:
+                    console.print(f"[red]Could not load series '{chosen_slug}': {exc}[/red]")
+                    return None, {}, set()
             else:
                 manifest = load_series(chosen_slug)
         else:
@@ -1410,15 +1233,9 @@ def _step_voice_setup(state: dict) -> dict:
                     for i, ch in enumerate(parse_result.get("chapters", []))
                 ]
                 chapter_voices = _prompt_chapter_voices(all_chapters, voice)
-            except Exception:
-                try:
-                    from ..readers import get_reader
-                    reader = get_reader(book_path, verbose=False)
-                    all_chapters = reader.get_chapters()
-                    chapter_voices = _prompt_chapter_voices(all_chapters, voice)
-                except Exception as exc:
-                    console.print(f"[red]Could not load chapters for assignment: {exc}[/red]")
-                    chapter_voices = {}
+            except Exception as exc:
+                console.print(f"[red]Could not parse book for chapter assignment: {exc}[/red]")
+                chapter_voices = {}
 
     return {
         **state,
