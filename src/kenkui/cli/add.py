@@ -133,7 +133,7 @@ def _prompt_voice(default: str = "alba", message: str = "Select voice:") -> str:
     return voice
 
 
-def _check_hf_auth(voice: str) -> None:
+def _check_hf_auth(voice: str, args=None) -> None:
     """If the voice requires HuggingFace auth, prompt for token if needed."""
     from ..huggingface_auth import is_custom_voice
     from InquirerPy import inquirer
@@ -141,33 +141,38 @@ def _check_hf_auth(voice: str) -> None:
     if not is_custom_voice(voice):
         return
 
-    from ..api_client import APIClient
+    if args is None:
+        console.print("[yellow]HuggingFace auth check skipped (no server args available).[/yellow]")
+        return
 
     HF_TOKEN_URL = "https://huggingface.co/settings/tokens"
 
-    with APIClient() as client:
-        status = client.get_hf_status()
-        if status.get("authenticated"):
-            return
-
-        console.print()
-        console.print("[yellow]This voice requires a free HuggingFace account.[/yellow]")
-        console.print(f"  Token page: [link={HF_TOKEN_URL}]{HF_TOKEN_URL}[/link]")
-        console.print()
-
-        for attempt in range(3):
-            token = _wizard_execute(inquirer.secret(message="Paste your HuggingFace token (hf_…):")).strip()
-            result = client.login_hf(token)
-            if result.get("authenticated"):
-                username = result.get("username", "")
-                console.print(f"[green]Logged in as {username}[/green]")
+    try:
+        with _get_client(args) as client:
+            status = client.get_hf_status()
+            if status.get("authenticated"):
                 return
-            err = result.get("error", "Authentication failed.")
-            console.print(f"[red]{err}[/red]")
-            if attempt < 2:
-                console.print("Please try again.")
 
-    console.print("[red]Could not authenticate. Custom voices may not work.[/red]")
+            console.print()
+            console.print("[yellow]This voice requires a free HuggingFace account.[/yellow]")
+            console.print(f"  Token page: [link={HF_TOKEN_URL}]{HF_TOKEN_URL}[/link]")
+            console.print()
+
+            for attempt in range(3):
+                token = _wizard_execute(inquirer.secret(message="Paste your HuggingFace token (hf_…):")).strip()
+                result = client.login_hf(token)
+                if result.get("authenticated"):
+                    username = result.get("username", "")
+                    console.print(f"[green]Logged in as {username}[/green]")
+                    return
+                err = result.get("error", "Authentication failed.")
+                console.print(f"[red]{err}[/red]")
+                if attempt < 2:
+                    console.print("Please try again.")
+
+        console.print("[red]Could not authenticate. Custom voices may not work.[/red]")
+    except Exception as exc:
+        console.print(f"[yellow]HuggingFace auth check failed ({exc}). Continuing without auth.[/yellow]")
 
 
 def _prompt_chapter_preset_and_selection(book_path: Path) -> dict:
@@ -247,7 +252,10 @@ def _run_nlp_analysis(client, book_path: Path, nlp_model: str):
 
     try:
         task_info = client.scan_book(str(book_path), nlp_model=nlp_model)
-        task_id = task_info["task_id"]
+        task_id = task_info.get("task_id")
+        if not task_id:
+            console.print(f"[red]Server returned no task ID: {task_info}[/red]")
+            return None
     except Exception as exc:
         console.print(f"[red]Could not start NLP analysis: {exc}[/red]")
         return None
@@ -284,14 +292,16 @@ def _run_fast_scan_wizard(
     client,
     book_path: Path,
     nlp_model: str,
-    chapter_selection: dict | None = None,
 ):
     """Run Stage 1-2 fast scan via server task. Returns result dict or None."""
     console.print(f"[cyan]Scanning characters in '{book_path.name}'…[/cyan]")
 
     try:
         task_info = client.scan_book(str(book_path), nlp_model=nlp_model)
-        task_id = task_info["task_id"]
+        task_id = task_info.get("task_id")
+        if not task_id:
+            console.print(f"[red]Server returned no task ID: {task_info}[/red]")
+            return None
     except Exception as exc:
         console.print(f"[red]Could not start character scan: {exc}[/red]")
         return None
@@ -658,6 +668,7 @@ def _prompt_character_voice_review(
 def _prompt_multivoice_character_voices(
     scan_result,
     default_voice: str,
+    args=None,
     inherited_voices: "dict[str, str] | None" = None,
     pinned: "set[str] | None" = None,
     series_name: "str | None" = None,
@@ -686,7 +697,7 @@ def _prompt_multivoice_character_voices(
         default=narrator_default,
         message="NARRATOR fallback voice:",
     )
-    _check_hf_auth(narrator_voice)
+    _check_hf_auth(narrator_voice, args)
 
     # Step B — choose simple or advanced assignment mode.
     assignment_mode = _wizard_execute(inquirer.select(
@@ -1150,6 +1161,7 @@ def _step_voice_setup(state: dict) -> dict:
     app_config = state["_app_config"]
     book_path: Path = state["_book_path"]
     chapter_selection: dict = state["chapter_selection"]
+    args = state["_args"]
 
     voice: str = app_config.default_voice
     speaker_voices: dict[str, str] = {}
@@ -1162,12 +1174,11 @@ def _step_voice_setup(state: dict) -> dict:
     pinned: set[str] = set()
 
     if mode_val == "multi":
-        from ..api_client import APIClient
         from ..config import save_app_config, DEFAULT_CONFIG_PATH
         from ..nlp.setup import check_llm_available, run_setup_dialogue
 
         console.print()
-        with APIClient() as client:
+        with _get_client(args) as client:
             if not _check_multivoice_requirements(client):
                 console.print("[yellow]Falling back to single-voice mode.[/yellow]")
                 narration_mode = "single"
@@ -1204,7 +1215,6 @@ def _step_voice_setup(state: dict) -> dict:
                     client,
                     book_path,
                     app_config.nlp_model,
-                    chapter_selection=chapter_selection,
                 )
                 if fast_result is None:
                     console.print("[yellow]Falling back to single-voice mode.[/yellow]")
@@ -1217,6 +1227,7 @@ def _step_voice_setup(state: dict) -> dict:
                     speaker_voices = _prompt_multivoice_character_voices(
                         fast_result,
                         app_config.default_voice,
+                        args=args,
                         inherited_voices=inherited_voices,
                         pinned=pinned,
                         series_name=series_manifest.name if series_manifest else None,
@@ -1229,7 +1240,7 @@ def _step_voice_setup(state: dict) -> dict:
         console.print()
         console.print("[bold]Voice for narrator / unassigned chapters:[/bold]")
         voice = _prompt_voice(default=app_config.default_voice, message="Default voice:")
-        _check_hf_auth(voice)
+        _check_hf_auth(voice, args)
         try:
             from ..readers import get_reader
             reader = get_reader(book_path, verbose=False)
@@ -1262,6 +1273,7 @@ def _step_narrator_voice(state: dict) -> dict:
     app_config = state["_app_config"]
     speaker_voices: dict = state["speaker_voices"]
     voice: str = state["voice"]
+    args = state["_args"]
 
     if narration_mode == "multi":
         voice = speaker_voices.get("NARRATOR", app_config.default_voice)
@@ -1269,7 +1281,7 @@ def _step_narrator_voice(state: dict) -> dict:
         console.print()
         console.print("[bold]Voice:[/bold]")
         voice = _prompt_voice(default=app_config.default_voice, message="Select voice:")
-        _check_hf_auth(voice)
+        _check_hf_auth(voice, args)
 
     return {**state, "voice": voice}
 
@@ -1362,7 +1374,7 @@ def _step_confirm(state: dict) -> dict:
     return {**state, "_job_kwargs": job_kwargs}
 
 
-def _run_wizard(book_path: Path, app_config) -> dict | None:
+def _run_wizard(book_path: Path, app_config, args) -> dict | None:
     """Run the interactive wizard using a step-stack state machine.
 
     Returns a kwargs dict suitable for client.add_job(), or None if the user
@@ -1373,6 +1385,7 @@ def _run_wizard(book_path: Path, app_config) -> dict | None:
     state: dict = {
         "_book_path": book_path,
         "_app_config": app_config,
+        "_args": args,
         # Defaults for step outputs
         "voice": app_config.default_voice,
         "speaker_voices": {},
@@ -1522,7 +1535,7 @@ def cmd_add(args) -> int:
 
         # Interactive wizard.
         app_config = _load_config(args)
-        job_kwargs = _run_wizard(book_path, app_config)
+        job_kwargs = _run_wizard(book_path, app_config, args)
         if job_kwargs is None:
             return 0  # User cancelled
 
@@ -1560,7 +1573,7 @@ def cmd_bare(args) -> int:
 
         # Interactive path.
         app_config = _load_config(args)
-        job_kwargs = _run_wizard(book_path, app_config)
+        job_kwargs = _run_wizard(book_path, app_config, args)
         if job_kwargs is None:
             return 0  # User cancelled
 
