@@ -82,7 +82,14 @@ def cmd_voices_fetch(args) -> None:
 
     console.print(f"Fetching voices from [bold]{hf_repo}[/bold] (task {task_id})…")
     with APIClient() as client:
-        final = client.poll_task(task_id, timeout=300.0)
+        try:
+            final = client.poll_task(task_id, timeout=300.0)
+        except TimeoutError:
+            console.print("[red]Timed out waiting for voice fetch to complete.[/red]")
+            sys.exit(1)
+        except Exception as exc:
+            console.print(f"[red]Voice fetch error: {exc}[/red]")
+            sys.exit(1)
 
     if final.get("status") == "failed":
         console.print(f"[red]Download failed: {final.get('error')}[/red]")
@@ -104,7 +111,14 @@ def cmd_voices_download(args) -> int:
 
     console.print("Downloading voices from HuggingFace…")
     with APIClient() as client:
-        final = client.poll_task(task_id, timeout=300.0)
+        try:
+            final = client.poll_task(task_id, timeout=300.0)
+        except TimeoutError:
+            console.print("[red]Timed out waiting for voice download to complete.[/red]")
+            return 1
+        except Exception as exc:
+            console.print(f"[red]Voice download error: {exc}[/red]")
+            return 1
 
     if final.get("status") == "failed":
         console.print(f"[red]Download failed: {final.get('error')}[/red]")
@@ -121,7 +135,8 @@ def cmd_voices_exclude(args) -> None:
         result = client.exclude_voice(voice_name)
     if result.get("warning"):
         console.print(f"[yellow]Warning: {result['warning']}[/yellow]")
-    console.print(f"[green]'{voice_name}' excluded from auto-assignment pool.[/green]")
+    else:
+        console.print(f"[green]'{voice_name}' excluded from auto-assignment pool.[/green]")
 
 
 def cmd_voices_include(args) -> None:
@@ -131,15 +146,8 @@ def cmd_voices_include(args) -> None:
         result = client.include_voice(voice_name)
     if result.get("warning"):
         console.print(f"[yellow]Warning: {result['warning']}[/yellow]")
-    console.print(f"[green]'{voice_name}' restored to auto-assignment pool.[/green]")
-
-
-def _sort_cast(speaker_voices: dict) -> list:
-    """Sort cast alphabetically with NARRATOR pinned last."""
-    return sorted(
-        speaker_voices.items(),
-        key=lambda kv: ("~" if kv[0] == "NARRATOR" else kv[0].lower()),
-    )
+    else:
+        console.print(f"[green]'{voice_name}' restored to auto-assignment pool.[/green]")
 
 
 def cmd_voices_cast(args) -> None:
@@ -193,7 +201,6 @@ def _preview_path(voice_name: str) -> Path:
 
 def cmd_voices_audition(args) -> None:
     """Synthesize a short voice preview and open it in the system audio player."""
-    import httpx
     import subprocess
     import tempfile
 
@@ -213,7 +220,14 @@ def cmd_voices_audition(args) -> None:
             f"Synthesizing preview for [bold]{voice_name}[/bold]: [dim]\"{preview_text}\"[/dim]"
         )
 
-        result = client.poll_task(task_id, timeout=120.0)
+        try:
+            result = client.poll_task(task_id, timeout=120.0)
+        except TimeoutError:
+            console.print("[red]Timed out waiting for audition to complete.[/red]")
+            return
+        except Exception as exc:
+            console.print(f"[red]Audition error: {exc}[/red]")
+            return
 
         if result["status"] == "failed":
             console.print(f"[red]Audition failed: {result.get('error')}[/red]")
@@ -221,16 +235,24 @@ def cmd_voices_audition(args) -> None:
 
         wav_url = client.get_audition_wav_url(task_id)
 
-    wav_data = httpx.get(wav_url).content
+    try:
+        import httpx as _httpx
+        wav_data = _httpx.get(wav_url, timeout=30.0)
+        wav_data.raise_for_status()
+        wav_bytes = wav_data.content
+    except Exception as exc:
+        console.print(f"[red]Could not download audio preview: {exc}[/red]")
+        return
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(wav_data)
+        f.write(wav_bytes)
         wav_path = f.name
 
     console.print(f"[green]Preview saved to {wav_path}[/green]")
 
     player = _player_command()
     try:
-        subprocess.run([player, wav_path], check=False)
+        subprocess.Popen([player, wav_path])
     except Exception as exc:
         console.print(
             f"[yellow]Could not open system player ({exc}). Play manually: {wav_path}[/yellow]"
@@ -247,7 +269,6 @@ __all__ = [
     "cmd_voices_audition",
     "cmd_voices_tui",
     "DEFAULT_AUDITION_TEXT",
-    "_sort_cast",
     "_player_command",
     "_preview_path",
     "_tui_execute",

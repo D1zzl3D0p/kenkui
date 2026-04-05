@@ -112,12 +112,35 @@ class TestVoicesCast:
         with patch("kenkui.cli.voices.APIClient", return_value=api_cm):
             cmd_voices_cast(Namespace(job_id="abc12345"))
 
-    def test_narrator_sorted_last(self):
-        from kenkui.cli.voices import _sort_cast
+    def test_narrator_sorted_last(self, monkeypatch):
+        """NARRATOR entry should appear last in the cast table output."""
+        from kenkui.cli.voices import cmd_voices_cast
+        from argparse import Namespace
 
-        voices = {"NARRATOR": "cosette", "Rand": "alba", "Mat": "jean"}
-        keys = [k for k, _ in _sort_cast(voices)]
-        assert keys[-1] == "NARRATOR"
+        cast_data = {
+            "job_id": "sort-test",
+            "book_name": "Sort Test",
+            "narration_mode": "multi",
+            "cast": [
+                {"character_id": "NARRATOR", "display_name": "Narrator", "voice_name": "cosette"},
+                {"character_id": "Rand", "display_name": "Rand", "voice_name": "alba"},
+                {"character_id": "Mat", "display_name": "Mat", "voice_name": "jean"},
+            ],
+        }
+        rows = []
+        api_cm = _make_api_client(get_queue_cast=cast_data)
+        # Capture the order by patching the table's add_row
+        with patch("kenkui.cli.voices.APIClient", return_value=api_cm):
+            import kenkui.cli.voices as _v
+            orig_table_cls = _v.Table
+            class CapturingTable(orig_table_cls):
+                def add_row(self, *args, **kwargs):
+                    rows.append(args[0])
+                    return super().add_row(*args, **kwargs)
+            monkeypatch.setattr(_v, "Table", CapturingTable)
+            cmd_voices_cast(Namespace(job_id="sort-test"))
+
+        assert rows[-1] == "Narrator", f"Expected NARRATOR last, got order: {rows}"
 
 
 class TestVoicesAudition:
@@ -139,8 +162,10 @@ class TestVoicesAudition:
         opened = []
         import httpx
 
-        monkeypatch.setattr(httpx, "get", lambda url: MagicMock(content=wav_bytes))
-        monkeypatch.setattr("subprocess.run", lambda cmd, **kw: opened.append(cmd))
+        mock_response = MagicMock(content=wav_bytes)
+        mock_response.raise_for_status.return_value = None
+        monkeypatch.setattr(httpx, "get", lambda url, **kw: mock_response)
+        monkeypatch.setattr("subprocess.Popen", lambda cmd: opened.append(cmd))
 
         with patch("kenkui.cli.voices.APIClient", return_value=api_cm):
             cmd_voices_audition(self._make_args())
@@ -173,8 +198,10 @@ class TestVoicesAudition:
         )
 
         import httpx
-        monkeypatch.setattr(httpx, "get", lambda url: MagicMock(content=wav_bytes))
-        monkeypatch.setattr("subprocess.run", lambda cmd, **kw: None)
+        mock_response = MagicMock(content=wav_bytes)
+        mock_response.raise_for_status.return_value = None
+        monkeypatch.setattr(httpx, "get", lambda url, **kw: mock_response)
+        monkeypatch.setattr("subprocess.Popen", lambda cmd: None)
 
         with patch("kenkui.cli.voices.APIClient", return_value=api_cm):
             cmd_voices_audition(self._make_args(text="Hello world"))
@@ -264,7 +291,7 @@ class TestVoicesTUI:
 
         wav_bytes = b"RIFF\x00\x00\x00\x00WAVEfmt "
         import httpx
-        monkeypatch.setattr(httpx, "get", lambda url: MagicMock(content=wav_bytes))
+        monkeypatch.setattr(httpx, "get", lambda url, **kw: MagicMock(content=wav_bytes))
         monkeypatch.setattr("subprocess.run", lambda cmd, **kw: None)
 
         api_cm = _make_api_client(
