@@ -452,23 +452,23 @@ def parse_book(request: BookParseRequest):
     server = get_server()
     try:
         result = _parse_book(request.ebook_path, server.book_cache)
+        return BookParseResponse(
+            book_hash=result.book_hash,
+            metadata=result.metadata,
+            chapters=[ChapterSummaryModel(**{
+                "index": c.index, "title": c.title, "word_count": c.word_count,
+                "paragraph_count": c.paragraph_count, "toc_index": c.toc_index,
+                "tags": {"is_toc": c.tags.is_toc, "is_foreword": c.tags.is_foreword,
+                         "is_content": c.tags.is_content, "is_appendix": c.tags.is_appendix,
+                         "is_short": c.tags.is_short},
+            }) for c in result.chapters],
+            total_chapters=result.total_chapters,
+            total_word_count=result.total_word_count,
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return BookParseResponse(
-        book_hash=result.book_hash,
-        metadata=result.metadata,
-        chapters=[ChapterSummaryModel(**{
-            "index": c.index, "title": c.title, "word_count": c.word_count,
-            "paragraph_count": c.paragraph_count, "toc_index": c.toc_index,
-            "tags": {"is_toc": c.tags.is_toc, "is_foreword": c.tags.is_foreword,
-                     "is_content": c.tags.is_content, "is_appendix": c.tags.is_appendix,
-                     "is_short": c.tags.is_short},
-        }) for c in result.chapters],
-        total_chapters=result.total_chapters,
-        total_word_count=result.total_word_count,
-    )
 
 
 @app.post("/books/chapters/filter", response_model=ChapterFilterResponse)
