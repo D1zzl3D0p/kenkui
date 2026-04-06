@@ -550,11 +550,11 @@ def include_voice(name: str):
 @app.post("/voices/audition", response_model=TaskResponse, status_code=202)
 def audition_voice(request: AuditionRequest):
     """Start async voice preview synthesis. Returns a task_id to poll."""
-    from ..services.voice_service import synthesize_preview
+    from ..services.voice_service import audition_voice as _audition_voice
     from ..server.tasks import TaskType
     server = get_server()
     task = server.task_runner.submit(
-        TaskType.AUDITION, synthesize_preview,
+        TaskType.AUDITION, _audition_voice,
         voice_name=request.voice_name,
         text=request.text,
     )

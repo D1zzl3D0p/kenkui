@@ -11,13 +11,13 @@ from kenkui.services.voice_service import (
     ExcludeResult,
     IncludeResult,
     VoiceInfo,
+    audition_voice,
     exclude_voice,
     gender_from_pronoun,
     get_voice,
     include_voice,
     list_voices,
     sort_cast,
-    synthesize_preview,
     top_gender_matched_voice,
 )
 from kenkui.voice_registry import VoiceMetadata
@@ -373,12 +373,12 @@ def test_sort_cast_alphabetical_order():
 
 
 # ---------------------------------------------------------------------------
-# synthesize_preview — skipped (requires pocket_tts model)
+# audition_voice — skipped (requires pocket_tts model)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skip(reason="requires pocket_tts model — integration test only")
-def test_synthesize_preview_creates_wav_file():
-    result = synthesize_preview("alba", text="Hello world.")
+def test_audition_voice_creates_wav_file():
+    result = audition_voice("alba", text="Hello world.")
     assert result.audio_path.endswith(".wav")
     assert result.duration_ms > 0

@@ -5,7 +5,7 @@ Public API:
   get_voice(name, config_path) -> VoiceInfo | None
   exclude_voice(name, config_path) -> ExcludeResult
   include_voice(name, config_path) -> IncludeResult
-  synthesize_preview(voice_name, text, config_path, progress_callback) -> AudioPreviewResult
+  audition_voice(voice_name, text, config_path, progress_callback) -> AudioPreviewResult
   gender_from_pronoun(pronoun) -> str
   top_gender_matched_voice(characters, excluded, default_voice) -> str
   sort_cast(speaker_voices) -> list[tuple[str, str]]
@@ -174,7 +174,7 @@ def include_voice(name: str, config_path: str | None = None) -> IncludeResult:
     return IncludeResult(excluded_voices=list(config.excluded_voices))
 
 
-def synthesize_preview(
+def audition_voice(
     voice_name: str,
     text: str | None = None,
     config_path: str | None = None,
@@ -526,7 +526,7 @@ __all__ = [
     "get_voice",
     "exclude_voice",
     "include_voice",
-    "synthesize_preview",
+    "audition_voice",
     "gender_from_pronoun",
     "top_gender_matched_voice",
     "sort_cast",
