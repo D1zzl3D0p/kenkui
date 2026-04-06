@@ -68,6 +68,17 @@ def _is_scene_break(text: str) -> bool:
     return not stripped or bool(_SCENE_BREAK_RE.match(stripped))
 
 
+def _load_spacy_model():
+    """Load en_core_web_sm, downloading it automatically if not installed."""
+    import spacy
+    try:
+        return spacy.load("en_core_web_sm")
+    except OSError:
+        from spacy.cli import download as _spacy_download
+        _spacy_download("en_core_web_sm")
+        return spacy.load("en_core_web_sm")
+
+
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
@@ -238,14 +249,7 @@ def run_fast_scan(
 
     # Load spaCy
     _cb("Loading spaCy language model…")
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        raise RuntimeError(
-            "spaCy model 'en_core_web_sm' not found. "
-            "Install it with: uv pip install https://github.com/explosion/spacy-models"
-            "/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-        )
+    nlp = _load_spacy_model()
 
     # Stage 2: Build character roster
     _cb("Building character roster…")
@@ -347,14 +351,7 @@ def run_attribution(
 
     # Load spaCy
     _cb("Loading spaCy language model…")
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        raise RuntimeError(
-            "spaCy model 'en_core_web_sm' not found. "
-            "Install it with: uv pip install https://github.com/explosion/spacy-models"
-            "/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-        )
+    nlp = _load_spacy_model()
 
     full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
 
