@@ -1,10 +1,10 @@
-"""Download service wrapping voices/download.py."""
+"""Download service wrapping voice_download.py."""
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from kenkui.voices.download import download_voices, fetch_uncompiled_voices, _VOICES_LOCAL_DIR
+from kenkui.voice_download import download_voices, fetch_uncompiled_voices, _VOICES_LOCAL_DIR
 
 
 @dataclass

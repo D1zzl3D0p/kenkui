@@ -1,4 +1,4 @@
-"""Tests for services/download_service.py and voices/download.py progress callbacks."""
+"""Tests for services/download_service.py and voice_download.py progress callbacks."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch, call
@@ -25,7 +25,7 @@ def test_download_compiled_success(tmp_path):
 
 def test_download_compiled_failure(tmp_path):
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("kenkui.services.download_service.download_voices", side_effect=RuntimeError("HF error")),
     ):
         from kenkui.services.download_service import download_compiled
@@ -37,7 +37,7 @@ def test_download_compiled_failure(tmp_path):
 
 def test_download_compiled_passes_force(tmp_path):
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("kenkui.services.download_service.download_voices") as mock_dv,
     ):
         from kenkui.services.download_service import download_compiled
@@ -49,7 +49,7 @@ def test_download_compiled_passes_force(tmp_path):
 def test_download_compiled_passes_callback(tmp_path):
     cb = MagicMock()
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("kenkui.services.download_service.download_voices") as mock_dv,
     ):
         from kenkui.services.download_service import download_compiled
@@ -60,7 +60,7 @@ def test_download_compiled_passes_callback(tmp_path):
 
 def test_fetch_uncompiled_success(tmp_path):
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("kenkui.services.download_service.fetch_uncompiled_voices") as mock_fuv,
     ):
         from kenkui.services.download_service import fetch_uncompiled
@@ -73,7 +73,7 @@ def test_fetch_uncompiled_success(tmp_path):
 
 def test_fetch_uncompiled_failure(tmp_path):
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch(
             "kenkui.services.download_service.fetch_uncompiled_voices",
             side_effect=RuntimeError("network error"),
@@ -88,7 +88,7 @@ def test_fetch_uncompiled_failure(tmp_path):
 
 def test_fetch_uncompiled_passes_repo_and_patterns(tmp_path):
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("kenkui.services.download_service.fetch_uncompiled_voices") as mock_fuv,
     ):
         from kenkui.services.download_service import fetch_uncompiled
@@ -98,7 +98,7 @@ def test_fetch_uncompiled_passes_repo_and_patterns(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# voices/download.py — progress callback integration tests
+# voice_download.py — progress callback integration tests
 # ---------------------------------------------------------------------------
 
 
@@ -111,11 +111,11 @@ def test_download_voices_callback_called(tmp_path):
 
     mock_registry = MagicMock()
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("huggingface_hub.snapshot_download"),
-        patch("kenkui.voices.download.get_registry", return_value=mock_registry),
+        patch("kenkui.voice_download.get_registry", return_value=mock_registry),
     ):
-        from kenkui.voices import download as dl
+        from kenkui import voice_download as dl
         dl.download_voices(progress_callback=cb)
 
     percents = [p for p, _ in calls]
@@ -131,11 +131,11 @@ def test_download_voices_no_callback_is_silent(tmp_path):
     """download_voices() with no callback should not raise."""
     mock_registry = MagicMock()
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("huggingface_hub.snapshot_download"),
-        patch("kenkui.voices.download.get_registry", return_value=mock_registry),
+        patch("kenkui.voice_download.get_registry", return_value=mock_registry),
     ):
-        from kenkui.voices import download as dl
+        from kenkui import voice_download as dl
         dl.download_voices()  # should not raise
 
 
@@ -148,11 +148,11 @@ def test_fetch_uncompiled_voices_callback_called(tmp_path):
 
     mock_registry = MagicMock()
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("huggingface_hub.snapshot_download"),
-        patch("kenkui.voices.download.get_registry", return_value=mock_registry),
+        patch("kenkui.voice_download.get_registry", return_value=mock_registry),
     ):
-        from kenkui.voices import download as dl
+        from kenkui import voice_download as dl
         dl.fetch_uncompiled_voices(repo_id="org/repo", patterns=["*.wav"], progress_callback=cb)
 
     percents = [p for p, _ in calls]
@@ -163,11 +163,11 @@ def test_fetch_uncompiled_voices_uses_default_repo(tmp_path):
     """fetch_uncompiled_voices() without repo_id uses HF_VOICES_REPO."""
     mock_registry = MagicMock()
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("huggingface_hub.snapshot_download") as mock_snap,
-        patch("kenkui.voices.download.get_registry", return_value=mock_registry),
+        patch("kenkui.voice_download.get_registry", return_value=mock_registry),
     ):
-        from kenkui.voices import download as dl
+        from kenkui import voice_download as dl
         dl.fetch_uncompiled_voices()
 
     call_kwargs = mock_snap.call_args
@@ -179,11 +179,11 @@ def test_fetch_uncompiled_voices_passes_patterns(tmp_path):
     """fetch_uncompiled_voices() forwards allow_patterns when provided."""
     mock_registry = MagicMock()
     with (
-        patch("kenkui.voices.download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
         patch("huggingface_hub.snapshot_download") as mock_snap,
-        patch("kenkui.voices.download.get_registry", return_value=mock_registry),
+        patch("kenkui.voice_download.get_registry", return_value=mock_registry),
     ):
-        from kenkui.voices import download as dl
+        from kenkui import voice_download as dl
         dl.fetch_uncompiled_voices(patterns=["*.wav", "*.pt"])
 
     call_kwargs = mock_snap.call_args

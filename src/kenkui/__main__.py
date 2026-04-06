@@ -315,7 +315,7 @@ def _ensure_voices() -> None:
     """Download voices on first run if not present."""
     from rich.console import Console
     from rich.panel import Panel
-    from .voices.download import voices_are_present, download_voices
+    from .voice_download import voices_are_present, download_voices
 
     console = Console()
     try:

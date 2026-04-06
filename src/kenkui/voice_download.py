@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from ..voice_registry import get_registry
+from .voice_registry import get_registry
 
 HF_VOICES_REPO = "D1zzl3D0p/kenkui-voices"
 HF_REPO_TYPE = "dataset"
