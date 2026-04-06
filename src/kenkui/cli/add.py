@@ -397,7 +397,7 @@ def _run_fast_scan_wizard(
         try:
             result = client.poll_task(
                 task_id,
-                timeout=300.0,
+                timeout=1800.0,
                 progress_callback=lambda pct, msg: prog.update(prog_task, description=msg or "Scanning characters…"),
             )
             prog.update(prog_task, description="Character scan complete")

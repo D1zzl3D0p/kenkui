@@ -90,7 +90,6 @@ _BOOK_ID = "kenkui"
 def build_roster_from_booknlp(
     text: str,
     model_size: str = "small",
-    max_words: int = 30_000,
 ) -> "BookNLPRosterData | None":
     """Run BookNLP on *text* and return a ``CharacterRoster``.
 
@@ -104,10 +103,6 @@ def build_roster_from_booknlp(
         text:       Full book text as a single string.
         model_size: BookNLP model size — ``"small"`` (CPU-friendly) or
                     ``"big"`` (more accurate, requires GPU).
-        max_words:  Truncate *text* to this many words before processing.
-                    Limits BERT processing time on large books; the leading
-                    portion of a novel contains the majority of named characters.
-                    Defaults to 30,000 words (~60 pages).
 
     Returns:
         ``CharacterRoster`` or ``None``.
@@ -117,15 +112,6 @@ def build_roster_from_booknlp(
     except ImportError:
         logger.info("build_roster_from_booknlp: booknlp not installed; skipping")
         return None
-
-    if max_words:
-        words = text.split()
-        if len(words) > max_words:
-            text = " ".join(words[:max_words])
-            logger.info(
-                "build_roster_from_booknlp: truncated to %d words for processing speed",
-                max_words,
-            )
 
     from .entities import _cluster_by_heuristic
     from .models import AliasGroup, CharacterRoster
