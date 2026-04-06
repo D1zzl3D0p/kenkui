@@ -1,5 +1,7 @@
 """FastAPI routes for the kenkui server."""
 
+import dataclasses
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -455,13 +457,11 @@ def parse_book(request: BookParseRequest):
         return BookParseResponse(
             book_hash=result.book_hash,
             metadata=result.metadata,
-            chapters=[ChapterSummaryModel(**{
-                "index": c.index, "title": c.title, "word_count": c.word_count,
-                "paragraph_count": c.paragraph_count, "toc_index": c.toc_index,
-                "tags": {"is_toc": c.tags.is_toc, "is_foreword": c.tags.is_foreword,
-                         "is_content": c.tags.is_content, "is_appendix": c.tags.is_appendix,
-                         "is_short": c.tags.is_short},
-            }) for c in result.chapters],
+            chapters=[ChapterSummaryModel(
+                index=c.index, title=c.title, word_count=c.word_count,
+                paragraph_count=c.paragraph_count, toc_index=c.toc_index,
+                tags=dataclasses.asdict(c.tags),
+            ) for c in result.chapters],
             total_chapters=result.total_chapters,
             total_word_count=result.total_word_count,
         )
@@ -484,13 +484,11 @@ def filter_chapters(request: ChapterFilterRequest):
         included_indices=result.included_indices,
         chapter_count=result.chapter_count,
         estimated_word_count=result.estimated_word_count,
-        chapters=[ChapterSummaryModel(**{
-            "index": c.index, "title": c.title, "word_count": c.word_count,
-            "paragraph_count": c.paragraph_count, "toc_index": c.toc_index,
-            "tags": {"is_toc": c.tags.is_toc, "is_foreword": c.tags.is_foreword,
-                     "is_content": c.tags.is_content, "is_appendix": c.tags.is_appendix,
-                     "is_short": c.tags.is_short},
-        }) for c in result.chapters],
+        chapters=[ChapterSummaryModel(
+            index=c.index, title=c.title, word_count=c.word_count,
+            paragraph_count=c.paragraph_count, toc_index=c.toc_index,
+            tags=dataclasses.asdict(c.tags),
+        ) for c in result.chapters],
     )
 
 
