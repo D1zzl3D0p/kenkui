@@ -397,13 +397,9 @@ def _run_fast_scan_wizard(
         try:
             result = client.poll_task(
                 task_id,
-                timeout=1800.0,
                 progress_callback=lambda pct, msg: prog.update(prog_task, description=msg or "Scanning characters…"),
             )
             prog.update(prog_task, description="Character scan complete")
-        except TimeoutError:
-            console.print("[red]Fast scan timed out.[/red]")
-            return None
         except Exception as exc:
             console.print(f"[red]Character scan failed: {exc}[/red]")
             return None
@@ -720,8 +716,8 @@ def _prompt_multivoice_character_voices(
 
 
 def _run_series_setup(
-    fast_result,
-    mode: str,
+    fast_result=None,
+    mode: str = "multi",
     prompts: "list | None" = None,
     _roster_candidates: "list | None" = None,
     client=None,
@@ -757,10 +753,6 @@ def _run_series_setup(
         console.print()
         wants_series = _wizard_execute(inquirer.confirm(
             message="Is this book part of a series?",
-            instruction=(
-                "(Say yes to reuse character voices across books. "
-                "Skip if converting a standalone book or not planning to process the full series.)"
-            ),
             default=False,
         ))
         if not wants_series:
@@ -812,35 +804,33 @@ def _run_series_setup(
                 manifest = load_series(chosen_slug)
         else:
             candidates = list_roster_candidates()
-            if not candidates:
-                console.print("[yellow]No previously processed books found. Starting a fresh series.[/yellow]")
-                series_name = _wizard_execute(inquirer.text(
-                    message="Series name:",
-                    instruction="(This name identifies the series in future books.)",
-                )).strip()
+            seed_idx: int | None = None
+            if candidates:
+                candidate_choices = [
+                    {"name": "[ Fresh start — no predecessor ]", "value": -1},
+                ] + [
+                    {"name": c["title"] or c["hash"][:8], "value": i}
+                    for i, c in enumerate(candidates)
+                ]
+                seed_idx = _wizard_execute(inquirer.select(
+                    message="Seed from a previously processed book? (optional)",
+                    choices=candidate_choices,
+                ))
+
+            series_name = _wizard_execute(inquirer.text(
+                message="Series name:",
+                default=candidates[seed_idx]["title"] if seed_idx is not None and seed_idx >= 0 else "",
+            )).strip()
+
+            if seed_idx is not None and seed_idx >= 0:
+                manifest = build_manifest_from_predecessor(candidates[seed_idx], series_name)
+            else:
                 manifest = SeriesManifest(
                     name=series_name,
                     slug=slugify(series_name),
                     updated_at="",
                     characters=[],
                 )
-            else:
-                candidate_choices = [
-                    {"name": c["title"] or c["hash"][:8], "value": i}
-                    for i, c in enumerate(candidates)
-                ]
-                idx = _wizard_execute(inquirer.select(
-                    message="Seed the series from which previously processed book?",
-                    instruction="(Pick the most recent or most complete book in the series.)",
-                    choices=candidate_choices,
-                ))
-                candidate = candidates[idx]
-                series_name = _wizard_execute(inquirer.text(
-                    message="Series name:",
-                    instruction="(This name identifies the series in future books. You can use any name you like.)",
-                    default=candidate.get("title", ""),
-                )).strip()
-                manifest = build_manifest_from_predecessor(candidate, series_name)
 
         save_series(manifest)
 
@@ -854,9 +844,9 @@ def _run_series_setup(
         chosen = next(_p, None)
         if chosen == "new":
             candidates = _roster_candidates or list_roster_candidates()
-            idx = next(_p, 0)
+            idx = next(_p, -1)
             series_name = next(_p, "Test Series")
-            if candidates:
+            if candidates and idx >= 0:
                 manifest = build_manifest_from_predecessor(candidates[idx], series_name)
             else:
                 manifest = SeriesManifest(
@@ -872,7 +862,10 @@ def _run_series_setup(
             return None, {}, set()
         save_series(manifest)
 
-    inherited_voices, pinned = match_characters(fast_result.characters, fast_result, manifest)
+    if fast_result is not None:
+        inherited_voices, pinned = match_characters(fast_result.characters, fast_result, manifest)
+    else:
+        inherited_voices, pinned = {}, set()
     return manifest, inherited_voices, pinned
 
 
@@ -1217,32 +1210,23 @@ def _step_voice_setup(state: dict) -> dict:
                         )
 
             if narration_mode == "multi":
-                from ..nlp import CACHE_DIR, book_hash
-                fast_result = _run_fast_scan_wizard(
-                    client,
-                    book_path,
-                    app_config.nlp_model,
+                # Pick narrator fallback voice upfront; characters are assigned
+                # automatically during processing (deferred cast assignment).
+                console.print()
+                console.print("[bold]Select fallback voice for NARRATOR:[/bold]")
+                narrator_voice = _prompt_voice(
+                    default=app_config.default_voice,
+                    message="NARRATOR fallback voice:",
+                    client=client,
                 )
-                if fast_result is None:
-                    console.print("[yellow]Falling back to single-voice mode.[/yellow]")
-                    narration_mode = "single"
-                else:
-                    series_manifest, inherited_voices, pinned = _run_series_setup(
-                        fast_result=fast_result,
-                        mode="multi",
-                        client=client,
-                    )
-                    speaker_voices = _prompt_multivoice_character_voices(
-                        fast_result,
-                        app_config.default_voice,
-                        args=args,
-                        client=client,
-                        inherited_voices=inherited_voices,
-                        pinned=pinned,
-                        series_name=series_manifest.name if series_manifest else None,
-                        excluded_voices=app_config.excluded_voices,
-                    )
-                    roster_cache_path = str(CACHE_DIR / f"{book_hash(book_path)}-roster.json")
+                _check_hf_auth(narrator_voice, args)
+                speaker_voices = {"NARRATOR": narrator_voice}
+
+                series_manifest, _, _ = _run_series_setup(
+                    fast_result=None,
+                    mode="multi",
+                    client=client,
+                )
 
     elif mode_val == "chapter":
         narration_mode = "single"
@@ -1272,10 +1256,8 @@ def _step_voice_setup(state: dict) -> dict:
         "roster_cache_path": roster_cache_path,
         "narration_mode": narration_mode,
         "mode": mode_val,
-        "_fast_result": fast_result if narration_mode == "multi" else None,
+        "series_slug": series_manifest.slug if series_manifest is not None else None,
         "_series_manifest": series_manifest if narration_mode == "multi" else None,
-        "_inherited_voices": inherited_voices if narration_mode == "multi" else {},
-        "_pinned": pinned if narration_mode == "multi" else set(),
     }
 
 
@@ -1314,6 +1296,7 @@ def _step_confirm(state: dict) -> dict:
     quality_overrides: dict = state["quality_overrides"]
     output_dir: str = state["output_dir"]
     roster_cache_path = state["roster_cache_path"]
+    series_slug = state.get("series_slug")
 
     console.print()
     summary = Table(title="Job Summary", show_header=False, box=None)
@@ -1329,9 +1312,16 @@ def _step_confirm(state: dict) -> dict:
     display_mode = mode_val if mode_val != "chapter" else "chapter-voice"
     summary.add_row("Mode", display_mode)
     summary.add_row("Narrator voice", voice)
-    if narration_mode == "multi" and speaker_voices:
+    if narration_mode == "multi":
         non_narrator = {k: v for k, v in speaker_voices.items() if k != "NARRATOR"}
-        summary.add_row("Character voices", f"{len(non_narrator)} assigned")
+        if non_narrator:
+            summary.add_row("Character voices", f"{len(non_narrator)} assigned")
+        else:
+            summary.add_row("Character voices", "Auto-assign during processing")
+        if series_slug:
+            series_manifest = state.get("_series_manifest")
+            series_label = series_manifest.name if series_manifest else series_slug
+            summary.add_row("Series", series_label)
     if chapter_voices:
         summary.add_row("Chapter voices", f"{len(chapter_voices)} chapters assigned")
     if quality_overrides:
@@ -1347,32 +1337,6 @@ def _step_confirm(state: dict) -> dict:
         console.print("Cancelled.")
         return {**state, "_cancelled": True}
 
-    # Write back series manifest with updated/new character voices
-    series_manifest = state.get("_series_manifest")
-    if series_manifest is not None:
-        fast_result = state.get("_fast_result")
-        pinned = state.get("_pinned") or set()
-        if fast_result is not None:
-            from ..series import save_series, update_manifest
-            updated = update_manifest(
-                series_manifest,
-                fast_result.characters,
-                fast_result,
-                speaker_voices,
-                pinned,
-            )
-            save_series(updated)
-            inherited_count = len(pinned)
-            modified_count = sum(
-                1 for cid in pinned
-                if speaker_voices.get(cid) != state.get("_inherited_voices", {}).get(cid)
-            )
-            if inherited_count > 0:
-                msg = f"{inherited_count} voice(s) inherited from '{series_manifest.name}'"
-                if modified_count:
-                    msg += f", {modified_count} modified"
-                console.print(f"[dim]{msg}[/dim]")
-
     job_kwargs = dict(
         ebook_path=str(book_path),
         voice=voice,
@@ -1383,6 +1347,7 @@ def _step_confirm(state: dict) -> dict:
         annotated_chapters_path=None,
         roster_cache_path=roster_cache_path,
         chapter_voices=chapter_voices or None,
+        series_slug=series_slug,
         **quality_overrides,
     )
     return {**state, "_job_kwargs": job_kwargs}
@@ -1406,10 +1371,8 @@ def _run_wizard(book_path: Path, app_config, args) -> dict | None:
         "chapter_voices": {},
         "roster_cache_path": None,
         "quality_overrides": {},
+        "series_slug": None,
         "_series_manifest": None,
-        "_fast_result": None,
-        "_inherited_voices": {},
-        "_pinned": set(),
     }
 
     steps = [

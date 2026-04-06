@@ -93,6 +93,7 @@ class APIClient:
         annotated_chapters_path: str | None = None,
         chapter_voices: dict | None = None,
         roster_cache_path: str | None = None,
+        series_slug: str | None = None,
         job_temp: float | None = None,
         job_lsd_decode_steps: int | None = None,
         job_noise_clamp: float | None = None,
@@ -121,6 +122,8 @@ class APIClient:
             payload["chapter_voices"] = chapter_voices
         if roster_cache_path:
             payload["roster_cache_path"] = roster_cache_path
+        if series_slug:
+            payload["series_slug"] = series_slug
         # Per-job quality overrides — only include when explicitly set
         for key, val in {
             "job_temp": job_temp,
@@ -296,14 +299,14 @@ class APIClient:
         task_id: str,
         *,
         interval: float = 0.5,
-        timeout: float = 300.0,
+        timeout: float | None = None,
         progress_callback=None,
     ) -> dict:
-        """Poll a task until it completes or times out."""
+        """Poll a task until it completes. If *timeout* is None, poll indefinitely."""
         import time
 
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.time() + timeout if timeout is not None else None
+        while deadline is None or time.time() < deadline:
             task = self.get_task(task_id)
             if progress_callback:
                 progress_callback(task.get("progress", 0), task.get("message", ""))
