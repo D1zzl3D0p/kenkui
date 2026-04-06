@@ -454,6 +454,8 @@ def parse_book(request: BookParseRequest):
         result = _parse_book(request.ebook_path, server.book_cache)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return BookParseResponse(
         book_hash=result.book_hash,
         metadata=result.metadata,
