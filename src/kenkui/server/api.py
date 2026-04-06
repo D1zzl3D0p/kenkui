@@ -152,6 +152,20 @@ class SuggestCastResponse(BaseModel):
     warnings: list[str]
 
 
+class OkResponse(BaseModel):
+    status: str = "ok"
+    message: str = ""
+
+
+class VoiceExcludeResponse(BaseModel):
+    excluded_voices: list[str]
+    warning: str | None = None
+
+
+class VoiceIncludeResponse(BaseModel):
+    excluded_voices: list[str]
+
+
 # --- Tasks ---
 class TaskResponse(BaseModel):
     task_id: str
@@ -320,7 +334,7 @@ def get_job(job_id: str):
     return _job_to_response(item)
 
 
-@app.delete("/queue/{job_id}")
+@app.delete("/queue/{job_id}", response_model=OkResponse)
 def remove_job(job_id: str):
     """Remove a job from the queue."""
     server = get_server()
@@ -331,7 +345,7 @@ def remove_job(job_id: str):
             status_code=400, detail="Cannot remove job - it may be currently processing"
         )
 
-    return {"status": "removed", "job_id": job_id}
+    return OkResponse()
 
 
 @app.post("/queue/{job_id}/start")
@@ -412,23 +426,23 @@ def get_config():
     return ConfigResponse(config=server.app_config.to_dict())
 
 
-@app.put("/config")
+@app.put("/config", response_model=OkResponse)
 def update_config(config_data: dict):
     """Update the app configuration."""
     server = get_server()
     config = AppConfig.from_dict(config_data)
     server.app_config = config
 
-    return {"status": "updated", "config": config.to_dict()}
+    return OkResponse()
 
 
-@app.delete("/queue")
+@app.delete("/queue", response_model=OkResponse)
 def clear_queue():
     """Clear all jobs from the queue."""
     server = get_server()
     server.clear_all_jobs()
 
-    return {"status": "cleared"}
+    return OkResponse()
 
 
 @app.post("/books/parse", response_model=BookParseResponse)
@@ -531,20 +545,20 @@ def get_voice(name: str):
     return VoiceResponse(**voice.__dict__)
 
 
-@app.post("/voices/{name}/exclude")
+@app.post("/voices/{name}/exclude", response_model=VoiceExcludeResponse)
 def exclude_voice(name: str):
     """Exclude a voice from the random pool."""
     from ..services.voice_service import exclude_voice as _exclude_voice
     result = _exclude_voice(name)
-    return {"excluded_voices": result.excluded_voices, "warning": result.warning}
+    return VoiceExcludeResponse(excluded_voices=result.excluded_voices, warning=result.warning)
 
 
-@app.delete("/voices/{name}/exclude")
+@app.delete("/voices/{name}/exclude", response_model=VoiceIncludeResponse)
 def include_voice(name: str):
     """Re-include a voice in the random pool."""
     from ..services.voice_service import include_voice as _include_voice
     result = _include_voice(name)
-    return {"excluded_voices": result.excluded_voices}
+    return VoiceIncludeResponse(excluded_voices=result.excluded_voices)
 
 
 @app.post("/voices/audition", response_model=TaskResponse, status_code=202)
@@ -616,10 +630,10 @@ def get_task(task_id: str):
 
 
 @app.get("/series", response_model=SeriesListResponse)
-def list_series_route():
+def list_series():
     """List all series manifests."""
-    from ..services.series_service import list_series as _list_series
-    result = _list_series()
+    from ..services import series_service as _series_svc
+    result = _series_svc.list_series()
     return SeriesListResponse(
         series=[
             SeriesModel(
@@ -643,11 +657,11 @@ def list_series_route():
 
 
 @app.get("/series/{slug}", response_model=SeriesModel)
-def get_series_route(slug: str):
+def get_series(slug: str):
     """Get a single series manifest by slug."""
-    from ..services.series_service import load_series as _load_series
+    from ..services import series_service as _series_svc
     try:
-        entry = _load_series(slug)
+        entry = _series_svc.load_series(slug)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Series not found: {slug}")
     return SeriesModel(
@@ -666,14 +680,14 @@ def get_series_route(slug: str):
     )
 
 
-@app.delete("/series/{slug}")
-def delete_series_route(slug: str):
+@app.delete("/series/{slug}", response_model=OkResponse)
+def delete_series(slug: str):
     """Delete a series manifest by slug."""
-    from ..services.series_service import delete_series as _delete_series
-    found = _delete_series(slug)
+    from ..services import series_service as _series_svc
+    found = _series_svc.delete_series(slug)
     if not found:
         raise HTTPException(status_code=404, detail=f"Series not found: {slug}")
-    return {"status": "deleted", "slug": slug}
+    return OkResponse()
 
 
 @app.get("/auth/huggingface", response_model=HFAuthResponse)

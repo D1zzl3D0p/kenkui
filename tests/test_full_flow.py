@@ -191,7 +191,7 @@ class TestConfigEndpoints:
         response = client.put("/config", json=new_config)
         assert response.status_code == 200
         data = response.json()
-        assert data["config"]["workers"] == 8
+        assert data["status"] == "ok"
 
 
 if __name__ == "__main__":
