@@ -15,7 +15,7 @@ import importlib.metadata
 
 from .chapter_classifier import ChapterClassifier, ChapterTags
 from .chapter_filter import ChapterFilter, FilterOperation, FilterPreset
-from .helpers import get_bundled_voices
+from .voice_registry import get_bundled_voices
 from .huggingface_auth import (
     check_voice_access,
     ensure_huggingface_access,

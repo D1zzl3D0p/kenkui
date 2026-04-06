@@ -325,11 +325,21 @@ def get_registry() -> VoiceRegistry:
     return _registry
 
 
+def get_bundled_voices() -> list[str]:
+    """Return names of all compiled + uncompiled voices, sorted alphabetically."""
+    return sorted(
+        v.name
+        for v in get_registry().voices
+        if v.source in ("compiled", "uncompiled")
+    )
+
+
 __all__ = [
     "BUILTIN_VOICE_NAMES",
     "VoiceMetadata",
     "VoiceRegistry",
     "get_registry",
+    "get_bundled_voices",
     "parse_compiled_filename",
     "parse_uncompiled_filename",
 ]
