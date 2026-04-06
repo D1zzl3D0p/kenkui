@@ -737,12 +737,9 @@ def multivoice_status():
     spacy_ok = False
     spacy_model = None
     try:
-        import spacy
-        server = get_server()
-        model_name = server.app_config.nlp_model or "en_core_web_trf"
-        spacy.load(model_name)
-        spacy_ok = True
-        spacy_model = model_name
+        import spacy.util
+        spacy_ok = spacy.util.is_package("en_core_web_sm")
+        spacy_model = "en_core_web_sm" if spacy_ok else None
     except Exception:
         pass
 
