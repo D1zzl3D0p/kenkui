@@ -526,6 +526,14 @@ wheels = [
 ]
 
 [[package]]
+name = "en-core-web-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.135.1"
 source = { registry = "https://pypi.org/simple" }
@@ -882,6 +890,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "booknlp" },
     { name = "ebooklib" },
+    { name = "en-core-web-sm" },
     { name = "fastapi" },
     { name = "ffmpeg-normalize" },
     { name = "httpx" },
@@ -916,6 +925,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.14.0" },
     { name = "booknlp", specifier = ">=1.0.8" },
     { name = "ebooklib", specifier = ">=0.20" },
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "ffmpeg-normalize", specifier = ">=1.26" },
     { name = "httpx", specifier = ">=0.28.0" },

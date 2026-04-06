@@ -31,6 +31,7 @@ dependencies = [
   "uvicorn>=0.34.0",
   "httpx>=0.28.0",
   "spacy>=3.0.0",
+  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
   "ollama>=0.3.0",
   "booknlp>=1.0.8",
   "psutil>=5.9.0",
