@@ -234,7 +234,14 @@ def _prompt_chapter_preset_and_selection(book_path: Path, client=None) -> dict:
             chapters_raw = parse_result.get("chapters", [])
             console.print(f"[green]{len(chapters_raw)} found[/green]")
         except Exception as exc:
-            console.print(f"[red]Failed to load chapters: {exc}[/red]")
+            import httpx as _httpx
+            detail = str(exc)
+            if isinstance(exc, _httpx.HTTPStatusError):
+                try:
+                    detail = exc.response.json().get("detail", detail)
+                except Exception:
+                    pass
+            console.print(f"[red]Failed to load chapters: {detail}[/red]")
             return ChapterSelection(preset=preset_enum).to_dict()
 
         if preset_val == "none":
