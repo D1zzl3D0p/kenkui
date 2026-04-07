@@ -297,8 +297,10 @@ class WorkerServer:
                 self.fail_job(item.id, "Conversion failed")
 
         except AnnotatedChaptersCacheMissError as e:
+            logger.error("Job %s failed (cache miss): %s", item.id, e)
             self.fail_job(item.id, f"CACHE_MISS: {e}")
         except Exception as e:
+            logger.exception("Job %s failed: %s", item.id, e)
             self.fail_job(item.id, str(e))
 
     def _run_attribution_phase(self, item: QueueItem) -> None:
@@ -387,6 +389,80 @@ class WorkerServer:
         cache_file = cache_result(nlp_result, book_path)
         job.annotated_chapters_path = cache_file
         self._save()
+
+        # Deferred cast assignment: auto-assign voices now that characters are known.
+        self._assign_cast_deferred(item, nlp_result)
+
+    def _assign_cast_deferred(self, item: QueueItem, nlp_result) -> None:
+        """Auto-assign character voices after NLP attribution completes.
+
+        Skips silently if character voices are already assigned (re-queued job).
+        Inherits voices from a linked series manifest first, then auto-assigns
+        any remaining characters via suggest_cast().
+        """
+        import json as _json
+
+        from ..models import FastScanResult
+        from ..nlp import CACHE_DIR, book_hash
+        from ..series import load_series, match_characters, save_series, update_manifest
+        from ..services.voice_service import suggest_cast
+
+        job = item.job
+
+        # Skip if character voices are already assigned (not just NARRATOR)
+        if any(k != "NARRATOR" for k in job.speaker_voices):
+            return
+
+        narrator_voice = job.speaker_voices.get("NARRATOR", self._app_config.default_voice)
+
+        # Load the roster cache for alias lookup (written by run_fast_scan)
+        h = book_hash(job.ebook_path)
+        roster_path = CACHE_DIR / f"{h}-roster.json"
+        fast_scan_result = None
+        if roster_path.exists():
+            try:
+                data = _json.loads(roster_path.read_text(encoding="utf-8"))
+                fast_scan_result = FastScanResult.from_dict(data)
+            except Exception as exc:
+                logger.warning("Could not load roster for cast assignment: %s", exc)
+
+        # 1. Series voice inheritance
+        inherited: dict[str, str] = {}
+        pinned: set[str] = set()
+        manifest = None
+        if job.series_slug and fast_scan_result is not None:
+            manifest = load_series(job.series_slug)
+            if manifest:
+                inherited, pinned = match_characters(
+                    nlp_result.characters, fast_scan_result, manifest
+                )
+
+        # 2. Auto-assign remaining characters (those not inherited from series)
+        unmatched = [c for c in nlp_result.characters if c.character_id not in inherited]
+        cast_result = suggest_cast(
+            roster=unmatched,
+            excluded_voices=self._app_config.excluded_voices,
+            default_voice=narrator_voice,
+        )
+
+        # 3. Merge: preserved NARRATOR + auto-assigned + inherited (inherited wins)
+        job.speaker_voices = {
+            "NARRATOR": narrator_voice,
+            **cast_result.speaker_voices,
+            **inherited,
+        }
+        self._save()
+
+        # 4. Update series manifest with the final assignments
+        if manifest is not None and fast_scan_result is not None:
+            updated = update_manifest(
+                manifest,
+                nlp_result.characters,
+                fast_scan_result,
+                job.speaker_voices,
+                pinned,
+            )
+            save_series(updated)
 
     def _build_config(self, job: JobConfig):
         """Build ProcessingConfig from JobConfig and AppConfig."""
