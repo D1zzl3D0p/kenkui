@@ -79,6 +79,24 @@ def _load_spacy_model():
         return spacy.load("en_core_web_sm")
 
 
+def _resolve_gender(group, full_text: str) -> str:
+    """Return the best pronoun set for *group*, cross-validating BookNLP against pronouns.
+
+    Always runs infer_gender_pronouns() and uses its result when it contradicts
+    the BookNLP-assigned gender. If pronoun inference returns empty (no clear
+    majority or no name mentions found), BookNLP's value is kept as-is.
+    """
+    from .entities import infer_gender_pronouns
+    inferred = infer_gender_pronouns(group.canonical, group.aliases, full_text)
+    booknlp = group.gender if group.gender and group.gender.lower() not in ("", "unknown") else ""
+    if not booknlp:
+        return inferred
+    if inferred and inferred != booknlp:
+        # Pronoun evidence contradicts BookNLP — trust pronouns
+        return inferred
+    return booknlp
+
+
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
@@ -226,7 +244,7 @@ def run_fast_scan(
     import spacy
 
     from ..models import CharacterInfo, FastScanResult
-    from .entities import build_roster_with_llm, infer_gender_pronouns
+    from .entities import build_roster_with_llm
     from .llm import LLMClient
 
     if use_cache:
@@ -265,17 +283,12 @@ def run_fast_scan(
     _cb("Counting character mentions…")
     mention_counts = _count_mentions(roster, full_text)
 
-    def _resolve_gender(group) -> str:
-        if group.gender and group.gender.lower() not in ("", "unknown"):
-            return group.gender
-        return infer_gender_pronouns(group.canonical, group.aliases, full_text)
-
     characters: list[CharacterInfo] = [
         CharacterInfo(
             character_id=group.canonical,
             display_name=group.canonical,
             mention_count=mention_counts.get(group.canonical, 0),
-            gender_pronoun=_resolve_gender(group),
+            gender_pronoun=_resolve_gender(group, full_text),
         )
         for group in roster.characters
     ]
@@ -327,7 +340,7 @@ def run_attribution(
     from ..models import Chapter, CharacterInfo, NLPResult, Segment
     from .attribution import attribute_all_chunks
     from .chunker import chunk_paragraphs
-    from .entities import extract_person_names, infer_gender_pronouns
+    from .entities import extract_person_names
     from .llm import LLMClient
     from .quotes import extract_quotes
 
@@ -430,17 +443,12 @@ def run_attribution(
         attributed_chapters.append(_replace(chapter, segments=segments))
 
     # Build CharacterInfo with quote_count
-    def _resolve_gender(group) -> str:
-        if group.gender and group.gender.lower() not in ("", "unknown"):
-            return group.gender
-        return infer_gender_pronouns(group.canonical, group.aliases, full_text)
-
     characters: list[CharacterInfo] = [
         CharacterInfo(
             character_id=group.canonical,
             display_name=group.canonical,
             quote_count=attribution_counts.get(group.canonical, 0),
-            gender_pronoun=_resolve_gender(group),
+            gender_pronoun=_resolve_gender(group, full_text),
         )
         for group in roster.characters
     ]
