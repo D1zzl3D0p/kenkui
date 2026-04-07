@@ -55,6 +55,8 @@ INSTRUCTIONS:
 - Items with "kind": "italic" are italicised inner monologue or thought. Attribute
   them to the character who is thinking, using context clues. If the thinker cannot
   be determined, use "NARRATOR".
+- "confidence": integer 1–5. 5 = speaker is unambiguous from the passage.
+  3 = plausible but uncertain. 1 = no clear evidence in the passage.
 
 Return ONLY the JSON — no explanation.
 """
@@ -138,14 +140,14 @@ def _attribute_chunk(
             if q.id not in returned_ids:
                 logger.debug("LLM skipped quote %d; defaulting to Unknown", q.id)
                 result.attributions.append(
-                    AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral")
+                    AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1)
                 )
         return result
     except (ValidationError, Exception) as exc:
         logger.warning("Attribution LLM call failed for chunk (%s); defaulting all", exc)
         return AttributionResult(
             attributions=[
-                AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral")
+                AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1)
                 for q in chunk_quotes
             ]
         )
@@ -157,17 +159,24 @@ def attribute_all_chunks(
     roster_names: list[str],
     llm: LLMClient,
     roster_aliases: dict[str, list[str]] | None = None,
+    confidence_threshold: int = 0,
+    review_llm: LLMClient | None = None,
 ) -> dict[int, AttributionItem]:
     """Attribute every quote across all chunks with maintained conversational state.
 
     Args:
-        chunks:         Overlapping chapter chunks from ``chunk_paragraphs()``.
-        quotes:         All regex-extracted quotes for the chapter.
-        roster_names:   Canonical character names + "NARRATOR" + "Unknown".
-        llm:            LLM client to use for attribution.
-        roster_aliases: Optional mapping of canonical → all known aliases.
-                        When supplied the prompt shows aliases so the LLM can
-                        recognise characters by the names used in the text.
+        chunks:               Overlapping chapter chunks from ``chunk_paragraphs()``.
+        quotes:               All regex-extracted quotes for the chapter.
+        roster_names:         Canonical character names + "NARRATOR" + "Unknown".
+        llm:                  LLM client to use for attribution.
+        roster_aliases:       Optional mapping of canonical → all known aliases.
+                              When supplied the prompt shows aliases so the LLM can
+                              recognise characters by the names used in the text.
+        confidence_threshold: Quotes attributed with confidence below this value
+                              will be re-attributed in a second pass.  0 disables
+                              the second pass entirely (default).
+        review_llm:           LLM client for the second pass.  Falls back to
+                              *llm* when None.
 
     Returns:
         Mapping of ``quote_id → AttributionItem`` covering every quote.
@@ -189,5 +198,24 @@ def attribute_all_chunks(
         # Update last_speakers with the tail of this chunk's attributions.
         tail = attribution.attributions[-_LAST_SPEAKERS_N:]
         last_speakers = [a.speaker for a in tail if a.speaker != "Unknown"]
+
+    # Second pass: re-attribute quotes below the confidence threshold.
+    if confidence_threshold > 0:
+        _retry_llm = review_llm or llm
+        low_ids = {qid for qid, item in result.items() if item.confidence < confidence_threshold}
+        if low_ids:
+            for chunk in chunks:
+                low_in_chunk = [
+                    quote_by_id[qid] for qid in chunk.quote_ids
+                    if qid in low_ids and qid in quote_by_id
+                ]
+                if not low_in_chunk:
+                    continue
+                retry = _attribute_chunk(
+                    chunk, low_in_chunk, roster_names, [], _retry_llm, roster_aliases
+                )
+                for item in retry.attributions:
+                    if item.confidence > result[item.quote_id].confidence:
+                        result[item.quote_id] = item
 
     return result

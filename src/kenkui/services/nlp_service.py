@@ -104,8 +104,9 @@ def full_analysis(
     if progress_callback:
         progress_callback(0, "Parsing ebook")
 
+    cfg = load_app_config(config_path)
     if nlp_model is None:
-        nlp_model = load_app_config(config_path).nlp_model
+        nlp_model = cfg.nlp_model
 
     reader = get_reader(Path(ebook_path))
     chapters = reader.get_chapters()
@@ -120,7 +121,14 @@ def full_analysis(
         if progress_callback:
             progress_callback(_pct[0], msg)
 
-    result = run_analysis(chapters, Path(ebook_path), nlp_model, progress_callback=_adapt)
+    result = run_analysis(
+        chapters,
+        Path(ebook_path),
+        nlp_model,
+        progress_callback=_adapt,
+        confidence_threshold=cfg.nlp_confidence_threshold,
+        review_model=cfg.nlp_review_model,
+    )
 
     if progress_callback:
         progress_callback(100, "Analysis complete")

@@ -63,6 +63,12 @@ class AttributionItem(BaseModel):
             "One of: neutral, happy, sad, angry, fearful, surprised, disgusted"
         )
     )
+    confidence: int = Field(
+        default=3,
+        description=(
+            "Confidence 1-5: 1=very uncertain, 5=very confident"
+        )
+    )
 
 
 class AttributionResult(BaseModel):

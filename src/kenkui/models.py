@@ -154,6 +154,8 @@ class JobConfig:
     roster_cache_path: Path | None = None  # Path to Stage 2 roster cache (set by wizard fast scan)
     # Per-chapter voice override (chapter-voice mode): str(chapter_index) → voice_name
     chapter_voices: dict[str, str] = field(default_factory=dict)
+    # Series slug for cross-book voice consistency (deferred cast assignment)
+    series_slug: str | None = None
     # Per-job quality overrides (None = inherit from AppConfig)
     job_temp: float | None = None
     job_lsd_decode_steps: int | None = None
@@ -184,6 +186,7 @@ class JobConfig:
             if self.roster_cache_path
             else None,
             "chapter_voices": self.chapter_voices,
+            "series_slug": self.series_slug,
         }
         # Only include per-job overrides when explicitly set (non-None)
         for key in (
@@ -213,6 +216,7 @@ class JobConfig:
             if data.get("roster_cache_path")
             else None,
             chapter_voices=data.get("chapter_voices") or {},
+            series_slug=data.get("series_slug"),
             job_temp=data.get("job_temp"),
             job_lsd_decode_steps=data.get("job_lsd_decode_steps"),
             job_noise_clamp=data.get("job_noise_clamp"),
@@ -312,6 +316,8 @@ class AppConfig:
     default_output_dir: Path | None = None  # Output directory for CLI runs
     # --- Multi-voice / NLP ---
     nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
+    nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
+    nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
     excluded_voices: list[str] = field(default_factory=list)
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
@@ -336,6 +342,8 @@ class AppConfig:
             "default_chapter_preset": self.default_chapter_preset,
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
             "nlp_model": self.nlp_model,
+            "nlp_confidence_threshold": self.nlp_confidence_threshold,
+            "nlp_review_model": self.nlp_review_model,
             "excluded_voices": list(self.excluded_voices),
             "post_processing": self.post_processing.to_dict(),
         }
@@ -363,6 +371,8 @@ class AppConfig:
             if data.get("default_output_dir")
             else None,
             nlp_model=data.get("nlp_model", "llama3.2"),
+            nlp_confidence_threshold=data.get("nlp_confidence_threshold", 0),
+            nlp_review_model=data.get("nlp_review_model", ""),
             excluded_voices=list(data.get("excluded_voices") or []),
             post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
         )

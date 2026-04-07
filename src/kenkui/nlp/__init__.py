@@ -327,6 +327,8 @@ def run_attribution(
     nlp_model: str,
     use_cache: bool = True,
     progress_callback: Callable[[str], None] | None = None,
+    confidence_threshold: int = 0,
+    review_model: str = "",
 ) -> "NLPResult":
     """Run Stage 3-4: LLM speaker attribution using a pre-built roster.
 
@@ -377,6 +379,7 @@ def run_attribution(
         ) from exc
 
     llm = LLMClient(nlp_model)
+    review_llm = LLMClient(review_model) if review_model else None
 
     # Load spaCy
     _cb("Loading spaCy language model…")
@@ -442,7 +445,8 @@ def run_attribution(
 
             chunks = chunk_paragraphs(chapter.paragraphs, quotes)
             all_attributions = attribute_all_chunks(
-                chunks, quotes, roster_names, llm, roster_aliases=roster_aliases
+                chunks, quotes, roster_names, llm, roster_aliases=roster_aliases,
+                confidence_threshold=confidence_threshold, review_llm=review_llm,
             )
 
             for item in all_attributions.values():
@@ -489,6 +493,8 @@ def run_analysis(
     book_path: Path,
     nlp_model: str,
     progress_callback: Callable[[str], None] | None = None,
+    confidence_threshold: int = 0,
+    review_model: str = "",
 ) -> "NLPResult":
     """Run the full NLP speaker-attribution pipeline on *chapters*.
 
@@ -523,6 +529,8 @@ def run_analysis(
         nlp_model=nlp_model,
         use_cache=True,
         progress_callback=_cb,
+        confidence_threshold=confidence_threshold,
+        review_model=review_model,
     )
 
     # Patch mention_count from fast scan into NLP result characters
