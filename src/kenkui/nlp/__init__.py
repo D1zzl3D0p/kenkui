@@ -79,6 +79,22 @@ def _load_spacy_model():
         return spacy.load("en_core_web_sm")
 
 
+def _normalize_gender_pronoun(value: str) -> str:
+    """Map BookNLP gender variants to canonical pronoun form.
+
+    infer_gender_pronouns() returns one of "he/him", "she/her", "they/them", or "".
+    BookNLP may return uppercase or alternative forms — normalise to the same vocabulary.
+    """
+    v = value.lower().strip()
+    if v in ("he/him", "he", "him", "his", "m", "male", "man"):
+        return "he/him"
+    if v in ("she/her", "she", "her", "hers", "f", "female", "woman"):
+        return "she/her"
+    if v in ("they/them", "they", "them", "their", "theirs", "nonbinary", "non-binary"):
+        return "they/them"
+    return ""
+
+
 def _resolve_gender(group, full_text: str) -> str:
     """Return the best pronoun set for *group*, cross-validating BookNLP against pronouns.
 
@@ -88,7 +104,7 @@ def _resolve_gender(group, full_text: str) -> str:
     """
     from .entities import infer_gender_pronouns
     inferred = infer_gender_pronouns(group.canonical, group.aliases, full_text)
-    booknlp = group.gender if group.gender and group.gender.lower() not in ("", "unknown") else ""
+    booknlp = _normalize_gender_pronoun(group.gender) if group.gender else ""
     if not booknlp:
         return inferred
     if inferred and inferred != booknlp:
