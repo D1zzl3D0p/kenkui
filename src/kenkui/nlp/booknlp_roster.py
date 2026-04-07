@@ -166,7 +166,7 @@ def build_roster_from_booknlp(
             continue
 
         # Read BookNLP's neural gender prediction.
-        raw_gender = char_data.get("g", {}).get("argmax", "") or ""
+        raw_gender = (char_data.get("g") or {}).get("argmax", "") or ""
         if raw_gender in ("he/him", "she/her", "they/them"):
             gender = raw_gender
         elif raw_gender in ("he", "him", "his"):
