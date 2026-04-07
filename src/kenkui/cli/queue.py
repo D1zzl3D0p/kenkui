@@ -55,7 +55,7 @@ def _eta_str(eta_seconds: int) -> str:
     return f"{s}s"
 
 
-def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
+def _build_queue_table(queue_info, exclude_statuses: "set[str] | None" = None) -> Table:
     """Build a Rich Table from a QueueInfo object."""
     tbl = Table(
         title="Job Queue",
@@ -69,11 +69,11 @@ def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
     tbl.add_column("Progress", width=8, justify="right")
     tbl.add_column("Elapsed", width=8, justify="right")
     tbl.add_column("ETA", width=8, justify="right")
-    tbl.add_column("Chapter", overflow="fold")
+    tbl.add_column("Chapter / Error", overflow="fold")
 
-    terminal = {"completed", "failed", "cancelled"}
+    exclude = exclude_statuses or set()
     for item in queue_info.items:
-        if not include_terminal and item.status in terminal:
+        if item.status in exclude:
             continue
         status_style = _STATUS_STYLE.get(item.status, "")
         progress_capped = min(item.progress or 0, 100)
@@ -84,7 +84,10 @@ def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
         else:
             elapsed_str = "—"
         eta_str = _eta_str(item.eta_seconds) if item.status == "processing" else "—"
-        chapter_str = (item.current_chapter or "")[:60]
+        if item.status == "failed" and getattr(item, "error_message", ""):
+            detail_str = Text(item.error_message[:120], style="red")
+        else:
+            detail_str = Text((item.current_chapter or "")[:60])
         job_name = item.job.get("name", item.id) if isinstance(item.job, dict) else item.id
 
         tbl.add_row(
@@ -94,7 +97,7 @@ def _build_queue_table(queue_info, include_terminal: bool = True) -> Table:
             progress_str,
             elapsed_str,
             eta_str,
-            chapter_str,
+            detail_str,
         )
 
     return tbl
@@ -177,7 +180,7 @@ def _live_dashboard(client) -> int:
 
     def _make_layout(queue_info) -> Layout:
         layout = Layout()
-        table = _build_queue_table(queue_info, include_terminal=False)
+        table = _build_queue_table(queue_info, exclude_statuses={"completed", "cancelled"})
         prog = _build_progress_bar(queue_info)
 
         if prog:
