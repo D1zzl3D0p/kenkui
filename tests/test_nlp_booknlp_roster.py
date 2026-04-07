@@ -401,3 +401,31 @@ class TestBookNLPCommonPhrases:
 
         assert data is not None
         assert data.common_phrases == []
+
+
+# ---------------------------------------------------------------------------
+# _normalize_gender_pronoun
+# ---------------------------------------------------------------------------
+
+
+from kenkui.nlp import _normalize_gender_pronoun  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("M", "he/him"),
+        ("male", "he/him"),
+        ("He/Him", "he/him"),
+        ("F", "she/her"),
+        ("female", "she/her"),
+        ("they", "they/them"),
+        ("nonbinary", "they/them"),
+        ("unknown", ""),
+        ("", ""),
+        ("N", ""),
+    ],
+)
+class TestNormalizeGenderPronoun:
+    def test_mapping(self, value: str, expected: str) -> None:
+        assert _normalize_gender_pronoun(value) == expected
