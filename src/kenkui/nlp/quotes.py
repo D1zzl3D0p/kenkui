@@ -61,7 +61,11 @@ def extract_quotes(paragraphs: list[str]) -> list[Quote]:
         # Process in document order so IDs are assigned left-to-right.
         matches.sort(key=lambda t: t[0])
 
+        last_end = 0
         for _, m, kind in matches:
+            if m.start() < last_end:
+                continue
+            last_end = m.end()
             text = m.group(0) if kind == "dialogue" else m.group(1)
             quotes.append(
                 Quote(

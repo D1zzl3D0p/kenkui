@@ -574,6 +574,9 @@ def _split_paragraph_by_quotes(
     last_end = 0
 
     for start, end, out_text, lookup_key in all_matches:
+        if start < last_end:
+            continue
+
         speaker = text_to_speaker.get(lookup_key, "NARRATOR")
 
         # Narrative text before this span

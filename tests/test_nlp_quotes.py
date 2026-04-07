@@ -98,3 +98,59 @@ class TestExtractQuotesMultiline:
         quotes = extract_quotes([para])
         assert len(quotes) == 1
         assert "He said" in quotes[0].text
+
+
+class TestExtractQuotesOverlap:
+    """Regression tests: italic span wrapping a dialogue quote must not produce
+    two Quote objects (one dialogue, one italic) for the same text region."""
+
+    def test_italic_wrapping_dialogue_produces_one_quote(self):
+        # \x02"Hello"\x03 — italic marker around a dialogue quote
+        para = '\x02"Hello"\x03'
+        quotes = extract_quotes([para])
+        assert len(quotes) == 1, (
+            f"Expected exactly 1 Quote for overlapping italic+dialogue, got {len(quotes)}: {quotes}"
+        )
+
+    def test_italic_wrapping_dialogue_kind_is_italic(self):
+        # The italic match starts at 0 and the dialogue match starts at 1,
+        # so italic wins (it sorts first by start position).
+        para = '\x02"Hello"\x03'
+        quotes = extract_quotes([para])
+        assert quotes[0].kind == "italic"
+
+    def test_non_overlapping_italic_and_dialogue_produce_two_quotes(self):
+        # Italic span then separate dialogue: both should be present.
+        para = '\x02inner\x03 then "dialogue"'
+        quotes = extract_quotes([para])
+        assert len(quotes) == 2
+        kinds = {q.kind for q in quotes}
+        assert "italic" in kinds
+        assert "dialogue" in kinds
+
+
+class TestSplitParagraphByQuotesOverlap:
+    """Regression tests: _split_paragraph_by_quotes must not emit two spans
+    for the same overlapping italic+dialogue region."""
+
+    def _split(self, para, para_quotes=None):
+        from kenkui.nlp import _split_paragraph_by_quotes
+        return _split_paragraph_by_quotes(para, para_quotes or [])
+
+    def test_italic_wrapping_dialogue_produces_one_span(self):
+        para = '\x02"Hello"\x03'
+        spans = self._split(para)
+        # Should be exactly one non-empty span (no duplicates)
+        non_empty = [(t, s) for t, s in spans if t]
+        assert len(non_empty) == 1, (
+            f"Expected 1 span for overlapping italic+dialogue, got {len(non_empty)}: {non_empty}"
+        )
+
+    def test_non_overlapping_regions_both_present(self):
+        para = '\x02inner\x03 then "dialogue"'
+        spans = self._split(para)
+        texts = [t for t, _ in spans if t]
+        combined = "".join(texts)
+        # Both regions must appear in the output
+        assert "inner" in combined
+        assert "dialogue" in combined
