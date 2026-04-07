@@ -734,6 +734,7 @@ def _run_series_setup(
     it falls back to local series functions.
     """
     from ..series import (
+        SeriesCharacter,
         SeriesManifest,
         build_manifest_from_predecessor,
         list_roster_candidates,
