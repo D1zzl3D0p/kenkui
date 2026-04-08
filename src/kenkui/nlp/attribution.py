@@ -215,7 +215,7 @@ def attribute_all_chunks(
                     chunk, low_in_chunk, roster_names, [], _retry_llm, roster_aliases
                 )
                 for item in retry.attributions:
-                    if item.confidence > result[item.quote_id].confidence:
+                    if item.quote_id in result and item.confidence > result[item.quote_id].confidence:
                         result[item.quote_id] = item
 
     return result

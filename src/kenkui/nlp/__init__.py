@@ -342,6 +342,11 @@ def run_attribution(
         nlp_model:         Ollama model name (e.g. ``"llama3.2"``).
         use_cache:         Return cached NLPResult if available.
         progress_callback: Optional callable receiving status strings.
+        confidence_threshold: Quotes with confidence below this value are
+                              re-attributed in a second pass using *review_model*.
+                              0 disables the second pass (default).
+        review_model:      Ollama model name for the second-pass review.
+                           Falls back to *nlp_model* when empty (default).
 
     Returns:
         Full ``NLPResult`` with annotated chapters and quote counts.
