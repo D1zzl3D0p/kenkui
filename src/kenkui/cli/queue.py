@@ -64,7 +64,7 @@ def _build_queue_table(queue_info, exclude_statuses: "set[str] | None" = None) -
         expand=True,
     )
     tbl.add_column("ID", style="dim", width=10)
-    tbl.add_column("Name", min_width=20)
+    tbl.add_column("Name", min_width=20, max_width=30, no_wrap=True)
     tbl.add_column("Status", width=12)
     tbl.add_column("Progress", width=8, justify="right")
     tbl.add_column("Elapsed", width=8, justify="right")

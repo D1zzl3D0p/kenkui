@@ -20,6 +20,7 @@ class JobInfo:
     eta_seconds: int
     error_message: str
     output_path: str = ""
+    started_at: float = 0.0
 
 
 @dataclass

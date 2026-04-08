@@ -337,7 +337,9 @@ class WorkerServer:
                 # Each callback call = one chunk processed; cap at 14.9% (TTS starts at 0%)
                 # Assume ~50 chunks typical; adjust estimate conservatively
                 pct = min(_attrib_step[0] * 0.3, 14.9)
-                self._progress_callback(pct, f"[Attribution] {msg}", 0)
+                current_item = self.get_job(self._current_id) if self._current_id else None
+                eta = current_item.eta_seconds if current_item is not None else 0
+                self._progress_callback(pct, f"[Attribution] {msg}", eta)
 
         # Load chapters
         _cb("reading ebook…")

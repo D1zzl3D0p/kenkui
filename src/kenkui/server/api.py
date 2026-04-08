@@ -46,6 +46,7 @@ class JobResponse(BaseModel):
     eta_seconds: int
     error_message: str
     output_path: str = ""
+    started_at: float = 0.0
 
 
 class QueueResponse(BaseModel):
@@ -241,6 +242,7 @@ def _job_to_response(item) -> JobResponse:
         eta_seconds=item.eta_seconds,
         error_message=item.error_message,
         output_path=item.output_path,
+        started_at=item.started_at,
     )
 
 
