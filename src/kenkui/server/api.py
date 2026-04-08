@@ -47,6 +47,7 @@ class JobResponse(BaseModel):
     error_message: str
     output_path: str = ""
     started_at: float = 0.0
+    completed_at: float = 0.0
 
 
 class QueueResponse(BaseModel):
@@ -243,6 +244,7 @@ def _job_to_response(item) -> JobResponse:
         error_message=item.error_message,
         output_path=item.output_path,
         started_at=item.started_at,
+        completed_at=item.completed_at,
     )
 
 

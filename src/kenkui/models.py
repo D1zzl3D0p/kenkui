@@ -390,6 +390,7 @@ class QueueItem:
     error_message: str = ""
     output_path: str = ""
     started_at: float = 0.0  # Unix timestamp set when job enters PROCESSING
+    completed_at: float = 0.0  # Unix timestamp set when job completes
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -402,6 +403,7 @@ class QueueItem:
             "error_message": self.error_message,
             "output_path": self.output_path,
             "started_at": self.started_at,
+            "completed_at": self.completed_at,
         }
 
     @classmethod
@@ -416,6 +418,7 @@ class QueueItem:
             error_message=data.get("error_message", ""),
             output_path=data.get("output_path", ""),
             started_at=data.get("started_at", 0.0),
+            completed_at=data.get("completed_at", 0.0),
         )
 
 

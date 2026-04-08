@@ -207,6 +207,7 @@ class WorkerServer:
             self._save()
 
     def complete_job(self, job_id: str, output_path: str = ""):
+        import time
         with self._lock:
             for item in self._items:
                 if item.id == job_id:
@@ -214,6 +215,7 @@ class WorkerServer:
                     item.progress = 100.0
                     item.current_chapter = ""
                     item.output_path = output_path
+                    item.completed_at = time.time()
                     break
             self._save()
 

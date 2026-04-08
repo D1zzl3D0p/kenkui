@@ -131,6 +131,32 @@ def _build_progress_bar(queue_info) -> Progress | None:
     return prog
 
 
+def _build_completed_table(queue_info) -> "Table | None":
+    """Build a summary table of completed jobs, or None if none exist."""
+    from pathlib import Path as _Path
+    import datetime as _dt
+    completed = [i for i in queue_info.items if i.status == "completed"]
+    if not completed:
+        return None
+    tbl = Table(show_header=True, header_style="dim green", expand=True)
+    tbl.add_column("ID", style="dim", width=10)
+    tbl.add_column("Name", min_width=15, max_width=30, no_wrap=True)
+    tbl.add_column("Output", overflow="fold")
+    tbl.add_column("Finished", width=10, justify="right", style="dim")
+    for item in completed:
+        job_name = item.job.get("name", item.id) if isinstance(item.job, dict) else item.id
+        output = item.output_path or ""
+        if output:
+            parts = _Path(output).parts
+            output = "/".join(parts[-2:]) if len(parts) >= 2 else output
+        finished = ""
+        completed_at = getattr(item, "completed_at", 0)
+        if completed_at and completed_at > 0:
+            finished = _dt.datetime.fromtimestamp(completed_at).strftime("%H:%M:%S")
+        tbl.add_row(item.id, job_name, output, finished)
+    return tbl
+
+
 def _build_summary_line(queue_info) -> Text:
     parts = [
         f"[cyan]{queue_info.pending_count} pending[/cyan]",
@@ -183,6 +209,7 @@ def _live_dashboard(client) -> int:
         layout = Layout()
         table = _build_queue_table(queue_info, exclude_statuses={"completed", "cancelled"})
         prog = _build_progress_bar(queue_info)
+        completed_tbl = _build_completed_table(queue_info)
 
         if prog:
             active = queue_info.current_item
@@ -198,11 +225,13 @@ def _live_dashboard(client) -> int:
         footer = Text.from_markup("[dim]Ctrl+C to exit  ·  [/dim]")
         footer.append_text(_build_summary_line(queue_info))
 
-        layout.split_column(
-            Layout(table, name="table"),
-            Layout(progress_panel, name="progress", size=5),  # fixed — never shifts
-            Layout(footer, name="footer", size=1),
-        )
+        sections = [Layout(table, name="table")]
+        sections.append(Layout(progress_panel, name="progress", size=5))
+        if completed_tbl:
+            sections.append(Layout(Panel(completed_tbl, title="[green]Completed[/green]"), name="completed", size=min(len([i for i in queue_info.items if i.status == "completed"]) + 3, 8)))
+        sections.append(Layout(footer, name="footer", size=1))
+
+        layout.split_column(*sections)
         return layout
 
 
