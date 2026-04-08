@@ -1391,6 +1391,276 @@ def _step_confirm(state: dict) -> dict:
     return {**state, "_job_kwargs": job_kwargs}
 
 
+# ---------------------------------------------------------------------------
+# Hub-and-spoke confirmation screen
+# ---------------------------------------------------------------------------
+
+
+def _init_state_from_profile(book_path, app_config, profile: dict) -> dict:
+    """Build initial wizard state from last profile, falling back to app_config defaults."""
+    return {
+        "_book_path": book_path,
+        "_app_config": app_config,
+        "voice": profile.get("voice") or app_config.default_voice,
+        "narration_mode": profile.get("narration_mode", "single"),
+        "chapter_selection": {
+            "preset": profile.get("chapter_preset", app_config.default_chapter_preset),
+            "included": [],
+            "excluded": [],
+        },
+        "output_dir": profile.get("output_dir") or str(
+            getattr(app_config, "default_output_dir", None) or book_path.parent
+        ),
+        "quality_overrides": dict(profile.get("quality_overrides") or {}),
+        "pp_overrides": dict(profile.get("pp_overrides") or {}),
+        "speaker_voices": {},
+        "chapter_voices": {},
+        "roster_cache_path": None,
+        "series_slug": None,
+        "_series_manifest": None,
+    }
+
+
+def _state_to_profile(state: dict) -> dict:
+    """Extract saveable profile keys from wizard state."""
+    chap_sel = state.get("chapter_selection", {})
+    return {
+        "voice": state.get("voice", ""),
+        "narration_mode": state.get("narration_mode", "single"),
+        "chapter_preset": chap_sel.get("preset", "content-only"),
+        "output_dir": state.get("output_dir", ""),
+    }
+
+
+def _build_confirmation_choices(state: dict, app_config) -> list:
+    """Build InquirerPy select choices for the confirmation screen."""
+    from InquirerPy.base.control import Choice, Separator
+
+    book_name = state["_book_path"].name
+
+    chap_sel = state.get("chapter_selection", {})
+    preset = chap_sel.get("preset", getattr(app_config, "default_chapter_preset", "content-only"))
+    included = chap_sel.get("included", [])
+    chap_count = f"{len(included)} selected" if included else "not yet selected"
+    chap_tag = "[DEFAULT]" if preset == getattr(app_config, "default_chapter_preset", "content-only") else "[CUSTOM]"
+
+    voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
+    mode = state.get("narration_mode", "single")
+    default_voice = getattr(app_config, "default_voice", "alba")
+    voice_tag = "[DEFAULT]" if (voice == default_voice and mode == "single") else "[CUSTOM]"
+
+    quality_tag = "[DEFAULT]" if not state.get("quality_overrides") else "[CUSTOM]"
+    output = state.get("output_dir", "")
+
+    return [
+        Separator(f"  Book:      {book_name}"),
+        Separator(f"  Chapters:  {preset} ({chap_count})  {chap_tag}"),
+        Separator(f"  Voice/NLP: {voice} / {mode}  {voice_tag}"),
+        Separator(f"  Quality:   {quality_tag}"),
+        Separator(f"  Output:    {output}"),
+        Separator(""),
+        Choice(value="submit",         name="  Submit Job"),
+        Choice(value="chapters",       name="  Chapters \u2192"),
+        Choice(value="voice",          name="  Voice / NLP \u2192"),
+        Choice(value="quality",        name="  Audio Quality \u2192"),
+        Choice(value="postprocessing", name="  Post-Processing \u2192"),
+        Choice(value="voices",         name="  Manage Voices \u2192"),
+        Choice(value="cancel",         name="  Cancel"),
+    ]
+
+
+def _submenu_chapters(state: dict, app_config, client) -> dict:
+    """Chapter selection submenu. Returns updated state."""
+    from InquirerPy import inquirer
+
+    action = _wizard_execute(inquirer.select(
+        message="Chapters",
+        choices=[
+            {"name": f"Keep current ({state['chapter_selection'].get('preset', 'content-only')})", "value": "keep"},
+            {"name": "Select chapters...", "value": "select"},
+            {"name": "Reset to defaults", "value": "reset"},
+            {"name": "Back", "value": "back"},
+        ],
+    ))
+    if action == "reset":
+        state = {**state, "chapter_selection": {
+            "preset": getattr(app_config, "default_chapter_preset", "content-only"),
+            "included": [],
+            "excluded": [],
+        }}
+    elif action == "select":
+        book_path = state["_book_path"]
+        try:
+            chapter_selection = _prompt_chapter_preset_and_selection(book_path, client=client)
+            state = {**state, "chapter_selection": chapter_selection}
+        except Exception:
+            pass
+    return state
+
+
+def _submenu_voice(state: dict, app_config, client) -> dict:
+    """Voice/NLP submenu. Returns updated state."""
+    from InquirerPy import inquirer
+
+    action = _wizard_execute(inquirer.select(
+        message="Voice / NLP",
+        choices=[
+            {"name": f"Keep current ({state.get('voice', '')} / {state.get('narration_mode', 'single')})", "value": "keep"},
+            {"name": "Change voice...", "value": "select"},
+            {"name": "Reset to defaults", "value": "reset"},
+            {"name": "Back", "value": "back"},
+        ],
+    ))
+    if action == "reset":
+        state = {**state,
+                 "voice": getattr(app_config, "default_voice", "alba"),
+                 "narration_mode": "single"}
+    elif action == "select":
+        console.print("[bold]Voice:[/bold]")
+        voice = _prompt_voice(default=state.get("voice", app_config.default_voice),
+                              message="Select voice:", client=client)
+        state = {**state, "voice": voice}
+    return state
+
+
+def _submenu_audio_quality(state: dict, app_config) -> dict:
+    """Per-job audio quality overrides submenu."""
+    from InquirerPy import inquirer
+
+    action = _wizard_execute(inquirer.select(
+        message="Audio Quality",
+        choices=[
+            {"name": f"Keep current ({'custom' if state.get('quality_overrides') else 'defaults'})", "value": "keep"},
+            {"name": "Edit quality overrides...", "value": "edit"},
+            {"name": "Reset to defaults (clear overrides)", "value": "reset"},
+            {"name": "Back", "value": "back"},
+        ],
+    ))
+    if action == "reset":
+        state = {**state, "quality_overrides": {}}
+    elif action == "edit":
+        overrides = dict(state.get("quality_overrides") or {})
+        temp_str = _wizard_execute(inquirer.text(
+            message="Temperature [0.0-1.5] (blank=inherit from config):",
+            default=str(overrides.get("temp", "")),
+        )).strip()
+        if temp_str:
+            try:
+                overrides["temp"] = float(temp_str)
+            except ValueError:
+                pass
+        steps_str = _wizard_execute(inquirer.text(
+            message="Generation steps [1-50] (blank=inherit):",
+            default=str(overrides.get("lsd_decode_steps", "")),
+        )).strip()
+        if steps_str:
+            try:
+                overrides["lsd_decode_steps"] = int(steps_str)
+            except ValueError:
+                pass
+        state = {**state, "quality_overrides": overrides}
+    return state
+
+
+def _submenu_post_processing(state: dict, app_config) -> dict:
+    """Post-processing per-job override submenu."""
+    from InquirerPy import inquirer
+
+    action = _wizard_execute(inquirer.select(
+        message="Post-Processing",
+        choices=[
+            {"name": f"Keep current ({'custom' if state.get('pp_overrides') else 'inherit from config'})", "value": "keep"},
+            {"name": "Reset to defaults (inherit from config)", "value": "reset"},
+            {"name": "Back", "value": "back"},
+        ],
+    ))
+    if action == "reset":
+        state = {**state, "pp_overrides": {}}
+    return state
+
+
+def _submenu_manage_voices(state: dict, app_config, client) -> None:
+    """Voice management submenu (list/filter voices). Does not modify job state."""
+    from InquirerPy import inquirer
+    from .voices import cmd_voices_list
+    import argparse
+
+    # Show voice list using existing cli/voices.py infrastructure
+    fake_args = argparse.Namespace(gender=None, accent=None, dataset=None, source=None,
+                                   server_host="127.0.0.1", server_port=45365)
+    try:
+        cmd_voices_list(fake_args)
+    except Exception:
+        pass
+    _wizard_execute(inquirer.text(message="Press Enter to return to job setup..."))
+
+
+def _state_to_job_kwargs(state: dict) -> dict:
+    """Convert hub-and-spoke state dict to the job kwargs expected by client.add_job()."""
+    book_path = state["_book_path"]
+    chapter_selection = state.get("chapter_selection", {})
+    narration_mode = state.get("narration_mode", "single")
+    voice = state.get("voice", "alba")
+    speaker_voices = state.get("speaker_voices", {})
+    chapter_voices = state.get("chapter_voices", {})
+    quality_overrides = state.get("quality_overrides", {})
+    output_dir = state.get("output_dir", str(book_path.parent))
+    roster_cache_path = state.get("roster_cache_path")
+    series_slug = state.get("series_slug")
+
+    job_kwargs = dict(
+        ebook_path=str(book_path),
+        voice=voice,
+        chapter_selection=chapter_selection,
+        output_path=output_dir,
+        narration_mode=narration_mode,
+        speaker_voices=speaker_voices or None,
+        annotated_chapters_path=None,
+        roster_cache_path=roster_cache_path,
+        chapter_voices=chapter_voices or None,
+        series_slug=series_slug,
+        **quality_overrides,
+    )
+    return job_kwargs
+
+
+def _run_confirmation_screen(book_path, app_config, args):
+    """Hub-and-spoke confirmation screen. Returns job kwargs or None if cancelled."""
+    from InquirerPy import inquirer
+    from .add_profile import load_last_profile, save_last_profile
+
+    client = _get_client(args)
+    profile = load_last_profile()
+    state = _init_state_from_profile(book_path, app_config, profile)
+
+    try:
+        while True:
+            choices = _build_confirmation_choices(state, app_config)
+            action = _wizard_execute(inquirer.select(
+                message=f"kenkui \u2014 {book_path.name}",
+                choices=choices,
+                max_height="80%",
+            ))
+
+            if action == "submit":
+                save_last_profile(_state_to_profile(state))
+                return _state_to_job_kwargs(state)
+            elif action == "chapters":
+                state = _submenu_chapters(state, app_config, client)
+            elif action == "voice":
+                state = _submenu_voice(state, app_config, client)
+            elif action == "quality":
+                state = _submenu_audio_quality(state, app_config)
+            elif action == "postprocessing":
+                state = _submenu_post_processing(state, app_config)
+            elif action == "voices":
+                _submenu_manage_voices(state, app_config, client)
+            elif action is None or action == "cancel":
+                return None
+    finally:
+        client.close()
+
+
 def _run_wizard(book_path: Path, app_config, args) -> dict | None:
     """Run the interactive wizard using a step-stack state machine.
 
@@ -1548,9 +1818,9 @@ def cmd_add(args) -> int:
             console.print("Run [bold]kenkui queue start --live[/bold] to watch progress.")
             return 0
 
-        # Interactive wizard.
+        # Interactive: hub-and-spoke confirmation screen.
         app_config = _load_config(args)
-        job_kwargs = _run_wizard(book_path, app_config, args)
+        job_kwargs = _run_confirmation_screen(book_path, app_config, args)
         if job_kwargs is None:
             return 0  # User cancelled
 
@@ -1570,7 +1840,7 @@ def cmd_add(args) -> int:
 def cmd_bare(args) -> int:
     """Handle 'kenkui book.epub [-c config]' (bare shorthand).
 
-    Interactive  (no -c):  wizard → queue → start → live dashboard.
+    Interactive  (no -c):  confirmation screen → queue → start → live dashboard.
     Headless     (-c set):  queue → start → Rich progress poll → exit 0/1.
     """
     book_path: Path = args.book
@@ -1586,9 +1856,9 @@ def cmd_bare(args) -> int:
             console.print("[cyan]Processing started.[/cyan]")
             return _poll_until_done(client, job_id)
 
-        # Interactive path.
+        # Interactive: hub-and-spoke confirmation screen.
         app_config = _load_config(args)
-        job_kwargs = _run_wizard(book_path, app_config, args)
+        job_kwargs = _run_confirmation_screen(book_path, app_config, args)
         if job_kwargs is None:
             return 0  # User cancelled
 
