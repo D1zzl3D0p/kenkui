@@ -201,11 +201,17 @@ Voices come in three tiers:
 alba, marius, javert, jean, fantine, cosette, eponine, azelma
 ```
 
-### Listing voices
+### Voice manager (interactive TUI)
 
 ```bash
 kenkui voices
-# or
+```
+
+Launches an interactive voice manager: browse and audition voices, manage the auto-assignment exclusion pool, and look up the character cast for a completed multi-voice book.
+
+### Listing voices
+
+```bash
 kenkui voices list
 
 # Filter by metadata
@@ -214,6 +220,17 @@ kenkui voices list --accent Scottish
 kenkui voices list --dataset VCTK
 kenkui voices list --source compiled
 ```
+
+### Auditioning voices
+
+```bash
+kenkui voices audition <voice>
+
+# Custom preview text
+kenkui voices audition <voice> --text "Your preview text here."
+```
+
+Synthesizes a short clip and opens it in your system audio player.
 
 ### Downloading compiled voices
 
@@ -238,6 +255,26 @@ KENKUI_VOICES_REPO=user/repo-name kenkui voices fetch
 ```
 
 Downloads `.wav` files from a HuggingFace repo to `~/.local/share/kenkui/voices/uncompiled/`. Requires a free HuggingFace account (see FAQ).
+
+### Managing the auto-assignment pool
+
+```bash
+# Exclude a voice from multi-voice auto-assignment
+kenkui voices exclude <voice>
+
+# Restore an excluded voice
+kenkui voices include <voice>
+```
+
+Excluded voices are still available for manual assignment in the wizard; they're just skipped during automatic gender-based matching.
+
+### Looking up a book's cast
+
+```bash
+kenkui voices cast <title>
+```
+
+Displays the character→voice cast for a completed multi-voice book (fuzzy-matched by title).
 
 ### Using your own voice
 
@@ -287,6 +324,9 @@ Named configs without a path separator are automatically looked up in `~/.config
 | `pause_chapter_ms` | `2000` | Pause between chapters (ms) |
 | `pause_scene_break_ms` | `4000` | Pause at scene breaks (ms) |
 | `nlp_model` | `llama3.2` | Ollama model for multi-voice speaker attribution |
+| `nlp_confidence_threshold` | `0` | Min attribution confidence score; 0 = second-pass disabled |
+| `nlp_review_model` | `""` | Ollama model for second-pass retry; `""` = same as `nlp_model` |
+| `excluded_voices` | `[]` | Voices excluded from auto-assignment (still available manually) |
 
 ### Per-job quality overrides
 

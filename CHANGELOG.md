@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-07
+
+### Added
+
+- **Voice manager TUI**: `kenkui voices` (bare) now launches an interactive voice manager — browse, audition, manage the exclusion pool, and look up a book's character cast
+- **Voice audition**: `kenkui voices audition <voice>` synthesizes a short preview and opens it in the system audio player
+- **Voice pool management**: `kenkui voices exclude <voice>` and `kenkui voices include <voice>` manage the auto-assignment exclusion pool
+- **Cast lookup**: `kenkui voices cast <title>` displays the character→voice cast for a completed multi-voice book
+- **Attribution confidence scoring**: NLP attribution now scores each quote assignment; low-confidence quotes can be re-attributed in a second LLM pass
+- **Second-pass review**: `nlp_confidence_threshold` (default `0`, disabled) and `nlp_review_model` config keys control the second-pass retry
+- **Scene-break silence**: Configurable pause at scene breaks (`pause_scene_break_ms`, default 4000 ms)
+- **Per-segment autogain**: EBU R128 normalization applied per chapter segment before stitching
+- **Chapter-voice mode**: Assign a distinct voice to each chapter via the wizard
+- **No duplicate chapter voices**: Auto-assignment ensures adjacent chapters don't share the same voice
+
+### Fixed
+
+- BookNLP gender field null-safety (`or {}` guard)
+- Gender string normalization before BookNLP cross-validation
+- Overlapping regex matches no longer produce duplicate audio segments
+- Fast-scan timeout removed so BookNLP can complete on large books
+- Failed jobs show `error_message` in the queue table and remain visible in the live dashboard
+- Full tracebacks logged to `kenkui-server.log` on job failure
+
 ## [0.8.0] - 2026-02-20
 
 ### Added
