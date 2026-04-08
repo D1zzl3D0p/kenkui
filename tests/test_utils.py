@@ -111,3 +111,93 @@ class TestNormalizeBitrate:
     def test_custom_default(self):
         assert _normalize_bitrate(None, default="128k") == "128k"
         assert _normalize_bitrate("", default="64k") == "64k"
+
+
+# ---------------------------------------------------------------------------
+# normalize_for_tts
+# ---------------------------------------------------------------------------
+
+from kenkui.utils import normalize_for_tts
+
+
+class TestNormalizeForTts:
+    """Tests for normalize_for_tts() — n't contraction expansion."""
+
+    @pytest.mark.parametrize("contraction,expansion", [
+        ("won't", "will not"),
+        ("can't", "cannot"),
+        ("don't", "do not"),
+        ("doesn't", "does not"),
+        ("didn't", "did not"),
+        ("isn't", "is not"),
+        ("aren't", "are not"),
+        ("wasn't", "was not"),
+        ("weren't", "were not"),
+        ("haven't", "have not"),
+        ("hasn't", "has not"),
+        ("hadn't", "had not"),
+        ("couldn't", "could not"),
+        ("wouldn't", "would not"),
+        ("shouldn't", "should not"),
+        ("mustn't", "must not"),
+        ("needn't", "need not"),
+        ("shan't", "shall not"),
+    ])
+    def test_nont_map_entries(self, contraction, expansion):
+        assert normalize_for_tts(contraction) == expansion
+
+    def test_uppercase_preserved(self):
+        assert normalize_for_tts("DON'T") == "DO NOT"
+
+    def test_uppercase_doesnt(self):
+        assert normalize_for_tts("DOESN'T") == "DOES NOT"
+
+    def test_title_case_preserved(self):
+        assert normalize_for_tts("Don't") == "Do not"
+
+    def test_title_case_wont(self):
+        assert normalize_for_tts("Won't") == "Will not"
+
+    def test_curly_apostrophe_dont(self):
+        assert normalize_for_tts("don\u2019t") == "do not"
+
+    def test_curly_apostrophe_cant(self):
+        assert normalize_for_tts("can\u2019t") == "cannot"
+
+    def test_curly_apostrophe_uppercase(self):
+        assert normalize_for_tts("DON\u2019T") == "DO NOT"
+
+    def test_non_nont_im_unchanged(self):
+        assert normalize_for_tts("I'm ready") == "I'm ready"
+
+    def test_non_nont_were_unchanged(self):
+        assert normalize_for_tts("we're here") == "we're here"
+
+    def test_non_nont_its_unchanged(self):
+        assert normalize_for_tts("it's fine") == "it's fine"
+
+    def test_non_nont_theyre_unchanged(self):
+        assert normalize_for_tts("they're going") == "they're going"
+
+    def test_mid_sentence(self):
+        result = normalize_for_tts("He doesn't know.")
+        assert result == "He does not know."
+
+    def test_sentence_start(self):
+        result = normalize_for_tts("Don't worry.")
+        assert result == "Do not worry."
+
+    def test_sentence_end(self):
+        result = normalize_for_tts("He said he wouldn't.")
+        assert result == "He said he would not."
+
+    def test_multiple_contractions_in_one_sentence(self):
+        result = normalize_for_tts("She doesn't know and wasn't sure.")
+        assert result == "She does not know and was not sure."
+
+    def test_no_contractions_unchanged(self):
+        text = "The sun rose over the hills."
+        assert normalize_for_tts(text) == text
+
+    def test_empty_string(self):
+        assert normalize_for_tts("") == ""
