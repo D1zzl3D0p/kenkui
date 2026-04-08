@@ -25,7 +25,38 @@ console = Console()
 def cmd_config(args) -> int:
     """Handle 'kenkui config [profile]'."""
     from InquirerPy import inquirer
-    from InquirerPy.validator import NumberValidator
+
+    class _RangeValidator:
+        """Validate numeric text input within optional min/max bounds.
+
+        Duck-typed prompt_toolkit validator — no InquirerPy base class needed.
+        """
+
+        def __init__(self, min_val=None, max_val=None, float_ok=False):
+            self._min = min_val
+            self._max = max_val
+            self._float_ok = float_ok
+
+        def validate(self, document) -> None:
+            from prompt_toolkit.validation import ValidationError as _PTKValidationError
+            text = document.text.strip()
+            try:
+                val = float(text) if self._float_ok else int(text)
+            except ValueError:
+                raise _PTKValidationError(
+                    message=f"Enter a {'decimal' if self._float_ok else 'whole'} number.",
+                    cursor_position=len(document.text),
+                )
+            if self._min is not None and val < self._min:
+                raise _PTKValidationError(
+                    message=f"Minimum value is {self._min}.",
+                    cursor_position=len(document.text),
+                )
+            if self._max is not None and val > self._max:
+                raise _PTKValidationError(
+                    message=f"Maximum value is {self._max}.",
+                    cursor_position=len(document.text),
+                )
 
     # ---- Fetch current config and available voices from server -----------
     try:
@@ -47,12 +78,11 @@ def cmd_config(args) -> int:
 
     # ---- Prompt each field --------------------------------------------
 
-    workers = inquirer.number(
+    workers = inquirer.text(
         message="Parallel TTS workers:",
-        default=cfg.get("workers", max(2, multiprocessing.cpu_count() - 2)),
-        min_allowed=1,
-        max_allowed=multiprocessing.cpu_count(),
-        validate=NumberValidator(),
+        default=str(cfg.get("workers", max(2, multiprocessing.cpu_count() - 2))),
+        validate=_RangeValidator(min_val=1, max_val=multiprocessing.cpu_count()),
+        filter=lambda x: int(x.strip()),
     ).execute()
 
     default_output_dir = (
@@ -98,56 +128,52 @@ def cmd_config(args) -> int:
         default=cfg.get("m4b_bitrate", "96k"),
     ).execute()
 
-    pause_line_ms = inquirer.number(
+    pause_line_ms = inquirer.text(
         message="Pause between lines (ms):",
-        default=cfg.get("pause_line_ms", 800),
-        min_allowed=0,
-        validate=NumberValidator(),
+        default=str(cfg.get("pause_line_ms", 800)),
+        validate=_RangeValidator(min_val=0),
+        filter=lambda x: int(x.strip()),
     ).execute()
 
-    pause_chapter_ms = inquirer.number(
+    pause_chapter_ms = inquirer.text(
         message="Pause between chapters (ms):",
-        default=cfg.get("pause_chapter_ms", 2000),
-        min_allowed=0,
-        validate=NumberValidator(),
+        default=str(cfg.get("pause_chapter_ms", 2000)),
+        validate=_RangeValidator(min_val=0),
+        filter=lambda x: int(x.strip()),
     ).execute()
 
-    temp = inquirer.number(
+    temp = inquirer.text(
         message="Temperature: 0.3=conservative/robotic, 0.7=balanced, 0.9=expressive/unstable [0.0–1.5]:",
-        default=cfg.get("temp", 0.7),
-        min_allowed=0.0,
-        max_allowed=1.5,
-        float_allowed=True,
+        default=str(cfg.get("temp", 0.7)),
+        validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True),
+        filter=lambda x: float(x.strip()),
     ).execute()
 
-    lsd_decode_steps = inquirer.number(
+    lsd_decode_steps = inquirer.text(
         message="Generation steps — higher = better quality, prosody & clarity (slower) [1–50]:",
-        default=cfg.get("lsd_decode_steps", 1),
-        min_allowed=1,
-        max_allowed=50,
-        validate=NumberValidator(),
+        default=str(cfg.get("lsd_decode_steps", 1)),
+        validate=_RangeValidator(min_val=1, max_val=50),
+        filter=lambda x: int(x.strip()),
     ).execute()
 
-    eos_threshold = inquirer.number(
+    eos_threshold = inquirer.text(
         message=(
             "EOS threshold — cut-off sensitivity. "
             "Higher (e.g. -2.0) = later cut-off, good if audio truncates. "
             "Lower (e.g. -6.0) = earlier cut-off, use if there is babbling/silence. "
             "Default -4.0 [-10.0–0.0]:"
         ),
-        default=cfg.get("eos_threshold", -4.0),
-        min_allowed=-10.0,
-        max_allowed=0.0,
-        float_allowed=True,
+        default=str(cfg.get("eos_threshold", -4.0)),
+        validate=_RangeValidator(min_val=-10.0, max_val=0.0, float_ok=True),
+        filter=lambda x: float(x.strip()),
     ).execute()
 
     frames_after_eos_default = cfg.get("frames_after_eos") or 0
-    frames_after_eos_raw = inquirer.number(
+    frames_after_eos_raw = inquirer.text(
         message="Frames after EOS (0=auto ~3–20 frames, each frame=80ms; recommended: leave as 0=auto):",
-        default=frames_after_eos_default,
-        min_allowed=0,
-        max_allowed=50,
-        validate=NumberValidator(),
+        default=str(frames_after_eos_default),
+        validate=_RangeValidator(min_val=0, max_val=50),
+        filter=lambda x: int(x.strip()),
     ).execute()
     frames_after_eos: int | None = None if int(frames_after_eos_raw) == 0 else int(frames_after_eos_raw)
 
@@ -185,50 +211,44 @@ def cmd_config(args) -> int:
 
         noise_prop = pp.get("noise_reduce_prop_decrease", 0.8)
         if noise_reduce:
-            noise_prop = inquirer.number(
+            noise_prop = inquirer.text(
                 message="Noise reduction strength (0.0–1.0):",
-                default=pp.get("noise_reduce_prop_decrease", 0.8),
-                min_allowed=0.0,
-                max_allowed=1.0,
-                float_allowed=True,
+                default=str(pp.get("noise_reduce_prop_decrease", 0.8)),
+                validate=_RangeValidator(min_val=0.0, max_val=1.0, float_ok=True),
+                filter=lambda x: float(x.strip()),
             ).execute()
 
-        highpass_hz = inquirer.number(
+        highpass_hz = inquirer.text(
             message="High-pass cutoff Hz (removes low-end rumble) [0–500]:",
-            default=pp.get("highpass_hz", 80),
-            min_allowed=0,
-            max_allowed=500,
-            validate=NumberValidator(),
+            default=str(pp.get("highpass_hz", 80)),
+            validate=_RangeValidator(min_val=0, max_val=500),
+            filter=lambda x: int(x.strip()),
         ).execute()
 
-        lowshelf_hz = inquirer.number(
+        lowshelf_hz = inquirer.text(
             message="Low shelf Hz (boominess control) [50–1000]:",
-            default=pp.get("lowshelf_hz", 250),
-            min_allowed=50,
-            max_allowed=1000,
-            validate=NumberValidator(),
+            default=str(pp.get("lowshelf_hz", 250)),
+            validate=_RangeValidator(min_val=50, max_val=1000),
+            filter=lambda x: int(x.strip()),
         ).execute()
-        lowshelf_db = inquirer.number(
+        lowshelf_db = inquirer.text(
             message="Low shelf gain dB (negative = cut) [-12.0–6.0]:",
-            default=pp.get("lowshelf_db", -3.0),
-            min_allowed=-12.0,
-            max_allowed=6.0,
-            float_allowed=True,
+            default=str(pp.get("lowshelf_db", -3.0)),
+            validate=_RangeValidator(min_val=-12.0, max_val=6.0, float_ok=True),
+            filter=lambda x: float(x.strip()),
         ).execute()
 
-        presence_hz = inquirer.number(
+        presence_hz = inquirer.text(
             message="Presence boost Hz (speech clarity) [0–10000]:",
-            default=pp.get("presence_hz", 3500),
-            min_allowed=0,
-            max_allowed=10000,
-            validate=NumberValidator(),
+            default=str(pp.get("presence_hz", 3500)),
+            validate=_RangeValidator(min_val=0, max_val=10000),
+            filter=lambda x: int(x.strip()),
         ).execute()
-        presence_db = inquirer.number(
+        presence_db = inquirer.text(
             message="Presence boost dB [-6.0–9.0]:",
-            default=pp.get("presence_db", 2.0),
-            min_allowed=-6.0,
-            max_allowed=9.0,
-            float_allowed=True,
+            default=str(pp.get("presence_db", 2.0)),
+            validate=_RangeValidator(min_val=-6.0, max_val=9.0, float_ok=True),
+            filter=lambda x: float(x.strip()),
         ).execute()
 
         deesser = inquirer.confirm(
@@ -243,35 +263,31 @@ def cmd_config(args) -> int:
 
         autogain_target_lufs = pp.get("autogain_target_lufs", -23.0)
         if autogain:
-            autogain_target_lufs = inquirer.number(
+            autogain_target_lufs = inquirer.text(
                 message="Autogain target level (EBU R128 LUFS, e.g. -23.0) [-40.0 – -6.0]:",
-                default=pp.get("autogain_target_lufs", -23.0),
-                min_allowed=-40.0,
-                max_allowed=-6.0,
-                float_allowed=True,
+                default=str(pp.get("autogain_target_lufs", -23.0)),
+                validate=_RangeValidator(min_val=-40.0, max_val=-6.0, float_ok=True),
+                filter=lambda x: float(x.strip()),
             ).execute()
 
-        comp_thresh = inquirer.number(
+        comp_thresh = inquirer.text(
             message="Compressor threshold dB [-40.0–0.0]:",
-            default=pp.get("compressor_threshold_db", -18.0),
-            min_allowed=-40.0,
-            max_allowed=0.0,
-            float_allowed=True,
+            default=str(pp.get("compressor_threshold_db", -18.0)),
+            validate=_RangeValidator(min_val=-40.0, max_val=0.0, float_ok=True),
+            filter=lambda x: float(x.strip()),
         ).execute()
-        comp_ratio = inquirer.number(
+        comp_ratio = inquirer.text(
             message="Compressor ratio (e.g. 3.0 = 3:1) [1.0–20.0]:",
-            default=pp.get("compressor_ratio", 3.0),
-            min_allowed=1.0,
-            max_allowed=20.0,
-            float_allowed=True,
+            default=str(pp.get("compressor_ratio", 3.0)),
+            validate=_RangeValidator(min_val=1.0, max_val=20.0, float_ok=True),
+            filter=lambda x: float(x.strip()),
         ).execute()
 
-        limiter_thresh = inquirer.number(
+        limiter_thresh = inquirer.text(
             message="Limiter threshold dB (safety ceiling) [-12.0–0.0]:",
-            default=pp.get("limiter_threshold_db", -1.0),
-            min_allowed=-12.0,
-            max_allowed=0.0,
-            float_allowed=True,
+            default=str(pp.get("limiter_threshold_db", -1.0)),
+            validate=_RangeValidator(min_val=-12.0, max_val=0.0, float_ok=True),
+            filter=lambda x: float(x.strip()),
         ).execute()
 
         normalize = inquirer.confirm(
@@ -291,26 +307,20 @@ def cmd_config(args) -> int:
                 default="peak" if pp.get("normalize_lufs") is None else "ebu",
             ).execute()
             if norm_mode == "peak":
-                normalize_target = float(
-                    inquirer.number(
-                        message="Peak target dBFS (e.g. -3.0) [-12.0–0.0]:",
-                        default=pp.get("normalize_target_db", -3.0),
-                        min_allowed=-12.0,
-                        max_allowed=0.0,
-                        float_allowed=True,
-                    ).execute()
-                )
+                normalize_target = inquirer.text(
+                    message="Peak target dBFS (e.g. -3.0) [-12.0–0.0]:",
+                    default=str(pp.get("normalize_target_db", -3.0)),
+                    validate=_RangeValidator(min_val=-12.0, max_val=0.0, float_ok=True),
+                    filter=lambda x: float(x.strip()),
+                ).execute()
                 normalize_lufs = None
             else:
-                normalize_lufs = float(
-                    inquirer.number(
-                        message="LUFS target (e.g. -23.0 for Audible) [-40.0 – -5.0]:",
-                        default=pp.get("normalize_lufs") if pp.get("normalize_lufs") is not None else -23.0,
-                        min_allowed=-40.0,
-                        max_allowed=-5.0,
-                        float_allowed=True,
-                    ).execute()
-                )
+                normalize_lufs = inquirer.text(
+                    message="LUFS target (e.g. -23.0 for Audible) [-40.0 – -5.0]:",
+                    default=str(pp.get("normalize_lufs") if pp.get("normalize_lufs") is not None else -23.0),
+                    validate=_RangeValidator(min_val=-40.0, max_val=-5.0, float_ok=True),
+                    filter=lambda x: float(x.strip()),
+                ).execute()
 
         post_processing = {
             "enabled": True,

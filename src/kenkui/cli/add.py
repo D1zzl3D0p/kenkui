@@ -40,6 +40,45 @@ from rich.table import Table
 
 console = Console()
 
+
+# ---------------------------------------------------------------------------
+# Validator (replaces InquirerPy NumberValidator to fix cursor-positioning bug)
+# ---------------------------------------------------------------------------
+
+
+class _RangeValidator:
+    """Validate numeric text input within optional min/max bounds.
+
+    Duck-typed prompt_toolkit validator — no InquirerPy base class needed.
+    The prompt_toolkit validate= kwarg accepts any object with .validate(document).
+    """
+
+    def __init__(self, min_val=None, max_val=None, float_ok=False):
+        self._min = min_val
+        self._max = max_val
+        self._float_ok = float_ok
+
+    def validate(self, document) -> None:
+        from prompt_toolkit.validation import ValidationError as _PTKValidationError
+        text = document.text.strip()
+        try:
+            val = float(text) if self._float_ok else int(text)
+        except ValueError:
+            raise _PTKValidationError(
+                message=f"Enter a {'decimal' if self._float_ok else 'whole'} number.",
+                cursor_position=len(document.text),
+            )
+        if self._min is not None and val < self._min:
+            raise _PTKValidationError(
+                message=f"Minimum value is {self._min}.",
+                cursor_position=len(document.text),
+            )
+        if self._max is not None and val > self._max:
+            raise _PTKValidationError(
+                message=f"Maximum value is {self._max}.",
+                cursor_position=len(document.text),
+            )
+
 # ---------------------------------------------------------------------------
 # Helpers shared between wizard paths
 # ---------------------------------------------------------------------------
@@ -1017,42 +1056,40 @@ def _prompt_quality_overrides(app_config) -> dict:
 
     overrides: dict = {}
 
-    temp = _wizard_execute(inquirer.number(
+    temp = _wizard_execute(inquirer.text(
         message=f"Temperature (0.0–1.5, current default {app_config.temp}):",
-        default=app_config.temp,
-        float_allowed=True,
-        min_allowed=0.0,
-        max_allowed=1.5,
+        default=str(app_config.temp),
+        validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True),
+        filter=lambda x: float(x.strip()),
     ))
     if float(temp) != app_config.temp:
         overrides["job_temp"] = float(temp)
 
-    lsd = _wizard_execute(inquirer.number(
+    lsd = _wizard_execute(inquirer.text(
         message=f"LSD decode steps (1–50, current default {app_config.lsd_decode_steps}):",
-        default=app_config.lsd_decode_steps,
-        min_allowed=1,
-        max_allowed=50,
+        default=str(app_config.lsd_decode_steps),
+        validate=_RangeValidator(min_val=1, max_val=50),
+        filter=lambda x: int(x.strip()),
     ))
     if int(lsd) != app_config.lsd_decode_steps:
         overrides["job_lsd_decode_steps"] = int(lsd)
 
     noise_default = app_config.noise_clamp or 0.0
-    noise = _wizard_execute(inquirer.number(
+    noise = _wizard_execute(inquirer.text(
         message=f"Noise clamp (0=off, ~3.0=reduce glitches, current default {noise_default}):",
-        default=noise_default,
-        float_allowed=True,
-        min_allowed=0.0,
-        max_allowed=10.0,
+        default=str(noise_default),
+        validate=_RangeValidator(min_val=0.0, max_val=10.0, float_ok=True),
+        filter=lambda x: float(x.strip()),
     ))
     noise_val = float(noise)
     if noise_val != noise_default:
         overrides["job_noise_clamp"] = noise_val if noise_val > 0 else None
 
-    fae = _wizard_execute(inquirer.number(
+    fae = _wizard_execute(inquirer.text(
         message=f"Frames after EoS cutoff (0=suppress noise, current default {app_config.frames_after_eos}):",
-        default=app_config.frames_after_eos,
-        min_allowed=0,
-        max_allowed=50,
+        default=str(app_config.frames_after_eos),
+        validate=_RangeValidator(min_val=0, max_val=50),
+        filter=lambda x: int(x.strip()),
     ))
     if int(fae) != app_config.frames_after_eos:
         overrides["job_frames_after_eos"] = int(fae)
@@ -1072,20 +1109,20 @@ def _prompt_quality_overrides(app_config) -> dict:
     if bitrate != app_config.m4b_bitrate:
         overrides["job_m4b_bitrate"] = bitrate
 
-    pause_line = _wizard_execute(inquirer.number(
+    pause_line = _wizard_execute(inquirer.text(
         message=f"Silence between lines in ms (current default {app_config.pause_line_ms}):",
-        default=app_config.pause_line_ms,
-        min_allowed=0,
-        max_allowed=5000,
+        default=str(app_config.pause_line_ms),
+        validate=_RangeValidator(min_val=0, max_val=5000),
+        filter=lambda x: int(x.strip()),
     ))
     if int(pause_line) != app_config.pause_line_ms:
         overrides["job_pause_line_ms"] = int(pause_line)
 
-    pause_chapter = _wizard_execute(inquirer.number(
+    pause_chapter = _wizard_execute(inquirer.text(
         message=f"Silence between chapters in ms (current default {app_config.pause_chapter_ms}):",
-        default=app_config.pause_chapter_ms,
-        min_allowed=0,
-        max_allowed=30000,
+        default=str(app_config.pause_chapter_ms),
+        validate=_RangeValidator(min_val=0, max_val=30000),
+        filter=lambda x: int(x.strip()),
     ))
     if int(pause_chapter) != app_config.pause_chapter_ms:
         overrides["job_pause_chapter_ms"] = int(pause_chapter)
