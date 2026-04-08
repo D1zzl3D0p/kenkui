@@ -243,13 +243,12 @@ class WorkerServer:
             return True
 
     def resume_job(self, job_id: str) -> bool:
-        import time
         with self._lock:
             item = next((i for i in self._items if i.id == job_id), None)
             if item is None or item.status != JobStatus.PAUSED:
                 return False
-            item.status = JobStatus.PROCESSING
-            item.started_at = time.time()
+            item.status = JobStatus.PENDING
+            # started_at will be set by start_next_job() when the loop picks it up
             self._pause_requested = False
             self._save()
         self.start_processing()
