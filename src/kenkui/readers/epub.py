@@ -458,6 +458,10 @@ class EpubReader(EbookReader):
             # Extract from section, looking at direct children first
             for child in section.children:
                 if hasattr(child, "name") and child.name:
+                    css_classes = child.get("class") or []
+                    if any("linespace" in c.lower() for c in css_classes):
+                        paragraphs.append("")
+                        continue
                     text = self._clean_text(self._extract_text_with_italic_markers(child))
                     if text and len(text) >= 2:
                         paragraphs.append(text)
@@ -483,6 +487,10 @@ class EpubReader(EbookReader):
         if not paragraphs:
             for elem in soup.find_all(["p", "div"]):
                 if elem.find_parent(["p", "div"]):
+                    continue
+                css_classes = elem.get("class") or []
+                if any("linespace" in c.lower() for c in css_classes):
+                    paragraphs.append("")
                     continue
                 text = self._clean_text(self._extract_text_with_italic_markers(elem))
                 if text and len(text) >= 2:
