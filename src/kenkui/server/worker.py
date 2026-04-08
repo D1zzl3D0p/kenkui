@@ -51,6 +51,7 @@ class WorkerServer:
         self._processing_thread: threading.Thread | None = None
         self._running = False
         self._progress_callback: Callable[[float, str, int], None] | None = None
+        self._pause_requested: bool = False
         self._load()
 
         from ..services.book_cache import BookCache
@@ -233,6 +234,27 @@ class WorkerServer:
                 return True
             return False
 
+    def pause_job(self, job_id: str) -> bool:
+        with self._lock:
+            item = next((i for i in self._items if i.id == job_id), None)
+            if item is None or item.status != JobStatus.PROCESSING:
+                return False
+            self._pause_requested = True
+            return True
+
+    def resume_job(self, job_id: str) -> bool:
+        import time
+        with self._lock:
+            item = next((i for i in self._items if i.id == job_id), None)
+            if item is None or item.status != JobStatus.PAUSED:
+                return False
+            item.status = JobStatus.PROCESSING
+            item.started_at = time.time()
+            self._pause_requested = False
+            self._save()
+        self.start_processing()
+        return True
+
     def start_processing(self, progress_callback: Callable[[float, str, int], None] | None = None):
         """Start processing the next job in the queue."""
         if self._running:
@@ -287,8 +309,18 @@ class WorkerServer:
 
             cfg = self._build_config(job)
             builder = AudioBuilder(cfg, progress_callback=self._progress_callback)
+            builder.pause_check = lambda: self._pause_requested
 
             result = builder.run()
+
+            if getattr(builder, 'was_paused', False) is True:
+                with self._lock:
+                    item = next((i for i in self._items if i.id == self._current_id), None)
+                    if item is not None:
+                        item.status = JobStatus.PAUSED
+                        self._pause_requested = False
+                        self._save()
+                return
 
             if result:
                 output_path = str(cfg.output_path / f"{job.name}.m4b")

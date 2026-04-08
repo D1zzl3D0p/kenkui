@@ -35,6 +35,7 @@ _STATUS_STYLE: dict[str, str] = {
     "completed": "green",
     "failed": "red bold",
     "cancelled": "yellow",
+    "paused": "yellow bold",
 }
 
 
@@ -268,6 +269,32 @@ def cmd_queue(args) -> int:
             try:
                 client.stop_processing()
                 console.print("[yellow]Processing stopped.[/yellow]")
+            except Exception as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                return 1
+            return 0
+
+        if queue_command == "pause":
+            job_id = getattr(args, "job_id", None)
+            if not job_id:
+                console.print("[red]Error: job_id is required.[/red]")
+                return 1
+            try:
+                client.pause_job(job_id)
+                console.print(f"[yellow bold]Job {job_id} will pause at the next chapter boundary.[/yellow bold]")
+            except Exception as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                return 1
+            return 0
+
+        if queue_command == "resume":
+            job_id = getattr(args, "job_id", None)
+            if not job_id:
+                console.print("[red]Error: job_id is required.[/red]")
+                return 1
+            try:
+                client.resume_job(job_id)
+                console.print(f"[green]Job {job_id} resumed.[/green]")
             except Exception as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 return 1

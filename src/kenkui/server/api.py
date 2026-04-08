@@ -391,6 +391,22 @@ def stop_job(job_id: str):
     return {"status": "stopped", "job_id": job_id}
 
 
+@app.post("/queue/{job_id}/pause", response_model=OkResponse)
+def pause_job_endpoint(job_id: str):
+    server = get_server()
+    if not server.pause_job(job_id):
+        raise HTTPException(status_code=400, detail="Job is not currently processing")
+    return OkResponse()
+
+
+@app.post("/queue/{job_id}/resume", response_model=OkResponse)
+def resume_job_endpoint(job_id: str):
+    server = get_server()
+    if not server.resume_job(job_id):
+        raise HTTPException(status_code=400, detail="Job is not paused")
+    return OkResponse()
+
+
 @app.post("/queue/start")
 def start_processing():
     """Start processing the next job in the queue."""

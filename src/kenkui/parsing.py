@@ -229,6 +229,8 @@ class AudioBuilder:
         self._total_batches = 0
         self._completed_batches = 0
         self._current_chapter = ""
+        self.pause_check: "Callable[[], bool] | None" = None
+        self.was_paused: bool = False
 
     def _report_progress(self, chapter: str = "", eta: int = 0):
         """Report progress to callback if configured."""
@@ -368,6 +370,9 @@ class AudioBuilder:
             with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
                 futures = {}
                 for idx, ch in enumerate(chapters):
+                    if self.pause_check is not None and self.pause_check():
+                        self.was_paused = True
+                        break
                     info = chapter_batch_info.get(ch.title, (0, 0, idx == 0))
                     is_first = bool(info[2]) if len(info) > 2 else (idx == 0)
                     fut = pool.submit(

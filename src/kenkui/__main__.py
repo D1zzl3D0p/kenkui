@@ -233,6 +233,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     queue_sub.add_parser("stop", help="Stop current job.")
 
+    queue_pause = queue_sub.add_parser("pause", help="Pause a processing job at the next chapter boundary.")
+    queue_pause.add_argument("job_id", help="Job ID to pause.")
+
+    queue_resume = queue_sub.add_parser("resume", help="Resume a paused job.")
+    queue_resume.add_argument("job_id", help="Job ID to resume.")
+
     # ---- kenkui config -----------------------------------------------------
     cfg_p = sub.add_parser("config", help="Create or edit a config file.")
     cfg_p.add_argument(

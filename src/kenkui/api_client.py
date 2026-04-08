@@ -164,6 +164,14 @@ class APIClient:
         """Stop a processing job."""
         return self._request("POST", f"/queue/{job_id}/stop")
 
+    def pause_job(self, job_id: str) -> dict:
+        """Pause a currently processing job at the next chapter boundary."""
+        return self._request("POST", f"/queue/{job_id}/pause")
+
+    def resume_job(self, job_id: str) -> dict:
+        """Resume a paused job."""
+        return self._request("POST", f"/queue/{job_id}/resume")
+
     def start_processing(self) -> dict:
         """Start processing the next job in the queue."""
         return self._request("POST", "/queue/start")
