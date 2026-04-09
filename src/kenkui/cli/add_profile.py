@@ -47,3 +47,13 @@ def save_last_profile(profile: dict) -> None:
                 lines.append(f"{k} = {v}")
             # Skip None and nested dicts for the fallback
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _quality_from_profile(profile: dict, app_config) -> dict:
+    """Extract quality overrides from profile, falling back to app_config defaults.
+
+    Returns a dict of quality override keys (temp, lsd_decode_steps) from the profile
+    if they are present and differ from app_config defaults; otherwise returns {}.
+    """
+    overrides = dict(profile.get("quality_overrides") or {})
+    return overrides

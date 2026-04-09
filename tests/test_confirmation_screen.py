@@ -133,6 +133,75 @@ class TestStateToJobKwargs:
         assert "output_path" in kwargs
 
 
+class TestRunConfirmationScreen:
+    """End-to-end tests for _run_confirmation_screen using mocked InquirerPy."""
+
+    def _app_config(self, **kw):
+        from kenkui.models import AppConfig
+        cfg = AppConfig()
+        for k, v in kw.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    def test_submit_immediately_returns_job_kwargs(self, tmp_path):
+        """When user selects Submit Job, screen returns a job-kwargs dict."""
+        from kenkui.cli.add import _run_confirmation_screen
+        from kenkui.cli import add_profile
+        import argparse
+
+        cfg = self._app_config(default_voice="alba")
+
+        mock_client = MagicMock()
+        mock_client.list_voices.return_value = {"voices": []}
+
+        with patch.object(add_profile, "_profile_path", return_value=tmp_path / "p.toml"):
+            with patch("kenkui.cli.add._wizard_execute") as mock_exec, \
+                 patch("kenkui.cli.add._get_client", return_value=mock_client):
+                mock_exec.return_value = "submit"
+
+                args = argparse.Namespace(server_host="127.0.0.1", server_port=45365,
+                                          output=None, voice=None, narration_mode=None,
+                                          chapter_preset=None, headless=False)
+                result = _run_confirmation_screen(tmp_path / "book.epub", cfg, args)
+
+        assert result is not None
+        assert "ebook_path" in result
+
+    def test_chapters_submenu_then_submit(self, tmp_path):
+        """Navigating into chapters submenu and back, then submitting, returns job kwargs."""
+        from kenkui.cli.add import _run_confirmation_screen
+        from kenkui.cli import add_profile
+        import argparse
+
+        cfg = self._app_config(default_voice="alba")
+
+        mock_client = MagicMock()
+        mock_client.list_voices.return_value = {"voices": []}
+
+        with patch.object(add_profile, "_profile_path", return_value=tmp_path / "p.toml"):
+            with patch("kenkui.cli.add._wizard_execute") as mock_exec, \
+                 patch("kenkui.cli.add._get_client", return_value=mock_client):
+                # Simulate: select "chapters" → (submenu returns "back") → select "submit"
+                call_count = [0]
+                def side_effect(prompt):
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        return "chapters"  # enter chapters submenu
+                    elif call_count[0] == 2:
+                        return "back"      # exit submenu
+                    else:
+                        return "submit"    # confirm
+                mock_exec.side_effect = side_effect
+
+                args = argparse.Namespace(server_host="127.0.0.1", server_port=45365,
+                                          output=None, voice=None, narration_mode=None,
+                                          chapter_preset=None, headless=False)
+                result = _run_confirmation_screen(tmp_path / "book.epub", cfg, args)
+
+        assert result is not None
+        assert "ebook_path" in result
+
+
 class TestProfilePersistence:
     def test_round_trip(self, tmp_path):
         from kenkui.cli import add_profile

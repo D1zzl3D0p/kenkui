@@ -1429,6 +1429,8 @@ def _state_to_profile(state: dict) -> dict:
         "narration_mode": state.get("narration_mode", "single"),
         "chapter_preset": chap_sel.get("preset", "content-only"),
         "output_dir": state.get("output_dir", ""),
+        "quality_overrides": state.get("quality_overrides") or {},
+        "pp_overrides": state.get("pp_overrides") or {},
     }
 
 
@@ -1543,6 +1545,7 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
         temp_str = _wizard_execute(inquirer.text(
             message="Temperature [0.0-1.5] (blank=inherit from config):",
             default=str(overrides.get("temp", "")),
+            validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True),
         )).strip()
         if temp_str:
             try:
@@ -1552,6 +1555,7 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
         steps_str = _wizard_execute(inquirer.text(
             message="Generation steps [1-50] (blank=inherit):",
             default=str(overrides.get("lsd_decode_steps", "")),
+            validate=_RangeValidator(min_val=1, max_val=50, float_ok=False),
         )).strip()
         if steps_str:
             try:
@@ -1582,16 +1586,9 @@ def _submenu_post_processing(state: dict, app_config) -> dict:
 def _submenu_manage_voices(state: dict, app_config, client) -> None:
     """Voice management submenu (list/filter voices). Does not modify job state."""
     from InquirerPy import inquirer
-    from .voices import cmd_voices_list
-    import argparse
+    from .voices import _voices_interactive
 
-    # Show voice list using existing cli/voices.py infrastructure
-    fake_args = argparse.Namespace(gender=None, accent=None, dataset=None, source=None,
-                                   server_host="127.0.0.1", server_port=45365)
-    try:
-        cmd_voices_list(fake_args)
-    except Exception:
-        pass
+    _voices_interactive(client)
     _wizard_execute(inquirer.text(message="Press Enter to return to job setup..."))
 
 

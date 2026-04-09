@@ -296,6 +296,48 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _voices_interactive(client) -> None:
+    """Display voice list inline (no sys.exit). Called from confirmation screen."""
+    try:
+        voices_data = client.list_voices()
+    except Exception as exc:
+        console.print(f"[red]Could not load voices: {exc}[/red]")
+        return
+
+    voices = voices_data.get("voices") or []
+    if not voices:
+        console.print("[dim]No voices available.[/dim]")
+        return
+
+    # Reuse the same table rendering as cmd_voices_list
+    table = Table(title="Available Voices", show_header=True, header_style="bold cyan")
+    table.add_column("Name", style="bold", min_width=20)
+    table.add_column("Source", min_width=12)
+    table.add_column("Gender", min_width=8)
+    table.add_column("Accent", min_width=22)
+    table.add_column("Dataset", min_width=6)
+
+    source_style = {
+        "compiled": "green",
+        "builtin": "blue",
+        "uncompiled": "yellow",
+    }
+
+    for v in voices:
+        src = v.get("source", "")
+        style = source_style.get(src, "")
+        table.add_row(
+            v.get("name", ""),
+            f"[{style}]{src}[/{style}]" if style else src,
+            v.get("gender") or "—",
+            v.get("accent") or "—",
+            v.get("dataset") or "—",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]{len(voices)} voice(s) listed.[/dim]")
+
+
 def _tui_execute(prompt):
     """Execute an InquirerPy prompt. Extracted for test monkeypatching."""
     return prompt.execute()
