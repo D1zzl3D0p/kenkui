@@ -1131,273 +1131,13 @@ def _prompt_quality_overrides(app_config) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Interactive wizard core
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Wizard step functions (each accepts state dict, returns updated state dict)
-# ---------------------------------------------------------------------------
-
-
-def _step_chapters(state: dict) -> dict:
-    """Step 1: chapter preset + selection."""
-    book_path: Path = state["_book_path"]
-    args = state.get("_args")
-    if args is not None:
-        with _get_client(args) as client:
-            chapter_selection = _prompt_chapter_preset_and_selection(book_path, client=client)
-    else:
-        chapter_selection = _prompt_chapter_preset_and_selection(book_path)
-    return {**state, "chapter_selection": chapter_selection}
-
-
-def _step_mode(state: dict) -> dict:
-    """Step 2: narration mode select."""
-    from InquirerPy import inquirer
-
-    mode_val = _wizard_execute(inquirer.select(
-        message="Narration mode:",
-        choices=[
-            {"name": "Single Voice", "value": "single"},
-            {"name": "Multi-Voice  (per-character, requires local LLM)", "value": "multi"},
-            {"name": "Chapter Voice  (assign a voice per chapter)", "value": "chapter"},
-        ],
-    ))
-    return {**state, "mode": mode_val}
-
-
-def _step_quality(state: dict) -> dict:
-    """Step 3: quality overrides."""
-    app_config = state["_app_config"]
-    quality_overrides = _prompt_quality_overrides(app_config)
-    return {**state, "quality_overrides": quality_overrides}
-
-
-def _step_output_dir(state: dict) -> dict:
-    """Step 4: output directory."""
-    from InquirerPy import inquirer
-
-    app_config = state["_app_config"]
-    book_path: Path = state["_book_path"]
-    default_out = str(app_config.default_output_dir or book_path.parent)
-    output_dir = (
-        _wizard_execute(inquirer.text(
-            message="Output directory:",
-            default=default_out,
-        )).strip()
-        or default_out
-    )
-    return {**state, "output_dir": output_dir}
-
-
-def _step_voice_setup(state: dict) -> dict:
-    """Step 5: mode-specific voice setup (multi / chapter / single)."""
-    from InquirerPy import inquirer
-
-    mode_val: str = state["mode"]
-    app_config = state["_app_config"]
-    book_path: Path = state["_book_path"]
-    chapter_selection: dict = state["chapter_selection"]
-    args = state["_args"]
-
-    voice: str = app_config.default_voice
-    speaker_voices: dict[str, str] = {}
-    chapter_voices: dict[str, str] = {}
-    roster_cache_path: str | None = None
-    narration_mode = mode_val
-    fast_result = None
-    series_manifest = None
-    inherited_voices: dict[str, str] = {}
-    pinned: set[str] = set()
-
-    if mode_val == "multi":
-        from ..config import save_app_config, DEFAULT_CONFIG_PATH
-        from ..nlp.setup import check_llm_available, run_setup_dialogue
-
-        console.print()
-        with _get_client(args) as client:
-            if not _check_multivoice_requirements(client):
-                console.print("[yellow]Falling back to single-voice mode.[/yellow]")
-                narration_mode = "single"
-                mode_val = "single"
-
-            if mode_val == "multi":
-                console.print()
-                console.print(
-                    f"NLP model for speaker inference: [bold]{app_config.nlp_model}[/bold]"
-                )
-                reconfigure_action = _wizard_execute(inquirer.select(
-                    message="Continue with this model or reconfigure?",
-                    choices=[
-                        {"name": f"Continue with {app_config.nlp_model}", "value": "continue"},
-                        {"name": "Reconfigure NLP model…", "value": "reconfigure"},
-                    ],
-                ))
-
-                if reconfigure_action == "reconfigure" or not check_llm_available(app_config):
-                    updated = run_setup_dialogue(app_config)
-                    if updated is None:
-                        console.print("[yellow]Falling back to single-voice mode.[/yellow]")
-                        narration_mode = "single"
-                    else:
-                        app_config = updated
-                        save_app_config(app_config, DEFAULT_CONFIG_PATH)
-                        console.print(
-                            f"[green]NLP model set to [bold]{app_config.nlp_model}[/bold][/green]"
-                        )
-
-            if narration_mode == "multi":
-                # Pick narrator fallback voice upfront; characters are assigned
-                # automatically during processing (deferred cast assignment).
-                console.print()
-                console.print("[bold]Select fallback voice for NARRATOR:[/bold]")
-                narrator_voice = _prompt_voice(
-                    default=app_config.default_voice,
-                    message="NARRATOR fallback voice:",
-                    client=client,
-                )
-                _check_hf_auth(narrator_voice, args)
-                speaker_voices = {"NARRATOR": narrator_voice}
-
-                series_manifest, _, _ = _run_series_setup(
-                    fast_result=None,
-                    mode="multi",
-                    client=client,
-                )
-
-    elif mode_val == "chapter":
-        narration_mode = "single"
-        console.print()
-        console.print("[bold]Voice for narrator / unassigned chapters:[/bold]")
-        with _get_client(args) as _chap_client:
-            voice = _prompt_voice(default=app_config.default_voice, message="Default voice:", client=_chap_client)
-            _check_hf_auth(voice, args)
-            try:
-                parse_result = _chap_client.parse_book(str(book_path))
-                from ..models import Chapter
-                all_chapters = [
-                    Chapter(index=ch.get("index", i), title=ch.get("title", ""), paragraphs=[])
-                    for i, ch in enumerate(parse_result.get("chapters", []))
-                ]
-                chapter_voices = _prompt_chapter_voices(all_chapters, voice)
-            except Exception as exc:
-                console.print(f"[red]Could not parse book for chapter assignment: {exc}[/red]")
-                chapter_voices = {}
-
-    return {
-        **state,
-        "_app_config": app_config,  # may have been updated during multi setup
-        "voice": voice,
-        "speaker_voices": speaker_voices,
-        "chapter_voices": chapter_voices,
-        "roster_cache_path": roster_cache_path,
-        "narration_mode": narration_mode,
-        "mode": mode_val,
-        "series_slug": series_manifest.slug if series_manifest is not None else None,
-        "_series_manifest": series_manifest if narration_mode == "multi" else None,
-    }
-
-
-def _step_narrator_voice(state: dict) -> dict:
-    """Step 6: narrator voice for single mode (no-op for multi/chapter)."""
-    narration_mode: str = state["narration_mode"]
-    mode_val: str = state["mode"]
-    app_config = state["_app_config"]
-    speaker_voices: dict = state["speaker_voices"]
-    voice: str = state["voice"]
-    args = state["_args"]
-
-    if narration_mode == "multi":
-        voice = speaker_voices.get("NARRATOR", app_config.default_voice)
-    elif mode_val != "chapter":
-        console.print()
-        console.print("[bold]Voice:[/bold]")
-        with _get_client(args) as _voice_client:
-            voice = _prompt_voice(default=app_config.default_voice, message="Select voice:", client=_voice_client)
-        _check_hf_auth(voice, args)
-
-    return {**state, "voice": voice}
-
-
-def _step_confirm(state: dict) -> dict:
-    """Step 7: confirmation table + submit."""
-    from InquirerPy import inquirer
-
-    book_path: Path = state["_book_path"]
-    chapter_selection: dict = state["chapter_selection"]
-    mode_val: str = state["mode"]
-    narration_mode: str = state["narration_mode"]
-    voice: str = state["voice"]
-    speaker_voices: dict = state["speaker_voices"]
-    chapter_voices: dict = state["chapter_voices"]
-    quality_overrides: dict = state["quality_overrides"]
-    output_dir: str = state["output_dir"]
-    roster_cache_path = state["roster_cache_path"]
-    series_slug = state.get("series_slug")
-
-    console.print()
-    summary = Table(title="Job Summary", show_header=False, box=None)
-    summary.add_column("Field", style="bold", width=20)
-    summary.add_column("Value")
-    summary.add_row("Book", str(book_path))
-    preset_label = chapter_selection.get("preset", "content-only")
-    included = chapter_selection.get("included", [])
-    if included:
-        summary.add_row("Chapters", f"{preset_label} ({len(included)} selected)")
-    else:
-        summary.add_row("Chapters", preset_label)
-    display_mode = mode_val if mode_val != "chapter" else "chapter-voice"
-    summary.add_row("Mode", display_mode)
-    summary.add_row("Narrator voice", voice)
-    if narration_mode == "multi":
-        non_narrator = {k: v for k, v in speaker_voices.items() if k != "NARRATOR"}
-        if non_narrator:
-            summary.add_row("Character voices", f"{len(non_narrator)} assigned")
-        else:
-            summary.add_row("Character voices", "Auto-assign during processing")
-        if series_slug:
-            series_manifest = state.get("_series_manifest")
-            series_label = series_manifest.name if series_manifest else series_slug
-            summary.add_row("Series", series_label)
-    if chapter_voices:
-        summary.add_row("Chapter voices", f"{len(chapter_voices)} chapters assigned")
-    if quality_overrides:
-        summary.add_row("Quality overrides", ", ".join(
-            f"{k.replace('job_', '')}={v}" for k, v in quality_overrides.items()
-        ))
-    summary.add_row("Output", output_dir)
-    console.print(summary)
-    console.print()
-
-    confirmed = _wizard_execute(inquirer.confirm(message="Queue this job?", default=True))
-    if not confirmed:
-        console.print("Cancelled.")
-        return {**state, "_cancelled": True}
-
-    job_kwargs = dict(
-        ebook_path=str(book_path),
-        voice=voice,
-        chapter_selection=chapter_selection,
-        output_path=output_dir,
-        narration_mode=narration_mode,
-        speaker_voices=speaker_voices or None,
-        annotated_chapters_path=None,
-        roster_cache_path=roster_cache_path,
-        chapter_voices=chapter_voices or None,
-        series_slug=series_slug,
-        **quality_overrides,
-    )
-    return {**state, "_job_kwargs": job_kwargs}
-
-
-# ---------------------------------------------------------------------------
 # Hub-and-spoke confirmation screen
 # ---------------------------------------------------------------------------
 
 
 def _init_state_from_profile(book_path, app_config, profile: dict) -> dict:
     """Build initial wizard state from last profile, falling back to app_config defaults."""
+    from .add_profile import load_last_profile, save_last_profile, _quality_from_profile
     return {
         "_book_path": book_path,
         "_app_config": app_config,
@@ -1411,7 +1151,7 @@ def _init_state_from_profile(book_path, app_config, profile: dict) -> dict:
         "output_dir": profile.get("output_dir") or str(
             getattr(app_config, "default_output_dir", None) or book_path.parent
         ),
-        "quality_overrides": dict(profile.get("quality_overrides") or {}),
+        "quality_overrides": _quality_from_profile(profile, app_config),
         "pp_overrides": dict(profile.get("pp_overrides") or {}),
         "speaker_voices": {},
         "chapter_voices": {},
@@ -1495,8 +1235,10 @@ def _submenu_chapters(state: dict, app_config, client) -> dict:
         try:
             chapter_selection = _prompt_chapter_preset_and_selection(book_path, client=client)
             state = {**state, "chapter_selection": chapter_selection}
-        except Exception:
-            pass
+        except (KeyboardInterrupt, EOFError):
+            raise
+        except Exception as exc:
+            console.print(f"[yellow]Could not load chapter list: {exc}[/yellow]")
     return state
 
 
@@ -1618,15 +1360,19 @@ def _state_to_job_kwargs(state: dict) -> dict:
         series_slug=series_slug,
         **quality_overrides,
     )
+    # pp_overrides are tracked in state for future API support but not yet forwarded
+    # to add_job (the API does not yet accept per-job post-processing overrides).
     return job_kwargs
 
 
-def _run_confirmation_screen(book_path, app_config, args):
+def _run_confirmation_screen(book_path, app_config, args, client=None):
     """Hub-and-spoke confirmation screen. Returns job kwargs or None if cancelled."""
     from InquirerPy import inquirer
     from .add_profile import load_last_profile, save_last_profile
 
-    client = _get_client(args)
+    _owns_client = client is None
+    if _owns_client:
+        client = _get_client(args)
     profile = load_last_profile()
     state = _init_state_from_profile(book_path, app_config, profile)
 
@@ -1655,53 +1401,8 @@ def _run_confirmation_screen(book_path, app_config, args):
             elif action is None or action == "cancel":
                 return None
     finally:
-        client.close()
-
-
-def _run_wizard(book_path: Path, app_config, args) -> dict | None:
-    """Run the interactive wizard using a step-stack state machine.
-
-    Returns a kwargs dict suitable for client.add_job(), or None if the user
-    cancels.
-    """
-    console.rule(f"[bold]kenkui — {book_path.name}[/bold]")
-
-    state: dict = {
-        "_book_path": book_path,
-        "_app_config": app_config,
-        "_args": args,
-        # Defaults for step outputs
-        "voice": app_config.default_voice,
-        "speaker_voices": {},
-        "chapter_voices": {},
-        "roster_cache_path": None,
-        "quality_overrides": {},
-        "series_slug": None,
-        "_series_manifest": None,
-    }
-
-    steps = [
-        _step_chapters,
-        _step_mode,
-        _step_quality,
-        _step_output_dir,
-        _step_voice_setup,
-        _step_narrator_voice,
-        _step_confirm,
-    ]
-
-    i = 0
-    while i < len(steps):
-        state = steps[i](state)
-        if state.get("_abort"):
-            return None
-        if state.get("_cancelled"):
-            return None
-        if "_job_kwargs" in state:
-            return state["_job_kwargs"]
-        i += 1
-
-    return None
+        if _owns_client:
+            client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1817,7 +1518,7 @@ def cmd_add(args) -> int:
 
         # Interactive: hub-and-spoke confirmation screen.
         app_config = _load_config(args)
-        job_kwargs = _run_confirmation_screen(book_path, app_config, args)
+        job_kwargs = _run_confirmation_screen(book_path, app_config, args, client=client)
         if job_kwargs is None:
             return 0  # User cancelled
 
@@ -1855,7 +1556,7 @@ def cmd_bare(args) -> int:
 
         # Interactive: hub-and-spoke confirmation screen.
         app_config = _load_config(args)
-        job_kwargs = _run_confirmation_screen(book_path, app_config, args)
+        job_kwargs = _run_confirmation_screen(book_path, app_config, args, client=client)
         if job_kwargs is None:
             return 0  # User cancelled
 

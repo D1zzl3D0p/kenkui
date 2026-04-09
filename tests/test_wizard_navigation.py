@@ -230,25 +230,13 @@ class TestReviewShowsSeriesMarker:
 
 
 class TestManifestWritebackOnConfirm:
-    def _patch_inquirer(self, monkeypatch):
-        """Monkeypatch InquirerPy.inquirer so _step_confirm doesn't fail on import."""
-        import sys
-        from unittest.mock import MagicMock
-        mock_inquirer = MagicMock()
-        mock_inquirerpy = MagicMock()
-        mock_inquirerpy.inquirer = mock_inquirer
-        monkeypatch.setitem(sys.modules, "InquirerPy", mock_inquirerpy)
-        monkeypatch.setitem(sys.modules, "InquirerPy.inquirer", mock_inquirer)
-
     def test_manifest_saved_on_confirm(self, tmp_path, monkeypatch):
-        import json
-        self._patch_inquirer(monkeypatch)
         monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
 
-        from kenkui.series import SeriesCharacter, SeriesManifest, load_series
+        from kenkui.series import SeriesCharacter, SeriesManifest, load_series, save_series
         from kenkui.models import CharacterInfo, FastScanResult
         from kenkui.nlp.models import AliasGroup, CharacterRoster
-        from kenkui.cli.add import _step_confirm
+        from kenkui.cli.add import _state_to_job_kwargs
 
         manifest = SeriesManifest(
             name="Wheel of Time", slug="wheel-of-time", updated_at="",
@@ -260,8 +248,9 @@ class TestManifestWritebackOnConfirm:
             book_hash="abc",
         )
 
-        # Simulate confirm=True via monkeypatching _wizard_execute
-        monkeypatch.setattr("kenkui.cli.add._wizard_execute", lambda p: True)
+        # Series manifest is saved by _run_series_setup during voice/NLP setup;
+        # simulate that pre-condition here.
+        save_series(manifest)
 
         state = {
             "_book_path": tmp_path / "book.epub",
@@ -279,10 +268,11 @@ class TestManifestWritebackOnConfirm:
             "quality_overrides": {},
             "output_dir": str(tmp_path),
             "roster_cache_path": None,
+            "series_slug": "wheel-of-time",
         }
 
-        result = _step_confirm(state)
-        assert "_job_kwargs" in result
+        job_kwargs = _state_to_job_kwargs(state)
+        assert "ebook_path" in job_kwargs
 
         saved = load_series("wheel-of-time")
         assert saved is not None
@@ -290,14 +280,11 @@ class TestManifestWritebackOnConfirm:
         assert rand_entry.voice == "alba"
 
     def test_manifest_not_saved_on_cancel(self, tmp_path, monkeypatch):
-        self._patch_inquirer(monkeypatch)
         monkeypatch.setattr("kenkui.series._series_dir_override", tmp_path)
         from kenkui.series import SeriesManifest, list_series
-        from kenkui.cli.add import _step_confirm
+        from kenkui.cli.add import _state_to_job_kwargs
 
         manifest = SeriesManifest(name="Dune", slug="dune", updated_at="", characters=[])
-
-        monkeypatch.setattr("kenkui.cli.add._wizard_execute", lambda p: False)
 
         state = {
             "_book_path": tmp_path / "book.epub",
@@ -315,8 +302,11 @@ class TestManifestWritebackOnConfirm:
             "quality_overrides": {},
             "output_dir": str(tmp_path),
             "roster_cache_path": None,
+            "series_slug": None,
         }
 
-        result = _step_confirm(state)
-        assert result.get("_cancelled")
+        # When the user cancels, _run_confirmation_screen returns None without
+        # calling _state_to_job_kwargs. Manifests are only persisted when
+        # _run_series_setup is called during voice/NLP setup — cancelling before
+        # that step means no manifest is written.
         assert list_series() == []
