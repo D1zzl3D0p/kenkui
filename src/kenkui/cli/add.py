@@ -1189,7 +1189,14 @@ def _build_confirmation_choices(state: dict, app_config) -> list:
     voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
     mode = state.get("narration_mode", "single")
     default_voice = getattr(app_config, "default_voice", "alba")
-    voice_tag = "[DEFAULT]" if (voice == default_voice and mode == "single") else "[CUSTOM]"
+    has_chapter_voices = bool(state.get("chapter_voices"))
+    if has_chapter_voices:
+        mode_display = "chapter-voice"
+    elif mode == "multi":
+        mode_display = "multi-voice NLP"
+    else:
+        mode_display = "single"
+    voice_tag = "[DEFAULT]" if (voice == default_voice and mode == "single" and not has_chapter_voices) else "[CUSTOM]"
 
     quality_tag = "[DEFAULT]" if not state.get("quality_overrides") else "[CUSTOM]"
     output = state.get("output_dir", "")
@@ -1197,7 +1204,7 @@ def _build_confirmation_choices(state: dict, app_config) -> list:
     return [
         Separator(f"  Book:      {book_name}"),
         Separator(f"  Chapters:  {preset} ({chap_count})  {chap_tag}"),
-        Separator(f"  Voice/NLP: {voice} / {mode}  {voice_tag}"),
+        Separator(f"  Voice/NLP: {voice} / {mode_display}  {voice_tag}"),
         Separator(f"  Quality:   {quality_tag}"),
         Separator(f"  Output:    {output}"),
         Separator(""),
@@ -1246,25 +1253,142 @@ def _submenu_voice(state: dict, app_config, client) -> dict:
     """Voice/NLP submenu. Returns updated state."""
     from InquirerPy import inquirer
 
+    cur_mode = state.get("narration_mode", "single")
+    has_chapter_voices = bool(state.get("chapter_voices"))
+    if has_chapter_voices:
+        mode_label = "chapter-voice"
+    elif cur_mode == "multi":
+        mode_label = "multi-voice NLP"
+    else:
+        mode_label = "single narrator"
+
     action = _wizard_execute(inquirer.select(
         message="Voice / NLP",
         choices=[
-            {"name": f"Keep current ({state.get('voice', '')} / {state.get('narration_mode', 'single')})", "value": "keep"},
-            {"name": "Change voice...", "value": "select"},
-            {"name": "Reset to defaults", "value": "reset"},
+            {"name": f"Keep current ({state.get('voice', '')} / {mode_label})", "value": "keep"},
+            {"name": "Change narrator voice...", "value": "select"},
+            {"name": "Change mode...", "value": "mode"},
+            {"name": "Reset to defaults (single narrator)", "value": "reset"},
             {"name": "Back", "value": "back"},
         ],
     ))
     if action == "reset":
         state = {**state,
                  "voice": getattr(app_config, "default_voice", "alba"),
-                 "narration_mode": "single"}
+                 "narration_mode": "single",
+                 "speaker_voices": {},
+                 "chapter_voices": {}}
     elif action == "select":
-        console.print("[bold]Voice:[/bold]")
         voice = _prompt_voice(default=state.get("voice", app_config.default_voice),
-                              message="Select voice:", client=client)
+                              message="Select narrator voice:", client=client)
         state = {**state, "voice": voice}
+    elif action == "mode":
+        state = _submenu_voice_mode(state, app_config, client)
     return state
+
+
+def _submenu_voice_mode(state: dict, app_config, client) -> dict:
+    """Mode selection for Voice / NLP submenu."""
+    from InquirerPy import inquirer
+
+    mode = _wizard_execute(inquirer.select(
+        message="Narration mode:",
+        choices=[
+            {"name": "Single narrator  — one voice reads everything", "value": "single"},
+            {"name": "Multi-voice (NLP) — voice per character (requires spaCy + Ollama)", "value": "multi"},
+            {"name": "Chapter-voice    — assign a voice per chapter", "value": "chapter"},
+        ],
+    ))
+    if mode == "single":
+        state = {**state, "narration_mode": "single", "speaker_voices": {}, "chapter_voices": {}}
+    elif mode == "multi":
+        state = _setup_multi_voice(state, app_config, client)
+    elif mode == "chapter":
+        state = _setup_chapter_voice(state, client)
+    return state
+
+
+def _setup_multi_voice(state: dict, app_config, client) -> dict:
+    """Run the full multi-voice NLP setup flow. Returns updated state."""
+    from kenkui.models import FastScanResult
+
+    if not _check_multivoice_requirements(client):
+        return state
+
+    book_path = state["_book_path"]
+    nlp_model = getattr(app_config, "nlp_model", None)
+
+    scan_raw = _run_fast_scan_wizard(client, book_path, nlp_model)
+    if scan_raw is None:
+        console.print("[yellow]Character scan failed; keeping current mode.[/yellow]")
+        return state
+
+    scan_result = FastScanResult.from_dict(scan_raw)
+
+    manifest, inherited_voices, pinned = _run_series_setup(
+        fast_result=scan_result, mode="multi", client=client
+    )
+
+    voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
+    args = state.get("_args")
+    series_name = manifest.name if manifest else None
+
+    speaker_voices = _prompt_multivoice_character_voices(
+        scan_result,
+        default_voice=voice,
+        args=args,
+        client=client,
+        inherited_voices=inherited_voices,
+        pinned=pinned,
+        series_name=series_name,
+    )
+
+    roster_cache_path = None
+    try:
+        from kenkui.nlp import cache_roster
+        cached = cache_roster(scan_result, book_path)
+        roster_cache_path = str(cached)
+    except Exception as exc:
+        console.print(f"[dim]Could not cache roster: {exc}[/dim]")
+
+    return {
+        **state,
+        "narration_mode": "multi",
+        "speaker_voices": speaker_voices,
+        "chapter_voices": {},
+        "roster_cache_path": roster_cache_path,
+        "_series_manifest": manifest,
+        "series_slug": manifest.slug if manifest else None,
+    }
+
+
+def _setup_chapter_voice(state: dict, client) -> dict:
+    """Run chapter-voice assignment flow. Returns updated state."""
+    import types
+
+    book_path = state["_book_path"]
+    voice = state.get("voice", "alba")
+
+    try:
+        parsed = client.parse_book(str(book_path))
+    except Exception as exc:
+        console.print(f"[red]Could not load chapter list: {exc}[/red]")
+        return state
+
+    raw_chapters = parsed.get("chapters") or []
+    if not raw_chapters:
+        console.print("[yellow]No chapters found.[/yellow]")
+        return state
+
+    chapters = [types.SimpleNamespace(**ch) for ch in raw_chapters]
+    chapter_voices = _prompt_chapter_voices(chapters, default_voice=voice)
+
+    return {
+        **state,
+        "narration_mode": "single",
+        "chapter_voices": chapter_voices,
+        "speaker_voices": {},
+    }
 
 
 def _submenu_audio_quality(state: dict, app_config) -> dict:
