@@ -50,10 +50,11 @@ def save_last_profile(profile: dict) -> None:
 
 
 def _quality_from_profile(profile: dict, app_config) -> dict:
-    """Extract quality overrides from profile, falling back to app_config defaults.
+    """Extract quality overrides from the profile dict.
 
-    Returns a dict of quality override keys (temp, lsd_decode_steps) from the profile
-    if they are present and differ from app_config defaults; otherwise returns {}.
+    Returns the ``quality_overrides`` sub-dict if present, or ``{}`` on first run.
+    ``app_config`` is accepted for future use (e.g. filtering keys that match
+    server defaults) but is not used by the current implementation.
     """
     overrides = dict(profile.get("quality_overrides") or {})
     return overrides
