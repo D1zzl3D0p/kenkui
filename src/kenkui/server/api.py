@@ -1,14 +1,30 @@
 """FastAPI routes for the kenkui server."""
 
 import dataclasses
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ..models import AppConfig, ChapterSelection, JobConfig, JobStatus, NarrationMode
 from .worker import get_server
 
-app = FastAPI(title="kenkui Worker Server", version="0.8.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("KENKUI_SERVER_READY", flush=True)
+    yield
+
+
+app = FastAPI(title="kenkui Worker Server", version="0.8.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["tauri://localhost", "http://tauri.localhost"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class JobCreateRequest(BaseModel):
