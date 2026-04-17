@@ -13,6 +13,8 @@ from .worker import get_server
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Print before yield: ASGI lifespan startup runs before Uvicorn accepts connections,
+    # so this signal is guaranteed to fire before any request can be served.
     print("KENKUI_SERVER_READY", flush=True)
     yield
 
@@ -24,6 +26,7 @@ app.add_middleware(
     allow_origins=["tauri://localhost", "http://tauri.localhost"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
 
 
