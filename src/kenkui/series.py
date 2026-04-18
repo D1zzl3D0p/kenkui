@@ -5,6 +5,11 @@ A series manifest lives at:
 
 It accumulates character→voice assignments across books, so the same
 character always gets the same voice in subsequent installments.
+
+A parallel roster JSON lives at:
+    ~/.config/kenkui/series/{slug}-roster.json
+
+It stores the full CharacterRoster (slug-keyed) built up across books.
 """
 from __future__ import annotations
 
@@ -192,6 +197,109 @@ def _word_overlap(a: str, b: str) -> float:
         if w in longer or (len(w) >= 3 and any(lw.startswith(w) for lw in longer))
     )
     return matched / len(shorter)
+
+
+# ---------------------------------------------------------------------------
+# Series CharacterRoster I/O
+# ---------------------------------------------------------------------------
+
+
+def load_series_roster(slug: str) -> "CharacterRoster | None":
+    """Return the persisted CharacterRoster for *slug*, or None if not found."""
+    from .nlp.models import CharacterRoster
+
+    path = series_dir() / f"{slug}-roster.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return CharacterRoster.model_validate(data)
+    except Exception:
+        return None
+
+
+def save_series_roster(slug: str, roster: "CharacterRoster") -> None:
+    """Persist *roster* as JSON for series *slug* (atomic write)."""
+    path = series_dir() / f"{slug}-roster.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(roster.model_dump(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def merge_into_series_roster(
+    existing: "CharacterRoster",
+    new_roster: "CharacterRoster",
+    book_slug: str,
+) -> "CharacterRoster":
+    """Merge a per-book CharacterRoster into the cumulative series roster.
+
+    Merge rules:
+    - Exact slug match → union aliases/chapters, update last_appearance, sum counts
+    - Alias intersection match → merge under existing slug (same rules)
+    - No match → append as new character; set first_appearance from book_slug if absent
+    """
+    from .nlp.models import CharacterRoster
+
+    existing_by_slug: dict[str, int] = {rec.slug: i for i, rec in enumerate(existing.characters)}
+
+    # Build alias→index map for fuzzy matching (canonical + every alias, lowercased)
+    alias_to_idx: dict[str, int] = {}
+    for i, rec in enumerate(existing.characters):
+        alias_to_idx[rec.canonical_name.lower()] = i
+        for a in rec.aliases:
+            alias_to_idx[a.lower()] = i
+
+    merged = list(existing.characters)
+
+    for new_rec in new_roster.characters:
+        # --- Exact slug match ---
+        if new_rec.slug in existing_by_slug:
+            idx = existing_by_slug[new_rec.slug]
+            old = merged[idx]
+            merged_aliases = list(dict.fromkeys(
+                old.aliases + [a for a in new_rec.aliases if a not in old.aliases]
+            ))
+            merged_chapters = sorted(set(old.chapters + new_rec.chapters))
+            last = new_rec.last_appearance or old.last_appearance
+            merged[idx] = old.model_copy(update={
+                "aliases": merged_aliases,
+                "chapters": merged_chapters,
+                "last_appearance": last,
+                "mention_count": old.mention_count + new_rec.mention_count,
+                "quote_count": old.quote_count + new_rec.quote_count,
+            })
+            continue
+
+        # --- Alias intersection match ---
+        new_names = {new_rec.canonical_name.lower()} | {a.lower() for a in new_rec.aliases}
+        match_idx: int | None = next(
+            (alias_to_idx[n] for n in new_names if n in alias_to_idx), None
+        )
+        if match_idx is not None:
+            old = merged[match_idx]
+            all_new_names = [new_rec.canonical_name] + new_rec.aliases
+            merged_aliases = list(dict.fromkeys(
+                old.aliases + [n for n in all_new_names if n != old.canonical_name and n not in old.aliases]
+            ))
+            merged_chapters = sorted(set(old.chapters + new_rec.chapters))
+            last = new_rec.last_appearance or old.last_appearance
+            merged[match_idx] = old.model_copy(update={
+                "aliases": merged_aliases,
+                "chapters": merged_chapters,
+                "last_appearance": last,
+                "mention_count": old.mention_count + new_rec.mention_count,
+                "quote_count": old.quote_count + new_rec.quote_count,
+            })
+            continue
+
+        # --- New character ---
+        first = new_rec.first_appearance or (book_slug, min(new_rec.chapters, default=0))
+        merged.append(new_rec.model_copy(update={"first_appearance": first}))
+
+    return CharacterRoster(characters=merged)
 
 
 def list_roster_candidates() -> list[dict]:

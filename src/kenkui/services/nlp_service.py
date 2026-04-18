@@ -67,6 +67,8 @@ def fast_scan(
     nlp_model: str | None = None,
     config_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    series_slug: str | None = None,
+    book_slug: str | None = None,
 ) -> FastScanResult:
     """Run Stage 1-2 NLP (quote extraction + entity clustering + mention counting).
 
@@ -75,6 +77,10 @@ def fast_scan(
         nlp_model:         Override model name.  Falls back to AppConfig.nlp_model.
         config_path:       Optional path/name for the kenkui config file.
         progress_callback: Optional ``(percent: int, message: str) -> None``.
+        series_slug:       If provided, load the series CharacterRoster before the
+                           scan and merge new characters back into it afterward.
+        book_slug:         Slug for the current book (used for first_appearance
+                           tracking when *series_slug* is set).
 
     Returns:
         ``FastScanResult`` with characters sorted by mention_count descending.
@@ -105,13 +111,25 @@ def fast_scan(
     if progress_callback:
         progress_callback(_FAST_SCAN_START_PCT, "Starting NLP scan")
 
+    # Fetch existing series roster before build_roster so providers can inject it.
+    series_roster = None
+    if series_slug:
+        from kenkui.services.series_service import get_roster as _get_roster
+        series_roster = _get_roster(series_slug)
+
     provider = get_provider(cfg)
     roster = provider.build_roster(
         chapters,
+        series_roster=series_roster,
         progress_callback=_make_adapter(
             progress_callback, _FAST_SCAN_START_PCT, _FAST_SCAN_BUMP, _FAST_SCAN_CAP
         ),
     )
+
+    # Update series roster with newly discovered characters.
+    if series_slug and book_slug:
+        from kenkui.services.series_service import update_roster as _update_roster
+        _update_roster(series_slug, roster, book_slug)
 
     characters: list[CharacterInfo] = [
         AppCharacterRecord.from_nlp(rec).to_character_info()
@@ -137,6 +155,8 @@ def full_analysis(
     nlp_model: str | None = None,
     config_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    series_slug: str | None = None,
+    book_slug: str | None = None,
 ) -> NLPResult:
     """Run the full NLP speaker-attribution pipeline.
 
@@ -145,6 +165,10 @@ def full_analysis(
         nlp_model:         Override model name.  Falls back to AppConfig.nlp_model.
         config_path:       Optional path/name for the kenkui config file.
         progress_callback: Optional ``(percent: int, message: str) -> None``.
+        series_slug:       If provided, load the series CharacterRoster before the
+                           analysis and merge new characters back into it afterward.
+        book_slug:         Slug for the current book (used for first_appearance
+                           tracking when *series_slug* is set).
 
     Returns:
         ``NLPResult`` with both ``mention_count`` and ``quote_count`` populated.
@@ -177,13 +201,25 @@ def full_analysis(
 
     provider = get_provider(cfg)
 
+    # Fetch existing series roster before build_roster so providers can inject it.
+    series_roster = None
+    if series_slug:
+        from kenkui.services.series_service import get_roster as _get_roster
+        series_roster = _get_roster(series_slug)
+
     # Phase 1: Build character roster (5–45 %)
     roster = provider.build_roster(
         chapters,
+        series_roster=series_roster,
         progress_callback=_make_adapter(
             progress_callback, _FULL_ROSTER_START_PCT, _FULL_ROSTER_BUMP, _FULL_ROSTER_CAP
         ),
     )
+
+    # Update series roster with newly discovered characters.
+    if series_slug and book_slug:
+        from kenkui.services.series_service import update_roster as _update_roster
+        _update_roster(series_slug, roster, book_slug)
 
     if progress_callback:
         progress_callback(_FULL_ATTRIB_START_PCT, "Attributing dialogue")
