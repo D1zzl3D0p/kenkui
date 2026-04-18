@@ -1,9 +1,10 @@
-"""Tests for series_service and the /series API routes."""
+"""Tests for series_service and series API route helpers."""
 from __future__ import annotations
 
 import tomli_w
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------
@@ -126,28 +127,77 @@ class TestDeleteSeries:
         assert result is False
 
 
-# ---------------------------------------------------------------------------
-# API route tests
-# ---------------------------------------------------------------------------
+class TestRosterCandidates:
+    def test_list_roster_candidates_returns_result(self, tmp_path, monkeypatch):
+        import json
+        import kenkui.series as _series_mod
+        import kenkui.config as _config_mod
 
-@pytest.fixture
-def api_client(tmp_path, monkeypatch):
-    """Return a TestClient with series dir isolated to tmp_path."""
-    import kenkui.series as _series_mod
-    monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
+        monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path / "series")
+        monkeypatch.setattr(_config_mod, "CONFIG_DIR", tmp_path)
+        cache_dir = tmp_path / "nlp_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "abc-roster.json").write_text(
+            json.dumps({"book_hash": "abc", "roster": {"characters": []}, "characters": []}),
+            encoding="utf-8",
+        )
 
-    from fastapi.testclient import TestClient
-    from kenkui.server.api import app
-    return TestClient(app)
+        from kenkui.services.series_service import RosterCandidateListResult, list_roster_candidates
+
+        result = list_roster_candidates()
+        assert isinstance(result, RosterCandidateListResult)
+        assert result.total >= 1
+
+
+class TestCreateAndMatchSeriesHelpers:
+    def test_create_empty_series_persists(self, tmp_path, monkeypatch):
+        import kenkui.series as _series_mod
+
+        monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
+        from kenkui.services.series_service import create_empty_series, load_series
+
+        created = create_empty_series("Wheel of Time")
+        assert created.slug == "wheel-of-time"
+        loaded = load_series("wheel-of-time")
+        assert loaded.name == "Wheel of Time"
+
+    def test_match_series_characters_returns_inherited_voices(self, tmp_path, monkeypatch):
+        import kenkui.series as _series_mod
+
+        monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
+        from kenkui.models import CharacterInfo, FastScanResult
+        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.services.series_service import match_series_characters, save_series, SeriesCharacterEntry, SeriesEntry
+
+        save_series(
+            SeriesEntry(
+                slug="wheel-of-time",
+                name="Wheel of Time",
+                characters=[SeriesCharacterEntry(canonical="Rand al'Thor", aliases=["Rand"], voice="alba", gender="he/him")],
+            )
+        )
+
+        fast_result = FastScanResult(
+            roster=CharacterRoster(characters=[AliasGroup(canonical="Rand al'Thor", aliases=["Rand"])]),
+            characters=[CharacterInfo(character_id="Rand al'Thor", display_name="Rand al'Thor")],
+            book_hash="abc",
+        )
+
+        result = match_series_characters("wheel-of-time", fast_result.to_dict())
+        assert result.inherited_voices["Rand al'Thor"] == "alba"
+        assert "Rand al'Thor" in result.pinned
 
 
 class TestSeriesListRoute:
-    def test_get_series_empty(self, api_client):
-        response = api_client.get("/series")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["series"] == []
-        assert data["total"] == 0
+    def test_get_series_empty(self, tmp_path, monkeypatch):
+        import kenkui.series as _series_mod
+
+        monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
+        from kenkui.server.api import list_series
+
+        body = list_series().model_dump()
+        assert body["series"] == []
+        assert body["total"] == 0
 
     def test_get_series_with_entries(self, tmp_path, monkeypatch):
         import kenkui.series as _series_mod
@@ -156,21 +206,24 @@ class TestSeriesListRoute:
         raw = {"name": "Dune", "updated_at": "", "characters": []}
         (tmp_path / "dune.toml").write_bytes(tomli_w.dumps(raw).encode())
 
-        from fastapi.testclient import TestClient
-        from kenkui.server.api import app
-        client = TestClient(app)
+        from kenkui.server.api import list_series
 
-        response = client.get("/series")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert data["series"][0]["slug"] == "dune"
+        body = list_series().model_dump()
+        assert body["total"] == 1
+        assert body["series"][0]["slug"] == "dune"
 
 
 class TestSeriesGetRoute:
-    def test_get_series_missing_returns_404(self, api_client):
-        response = api_client.get("/series/missing")
-        assert response.status_code == 404
+    def test_get_series_missing_returns_404(self, tmp_path, monkeypatch):
+        import kenkui.series as _series_mod
+        from fastapi import HTTPException
+
+        monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
+        from kenkui.server.api import get_series
+
+        with pytest.raises(HTTPException) as exc:
+            get_series("missing")
+        assert exc.value.status_code == 404
 
     def test_get_series_existing_returns_200(self, tmp_path, monkeypatch):
         import kenkui.series as _series_mod
@@ -185,22 +238,25 @@ class TestSeriesGetRoute:
         }
         (tmp_path / "foundation.toml").write_bytes(tomli_w.dumps(raw).encode())
 
-        from fastapi.testclient import TestClient
-        from kenkui.server.api import app
-        client = TestClient(app)
+        from kenkui.server.api import get_series
 
-        response = client.get("/series/foundation")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["slug"] == "foundation"
-        assert data["name"] == "Foundation"
-        assert len(data["characters"]) == 1
+        body = get_series("foundation").model_dump()
+        assert body["slug"] == "foundation"
+        assert body["name"] == "Foundation"
+        assert len(body["characters"]) == 1
 
 
 class TestSeriesDeleteRoute:
-    def test_delete_missing_returns_404(self, api_client):
-        response = api_client.delete("/series/missing")
-        assert response.status_code == 404
+    def test_delete_missing_returns_404(self, tmp_path, monkeypatch):
+        import kenkui.series as _series_mod
+        from fastapi import HTTPException
+
+        monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
+        from kenkui.server.api import delete_series
+
+        with pytest.raises(HTTPException) as exc:
+            delete_series("missing")
+        assert exc.value.status_code == 404
 
     def test_delete_existing_returns_200(self, tmp_path, monkeypatch):
         import kenkui.series as _series_mod
@@ -209,10 +265,120 @@ class TestSeriesDeleteRoute:
         raw = {"name": "Deleted", "updated_at": "", "characters": []}
         (tmp_path / "deleted.toml").write_bytes(tomli_w.dumps(raw).encode())
 
-        from fastapi.testclient import TestClient
-        from kenkui.server.api import app
-        client = TestClient(app)
+        from kenkui.server.api import delete_series
 
-        response = client.delete("/series/deleted")
-        assert response.status_code == 200
+        body = delete_series("deleted").model_dump()
+        assert body["status"] == "ok"
         assert not (tmp_path / "deleted.toml").exists()
+
+
+class TestSeriesCreationAndMatchRoutes:
+    def test_list_roster_candidates_route(self):
+        from kenkui.server.api import list_series_roster_candidates
+
+        with patch(
+            "kenkui.services.series_service.list_roster_candidates",
+            return_value=type(
+                "Result",
+                (),
+                {
+                    "candidates": [
+                        type(
+                            "Candidate",
+                            (),
+                            {
+                                "hash": "abc",
+                                "title": "Book",
+                                "path": "/tmp/book.epub",
+                                "speaker_voices": {"Rand": "alba"},
+                                "roster_path": "/tmp/abc-roster.json",
+                            },
+                        )()
+                    ],
+                    "total": 1,
+                },
+            )(),
+        ):
+            body = list_series_roster_candidates().model_dump()
+
+        assert body["total"] == 1
+        assert body["candidates"][0]["hash"] == "abc"
+
+    def test_create_empty_series_route(self):
+        from kenkui.server.api import CreateEmptySeriesRequest, create_empty_series
+
+        with patch(
+            "kenkui.services.series_service.create_empty_series",
+            return_value=type(
+                "Entry",
+                (),
+                {"slug": "wheel-of-time", "name": "Wheel of Time", "updated_at": "", "characters": []},
+            )(),
+        ):
+            body = create_empty_series(CreateEmptySeriesRequest(name="Wheel of Time")).model_dump()
+
+        assert body["slug"] == "wheel-of-time"
+        assert body["name"] == "Wheel of Time"
+
+    def test_create_series_from_candidate_route(self):
+        from kenkui.server.api import CreateSeriesFromCandidateRequest, create_series_from_candidate
+
+        with patch(
+            "kenkui.services.series_service.build_series_from_candidate",
+            return_value=type(
+                "Entry",
+                (),
+                {
+                    "slug": "wheel-of-time",
+                    "name": "Wheel of Time",
+                    "updated_at": "",
+                    "characters": [
+                        type(
+                            "Character",
+                            (),
+                            {
+                                "canonical": "Rand al'Thor",
+                                "aliases": ["Rand"],
+                                "voice": "alba",
+                                "gender": "he/him",
+                            },
+                        )()
+                    ],
+                },
+            )(),
+        ):
+            body = create_series_from_candidate(
+                CreateSeriesFromCandidateRequest(
+                    name="Wheel of Time",
+                    roster_path="/tmp/abc-roster.json",
+                )
+            ).model_dump()
+
+        assert body["slug"] == "wheel-of-time"
+        assert body["characters"][0]["canonical"] == "Rand al'Thor"
+
+    def test_match_series_route(self):
+        from kenkui.server.api import SeriesMatchRequest, match_series
+
+        with patch(
+            "kenkui.services.series_service.match_series_characters",
+            return_value=type(
+                "MatchResult",
+                (),
+                {"inherited_voices": {"Rand al'Thor": "alba"}, "pinned": ["Rand al'Thor"]},
+            )(),
+        ):
+            body = match_series("wheel-of-time", SeriesMatchRequest(fast_result={"characters": []})).model_dump()
+
+        assert body["inherited_voices"]["Rand al'Thor"] == "alba"
+        assert body["pinned"] == ["Rand al'Thor"]
+
+    def test_match_series_route_missing_returns_404(self):
+        from fastapi import HTTPException
+        from kenkui.server.api import SeriesMatchRequest, match_series
+
+        with patch("kenkui.services.series_service.match_series_characters", side_effect=KeyError("missing")):
+            with pytest.raises(HTTPException) as exc:
+                match_series("missing", SeriesMatchRequest(fast_result={"characters": []}))
+
+        assert exc.value.status_code == 404

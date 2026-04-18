@@ -56,5 +56,6 @@ def _quality_from_profile(profile: dict, app_config) -> dict:
     ``app_config`` is accepted for future use (e.g. filtering keys that match
     server defaults) but is not used by the current implementation.
     """
-    overrides = dict(profile.get("quality_overrides") or {})
-    return overrides
+    from ..services.confirmation_service import quality_overrides_from_profile
+
+    return quality_overrides_from_profile(profile)

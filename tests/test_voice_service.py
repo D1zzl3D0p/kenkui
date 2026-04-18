@@ -11,12 +11,20 @@ from kenkui.services.voice_service import (
     ExcludeResult,
     IncludeResult,
     VoiceInfo,
+    annotate_voice_choices,
+    assign_simple_cast,
     audition_voice,
+    build_character_review_choices,
+    build_roster_payload,
+    build_voice_users,
     exclude_voice,
+    format_character_review_label,
+    format_unresolved_conflict_warnings,
     gender_from_pronoun,
     get_voice,
     include_voice,
     list_voices,
+    merge_speaker_voices,
     sort_cast,
     top_gender_matched_voice,
 )
@@ -57,6 +65,7 @@ def _make_app_config(excluded_voices: list[str] | None = None):
 class FakeCharacter:
     gender_pronoun: str | None
     prominence: int
+    character_id: str = "Character"
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +379,113 @@ def test_sort_cast_alphabetical_order():
     result = sort_cast(cast)
     names = [k for k, _ in result]
     assert names == ["alice", "Bob", "Zara"]
+
+
+# ---------------------------------------------------------------------------
+# assign_simple_cast
+# ---------------------------------------------------------------------------
+
+
+def test_assign_simple_cast_routes_by_gender():
+    roster = [
+        MagicMock(character_id="Rand", gender_pronoun="he/him"),
+        MagicMock(character_id="Egwene", gender_pronoun="she/her"),
+        MagicMock(character_id="Loial", gender_pronoun="they/them"),
+    ]
+
+    result = assign_simple_cast(
+        roster=roster,
+        narrator_voice="narrator",
+        male_voice="male-voice",
+        female_voice="female-voice",
+    )
+
+    assert result["NARRATOR"] == "narrator"
+    assert result["Rand"] == "male-voice"
+    assert result["Egwene"] == "female-voice"
+    assert result["Loial"] == "narrator"
+
+
+def test_format_character_review_label_includes_series_marker():
+    char = MagicMock(
+        character_id="Rand",
+        display_name="Rand al'Thor",
+        gender_pronoun="he/him",
+        prominence=100,
+    )
+    result = format_character_review_label(
+        char,
+        "alba",
+        pinned={"Rand"},
+        series_name="Wheel of Time",
+    )
+    assert "Wheel of Time" in result
+    assert result.startswith("alba")
+
+
+def test_build_voice_users_groups_display_names():
+    chars = [
+        MagicMock(character_id="Rand", display_name="Rand al'Thor"),
+        MagicMock(character_id="Mat", display_name="Matrim Cauthon"),
+    ]
+    result = build_voice_users(
+        {"Rand": "alba", "Mat": "alba", "NARRATOR": "cosette"},
+        chars,
+    )
+    assert result == {"alba": ["Rand al'Thor", "Matrim Cauthon"]}
+
+
+def test_annotate_voice_choices_appends_other_users():
+    result = annotate_voice_choices(
+        [{"name": "alba", "value": "alba"}, {"name": "custom", "value": "__custom__"}],
+        {"alba": ["Alice", "Bob", "Charlie"]},
+        exclude_char_name="Alice",
+    )
+    assert result[0]["name"].endswith("  ← Bob, Charlie")
+    assert result[1]["name"] == "custom"
+
+
+def test_format_unresolved_conflict_warnings_handles_pinned_series_voice():
+    result = format_unresolved_conflict_warnings([("Rand", "Mat")], {"Rand"})
+    assert len(result) == 1
+    assert "inherited from the series" in result[0]
+
+
+def test_build_character_review_choices_sorted_by_prominence():
+    chars = [
+        MagicMock(character_id="Mat", display_name="Mat", gender_pronoun="he/him", prominence=10),
+        MagicMock(character_id="Rand", display_name="Rand", gender_pronoun="he/him", prominence=50),
+    ]
+    result = build_character_review_choices(
+        chars,
+        {"Rand": "alba", "Mat": "jean"},
+        "cosette",
+    )
+    assert [item["value"] for item in result] == ["Rand", "Mat"]
+
+
+def test_build_roster_payload_uses_character_fields():
+    chars = [
+        MagicMock(
+            character_id="Rand",
+            gender_pronoun="he/him",
+            quote_count=5,
+            mention_count=10,
+        )
+    ]
+    assert build_roster_payload(chars) == [
+        {
+            "name": "Rand",
+            "pronoun": "he/him",
+            "quote_count": 5,
+            "mention_count": 10,
+        }
+    ]
+
+
+def test_merge_speaker_voices_applies_overrides():
+    result = merge_speaker_voices({"Rand": "alba", "Mat": "jean"}, {"Mat": "cosette"})
+    assert result == {"Rand": "alba", "Mat": "cosette"}
 
 
 # ---------------------------------------------------------------------------

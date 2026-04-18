@@ -310,3 +310,71 @@ class TestManifestWritebackOnConfirm:
         # _run_series_setup is called during voice/NLP setup — cancelling before
         # that step means no manifest is written.
         assert list_series() == []
+
+
+class TestJobAssembly:
+    def test_build_job_kwargs_from_state_matches_cli_wrapper(self, tmp_path):
+        from kenkui.cli.add import _state_to_job_kwargs
+        from kenkui.services.job_service import build_job_kwargs_from_state
+
+        state = {
+            "_book_path": tmp_path / "book.epub",
+            "chapter_selection": {"preset": "content-only", "included": [], "excluded": []},
+            "narration_mode": "multi",
+            "voice": "alba",
+            "speaker_voices": {"Rand": "jean"},
+            "chapter_voices": {},
+            "quality_overrides": {"job_temp": 0.7},
+            "output_dir": str(tmp_path),
+            "roster_cache_path": "/tmp/roster.json",
+            "series_slug": "wheel-of-time",
+        }
+
+        assert _state_to_job_kwargs(state) == build_job_kwargs_from_state(state)
+
+    def test_build_job_kwargs_omits_empty_voice_maps(self, tmp_path):
+        from kenkui.services.job_service import build_job_kwargs_from_state
+
+        state = {
+            "_book_path": tmp_path / "book.epub",
+            "chapter_selection": {"preset": "content-only", "included": [], "excluded": []},
+            "narration_mode": "single",
+            "voice": "alba",
+            "speaker_voices": {},
+            "chapter_voices": {},
+            "quality_overrides": {},
+            "output_dir": str(tmp_path),
+            "roster_cache_path": None,
+            "series_slug": None,
+        }
+
+        result = build_job_kwargs_from_state(state)
+        assert result["speaker_voices"] is None
+        assert result["chapter_voices"] is None
+
+    def test_build_headless_job_kwargs_uses_app_defaults(self, tmp_path):
+        from argparse import Namespace
+
+        from kenkui.models import AppConfig
+        from kenkui.services.job_service import build_headless_job_kwargs
+
+        cfg = AppConfig(default_voice="alba", default_chapter_preset="content-only")
+        args = Namespace(book=tmp_path / "book.epub", output=None)
+
+        result = build_headless_job_kwargs(args, cfg)
+        assert result["ebook_path"] == str(tmp_path / "book.epub")
+        assert result["voice"] == "alba"
+        assert result["chapter_selection"]["preset"] == "content-only"
+
+    def test_build_headless_job_kwargs_respects_output_override(self, tmp_path):
+        from argparse import Namespace
+
+        from kenkui.models import AppConfig
+        from kenkui.services.job_service import build_headless_job_kwargs
+
+        cfg = AppConfig(default_voice="alba", default_chapter_preset="content-only")
+        outdir = tmp_path / "out"
+        args = Namespace(book=tmp_path / "book.epub", output=str(outdir))
+
+        result = build_headless_job_kwargs(args, cfg)
+        assert result["output_path"] == str(outdir.resolve())

@@ -73,6 +73,15 @@ class TestInitStateFromProfile:
         state = _init_state_from_profile(Path("/tmp/t.epub"), cfg, {})
         assert state["quality_overrides"] == {}
 
+    def test_shared_confirmation_state_helper_matches_cli_wrapper(self):
+        from kenkui.cli.add import _init_state_from_profile
+        from kenkui.services.confirmation_service import init_confirmation_state
+
+        cfg = self._app_config(default_voice="alba")
+        profile = {"voice": "cosette", "chapter_preset": "all"}
+        path = Path("/tmp/t.epub")
+        assert _init_state_from_profile(path, cfg, profile) == init_confirmation_state(path, cfg, profile)
+
 
 class TestBuildConfirmationChoices:
     def _app_config(self, **kw):
@@ -117,6 +126,81 @@ class TestBuildConfirmationChoices:
         choices = _build_confirmation_choices(state, cfg)
         names = [getattr(c, "title", getattr(c, "name", str(c))) for c in choices]
         assert any("[CUSTOM]" in str(n) for n in names)
+
+    def test_shared_summary_helper_matches_choice_lines(self):
+        from kenkui.cli.add import _build_confirmation_choices
+        from kenkui.services.confirmation_service import summarize_confirmation_state
+
+        cfg = self._app_config(default_voice="alba")
+        state = self._state(cfg, voice="cosette", narration_mode="single")
+        choices = _build_confirmation_choices(state, cfg)
+        names = [getattr(c, "title", getattr(c, "name", str(c))) for c in choices]
+        summary = summarize_confirmation_state(state, cfg)
+        assert any(summary["book_name"] in str(n) for n in names)
+        assert any(summary["voice_line"] in str(n) for n in names)
+
+
+class TestWorkflowStateHelpers:
+    def _app_config(self, **kw):
+        from kenkui.models import AppConfig
+        cfg = AppConfig()
+        for k, v in kw.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    def test_reset_voice_mode_restores_single_defaults(self):
+        from kenkui.services.workflow_service import reset_voice_mode
+
+        cfg = self._app_config(default_voice="alba")
+        state = {
+            "voice": "cosette",
+            "narration_mode": "multi",
+            "speaker_voices": {"Rand": "jean"},
+            "chapter_voices": {"1": "alba"},
+            "roster_cache_path": "/tmp/roster.json",
+            "series_slug": "wheel-of-time",
+            "_series_manifest": object(),
+        }
+        result = reset_voice_mode(state, cfg)
+        assert result["voice"] == "alba"
+        assert result["narration_mode"] == "single"
+        assert result["speaker_voices"] == {}
+        assert result["chapter_voices"] == {}
+        assert result["roster_cache_path"] is None
+        assert result["series_slug"] is None
+
+    def test_apply_multi_voice_setup_sets_series_and_cache(self):
+        from types import SimpleNamespace
+        from kenkui.services.workflow_service import apply_multi_voice_setup
+
+        state = {"narration_mode": "single", "chapter_voices": {"1": "alba"}}
+        manifest = SimpleNamespace(slug="wheel-of-time")
+        result = apply_multi_voice_setup(
+            state,
+            speaker_voices={"Rand": "jean"},
+            roster_cache_path="/tmp/roster.json",
+            manifest=manifest,
+        )
+        assert result["narration_mode"] == "multi"
+        assert result["speaker_voices"] == {"Rand": "jean"}
+        assert result["chapter_voices"] == {}
+        assert result["series_slug"] == "wheel-of-time"
+
+    def test_apply_chapter_voice_setup_clears_speaker_voices(self):
+        from kenkui.services.workflow_service import apply_chapter_voice_setup
+
+        state = {"speaker_voices": {"Rand": "jean"}}
+        result = apply_chapter_voice_setup(state, {"1": "alba"})
+        assert result["narration_mode"] == "single"
+        assert result["chapter_voices"] == {"1": "alba"}
+        assert result["speaker_voices"] == {}
+
+    def test_describe_voice_mode(self):
+        from kenkui.services.workflow_service import describe_voice_mode
+
+        assert describe_voice_mode({"narration_mode": "single", "chapter_voices": {}}) == "single narrator"
+        assert describe_voice_mode({"narration_mode": "multi", "chapter_voices": {}}) == "multi-voice NLP"
+        assert describe_voice_mode({"narration_mode": "single", "chapter_voices": {"1": "alba"}}) == "chapter-voice"
 
 
 class TestStateToJobKwargs:

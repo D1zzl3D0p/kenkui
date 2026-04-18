@@ -96,24 +96,6 @@ def _load_config(args):
     return load_app_config(getattr(args, "config", None))
 
 
-def _gender_pool(gender_str: str | None) -> str:
-    """Return 'male', 'female', or 'they' from a gender_pronoun string.
-
-    Handles values like "she/her", "he/him/his", "they/them/their".
-    Splits on '/' and checks each segment to handle all three formats.
-    """
-    raw = (gender_str or "").strip().lower()
-    if not raw:
-        return "they"
-    for segment in raw.split("/"):
-        segment = segment.strip()
-        if segment in ("he", "him", "his", "male"):
-            return "male"
-        if segment in ("she", "her", "hers", "female"):
-            return "female"
-    return "they"
-
-
 def _build_voice_choices(client=None) -> list[dict]:
     """Return InquirerPy-compatible choice list for voice selection.
 
@@ -460,37 +442,25 @@ def _top_gender_matched_voice(characters, default_voice: str, client=None) -> st
 
     When ``client`` is provided, fetches voice lists via the API.
     """
-    by_quotes = sorted(characters, key=lambda c: c.prominence, reverse=True)
+    from ..services.voice_service import (
+        build_roster_payload,
+        top_gender_matched_voice as _recommend_local,
+    )
 
-    top_male_quotes = 0
-    top_female_quotes = 0
-    for ch in by_quotes:
-        g = _gender_pool(ch.gender_pronoun)
-        if g == "male":
-            top_male_quotes = ch.prominence
-            break
-        if g == "female":
-            top_female_quotes = ch.prominence
-            break
+    roster_payload = build_roster_payload(characters)
 
     if client is not None:
         try:
-            male_voices = [v["name"] for v in (client.list_voices(gender="Male").get("voices") or [])]
-            female_voices = [v["name"] for v in (client.list_voices(gender="Female").get("voices") or [])]
+            result = client.recommend_narrator_voice(
+                roster=roster_payload,
+                default_voice=default_voice,
+                excluded_voices=[],
+            )
+            return result.get("voice_name", default_voice)
         except Exception:
-            male_voices = []
-            female_voices = []
-    else:
-        from ..voice_registry import get_registry
-        registry = get_registry()
-        male_voices = [v.name for v in registry.filter(gender="Male")]
-        female_voices = [v.name for v in registry.filter(gender="Female")]
+            pass
 
-    if top_female_quotes > top_male_quotes and female_voices:
-        return female_voices[0]
-    if male_voices:
-        return male_voices[0]
-    return default_voice
+    return _recommend_local(characters, excluded=[], default_voice=default_voice)
 
 
 
@@ -505,24 +475,29 @@ def _auto_assign_voices(
     Returns (speaker_voices, unresolved_conflicts).
     Returns ({}, []) on failure so the caller falls through to manual review.
     """
-    roster_payload = [
-        {
-            "name": c.character_id,
-            "pronoun": c.gender_pronoun or None,
-            "quote_count": c.quote_count,
-            "mention_count": c.mention_count,
-        }
-        for c in characters
-    ]
+    from ..services.voice_service import build_roster_payload, suggest_cast
+
+    roster_payload = build_roster_payload(characters)
     try:
-        result = client.suggest_cast(
-            roster=roster_payload,
-            excluded_voices=excluded_voices or [],
-            default_voice=narrator_voice,
-        )
-        for w in result.get("warnings", []):
+        if client is not None:
+            result = client.suggest_cast(
+                roster=roster_payload,
+                excluded_voices=excluded_voices or [],
+                default_voice=narrator_voice,
+            )
+            speaker_voices = result.get("speaker_voices", {})
+            warnings = result.get("warnings", [])
+        else:
+            local_result = suggest_cast(
+                roster=characters,
+                excluded_voices=excluded_voices or [],
+                default_voice=narrator_voice,
+            )
+            speaker_voices = local_result.speaker_voices
+            warnings = local_result.warnings
+        for w in warnings:
             console.print(f"[yellow]Warning:[/yellow] {w}")
-        return result.get("speaker_voices", {}), []
+        return speaker_voices, []
     except Exception as exc:
         console.print(f"[red]Could not auto-assign voices: {exc}[/red]")
         return {}, []   # return empty, caller will prompt manually
@@ -534,15 +509,10 @@ def _make_character_review_label(
     pinned: "set[str]",
     series_name: "str | None" = None,
 ) -> str:
-    """Build a display label for the character review list.
+    """Build a display label for the character review list."""
+    from ..services.voice_service import format_character_review_label
 
-    Format: voice (20 chars)  CharName  (N mentions, gender)  [series: Name]
-    """
-    gender = ch.gender_pronoun or "?"
-    base = f"{voice:<20}  {ch.display_name}  ({ch.prominence} mentions, {gender})"
-    if ch.character_id in pinned and series_name:
-        base += f"  [series: {series_name}]"
-    return base
+    return format_character_review_label(ch, voice, pinned=pinned, series_name=series_name)
 
 
 def _prompt_character_voice_review(
@@ -555,29 +525,19 @@ def _prompt_character_voice_review(
     client=None,
 ) -> dict[str, str]:
     """Show a reference table, then review each character via an InquirerPy list."""
-    from collections import defaultdict
-
     from InquirerPy import inquirer
+    from ..services.voice_service import (
+        annotate_voice_choices,
+        build_character_review_choices,
+        format_character_review_label,
+        build_voice_users,
+        format_unresolved_conflict_warnings,
+    )
 
+    _pinned = pinned or set()
+    for warning in format_unresolved_conflict_warnings(unresolved_conflicts, _pinned):
+        console.print(f"[yellow]⚠ {warning}[/yellow]")
     if unresolved_conflicts:
-        _pinned = pinned or set()
-        for char_a, char_b in unresolved_conflicts:
-            if char_a in _pinned:
-                inherited, other = char_a, char_b
-            elif char_b in _pinned:
-                inherited, other = char_b, char_a
-            else:
-                inherited = other = None
-            if inherited:
-                console.print(
-                    f"[yellow]⚠ {char_a!r} and {char_b!r} share a chapter with the same voice. "
-                    f"{inherited!r} is inherited from the series — change the other if needed.[/yellow]"
-                )
-            else:
-                console.print(
-                    f"[yellow]⚠ {char_a!r} and {char_b!r} share a chapter with the same voice "
-                    f"and no spare voice exists.[/yellow]"
-                )
         console.print()
 
     # Exclude narrator voice from per-character assignment choices
@@ -594,43 +554,23 @@ def _prompt_character_voice_review(
     tbl.add_column("Gender")
     tbl.add_column("Voice", style="bold cyan")
 
-    _pinned = pinned or set()
-
-    def _build_voice_users() -> dict[str, list[str]]:
-        """Build inverse map: voice_name → list of character display names using it."""
-        users: dict[str, list[str]] = defaultdict(list)
-        for cid, v in speaker_voices.items():
-            if cid == "NARRATOR":
-                continue
-            char = next((c for c in characters if c.character_id == cid), None)
-            label = char.display_name if char else cid
-            users[v].append(label)
-        return users
-
     def _annotated_voice_choices(exclude_char_name: str | None = None) -> list[dict]:
         """Return voice choices annotated with which other chars already use each voice."""
-        voice_users = _build_voice_users()
-        result = []
-        for c in voice_choices:
-            if c.get("value") == "__custom__":
-                result.append(c)
-                continue
-            v = c["value"]
-            users = [u for u in voice_users.get(v, []) if u != exclude_char_name]
-            suffix = f"  ← {', '.join(users[:2])}" if users else ""
-            result.append({**c, "name": c["name"] + suffix})
-        return result
+        voice_users = build_voice_users(speaker_voices, characters)
+        return annotate_voice_choices(
+            voice_choices,
+            voice_users,
+            exclude_char_name=exclude_char_name,
+        )
 
     # Build list of review choices — one per character (voice-first format).
-    review_choices = []
-    for ch in sorted(characters, key=lambda c: c.prominence, reverse=True):
-        current = speaker_voices.get(ch.character_id, narrator_voice)
-        review_choices.append(
-            {
-                "name": _make_character_review_label(ch, current, _pinned, series_name),
-                "value": ch.character_id,
-            }
-        )
+    review_choices = build_character_review_choices(
+        characters,
+        speaker_voices,
+        narrator_voice,
+        pinned=_pinned,
+        series_name=series_name,
+    )
 
     while True:
         # Task 3B: confirm-based loop instead of "Done" sentinel.
@@ -669,7 +609,12 @@ def _prompt_character_voice_review(
         for rc in review_choices:
             if rc["value"] == chosen:
                 if ch is not None:
-                    rc["name"] = _make_character_review_label(ch, new_voice, _pinned, series_name)
+                    rc["name"] = format_character_review_label(
+                        ch,
+                        new_voice,
+                        pinned=_pinned,
+                        series_name=series_name,
+                    )
                 break
 
     return speaker_voices
@@ -693,6 +638,7 @@ def _prompt_multivoice_character_voices(
     via ``suggest_cast``.  ``args`` is kept for HF auth checks.
     """
     from InquirerPy import inquirer
+    from ..services.voice_service import merge_speaker_voices
 
     characters = scan_result.characters
     if not characters:
@@ -739,8 +685,7 @@ def _prompt_multivoice_character_voices(
     )
 
     # Pre-populate with inherited series voices (override auto-assigned ones)
-    if inherited_voices:
-        speaker_voices.update(inherited_voices)
+    speaker_voices = merge_speaker_voices(speaker_voices, inherited_voices)
 
     # Step D — review / adjust via list.
     speaker_voices = _prompt_character_voice_review(
@@ -843,7 +788,15 @@ def _run_series_setup(
             else:
                 manifest = load_series(chosen_slug)
         else:
-            candidates = list_roster_candidates()
+            if client is not None:
+                try:
+                    candidate_data = client.list_series_roster_candidates()
+                    candidates = candidate_data.get("candidates", [])
+                except Exception as exc:
+                    console.print(f"[yellow]Could not load roster candidates: {exc}[/yellow]")
+                    candidates = []
+            else:
+                candidates = list_roster_candidates()
             seed_idx: int | None = None
             if candidates:
                 candidate_choices = [
@@ -863,16 +816,47 @@ def _run_series_setup(
             )).strip()
 
             if seed_idx is not None and seed_idx >= 0:
-                manifest = build_manifest_from_predecessor(candidates[seed_idx], series_name)
+                if client is not None:
+                    created = client.create_series_from_candidate(
+                        series_name,
+                        candidates[seed_idx]["roster_path"],
+                    )
+                    characters = [
+                        SeriesCharacter(
+                            canonical=c["canonical"],
+                            aliases=c.get("aliases", []),
+                            voice=c.get("voice", ""),
+                            gender=c.get("gender", ""),
+                        )
+                        for c in created.get("characters", [])
+                    ]
+                    manifest = SeriesManifest(
+                        name=created.get("name", series_name),
+                        slug=created.get("slug", slugify(series_name)),
+                        updated_at=created.get("updated_at", ""),
+                        characters=characters,
+                    )
+                else:
+                    manifest = build_manifest_from_predecessor(candidates[seed_idx], series_name)
             else:
-                manifest = SeriesManifest(
-                    name=series_name,
-                    slug=slugify(series_name),
-                    updated_at="",
-                    characters=[],
-                )
+                if client is not None:
+                    created = client.create_empty_series(series_name)
+                    manifest = SeriesManifest(
+                        name=created.get("name", series_name),
+                        slug=created.get("slug", slugify(series_name)),
+                        updated_at=created.get("updated_at", ""),
+                        characters=[],
+                    )
+                else:
+                    manifest = SeriesManifest(
+                        name=series_name,
+                        slug=slugify(series_name),
+                        updated_at="",
+                        characters=[],
+                    )
 
-        save_series(manifest)
+        if client is None:
+            save_series(manifest)
 
     else:
         # --- Test seam: replay scripted prompt answers ---
@@ -903,7 +887,16 @@ def _run_series_setup(
         save_series(manifest)
 
     if fast_result is not None:
-        inherited_voices, pinned = match_characters(fast_result.characters, fast_result, manifest)
+        if client is not None and manifest is not None and prompts is None:
+            try:
+                match_result = client.match_series_characters(manifest.slug, fast_result.to_dict())
+                inherited_voices = match_result.get("inherited_voices", {})
+                pinned = set(match_result.get("pinned", []))
+            except Exception as exc:
+                console.print(f"[yellow]Could not match series characters: {exc}[/yellow]")
+                inherited_voices, pinned = {}, set()
+        else:
+            inherited_voices, pinned = match_characters(fast_result.characters, fast_result, manifest)
     else:
         inherited_voices, pinned = {}, set()
     return manifest, inherited_voices, pinned
@@ -977,6 +970,8 @@ def _prompt_simple_voice_assignment(characters, narrator_voice: str, client=None
 
     When ``client`` is provided, fetches voice defaults via the API.
     """
+    from ..services.voice_service import build_roster_payload
+
     if client is not None:
         try:
             male_voices = [v["name"] for v in (client.list_voices(gender="Male").get("voices") or [])]
@@ -1004,17 +999,28 @@ def _prompt_simple_voice_assignment(characters, narrator_voice: str, client=None
         client=client,
     )
 
-    speaker_voices: dict[str, str] = {"NARRATOR": narrator_voice}
-    for ch in characters:
-        g = _gender_pool(ch.gender_pronoun)
-        if g == "male":
-            speaker_voices[ch.character_id] = male_voice
-        elif g == "female":
-            speaker_voices[ch.character_id] = female_voice
-        else:
-            speaker_voices[ch.character_id] = narrator_voice  # ambiguous → narrator
+    roster_payload = build_roster_payload(characters)
 
-    return speaker_voices
+    if client is not None:
+        try:
+            result = client.assign_simple_cast(
+                roster=roster_payload,
+                narrator_voice=narrator_voice,
+                male_voice=male_voice,
+                female_voice=female_voice,
+            )
+            return result.get("speaker_voices", {})
+        except Exception as exc:
+            console.print(f"[yellow]Could not assign simple cast via server: {exc}[/yellow]")
+
+    from ..services.voice_service import assign_simple_cast as _assign_simple_cast
+
+    return _assign_simple_cast(
+        roster=characters,
+        narrator_voice=narrator_voice,
+        male_voice=male_voice,
+        female_voice=female_voice,
+    )
 
 
 def _prompt_chapter_voices(chapters, default_voice: str) -> dict[str, str]:
@@ -1137,76 +1143,31 @@ def _prompt_quality_overrides(app_config) -> dict:
 
 def _init_state_from_profile(book_path, app_config, profile: dict) -> dict:
     """Build initial wizard state from last profile, falling back to app_config defaults."""
-    from .add_profile import load_last_profile, save_last_profile, _quality_from_profile
-    return {
-        "_book_path": book_path,
-        "_app_config": app_config,
-        "voice": profile.get("voice") or app_config.default_voice,
-        "narration_mode": profile.get("narration_mode", "single"),
-        "chapter_selection": {
-            "preset": profile.get("chapter_preset", app_config.default_chapter_preset),
-            "included": [],
-            "excluded": [],
-        },
-        "output_dir": profile.get("output_dir") or str(
-            getattr(app_config, "default_output_dir", None) or book_path.parent
-        ),
-        "quality_overrides": _quality_from_profile(profile, app_config),
-        "pp_overrides": dict(profile.get("pp_overrides") or {}),
-        "speaker_voices": {},
-        "chapter_voices": {},
-        "roster_cache_path": None,
-        "series_slug": None,
-        "_series_manifest": None,
-    }
+    from ..services.confirmation_service import init_confirmation_state
+
+    return init_confirmation_state(book_path, app_config, profile)
 
 
 def _state_to_profile(state: dict) -> dict:
     """Extract saveable profile keys from wizard state."""
-    chap_sel = state.get("chapter_selection", {})
-    return {
-        "voice": state.get("voice", ""),
-        "narration_mode": state.get("narration_mode", "single"),
-        "chapter_preset": chap_sel.get("preset", "content-only"),
-        "output_dir": state.get("output_dir", ""),
-        "quality_overrides": state.get("quality_overrides") or {},
-        "pp_overrides": state.get("pp_overrides") or {},
-    }
+    from ..services.confirmation_service import confirmation_state_to_profile
+
+    return confirmation_state_to_profile(state)
 
 
 def _build_confirmation_choices(state: dict, app_config) -> list:
     """Build InquirerPy select choices for the confirmation screen."""
     from InquirerPy.base.control import Choice, Separator
+    from ..services.confirmation_service import summarize_confirmation_state
 
-    book_name = state["_book_path"].name
-
-    chap_sel = state.get("chapter_selection", {})
-    preset = chap_sel.get("preset", getattr(app_config, "default_chapter_preset", "content-only"))
-    included = chap_sel.get("included", [])
-    chap_count = f"{len(included)} selected" if included else "not yet selected"
-    chap_tag = "[DEFAULT]" if preset == getattr(app_config, "default_chapter_preset", "content-only") else "[CUSTOM]"
-
-    voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
-    mode = state.get("narration_mode", "single")
-    default_voice = getattr(app_config, "default_voice", "alba")
-    has_chapter_voices = bool(state.get("chapter_voices"))
-    if has_chapter_voices:
-        mode_display = "chapter-voice"
-    elif mode == "multi":
-        mode_display = "multi-voice NLP"
-    else:
-        mode_display = "single"
-    voice_tag = "[DEFAULT]" if (voice == default_voice and mode == "single" and not has_chapter_voices) else "[CUSTOM]"
-
-    quality_tag = "[DEFAULT]" if not state.get("quality_overrides") else "[CUSTOM]"
-    output = state.get("output_dir", "")
+    summary = summarize_confirmation_state(state, app_config)
 
     return [
-        Separator(f"  Book:      {book_name}"),
-        Separator(f"  Chapters:  {preset} ({chap_count})  {chap_tag}"),
-        Separator(f"  Voice/NLP: {voice} / {mode_display}  {voice_tag}"),
-        Separator(f"  Quality:   {quality_tag}"),
-        Separator(f"  Output:    {output}"),
+        Separator(f"  Book:      {summary['book_name']}"),
+        Separator(f"  Chapters:  {summary['chapter_line']}"),
+        Separator(f"  Voice/NLP: {summary['voice_line']}"),
+        Separator(f"  Quality:   {summary['quality_line']}"),
+        Separator(f"  Output:    {summary['output_line']}"),
         Separator(""),
         Choice(value="submit",         name="  Submit Job"),
         Choice(value="chapters",       name="  Chapters \u2192"),
@@ -1221,6 +1182,7 @@ def _build_confirmation_choices(state: dict, app_config) -> list:
 def _submenu_chapters(state: dict, app_config, client) -> dict:
     """Chapter selection submenu. Returns updated state."""
     from InquirerPy import inquirer
+    from ..services.workflow_service import reset_chapter_selection
 
     action = _wizard_execute(inquirer.select(
         message="Chapters",
@@ -1232,11 +1194,7 @@ def _submenu_chapters(state: dict, app_config, client) -> dict:
         ],
     ))
     if action == "reset":
-        state = {**state, "chapter_selection": {
-            "preset": getattr(app_config, "default_chapter_preset", "content-only"),
-            "included": [],
-            "excluded": [],
-        }}
+        state = reset_chapter_selection(state, app_config)
     elif action == "select":
         book_path = state["_book_path"]
         try:
@@ -1252,15 +1210,9 @@ def _submenu_chapters(state: dict, app_config, client) -> dict:
 def _submenu_voice(state: dict, app_config, client) -> dict:
     """Voice/NLP submenu. Returns updated state."""
     from InquirerPy import inquirer
+    from ..services.workflow_service import describe_voice_mode, reset_voice_mode
 
-    cur_mode = state.get("narration_mode", "single")
-    has_chapter_voices = bool(state.get("chapter_voices"))
-    if has_chapter_voices:
-        mode_label = "chapter-voice"
-    elif cur_mode == "multi":
-        mode_label = "multi-voice NLP"
-    else:
-        mode_label = "single narrator"
+    mode_label = describe_voice_mode(state)
 
     action = _wizard_execute(inquirer.select(
         message="Voice / NLP",
@@ -1273,11 +1225,7 @@ def _submenu_voice(state: dict, app_config, client) -> dict:
         ],
     ))
     if action == "reset":
-        state = {**state,
-                 "voice": getattr(app_config, "default_voice", "alba"),
-                 "narration_mode": "single",
-                 "speaker_voices": {},
-                 "chapter_voices": {}}
+        state = reset_voice_mode(state, app_config)
     elif action == "select":
         voice = _prompt_voice(default=state.get("voice", app_config.default_voice),
                               message="Select narrator voice:", client=client)
@@ -1290,6 +1238,7 @@ def _submenu_voice(state: dict, app_config, client) -> dict:
 def _submenu_voice_mode(state: dict, app_config, client) -> dict:
     """Mode selection for Voice / NLP submenu."""
     from InquirerPy import inquirer
+    from ..services.workflow_service import set_single_voice_mode
 
     mode = _wizard_execute(inquirer.select(
         message="Narration mode:",
@@ -1300,7 +1249,7 @@ def _submenu_voice_mode(state: dict, app_config, client) -> dict:
         ],
     ))
     if mode == "single":
-        state = {**state, "narration_mode": "single", "speaker_voices": {}, "chapter_voices": {}}
+        state = set_single_voice_mode(state)
     elif mode == "multi":
         state = _setup_multi_voice(state, app_config, client)
     elif mode == "chapter":
@@ -1310,7 +1259,8 @@ def _submenu_voice_mode(state: dict, app_config, client) -> dict:
 
 def _setup_multi_voice(state: dict, app_config, client) -> dict:
     """Run the full multi-voice NLP setup flow. Returns updated state."""
-    from kenkui.models import FastScanResult
+    from ..services.setup_service import cache_roster_result, parse_fast_scan_result
+    from ..services.workflow_service import apply_multi_voice_setup
 
     if not _check_multivoice_requirements(client):
         return state
@@ -1323,7 +1273,7 @@ def _setup_multi_voice(state: dict, app_config, client) -> dict:
         console.print("[yellow]Character scan failed; keeping current mode.[/yellow]")
         return state
 
-    scan_result = FastScanResult.from_dict(scan_raw)
+    scan_result = parse_fast_scan_result(scan_raw)
 
     manifest, inherited_voices, pinned = _run_series_setup(
         fast_result=scan_result, mode="multi", client=client
@@ -1343,28 +1293,22 @@ def _setup_multi_voice(state: dict, app_config, client) -> dict:
         series_name=series_name,
     )
 
-    roster_cache_path = None
-    try:
-        from kenkui.nlp import cache_roster
-        cached = cache_roster(scan_result, book_path)
-        roster_cache_path = str(cached)
-    except Exception as exc:
-        console.print(f"[dim]Could not cache roster: {exc}[/dim]")
+    roster_cache_path = cache_roster_result(scan_result, book_path)
+    if roster_cache_path is None:
+        console.print("[dim]Could not cache roster[/dim]")
 
-    return {
-        **state,
-        "narration_mode": "multi",
-        "speaker_voices": speaker_voices,
-        "chapter_voices": {},
-        "roster_cache_path": roster_cache_path,
-        "_series_manifest": manifest,
-        "series_slug": manifest.slug if manifest else None,
-    }
+    return apply_multi_voice_setup(
+        state,
+        speaker_voices=speaker_voices,
+        roster_cache_path=roster_cache_path,
+        manifest=manifest,
+    )
 
 
 def _setup_chapter_voice(state: dict, client) -> dict:
     """Run chapter-voice assignment flow. Returns updated state."""
-    import types
+    from ..services.setup_service import build_chapter_prompt_items
+    from ..services.workflow_service import apply_chapter_voice_setup
 
     book_path = state["_book_path"]
     voice = state.get("voice", "alba")
@@ -1375,25 +1319,20 @@ def _setup_chapter_voice(state: dict, client) -> dict:
         console.print(f"[red]Could not load chapter list: {exc}[/red]")
         return state
 
-    raw_chapters = parsed.get("chapters") or []
-    if not raw_chapters:
+    chapters = build_chapter_prompt_items(parsed)
+    if not chapters:
         console.print("[yellow]No chapters found.[/yellow]")
         return state
 
-    chapters = [types.SimpleNamespace(**ch) for ch in raw_chapters]
     chapter_voices = _prompt_chapter_voices(chapters, default_voice=voice)
 
-    return {
-        **state,
-        "narration_mode": "single",
-        "chapter_voices": chapter_voices,
-        "speaker_voices": {},
-    }
+    return apply_chapter_voice_setup(state, chapter_voices)
 
 
 def _submenu_audio_quality(state: dict, app_config) -> dict:
     """Per-job audio quality overrides submenu."""
     from InquirerPy import inquirer
+    from ..services.workflow_service import reset_quality_overrides
 
     action = _wizard_execute(inquirer.select(
         message="Audio Quality",
@@ -1405,7 +1344,7 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
         ],
     ))
     if action == "reset":
-        state = {**state, "quality_overrides": {}}
+        state = reset_quality_overrides(state)
     elif action == "edit":
         overrides = dict(state.get("quality_overrides") or {})
         temp_str = _wizard_execute(inquirer.text(
@@ -1435,6 +1374,7 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
 def _submenu_post_processing(state: dict, app_config) -> dict:
     """Post-processing per-job override submenu."""
     from InquirerPy import inquirer
+    from ..services.workflow_service import reset_post_processing_overrides
 
     action = _wizard_execute(inquirer.select(
         message="Post-Processing",
@@ -1445,7 +1385,7 @@ def _submenu_post_processing(state: dict, app_config) -> dict:
         ],
     ))
     if action == "reset":
-        state = {**state, "pp_overrides": {}}
+        state = reset_post_processing_overrides(state)
     return state
 
 
@@ -1460,30 +1400,9 @@ def _submenu_manage_voices(state: dict, app_config, client) -> None:
 
 def _state_to_job_kwargs(state: dict) -> dict:
     """Convert hub-and-spoke state dict to the job kwargs expected by client.add_job()."""
-    book_path = state["_book_path"]
-    chapter_selection = state.get("chapter_selection", {})
-    narration_mode = state.get("narration_mode", "single")
-    voice = state.get("voice", "alba")
-    speaker_voices = state.get("speaker_voices", {})
-    chapter_voices = state.get("chapter_voices", {})
-    quality_overrides = state.get("quality_overrides", {})
-    output_dir = state.get("output_dir", str(book_path.parent))
-    roster_cache_path = state.get("roster_cache_path")
-    series_slug = state.get("series_slug")
+    from ..services.job_service import build_job_kwargs_from_state
 
-    job_kwargs = dict(
-        ebook_path=str(book_path),
-        voice=voice,
-        chapter_selection=chapter_selection,
-        output_path=output_dir,
-        narration_mode=narration_mode,
-        speaker_voices=speaker_voices or None,
-        annotated_chapters_path=None,
-        roster_cache_path=roster_cache_path,
-        chapter_voices=chapter_voices or None,
-        series_slug=series_slug,
-        **quality_overrides,
-    )
+    job_kwargs = build_job_kwargs_from_state(state)
     # pp_overrides are tracked in state for future API support but not yet forwarded
     # to add_job (the API does not yet accept per-job post-processing overrides).
     return job_kwargs
@@ -1537,33 +1456,12 @@ def _run_confirmation_screen(book_path, app_config, args, client=None):
 def _headless_submit(args, client) -> str:
     """Submit a job using config defaults. Returns the job ID."""
     from ..config import load_app_config
-    from ..models import ChapterPreset, ChapterSelection
+    from ..services.job_service import build_headless_job_kwargs
 
     app_config = load_app_config(args.config)
 
-    try:
-        preset_enum = ChapterPreset(app_config.default_chapter_preset)
-    except ValueError:
-        preset_enum = ChapterPreset.CONTENT_ONLY
-
-    chapter_selection = ChapterSelection(preset=preset_enum).to_dict()
-    output_dir = (
-        str(Path(args.output).expanduser().resolve())
-        if getattr(args, "output", None)
-        else (
-            str(app_config.default_output_dir)
-            if app_config.default_output_dir
-            else str(args.book.parent)
-        )
-    )
-
     client.update_config(app_config.to_dict())
-    job_info = client.add_job(
-        ebook_path=str(args.book),
-        voice=app_config.default_voice,
-        chapter_selection=chapter_selection,
-        output_path=output_dir,
-    )
+    job_info = client.add_job(**build_headless_job_kwargs(args, app_config))
     return job_info.id
 
 

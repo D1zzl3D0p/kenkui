@@ -9,6 +9,7 @@ Public API:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .. import series as _series
 
@@ -38,6 +39,27 @@ class SeriesEntry:
 class ListSeriesResult:
     series: list[SeriesEntry]
     total: int
+
+
+@dataclass
+class RosterCandidateEntry:
+    hash: str
+    title: str
+    path: str
+    speaker_voices: dict[str, str] = field(default_factory=dict)
+    roster_path: str = ""
+
+
+@dataclass
+class RosterCandidateListResult:
+    candidates: list[RosterCandidateEntry]
+    total: int
+
+
+@dataclass
+class SeriesMatchResult:
+    inherited_voices: dict[str, str] = field(default_factory=dict)
+    pinned: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -125,12 +147,73 @@ def delete_series(slug: str) -> bool:
         return False
 
 
+def list_roster_candidates() -> RosterCandidateListResult:
+    """Return available roster candidates for seeding a new series manifest."""
+    candidates = [
+        RosterCandidateEntry(
+            hash=c["hash"],
+            title=c["title"],
+            path=c["path"],
+            speaker_voices=dict(c.get("speaker_voices") or {}),
+            roster_path=str(c["roster_path"]),
+        )
+        for c in _series.list_roster_candidates()
+    ]
+    return RosterCandidateListResult(candidates=candidates, total=len(candidates))
+
+
+def create_empty_series(name: str) -> SeriesEntry:
+    """Create and persist an empty series manifest from a name."""
+    manifest = _series.SeriesManifest(
+        name=name,
+        slug=_series.slugify(name),
+        updated_at="",
+        characters=[],
+    )
+    _series.save_series(manifest)
+    return _manifest_to_entry(manifest)
+
+
+def build_series_from_candidate(roster_path: str, name: str) -> SeriesEntry:
+    """Create and persist a series manifest seeded from a roster candidate path."""
+    candidate = {"roster_path": Path(roster_path)}
+    manifest = _series.build_manifest_from_predecessor(candidate, name)
+    _series.save_series(manifest)
+    return _manifest_to_entry(manifest)
+
+
+def match_series_characters(slug: str, fast_result_dict: dict) -> SeriesMatchResult:
+    """Match scanned characters against an existing series manifest."""
+    manifest = _series.load_series(slug)
+    if manifest is None:
+        raise KeyError(slug)
+    from ..models import FastScanResult
+
+    fast_result = FastScanResult.from_dict(fast_result_dict)
+    inherited_voices, pinned = _series.match_characters(
+        fast_result.characters,
+        fast_result,
+        manifest,
+    )
+    return SeriesMatchResult(
+        inherited_voices=inherited_voices,
+        pinned=sorted(pinned),
+    )
+
+
 __all__ = [
     "SeriesCharacterEntry",
     "SeriesEntry",
     "ListSeriesResult",
+    "RosterCandidateEntry",
+    "RosterCandidateListResult",
+    "SeriesMatchResult",
     "list_series",
     "load_series",
     "save_series",
     "delete_series",
+    "list_roster_candidates",
+    "create_empty_series",
+    "build_series_from_candidate",
+    "match_series_characters",
 ]

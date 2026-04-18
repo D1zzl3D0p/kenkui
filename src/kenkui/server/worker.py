@@ -187,6 +187,7 @@ class WorkerServer:
 
     def start_next_job(self) -> QueueItem | None:
         import time
+
         with self._lock:
             item = self.get_next_pending()
             if item:
@@ -208,6 +209,7 @@ class WorkerServer:
 
     def complete_job(self, job_id: str, output_path: str = ""):
         import time
+
         with self._lock:
             for item in self._items:
                 if item.id == job_id:
@@ -314,7 +316,7 @@ class WorkerServer:
 
             result = builder.run()
 
-            if getattr(builder, 'was_paused', False) is True:
+            if getattr(builder, "was_paused", False) is True:
                 with self._lock:
                     item = next((i for i in self._items if i.id == self._current_id), None)
                     if item is not None:
@@ -394,10 +396,13 @@ class WorkerServer:
         if job.roster_cache_path and job.roster_cache_path.exists():
             try:
                 from ..models import FastScanResult
+
                 data = json.loads(job.roster_cache_path.read_text(encoding="utf-8"))
                 roster = FastScanResult.from_dict(data).roster
             except Exception as exc:
-                logger.warning("Could not load roster cache %s: %s — re-scanning", job.roster_cache_path, exc)
+                logger.warning(
+                    "Could not load roster cache %s: %s — re-scanning", job.roster_cache_path, exc
+                )
 
         if roster is None:
             # Fallback: run fast scan to rebuild roster
@@ -517,12 +522,23 @@ class WorkerServer:
         output_path = job.output_path or job.ebook_path.parent
 
         from ..models import _normalize_bitrate
+
         cfg = ProcessingConfig(
             voice=job.voice,
             ebook_path=job.ebook_path,
             output_path=output_path,
             pause_line_ms=_resolve(job.job_pause_line_ms, self._app_config.pause_line_ms),
             pause_chapter_ms=_resolve(job.job_pause_chapter_ms, self._app_config.pause_chapter_ms),
+            speak_chapter_titles=_resolve(
+                job.job_speak_chapter_titles, self._app_config.speak_chapter_titles
+            ),
+            pause_before_chapter_title_ms=_resolve(
+                job.job_pause_before_chapter_title_ms,
+                self._app_config.pause_before_chapter_title_ms,
+            ),
+            pause_after_chapter_title_ms=_resolve(
+                job.job_pause_after_chapter_title_ms, self._app_config.pause_after_chapter_title_ms
+            ),
             workers=self._app_config.workers,
             m4b_bitrate=_normalize_bitrate(
                 _resolve(job.job_m4b_bitrate, self._app_config.m4b_bitrate)

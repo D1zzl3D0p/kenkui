@@ -177,6 +177,27 @@ class SuggestCastResponse(BaseModel):
     warnings: list[str]
 
 
+class NarratorRecommendationRequest(BaseModel):
+    roster: list[CharacterInfoModel]
+    excluded_voices: list[str] = []
+    default_voice: str = "narrator"
+
+
+class NarratorRecommendationResponse(BaseModel):
+    voice_name: str
+
+
+class SimpleCastRequest(BaseModel):
+    roster: list[CharacterInfoModel]
+    narrator_voice: str
+    male_voice: str
+    female_voice: str
+
+
+class SimpleCastResponse(BaseModel):
+    speaker_voices: dict[str, str]
+
+
 class OkResponse(BaseModel):
     status: str = "ok"
     message: str = ""
@@ -220,6 +241,37 @@ class SeriesModel(BaseModel):
 class SeriesListResponse(BaseModel):
     series: list[SeriesModel]
     total: int
+
+
+class RosterCandidateModel(BaseModel):
+    hash: str
+    title: str
+    path: str
+    speaker_voices: dict[str, str] = {}
+    roster_path: str
+
+
+class RosterCandidateListResponse(BaseModel):
+    candidates: list[RosterCandidateModel]
+    total: int
+
+
+class CreateEmptySeriesRequest(BaseModel):
+    name: str
+
+
+class CreateSeriesFromCandidateRequest(BaseModel):
+    name: str
+    roster_path: str
+
+
+class SeriesMatchRequest(BaseModel):
+    fast_result: dict
+
+
+class SeriesMatchResponse(BaseModel):
+    inherited_voices: dict[str, str]
+    pinned: list[str]
 
 
 # --- Auth ---
@@ -577,6 +629,55 @@ def voices_suggest_cast(req: SuggestCastRequest):
     return SuggestCastResponse(speaker_voices=result.speaker_voices, warnings=result.warnings)
 
 
+@app.post("/voices/recommend-narrator", response_model=NarratorRecommendationResponse)
+def recommend_narrator(req: NarratorRecommendationRequest):
+    """Recommend a narrator voice based on dominant character gender."""
+    from kenkui.models import CharacterInfo
+    from kenkui.services.voice_service import top_gender_matched_voice
+
+    roster = [
+        CharacterInfo(
+            character_id=c.name,
+            display_name=c.name,
+            gender_pronoun=c.pronoun or "",
+            quote_count=c.quote_count,
+            mention_count=c.mention_count,
+        )
+        for c in req.roster
+    ]
+    voice_name = top_gender_matched_voice(
+        roster,
+        excluded=req.excluded_voices,
+        default_voice=req.default_voice,
+    )
+    return NarratorRecommendationResponse(voice_name=voice_name)
+
+
+@app.post("/voices/assign-simple", response_model=SimpleCastResponse)
+def assign_simple_cast(req: SimpleCastRequest):
+    """Assign simple-mode voices using shared server-side rules."""
+    from kenkui.models import CharacterInfo
+    from kenkui.services.voice_service import assign_simple_cast as _assign_simple_cast
+
+    roster = [
+        CharacterInfo(
+            character_id=c.name,
+            display_name=c.name,
+            gender_pronoun=c.pronoun or "",
+            quote_count=c.quote_count,
+            mention_count=c.mention_count,
+        )
+        for c in req.roster
+    ]
+    speaker_voices = _assign_simple_cast(
+        roster=roster,
+        narrator_voice=req.narrator_voice,
+        male_voice=req.male_voice,
+        female_voice=req.female_voice,
+    )
+    return SimpleCastResponse(speaker_voices=speaker_voices)
+
+
 @app.get("/voices/{name}", response_model=VoiceResponse)
 def get_voice(name: str):
     """Get details for a specific voice."""
@@ -698,6 +799,63 @@ def list_series():
     )
 
 
+@app.get("/series/roster-candidates", response_model=RosterCandidateListResponse)
+def list_series_roster_candidates():
+    """List roster candidates that can seed a new series manifest."""
+    from ..services import series_service as _series_svc
+
+    result = _series_svc.list_roster_candidates()
+    return RosterCandidateListResponse(
+        candidates=[
+            RosterCandidateModel(
+                hash=c.hash,
+                title=c.title,
+                path=c.path,
+                speaker_voices=c.speaker_voices,
+                roster_path=c.roster_path,
+            )
+            for c in result.candidates
+        ],
+        total=result.total,
+    )
+
+
+@app.post("/series/empty", response_model=SeriesModel)
+def create_empty_series(req: CreateEmptySeriesRequest):
+    """Create and persist an empty series manifest."""
+    from ..services import series_service as _series_svc
+
+    entry = _series_svc.create_empty_series(req.name)
+    return SeriesModel(
+        slug=entry.slug,
+        name=entry.name,
+        updated_at=entry.updated_at,
+        characters=[],
+    )
+
+
+@app.post("/series/from-candidate", response_model=SeriesModel)
+def create_series_from_candidate(req: CreateSeriesFromCandidateRequest):
+    """Create and persist a series manifest seeded from a roster candidate."""
+    from ..services import series_service as _series_svc
+
+    entry = _series_svc.build_series_from_candidate(req.roster_path, req.name)
+    return SeriesModel(
+        slug=entry.slug,
+        name=entry.name,
+        updated_at=entry.updated_at,
+        characters=[
+            SeriesCharacterModel(
+                canonical=c.canonical,
+                aliases=c.aliases,
+                voice=c.voice,
+                gender=c.gender,
+            )
+            for c in entry.characters
+        ],
+    )
+
+
 @app.get("/series/{slug}", response_model=SeriesModel)
 def get_series(slug: str):
     """Get a single series manifest by slug."""
@@ -719,6 +877,21 @@ def get_series(slug: str):
             )
             for c in entry.characters
         ],
+    )
+
+
+@app.post("/series/{slug}/match", response_model=SeriesMatchResponse)
+def match_series(slug: str, req: SeriesMatchRequest):
+    """Match a fast-scan result against a series manifest."""
+    from ..services import series_service as _series_svc
+
+    try:
+        result = _series_svc.match_series_characters(slug, req.fast_result)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Series not found: {slug}")
+    return SeriesMatchResponse(
+        inherited_voices=result.inherited_voices,
+        pinned=result.pinned,
     )
 
 

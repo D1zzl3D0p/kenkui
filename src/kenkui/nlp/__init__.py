@@ -48,24 +48,17 @@ from collections.abc import Callable
 from dataclasses import replace as _replace
 from pathlib import Path
 
+from ..text_rules import SCENE_BREAK_RE, is_scene_break
+
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Scene-break helpers (duplicated from workers.py to avoid circular import)
-# ---------------------------------------------------------------------------
-
-_SCENE_BREAK_RE = re.compile(
-    r"^\s*(\*\s*){2,}\s*$"
-    r"|^\s*[-\u2014]{2,}\s*$"
-    r"|^\s*#\s*$",
-)
 
 
 def _is_scene_break(text: str) -> bool:
     """Return True if *text* is a scene-break marker or pure whitespace."""
-    stripped = text.strip()
-    return not stripped or bool(_SCENE_BREAK_RE.match(stripped))
+    return is_scene_break(text)
+
+
+_SCENE_BREAK_RE = SCENE_BREAK_RE
 
 
 def _load_spacy_model():

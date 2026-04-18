@@ -63,21 +63,56 @@ def test_suggest_cast_resolves_chapter_conflicts():
 
 def test_suggest_cast_api_route():
     from unittest.mock import patch, MagicMock
-    from fastapi.testclient import TestClient
-    from kenkui.server.api import app
-    client = TestClient(app)
+    from kenkui.server.api import SuggestCastRequest, voices_suggest_cast
+
     mock_result = MagicMock()
     mock_result.speaker_voices = {"Alice": "alba", "Bob": "archie"}
     mock_result.warnings = []
-    with patch("kenkui.server.api.get_server"), \
-         patch("kenkui.services.voice_service.suggest_cast", return_value=mock_result):
-        resp = client.post("/voices/suggest-cast", json={
-            "roster": [{"name": "Alice", "pronoun": "she/her"},
-                       {"name": "Bob", "pronoun": "he/him"}],
-            "excluded_voices": [],
-            "default_voice": "narrator",
-        })
-    assert resp.status_code == 200
-    body = resp.json()
+    req = SuggestCastRequest(
+        roster=[
+            {"name": "Alice", "pronoun": "she/her"},
+            {"name": "Bob", "pronoun": "he/him"},
+        ],
+        excluded_voices=[],
+        default_voice="narrator",
+    )
+    with patch("kenkui.server.api.get_server"), patch(
+        "kenkui.services.voice_service.suggest_cast", return_value=mock_result
+    ):
+        body = voices_suggest_cast(req).model_dump()
     assert "speaker_voices" in body
     assert "warnings" in body
+
+
+def test_recommend_narrator_api_route():
+    from unittest.mock import patch
+    from kenkui.server.api import NarratorRecommendationRequest, recommend_narrator
+
+    req = NarratorRecommendationRequest(
+        roster=[{"name": "Alice", "pronoun": "she/her"}],
+        excluded_voices=[],
+        default_voice="narrator",
+    )
+    with patch("kenkui.services.voice_service.top_gender_matched_voice", return_value="fantine"):
+        body = recommend_narrator(req).model_dump()
+
+    assert body["voice_name"] == "fantine"
+
+
+def test_assign_simple_cast_api_route():
+    from unittest.mock import patch
+    from kenkui.server.api import SimpleCastRequest, assign_simple_cast
+
+    req = SimpleCastRequest(
+        roster=[{"name": "Alice", "pronoun": "she/her"}],
+        narrator_voice="narrator",
+        male_voice="alba",
+        female_voice="fantine",
+    )
+    with patch(
+        "kenkui.services.voice_service.assign_simple_cast",
+        return_value={"NARRATOR": "narrator", "Alice": "fantine"},
+    ):
+        body = assign_simple_cast(req).model_dump()
+
+    assert body["speaker_voices"]["Alice"] == "fantine"

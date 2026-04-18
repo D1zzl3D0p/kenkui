@@ -149,6 +149,36 @@ def test_suggest_cast():
     assert result["speaker_voices"]["char1"] == "alba"
 
 
+def test_recommend_narrator_voice():
+    c = _client()
+    with patch.object(
+        c._client,
+        "request",
+        return_value=_mock_response(json_data={"voice_name": "fantine"}),
+    ):
+        result = c.recommend_narrator_voice(
+            roster=[{"name": "Alice", "pronoun": "she/her"}],
+            default_voice="narrator",
+        )
+    assert result["voice_name"] == "fantine"
+
+
+def test_assign_simple_cast():
+    c = _client()
+    with patch.object(
+        c._client,
+        "request",
+        return_value=_mock_response(json_data={"speaker_voices": {"Alice": "fantine"}}),
+    ):
+        result = c.assign_simple_cast(
+            roster=[{"name": "Alice", "pronoun": "she/her"}],
+            narrator_voice="narrator",
+            male_voice="alba",
+            female_voice="fantine",
+        )
+    assert result["speaker_voices"]["Alice"] == "fantine"
+
+
 # --- Tasks ---
 
 def test_get_task():
@@ -221,6 +251,27 @@ def test_list_series():
     assert result["total"] == 0
 
 
+def test_list_series_roster_candidates():
+    c = _client()
+    with patch.object(c._client, "request", return_value=_mock_response(json_data={"candidates": [], "total": 0})):
+        result = c.list_series_roster_candidates()
+    assert result["total"] == 0
+
+
+def test_create_empty_series():
+    c = _client()
+    with patch.object(c._client, "request", return_value=_mock_response(json_data={"slug": "my-series", "name": "My Series", "characters": []})):
+        result = c.create_empty_series("My Series")
+    assert result["slug"] == "my-series"
+
+
+def test_create_series_from_candidate():
+    c = _client()
+    with patch.object(c._client, "request", return_value=_mock_response(json_data={"slug": "my-series", "name": "My Series", "characters": []})):
+        result = c.create_series_from_candidate("My Series", "/tmp/roster.json")
+    assert result["slug"] == "my-series"
+
+
 def test_get_series():
     c = _client()
     with patch.object(c._client, "request",
@@ -228,6 +279,13 @@ def test_get_series():
                                                               "updated_at": "", "characters": []})):
         result = c.get_series("my-series")
     assert result["slug"] == "my-series"
+
+
+def test_match_series_characters():
+    c = _client()
+    with patch.object(c._client, "request", return_value=_mock_response(json_data={"inherited_voices": {"Rand": "alba"}, "pinned": ["Rand"]})):
+        result = c.match_series_characters("wheel-of-time", {"book_hash": "abc"})
+    assert result["inherited_voices"]["Rand"] == "alba"
 
 
 def test_delete_series():

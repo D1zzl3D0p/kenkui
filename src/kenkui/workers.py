@@ -22,7 +22,6 @@ import logging
 import math
 import multiprocessing
 import os
-import re
 import traceback
 from pathlib import Path
 
@@ -30,6 +29,7 @@ import scipy.io.wavfile
 from pydub import AudioSegment
 
 from .models import AudioResult, Chapter, Segment
+from .text_rules import SCENE_BREAK_RE, is_scene_break, split_at_scene_breaks
 from .utils import batch_text
 from .voice_loader import load_voice
 
@@ -79,21 +79,9 @@ def _get_or_load_model(
     return _model_cache[key]
 
 
-# ---------------------------------------------------------------------------
-# Scene-break helpers
-# ---------------------------------------------------------------------------
-
-_SCENE_BREAK_RE = re.compile(
-    r"^\s*(\*\s*){2,}\s*$"
-    r"|^\s*[-\u2014]{2,}\s*$"
-    r"|^\s*#\s*$",
-)
-
-
 def _is_scene_break(text: str) -> bool:
     """Return True if *text* is a scene-break marker (or pure whitespace)."""
-    stripped = text.strip()
-    return not stripped or bool(_SCENE_BREAK_RE.match(stripped))
+    return is_scene_break(text)
 
 
 def _split_at_scene_breaks(paragraphs: list[str]) -> list[list[str]]:
@@ -102,18 +90,7 @@ def _split_at_scene_breaks(paragraphs: list[str]) -> list[list[str]]:
     Scene-break paragraphs are dropped; remaining paragraphs are grouped
     between break points.  Always returns at least one group.
     """
-    groups: list[list[str]] = []
-    current: list[str] = []
-    for para in paragraphs:
-        if _is_scene_break(para):
-            if current:
-                groups.append(current)
-                current = []
-        else:
-            current.append(para)
-    if current:
-        groups.append(current)
-    return groups or [[]]
+    return split_at_scene_breaks(paragraphs)
 
 
 def _autogain_segment(seg: "AudioSegment", target_db: float) -> "AudioSegment":
@@ -132,7 +109,7 @@ def _autogain_segment(seg: "AudioSegment", target_db: float) -> "AudioSegment":
     if max_val == 0:
         return seg
     samples /= max_val
-    rms = float(np.sqrt(np.mean(samples ** 2)))
+    rms = float(np.sqrt(np.mean(samples**2)))
     if rms < 1e-8:
         return seg  # silence — skip
     target_linear = 10 ** (target_db / 20.0)
@@ -203,6 +180,7 @@ def worker_process_chapter(
     # process_name are no-ops, so this pays no cost after the first chapter.
     try:
         from .log import setup_logging
+
         setup_logging("workers")
     except Exception:
         pass
@@ -314,10 +292,29 @@ def _process_chapter_inner(
 
         pause_line_ms = config_dict.get("pause_line_ms", 400)
         pause_scene_break_ms = config_dict.get("pause_scene_break_ms", 4000)
+        speak_chapter_titles = config_dict.get("speak_chapter_titles", True)
+        pause_before_title_ms = config_dict.get("pause_before_chapter_title_ms", 2000)
+        pause_after_title_ms = config_dict.get("pause_after_chapter_title_ms", 3000)
         pp = config_dict.get("post_processing", {})
         autogain_enabled = bool(pp.get("autogain", True)) if pp.get("enabled", True) else False
         autogain_target_db = float(pp.get("autogain_target_lufs", -23.0))
         full_audio = AudioSegment.empty()
+
+        if speak_chapter_titles and chapter.title:
+            full_audio += AudioSegment.silent(duration=pause_before_title_ms)
+            title_audio = _render_text(
+                model,
+                voice_state,
+                chapter.title,
+                log_message,
+                pid,
+                0,
+                total_batches,
+                frames_after_eos=0,
+            )
+            if title_audio is not None:
+                full_audio += title_audio
+            full_audio += AudioSegment.silent(duration=pause_after_title_ms)
 
         fae = config_dict.get("frames_after_eos")
         global_batch_idx = 0
@@ -327,7 +324,13 @@ def _process_chapter_inner(
             for batch in batches:
                 batch_fae = fae if fae is not None else max(3, len(batch) // 150)
                 audio_seg = _render_text(
-                    model, voice_state, batch, log_message, pid, global_batch_idx, total_batches,
+                    model,
+                    voice_state,
+                    batch,
+                    log_message,
+                    pid,
+                    global_batch_idx,
+                    total_batches,
                     frames_after_eos=batch_fae,
                 )
                 if audio_seg is not None:
@@ -377,9 +380,9 @@ def _render_multi_voice(
     segments: list[Segment] = chapter.segments
 
     # Collect unique speakers (exclude SCENE_BREAK — no voice state needed)
-    unique_speakers: list[str] = list(dict.fromkeys(
-        s.speaker for s in segments if not s.is_scene_break
-    ))
+    unique_speakers: list[str] = list(
+        dict.fromkeys(s.speaker for s in segments if not s.is_scene_break)
+    )
     log_message(
         f"[Worker {pid}] Multi-voice: {len(segments)} segments, "
         f"{len(unique_speakers)} speakers: {unique_speakers}"
@@ -409,10 +412,31 @@ def _render_multi_voice(
 
     pause_line_ms = config_dict.get("pause_line_ms", 400)
     pause_scene_break_ms = config_dict.get("pause_scene_break_ms", 4000)
+    speak_chapter_titles = config_dict.get("speak_chapter_titles", True)
+    pause_before_title_ms = config_dict.get("pause_before_chapter_title_ms", 2000)
+    pause_after_title_ms = config_dict.get("pause_after_chapter_title_ms", 3000)
     pp = config_dict.get("post_processing", {})
     autogain_enabled = bool(pp.get("autogain", True)) if pp.get("enabled", True) else False
     autogain_target_db = float(pp.get("autogain_target_lufs", -23.0))
     fae_cfg = config_dict.get("frames_after_eos")
+
+    # Build initial audio with chapter title if enabled
+    initial_audio = AudioSegment.empty()
+    if speak_chapter_titles and chapter.title:
+        initial_audio += AudioSegment.silent(duration=pause_before_title_ms)
+        title_audio = _render_text(
+            model,
+            speaker_states.get("NARRATOR", list(speaker_states.values())[0]),
+            chapter.title,
+            log_message,
+            pid,
+            0,
+            total_segments,
+            frames_after_eos=0,
+        )
+        if title_audio is not None:
+            initial_audio += title_audio
+        initial_audio += AudioSegment.silent(duration=pause_after_title_ms)
 
     # Render each segment with its speaker's voice state
     rendered: dict[int, tuple[AudioSegment, str]] = {}
@@ -424,7 +448,13 @@ def _render_multi_voice(
         voice_state = speaker_states[seg.speaker]
         seg_fae = fae_cfg if fae_cfg is not None else max(3, len(seg.text) // 150)
         audio_seg = _render_text(
-            model, voice_state, seg.text, log_message, pid, seg_idx, total_segments,
+            model,
+            voice_state,
+            seg.text,
+            log_message,
+            pid,
+            seg_idx,
+            total_segments,
             frames_after_eos=seg_fae,
         )
         if audio_seg is not None and autogain_enabled:
@@ -436,7 +466,7 @@ def _render_multi_voice(
         queue.put(("UPDATE", pid, 1, seg_idx + 1, total_segments, len(seg.text)))
 
     # Reassemble in original index order
-    full_audio = AudioSegment.empty()
+    full_audio = initial_audio
     for idx in sorted(rendered):
         audio_seg, seg_text = rendered[idx]
         full_audio += audio_seg + _pause_for_segment(pause_line_ms, seg_text)
@@ -493,9 +523,10 @@ def _render_text(
         try:
             # Strip any italic STX/ETX markers that may have survived into this
             # segment (e.g. in single-voice mode that bypasses the NLP pipeline).
-            text = text.replace('\x02', '').replace('\x03', '')
+            text = text.replace("\x02", "").replace("\x03", "")
             # Expand n't contractions so TTS pronounces them correctly.
             from .utils import normalize_for_tts
+
             text = normalize_for_tts(text)
             log_message(f"  Batch {batch_idx + 1}/{total_batches}: {text[:80]}…")
             tensor = model.generate_audio(

@@ -165,6 +165,9 @@ class JobConfig:
     job_m4b_bitrate: str | None = None
     job_pause_line_ms: int | None = None
     job_pause_chapter_ms: int | None = None
+    job_speak_chapter_titles: bool | None = None
+    job_pause_before_chapter_title_ms: int | None = None
+    job_pause_after_chapter_title_ms: int | None = None
     job_frames_after_eos: int | None = None
 
     def __post_init__(self):
@@ -183,16 +186,22 @@ class JobConfig:
             "annotated_chapters_path": str(self.annotated_chapters_path)
             if self.annotated_chapters_path
             else None,
-            "roster_cache_path": str(self.roster_cache_path)
-            if self.roster_cache_path
-            else None,
+            "roster_cache_path": str(self.roster_cache_path) if self.roster_cache_path else None,
             "chapter_voices": self.chapter_voices,
             "series_slug": self.series_slug,
         }
         # Only include per-job overrides when explicitly set (non-None)
         for key in (
-            "job_temp", "job_lsd_decode_steps", "job_noise_clamp", "job_eos_threshold",
-            "job_m4b_bitrate", "job_pause_line_ms", "job_pause_chapter_ms",
+            "job_temp",
+            "job_lsd_decode_steps",
+            "job_noise_clamp",
+            "job_eos_threshold",
+            "job_m4b_bitrate",
+            "job_pause_line_ms",
+            "job_pause_chapter_ms",
+            "job_speak_chapter_titles",
+            "job_pause_before_chapter_title_ms",
+            "job_pause_after_chapter_title_ms",
             "job_frames_after_eos",
         ):
             val = getattr(self, key)
@@ -225,6 +234,9 @@ class JobConfig:
             job_m4b_bitrate=data.get("job_m4b_bitrate"),
             job_pause_line_ms=data.get("job_pause_line_ms"),
             job_pause_chapter_ms=data.get("job_pause_chapter_ms"),
+            job_speak_chapter_titles=data.get("job_speak_chapter_titles"),
+            job_pause_before_chapter_title_ms=data.get("job_pause_before_chapter_title_ms"),
+            job_pause_after_chapter_title_ms=data.get("job_pause_after_chapter_title_ms"),
             job_frames_after_eos=data.get("job_frames_after_eos"),
         )
 
@@ -266,6 +278,7 @@ class PostProcessingConfig:
 
     def to_dict(self) -> dict:
         import dataclasses as _dc
+
         return _dc.asdict(self)
 
     @classmethod
@@ -306,6 +319,9 @@ class AppConfig:
     pause_line_ms: int = 800
     pause_chapter_ms: int = 2000
     pause_scene_break_ms: int = 4000
+    speak_chapter_titles: bool = True
+    pause_before_chapter_title_ms: int = 2000
+    pause_after_chapter_title_ms: int = 3000
     temp: float = 0.7  # Sampling temperature (lower = stable, higher = expressive)
     lsd_decode_steps: int = 1  # LSD decode steps (higher = better quality, slower)
     noise_clamp: float | None = None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
@@ -317,8 +333,8 @@ class AppConfig:
     default_output_dir: Path | None = None  # Output directory for CLI runs
     # --- Multi-voice / NLP ---
     nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
-    nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
-    nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
+    nlp_confidence_threshold: int = 0  # 0 = disabled; >0 triggers second-pass retry
+    nlp_review_model: str = ""  # Ollama model for second pass; "" = same as nlp_model
     excluded_voices: list[str] = field(default_factory=list)
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
@@ -334,6 +350,9 @@ class AppConfig:
             "pause_line_ms": self.pause_line_ms,
             "pause_chapter_ms": self.pause_chapter_ms,
             "pause_scene_break_ms": self.pause_scene_break_ms,
+            "speak_chapter_titles": self.speak_chapter_titles,
+            "pause_before_chapter_title_ms": self.pause_before_chapter_title_ms,
+            "pause_after_chapter_title_ms": self.pause_after_chapter_title_ms,
             "temp": self.temp,
             "lsd_decode_steps": self.lsd_decode_steps,
             "noise_clamp": self.noise_clamp,
@@ -361,6 +380,9 @@ class AppConfig:
             pause_line_ms=data.get("pause_line_ms", 800),
             pause_chapter_ms=data.get("pause_chapter_ms", 2000),
             pause_scene_break_ms=data.get("pause_scene_break_ms", 4000),
+            speak_chapter_titles=data.get("speak_chapter_titles", True),
+            pause_before_chapter_title_ms=data.get("pause_before_chapter_title_ms", 2000),
+            pause_after_chapter_title_ms=data.get("pause_after_chapter_title_ms", 3000),
             temp=data.get("temp", 0.7),
             lsd_decode_steps=data.get("lsd_decode_steps", 1),
             noise_clamp=data.get("noise_clamp"),
@@ -548,6 +570,7 @@ class FastScanResult:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FastScanResult":
         from .nlp.models import CharacterRoster
+
         return cls(
             book_hash=data.get("book_hash", ""),
             roster=CharacterRoster.model_validate(data.get("roster", {"characters": []})),
@@ -575,6 +598,9 @@ class ProcessingConfig:
     keep_temp: bool
     debug_html: bool
     chapter_filters: list["FilterOperation"]
+    speak_chapter_titles: bool = True
+    pause_before_chapter_title_ms: int = 2000
+    pause_after_chapter_title_ms: int = 3000
     preview: bool = False
     verbose: bool = False
     tts_model: str = "kyutai/pocket-tts"

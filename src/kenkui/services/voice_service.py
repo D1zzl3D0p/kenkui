@@ -296,6 +296,157 @@ def top_gender_matched_voice(
     return default_voice
 
 
+def assign_simple_cast(
+    *,
+    roster: list,
+    narrator_voice: str,
+    male_voice: str,
+    female_voice: str,
+) -> dict[str, str]:
+    """Assign one shared voice per binary gender pool plus narrator fallback.
+
+    ``roster`` items must expose ``character_id`` and ``gender_pronoun``.
+    Ambiguous / non-binary characters fall back to ``narrator_voice``.
+    """
+    speaker_voices: dict[str, str] = {"NARRATOR": narrator_voice}
+    for ch in roster:
+        gender = gender_from_pronoun(getattr(ch, "gender_pronoun", None))
+        if gender == "male":
+            speaker_voices[ch.character_id] = male_voice
+        elif gender == "female":
+            speaker_voices[ch.character_id] = female_voice
+        else:
+            speaker_voices[ch.character_id] = narrator_voice
+    return speaker_voices
+
+
+def build_roster_payload(characters: list) -> list[dict]:
+    """Serialize character info into the API payload shape used by voice endpoints."""
+    return [
+        {
+            "name": character.character_id,
+            "pronoun": character.gender_pronoun or None,
+            "quote_count": character.quote_count,
+            "mention_count": character.mention_count,
+        }
+        for character in characters
+    ]
+
+
+def merge_speaker_voices(
+    base_assignments: dict[str, str],
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Merge speaker assignments with explicit overrides winning."""
+    merged = dict(base_assignments)
+    if overrides:
+        merged.update(overrides)
+    return merged
+
+
+def format_character_review_label(
+    character,
+    voice: str,
+    pinned: set[str] | None = None,
+    series_name: str | None = None,
+) -> str:
+    """Format the CLI review label for a character/voice assignment."""
+    pinned = pinned or set()
+    gender = getattr(character, "gender_pronoun", None) or "?"
+    prominence = getattr(character, "prominence", 0)
+    base = f"{voice:<20}  {character.display_name}  ({prominence} mentions, {gender})"
+    if character.character_id in pinned and series_name:
+        base += f"  [series: {series_name}]"
+    return base
+
+
+def build_voice_users(
+    speaker_voices: dict[str, str],
+    characters: list,
+) -> dict[str, list[str]]:
+    """Build inverse map of voice name to character display names."""
+    character_names = {c.character_id: c.display_name for c in characters}
+    users: dict[str, list[str]] = defaultdict(list)
+    for character_id, voice_name in speaker_voices.items():
+        if character_id == "NARRATOR":
+            continue
+        users[voice_name].append(character_names.get(character_id, character_id))
+    return dict(users)
+
+
+def annotate_voice_choices(
+    voice_choices: list[dict],
+    voice_users: dict[str, list[str]],
+    *,
+    exclude_char_name: str | None = None,
+) -> list[dict]:
+    """Annotate raw voice choices with other characters already using each voice."""
+    result: list[dict] = []
+    for choice in voice_choices:
+        if choice.get("value") == "__custom__":
+            result.append(choice)
+            continue
+        voice_name = choice["value"]
+        users = [u for u in voice_users.get(voice_name, []) if u != exclude_char_name]
+        suffix = f"  ← {', '.join(users[:2])}" if users else ""
+        result.append({**choice, "name": choice["name"] + suffix})
+    return result
+
+
+def format_unresolved_conflict_warnings(
+    unresolved_conflicts: list[tuple[str, str]] | None,
+    pinned: set[str] | None = None,
+) -> list[str]:
+    """Return user-facing warning strings for unresolved chapter voice conflicts."""
+    warnings: list[str] = []
+    pinned = pinned or set()
+    for char_a, char_b in unresolved_conflicts or []:
+        if char_a in pinned:
+            inherited = char_a
+        elif char_b in pinned:
+            inherited = char_b
+        else:
+            inherited = None
+        if inherited:
+            warnings.append(
+                f"{char_a!r} and {char_b!r} share a chapter with the same voice. "
+                f"{inherited!r} is inherited from the series — change the other if needed."
+            )
+        else:
+            warnings.append(
+                f"{char_a!r} and {char_b!r} share a chapter with the same voice "
+                "and no spare voice exists."
+            )
+    return warnings
+
+
+def build_character_review_choices(
+    characters: list,
+    speaker_voices: dict[str, str],
+    narrator_voice: str,
+    *,
+    pinned: set[str] | None = None,
+    series_name: str | None = None,
+) -> list[dict[str, str]]:
+    """Build review-menu entries for character voice assignments."""
+    pinned = pinned or set()
+    review_choices: list[dict[str, str]] = []
+    for character in sorted(characters, key=lambda c: c.prominence, reverse=True):
+        current_voice = speaker_voices.get(character.character_id, narrator_voice)
+        review_choices.append(
+            {
+                "name": format_character_review_label(
+                    character,
+                    current_voice,
+                    pinned=pinned,
+                    series_name=series_name,
+                ),
+                "value": character.character_id,
+            }
+        )
+    return review_choices
+
+
 def sort_cast(speaker_voices: dict) -> list[tuple[str, str]]:
     """Sort cast alphabetically with NARRATOR pinned last."""
     return sorted(
@@ -527,6 +678,14 @@ __all__ = [
     "exclude_voice",
     "include_voice",
     "audition_voice",
+    "assign_simple_cast",
+    "build_roster_payload",
+    "merge_speaker_voices",
+    "format_character_review_label",
+    "build_voice_users",
+    "annotate_voice_choices",
+    "format_unresolved_conflict_warnings",
+    "build_character_review_choices",
     "gender_from_pronoun",
     "top_gender_matched_voice",
     "sort_cast",

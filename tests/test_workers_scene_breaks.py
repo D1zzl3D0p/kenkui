@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +44,15 @@ class TestIsSceneBreak:
     def test_is_scene_break_false(self, text):
         from kenkui.workers import _is_scene_break
         assert _is_scene_break(text) is False
+
+
+class TestSharedSceneBreakRules:
+    def test_shared_helper_matches_worker_helper(self):
+        from kenkui.text_rules import is_scene_break
+        from kenkui.workers import _is_scene_break
+
+        samples = ["", "* * *", "---", "#", "Chapter 1", "Some --- text"]
+        assert [is_scene_break(s) for s in samples] == [_is_scene_break(s) for s in samples]
 
 
 # ---------------------------------------------------------------------------

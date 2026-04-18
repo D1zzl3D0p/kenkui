@@ -298,6 +298,42 @@ class APIClient:
             },
         )
 
+    def recommend_narrator_voice(
+        self,
+        roster: list[dict],
+        default_voice: str,
+        excluded_voices: list[str] | None = None,
+    ) -> dict:
+        """Recommend a narrator voice based on the roster."""
+        return self._request(
+            "POST",
+            "/voices/recommend-narrator",
+            json={
+                "roster": roster,
+                "default_voice": default_voice,
+                "excluded_voices": excluded_voices or [],
+            },
+        )
+
+    def assign_simple_cast(
+        self,
+        roster: list[dict],
+        narrator_voice: str,
+        male_voice: str,
+        female_voice: str,
+    ) -> dict:
+        """Assign simple-mode voices server-side."""
+        return self._request(
+            "POST",
+            "/voices/assign-simple",
+            json={
+                "roster": roster,
+                "narrator_voice": narrator_voice,
+                "male_voice": male_voice,
+                "female_voice": female_voice,
+            },
+        )
+
     # --- Tasks ---
 
     def get_task(self, task_id: str) -> dict:
@@ -348,9 +384,29 @@ class APIClient:
         """List all series manifests."""
         return self._request("GET", "/series")
 
+    def list_series_roster_candidates(self) -> dict:
+        """List roster candidates that can seed a new series manifest."""
+        return self._request("GET", "/series/roster-candidates")
+
+    def create_empty_series(self, name: str) -> dict:
+        """Create an empty series manifest."""
+        return self._request("POST", "/series/empty", json={"name": name})
+
+    def create_series_from_candidate(self, name: str, roster_path: str) -> dict:
+        """Create a series manifest seeded from a roster candidate."""
+        return self._request(
+            "POST",
+            "/series/from-candidate",
+            json={"name": name, "roster_path": roster_path},
+        )
+
     def get_series(self, slug: str) -> dict:
         """Get a single series manifest by slug."""
         return self._request("GET", f"/series/{slug}")
+
+    def match_series_characters(self, slug: str, fast_result: dict) -> dict:
+        """Match a fast-scan result against a series manifest."""
+        return self._request("POST", f"/series/{slug}/match", json={"fast_result": fast_result})
 
     def delete_series(self, slug: str) -> dict:
         """Delete a series manifest by slug."""
