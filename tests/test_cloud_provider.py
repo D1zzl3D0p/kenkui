@@ -130,3 +130,81 @@ def test_build_roster_injects_series_context(monkeypatch):
     prompt_text = str(call_kwargs.get("messages", ""))
     assert "Gandalf" in prompt_text
     assert "Mithrandir" in prompt_text
+
+
+from kenkui.nlp.providers.cloud import merge_rosters, split_chapters_into_segments
+
+
+def test_merge_rosters_exact_slug_match():
+    """Same slug in two rosters → merged into one record with unioned data."""
+    r1 = CharacterRoster(characters=[
+        CharacterRecord(
+            slug="elizabeth_bennet", canonical_name="Elizabeth Bennet",
+            aliases=["Lizzy"], chapters=[0, 1],
+            first_appearance=("book", 0), last_appearance=("book", 1),
+            mention_count=50,
+        )
+    ])
+    r2 = CharacterRoster(characters=[
+        CharacterRecord(
+            slug="elizabeth_bennet", canonical_name="Elizabeth Bennet",
+            aliases=["Miss Bennet"], chapters=[2, 3],
+            description="Witty heroine",
+            first_appearance=("book", 2), last_appearance=("book", 3),
+            mention_count=100,
+        )
+    ])
+    merged = merge_rosters([r1, r2], book_slug="book")
+    assert len(merged.characters) == 1
+    c = merged.characters[0]
+    assert set(c.aliases) >= {"Lizzy", "Miss Bennet"}
+    assert set(c.chapters) == {0, 1, 2, 3}
+    assert c.first_appearance == ("book", 0)
+    assert c.last_appearance == ("book", 3)
+    assert c.description == "Witty heroine"   # prefer non-empty
+    assert c.mention_count == 150             # summed
+
+
+def test_merge_rosters_alias_intersection():
+    """Character with alias matching another's canonical → merged."""
+    r1 = CharacterRoster(characters=[
+        CharacterRecord(slug="mr_darcy", canonical_name="Mr. Darcy", aliases=["Darcy"],
+                        chapters=[0], first_appearance=("book", 0), last_appearance=("book", 0))
+    ])
+    r2 = CharacterRoster(characters=[
+        CharacterRecord(slug="darcy", canonical_name="Darcy", aliases=[],
+                        chapters=[1], first_appearance=("book", 1), last_appearance=("book", 1))
+    ])
+    merged = merge_rosters([r1, r2], book_slug="book")
+    assert len(merged.characters) == 1
+    assert merged.characters[0].slug == "mr_darcy"   # keep richer canonical
+
+
+def test_merge_rosters_distinct_characters():
+    """Unrelated characters stay separate."""
+    r1 = CharacterRoster(characters=[
+        CharacterRecord(slug="frodo", canonical_name="Frodo Baggins", chapters=[0],
+                        first_appearance=("book", 0), last_appearance=("book", 0))
+    ])
+    r2 = CharacterRoster(characters=[
+        CharacterRecord(slug="sam_gamgee", canonical_name="Sam Gamgee", chapters=[0],
+                        first_appearance=("book", 0), last_appearance=("book", 0))
+    ])
+    merged = merge_rosters([r1, r2], book_slug="book")
+    assert len(merged.characters) == 2
+
+
+def test_split_chapters_into_segments_overlap():
+    """Segments have 2-chapter overlap and cover all chapters."""
+    chapters = [MagicMock(index=i, paragraphs=[f"text {i}"]) for i in range(10)]
+    # Force very small segment size so chunking triggers
+    segments = split_chapters_into_segments(chapters, max_tokens_per_segment=5)
+    # All chapters appear in at least one segment
+    all_indices = {ch.index for seg in segments for ch in seg}
+    assert all_indices == set(range(10))
+    # Overlap: adjacent segments share ≥ 1 chapter (except possibly first)
+    if len(segments) > 1:
+        for i in range(len(segments) - 1):
+            seg_indices = {ch.index for ch in segments[i]}
+            next_indices = {ch.index for ch in segments[i + 1]}
+            assert seg_indices & next_indices  # non-empty overlap
