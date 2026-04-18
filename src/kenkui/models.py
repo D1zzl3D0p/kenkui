@@ -101,6 +101,57 @@ class CharacterInfo:
 
 
 @dataclass
+class CharacterRecord:
+    """Rich app-layer character representation. Built from NLP pipeline output.
+
+    The ``slug`` is the canonical lookup key used in ``JobConfig.speaker_voices``.
+    ``CharacterInfo`` is the slimmer UI-facing view, built via ``to_character_info()``.
+    """
+
+    slug: str
+    canonical_name: str
+    aliases: list[str] = field(default_factory=list)
+    titles: list[Any] = field(default_factory=list)   # list[TitleRecord] from nlp.models
+    gender: str = ""
+    role: str = ""
+    description: str = ""
+    chapters: list[int] = field(default_factory=list)
+    first_appearance: tuple[str, int] | None = None   # (book_slug, chapter_index)
+    last_appearance: tuple[str, int] | None = None
+    mention_count: int = 0
+    quote_count: int = 0
+
+    @classmethod
+    def from_nlp(cls, record: Any) -> "CharacterRecord":
+        """Build from a kenkui.nlp.models.CharacterRecord Pydantic object."""
+        return cls(
+            slug=record.slug,
+            canonical_name=record.canonical_name,
+            aliases=list(record.aliases),
+            titles=list(record.titles),
+            gender=record.gender,
+            role=record.role,
+            description=record.description,
+            chapters=list(record.chapters),
+            first_appearance=record.first_appearance,
+            last_appearance=record.last_appearance,
+            mention_count=record.mention_count,
+            quote_count=record.quote_count,
+        )
+
+    def to_character_info(self) -> "CharacterInfo":
+        """Build a CharacterInfo for the UI / voice assignment layer."""
+        pronoun = self.gender.split("/")[0] if self.gender else ""
+        return CharacterInfo(
+            character_id=self.slug,
+            display_name=self.canonical_name,
+            quote_count=self.quote_count,
+            mention_count=self.mention_count,
+            gender_pronoun=pronoun,
+        )
+
+
+@dataclass
 class BookInfo:
     """Lightweight book info for display in selection UI."""
 
