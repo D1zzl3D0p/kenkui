@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .chapter_classifier import ChapterTags
     from .chapter_filter import FilterOperation
+    from .nlp.models import TitleRecord
 
 
 def _normalize_bitrate(value: str | None, default: str = "96k") -> str:
@@ -111,7 +112,7 @@ class CharacterRecord:
     slug: str
     canonical_name: str
     aliases: list[str] = field(default_factory=list)
-    titles: list[Any] = field(default_factory=list)   # list[TitleRecord] from nlp.models
+    titles: list["TitleRecord"] = field(default_factory=list)
     gender: str = ""
     role: str = ""
     description: str = ""
