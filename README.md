@@ -160,12 +160,44 @@ The default. One voice narrates everything.
 
 kenkui uses an NLP pipeline to identify characters in the book and assigns each a distinct voice. The narrator gets its own voice too.
 
+Two NLP backends are available: **Ollama** (local, default) and **cloud providers** (Anthropic, OpenAI, Google). Cloud providers use large-context models that process the whole book in fewer passes and generally produce higher-quality results.
+
+#### Ollama (default)
+
 **Requirements:**
 - [Ollama](https://ollama.com) running locally (`ollama serve`)
 - NLP model pulled (default: `llama3.2`) — `ollama pull llama3.2`
 - spaCy model — kenkui downloads this automatically if missing
 
 The wizard checks all requirements and shows a status table before proceeding.
+
+#### Cloud providers (Anthropic, OpenAI, Google)
+
+**One-time setup:**
+
+```bash
+kenkui configure-provider
+```
+
+Prompts for your provider choice, API key, and preferred model. Saves credentials to `~/.config/kenkui/credentials.toml` with restricted permissions (`0600`).
+
+Then set `nlp_provider` in your config to activate:
+
+```toml
+nlp_provider = "anthropic"   # or "openai" or "google"
+```
+
+No Ollama or spaCy required when using a cloud provider.
+
+**Default models:**
+
+| Provider | Default model |
+|----------|--------------|
+| `anthropic` | `claude-sonnet-4-6` |
+| `openai` | `gpt-4o` |
+| `google` | `gemini/gemini-2.0-flash` |
+
+Override with `nlp_model` in your config. Any [LiteLLM-supported model string](https://docs.litellm.ai/docs/providers) works.
 
 **How it works:**
 
@@ -178,7 +210,7 @@ The wizard runs a fast character scan (seconds) before voice assignment so you c
 
 When reviewing assignments, the voice picker shows which other characters are already using each voice (e.g. `← Rand al'Thor`) so you can avoid conflicts at a glance. Press **Enter** to accept all assignments.
 
-The Ollama model used for attribution is configurable via `nlp_model` in your config.
+The NLP provider and model are configurable via `nlp_provider` and `nlp_model` in your config.
 
 ### Chapter-voice mode
 
@@ -323,7 +355,8 @@ Named configs without a path separator are automatically looked up in `~/.config
 | `pause_line_ms` | `800` | Pause between lines (ms) |
 | `pause_chapter_ms` | `2000` | Pause between chapters (ms) |
 | `pause_scene_break_ms` | `4000` | Pause at scene breaks (ms) |
-| `nlp_model` | `llama3.2` | Ollama model for multi-voice speaker attribution |
+| `nlp_provider` | `ollama` | NLP backend: `"ollama"`, `"anthropic"`, `"openai"`, `"google"`, or any LiteLLM model prefix |
+| `nlp_model` | `llama3.2` | Model for multi-voice speaker attribution; `""` = use provider default from credentials |
 | `nlp_confidence_threshold` | `0` | Min attribution confidence score; 0 = second-pass disabled |
 | `nlp_review_model` | `""` | Ollama model for second-pass retry; `""` = same as `nlp_model` |
 | `excluded_voices` | `[]` | Voices excluded from auto-assignment (still available manually) |
@@ -387,10 +420,10 @@ EPUB, MOBI/AZW/AZW3/AZW4, and FB2.
 No. This is intentional — M4B is a significantly better format for audiobooks.
 
 **How does multi-voice narration work?**
-kenkui runs a two-stage NLP pipeline: first BookNLP and spaCy identify characters and their dialogue; then an Ollama LLM resolves ambiguous attribution. The result is a speaker map where each character speaks in their assigned voice and the narrator fills everything else.
+kenkui runs a two-stage NLP pipeline: first a character scan builds a roster of characters and their aliases; then an LLM pass attributes each dialogue segment to its speaker. The result is a speaker map where each character speaks in their assigned voice and the narrator fills everything else. With the default Ollama backend this runs entirely locally (BookNLP + spaCy + Ollama). With a cloud provider (Anthropic, OpenAI, Google) the whole-book pass runs in a single large-context call, which is faster and generally more accurate.
 
-**Why do I need Ollama for multi-voice?**
-The LLM resolves ambiguous dialogue attribution that rule-based systems can't handle reliably. It runs locally via Ollama — nothing leaves your machine.
+**Do I need Ollama for multi-voice?**
+Not anymore. You can use Ollama (local, default) or a cloud provider (Anthropic, OpenAI, Google). With Ollama, nothing leaves your machine. With a cloud provider, your book text is sent to the provider's API for the character scan and attribution passes — the same text that's in the ebook file. Run `kenkui configure-provider` to set up a cloud provider.
 
 **Why do I need a HuggingFace account for custom voices?**
 The pocket-tts model is gated on HuggingFace, meaning the authors require users to accept their terms before downloading. This only applies to custom uncompiled `.wav` voices — compiled voices and built-ins require no authentication at all.

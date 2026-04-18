@@ -17,6 +17,8 @@ Sub-commands
   kenkui queue stop                   Stop current job
 
   kenkui config path/to/config.toml   Create/edit a config at the given path
+
+  kenkui configure-provider           Configure a cloud NLP provider API key
 """
 
 from __future__ import annotations
@@ -148,7 +150,7 @@ def _build_bare_parser() -> argparse.ArgumentParser:
             "Pass an ebook path directly to run the interactive wizard then\n"
             "auto-start the queue with a live dashboard.  Add -c config.toml\n"
             "to skip the wizard and run headless instead.\n\n"
-            "Sub-commands: add, queue, config, voices"
+            "Sub-commands: add, queue, config, voices, configure-provider"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -172,7 +174,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Pass an ebook path directly to run the interactive wizard then\n"
             "auto-start the queue with a live dashboard.  Add -c config.toml\n"
             "to skip the wizard and run headless instead.\n\n"
-            "Sub-commands: add, queue, config, voices"
+            "Sub-commands: add, queue, config, voices, configure-provider"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
