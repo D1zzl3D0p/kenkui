@@ -368,7 +368,8 @@ class AppConfig:
     default_chapter_preset: str = "content-only"  # Chapter filter preset for CLI
     default_output_dir: Path | None = None  # Output directory for CLI runs
     # --- Multi-voice / NLP ---
-    nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
+    nlp_provider: str = "ollama"  # "ollama" | "anthropic" | "openai" | "google" | any LiteLLM prefix
+    nlp_model: str = "llama3.2"   # model name; "" = use provider default from credentials.toml
     nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
     nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
     excluded_voices: list[str] = field(default_factory=list)
@@ -394,6 +395,7 @@ class AppConfig:
             "default_voice": self.default_voice,
             "default_chapter_preset": self.default_chapter_preset,
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
+            "nlp_provider": self.nlp_provider,
             "nlp_model": self.nlp_model,
             "nlp_confidence_threshold": self.nlp_confidence_threshold,
             "nlp_review_model": self.nlp_review_model,
@@ -423,6 +425,7 @@ class AppConfig:
             default_output_dir=Path(data["default_output_dir"])
             if data.get("default_output_dir")
             else None,
+            nlp_provider=data.get("nlp_provider", "ollama"),
             nlp_model=data.get("nlp_model", "llama3.2"),
             nlp_confidence_threshold=data.get("nlp_confidence_threshold", 0),
             nlp_review_model=data.get("nlp_review_model", ""),
