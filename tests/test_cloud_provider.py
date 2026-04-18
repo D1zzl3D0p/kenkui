@@ -50,3 +50,83 @@ def test_cloud_provider_init():
     config = AppConfig(nlp_provider="anthropic", nlp_model="claude-sonnet-4-6")
     provider = CloudProvider(config)
     assert provider.config.nlp_provider == "anthropic"
+
+
+from kenkui.nlp.models import CharacterRecord, CharacterRoster, TitleRecord
+from unittest.mock import patch
+
+
+def _make_chapters(texts: list[str]) -> list:
+    chapters = []
+    for i, text in enumerate(texts):
+        ch = MagicMock()
+        ch.index = i
+        ch.paragraphs = [text]
+        chapters.append(ch)
+    return chapters
+
+
+def test_build_roster_single_pass(monkeypatch):
+    """When book fits in context, build_roster makes one LLM call."""
+    config = AppConfig(nlp_provider="anthropic", nlp_model="claude-sonnet-4-6")
+
+    mock_roster = CharacterRoster(characters=[
+        CharacterRecord(
+            slug="frodo_baggins",
+            canonical_name="Frodo Baggins",
+            aliases=["Mr. Baggins"],
+            gender="he/him",
+            role="protagonist",
+            description="A hobbit from the Shire.",
+            chapters=[0],
+            first_appearance=("fellowship", 0),
+            last_appearance=("fellowship", 0),
+        )
+    ])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_roster
+
+    with patch("kenkui.nlp.providers.cloud.instructor") as mock_instructor:
+        mock_instructor.from_litellm.return_value = mock_client
+        with patch("kenkui.nlp.providers.cloud.litellm"):
+            provider = CloudProvider(config)
+            provider._client = mock_client
+
+            ch = MagicMock()
+            ch.index = 0
+            ch.paragraphs = ["In a hole in the ground there lived a hobbit."]
+
+            roster = provider.build_roster([ch])
+
+    assert len(roster.characters) == 1
+    assert roster.characters[0].slug == "frodo_baggins"
+    mock_client.chat.completions.create.assert_called_once()
+
+
+def test_build_roster_injects_series_context(monkeypatch):
+    """Series roster characters appear in the prompt as 'known characters'."""
+    config = AppConfig(nlp_provider="anthropic", nlp_model="claude-sonnet-4-6")
+    series_roster = CharacterRoster(characters=[
+        CharacterRecord(slug="gandalf", canonical_name="Gandalf", aliases=["Mithrandir"])
+    ])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = CharacterRoster(characters=[])
+
+    with patch("kenkui.config.load_provider_credentials", return_value={}):
+        with patch("kenkui.config.inject_provider_env_vars"):
+            provider = CloudProvider.__new__(CloudProvider)
+            provider.config = config
+            provider._client = mock_client
+
+            ch = MagicMock()
+            ch.index = 0
+            ch.paragraphs = ["Gandalf the Grey appeared."]
+
+            provider.build_roster([ch], series_roster=series_roster)
+
+    call_kwargs = mock_client.chat.completions.create.call_args[1]
+    prompt_text = str(call_kwargs.get("messages", ""))
+    assert "Gandalf" in prompt_text
+    assert "Mithrandir" in prompt_text
