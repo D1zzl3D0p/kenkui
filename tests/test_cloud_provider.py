@@ -208,3 +208,41 @@ def test_split_chapters_into_segments_overlap():
             seg_indices = {ch.index for ch in segments[i]}
             next_indices = {ch.index for ch in segments[i + 1]}
             assert seg_indices & next_indices  # non-empty overlap
+
+
+from kenkui.nlp.models import AttributionItem, AttributionResult
+
+
+def test_attribute_chapter_returns_slug_speakers():
+    """attribute_chapter returns AttributionResult with slug-keyed speakers."""
+    config = AppConfig(nlp_provider="anthropic", nlp_model="claude-sonnet-4-6")
+
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="frodo_baggins", canonical_name="Frodo Baggins"),
+        CharacterRecord(slug="gandalf", canonical_name="Gandalf"),
+    ])
+
+    mock_result = AttributionResult(attributions=[
+        AttributionItem(quote_id=1, speaker="frodo_baggins", emotion="neutral", confidence=5),
+        AttributionItem(quote_id=2, speaker="NARRATOR", emotion="neutral", confidence=5),
+    ])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_result
+
+    with patch("kenkui.config.load_provider_credentials", return_value={}):
+        with patch("kenkui.config.inject_provider_env_vars"):
+            provider = CloudProvider.__new__(CloudProvider)
+            provider.config = config
+            provider._client = mock_client
+
+            chapter = MagicMock()
+            chapter.index = 0
+            chapter.paragraphs = ['"I will take the Ring," said Frodo.']
+
+            result = provider.attribute_chapter(chapter, roster)
+
+    assert len(result.attributions) == 2
+    speakers = {a.quote_id: a.speaker for a in result.attributions}
+    assert speakers[1] == "frodo_baggins"
+    assert speakers[2] == "NARRATOR"
