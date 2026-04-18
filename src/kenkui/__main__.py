@@ -309,6 +309,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text to synthesize (default: built-in sample phrase).",
     )
 
+    # ---- kenkui configure-provider -----------------------------------------
+    sub.add_parser(
+        "configure-provider",
+        help="Configure a cloud NLP provider API key (one-time setup).",
+    )
+
     return parser
 
 
@@ -447,6 +453,12 @@ def main() -> None:
         else:
             # No subcommand: launch interactive TUI
             cmd_voices_tui(args)
+        sys.exit(0)
+
+    elif command == "configure-provider":
+        from .cli.add import configure_provider
+
+        configure_provider()
         sys.exit(0)
 
     else:

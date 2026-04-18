@@ -1700,3 +1700,44 @@ def cmd_bare(args) -> int:
 
     finally:
         client.close()
+
+
+def configure_provider() -> None:
+    """Interactive wizard to configure a cloud NLP provider and save credentials."""
+    from InquirerPy import inquirer
+    from kenkui.config import (
+        CREDENTIALS_PATH,
+        ProviderCredentials,
+        load_provider_credentials,
+        save_provider_credentials,
+    )
+
+    _PROVIDER_MODELS = {
+        "anthropic": "claude-sonnet-4-6",
+        "openai": "gpt-4o",
+        "google": "gemini/gemini-2.0-flash",
+    }
+
+    provider = inquirer.select(
+        message="Select NLP provider:",
+        choices=["anthropic", "openai", "google"],
+    ).execute()
+
+    api_key = inquirer.secret(
+        message=f"Enter your {provider} API key:",
+    ).execute()
+
+    default_model = inquirer.text(
+        message="Default model (press Enter to use recommended):",
+        default=_PROVIDER_MODELS.get(provider, ""),
+    ).execute()
+
+    existing = load_provider_credentials()
+    existing[provider] = ProviderCredentials(
+        api_key=api_key,
+        default_model=default_model or _PROVIDER_MODELS.get(provider, ""),
+    )
+    save_provider_credentials(existing)
+
+    print(f"\nCredentials for '{provider}' saved to {CREDENTIALS_PATH}")
+    print(f"  Set nlp_provider = \"{provider}\" in your kenkui config to use it.\n")
