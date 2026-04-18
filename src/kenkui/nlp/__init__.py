@@ -724,6 +724,21 @@ def _build_segments(paragraphs: list[str], quotes: list, attributions: dict) -> 
     return _merge_consecutive_segments(segments)
 
 
+def _attribution_to_segments(
+    chapter: "Chapter",
+    attr_result: "AttributionResult",
+    roster: "CharacterRoster",
+) -> list["Segment"]:
+    """Convert AttributionResult + Chapter paragraphs into a Segment list.
+
+    Used by NLPService when dispatching through the provider protocol.
+    """
+    from kenkui.nlp.quotes import extract_quotes
+    quotes = extract_quotes(chapter.paragraphs)
+    attributions = {item.quote_id: item for item in attr_result.attributions}
+    return _build_segments(chapter.paragraphs, quotes, attributions)
+
+
 def _normalize_speaker(
     speaker: str,
     alias_to_canonical: dict[str, str],
@@ -776,6 +791,7 @@ __all__ = [
     "_split_paragraph_by_quotes",
     "_merge_consecutive_segments",
     "_build_segments",
+    "_attribution_to_segments",
     "_is_scene_break",
     "_SCENE_BREAK_RE",
 ]
