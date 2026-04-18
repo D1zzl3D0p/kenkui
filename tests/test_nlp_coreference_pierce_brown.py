@@ -86,13 +86,13 @@ class TestAliasClusteringDarrow:
         groups = _cluster_by_heuristic(names)
 
         # Canonical names are the longest-form names
-        canonicals = {g.canonical for g in groups}
+        canonicals = {g.canonical_name for g in groups}
         assert "Darrow of Lykos" in canonicals, (
             f"Expected 'Darrow of Lykos' as canonical, got: {canonicals}"
         )
 
         # Find the group containing Darrow of Lykos
-        darrow_group = next(g for g in groups if g.canonical == "Darrow of Lykos")
+        darrow_group = next(g for g in groups if g.canonical_name =="Darrow of Lykos")
         assert "Darrow" in darrow_group.aliases, (
             f"Expected 'Darrow' in aliases of 'Darrow of Lykos', got: {darrow_group.aliases}"
         )
@@ -104,12 +104,12 @@ class TestAliasClusteringDarrow:
         names = ["Darrow of Lykos", "Darrow", "Sevro", "Sevro au Barca"]
         groups = _cluster_by_heuristic(names)
 
-        canonicals = {g.canonical for g in groups}
+        canonicals = {g.canonical_name for g in groups}
         assert "Sevro au Barca" in canonicals, (
             f"Expected 'Sevro au Barca' as canonical, got: {canonicals}"
         )
 
-        sevro_group = next(g for g in groups if g.canonical == "Sevro au Barca")
+        sevro_group = next(g for g in groups if g.canonical_name =="Sevro au Barca")
         assert "Sevro" in sevro_group.aliases, (
             f"Expected 'Sevro' in aliases of 'Sevro au Barca', got: {sevro_group.aliases}"
         )
@@ -121,7 +121,7 @@ class TestAliasClusteringDarrow:
         names = ["Darrow of Lykos", "Darrow", "Sevro", "Sevro au Barca"]
         groups = _cluster_by_heuristic(names)
         assert len(groups) == 2, (
-            f"Expected 2 character groups, got {len(groups)}: {[g.canonical for g in groups]}"
+            f"Expected 2 character groups, got {len(groups)}: {[g.canonical_name for g in groups]}"
         )
 
     def test_each_name_in_exactly_one_group(self):

@@ -103,7 +103,7 @@ def _resolve_gender(group, full_text: str) -> str:
     majority or no name mentions found), BookNLP's value is kept as-is.
     """
     from .entities import infer_gender_pronouns
-    inferred = infer_gender_pronouns(group.canonical, group.aliases, full_text)
+    inferred = infer_gender_pronouns(group.canonical_name, group.aliases, full_text)
     booknlp = _normalize_gender_pronoun(group.gender) if group.gender else ""
     if not booknlp:
         return inferred
@@ -226,7 +226,7 @@ def _count_mentions(roster: "CharacterRoster", full_text: str) -> dict[str, int]
         for alias in group.aliases:
             pattern = re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE)
             total += len(pattern.findall(full_text))
-        counts[group.canonical] = total
+        counts[group.canonical_name] = total
     return counts
 
 
@@ -290,7 +290,7 @@ def run_fast_scan(
     full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
     roster = build_roster_with_llm(full_text, nlp, llm)
 
-    char_names = ", ".join(g.canonical for g in roster.characters[:8])
+    char_names = ", ".join(g.canonical_name for g in roster.characters[:8])
     overflow = len(roster.characters) - 8
     suffix = f" (+{overflow} more)" if overflow > 0 else ""
     _cb(f"Character roster: {len(roster.characters)} characters — {char_names}{suffix}")
@@ -301,9 +301,9 @@ def run_fast_scan(
 
     characters: list[CharacterInfo] = [
         CharacterInfo(
-            character_id=group.canonical,
-            display_name=group.canonical,
-            mention_count=mention_counts.get(group.canonical, 0),
+            character_id=group.canonical_name,
+            display_name=group.canonical_name,
+            mention_count=mention_counts.get(group.canonical_name, 0),
             gender_pronoun=_resolve_gender(group, full_text),
         )
         for group in roster.characters
@@ -395,12 +395,12 @@ def run_attribution(
     # Build alias → canonical lookup
     alias_to_canonical: dict[str, str] = {}
     for group in roster.characters:
-        alias_to_canonical[group.canonical.lower()] = group.canonical
+        alias_to_canonical[group.canonical_name.lower()] = group.canonical_name
         for alias in group.aliases:
-            alias_to_canonical[alias.lower()] = group.canonical
+            alias_to_canonical[alias.lower()] = group.canonical_name
 
     roster_aliases: dict[str, list[str]] = {
-        group.canonical: group.aliases for group in roster.characters
+        group.canonical_name: group.aliases for group in roster.characters
     }
 
     # Stage 1: Extract quotes per chapter
@@ -470,9 +470,9 @@ def run_attribution(
     # Build CharacterInfo with quote_count
     characters: list[CharacterInfo] = [
         CharacterInfo(
-            character_id=group.canonical,
-            display_name=group.canonical,
-            quote_count=attribution_counts.get(group.canonical, 0),
+            character_id=group.canonical_name,
+            display_name=group.canonical_name,
+            quote_count=attribution_counts.get(group.canonical_name, 0),
             gender_pronoun=_resolve_gender(group, full_text),
         )
         for group in roster.characters

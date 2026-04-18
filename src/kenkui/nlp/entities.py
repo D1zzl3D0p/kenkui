@@ -41,7 +41,7 @@ import re
 from typing import TYPE_CHECKING
 
 from ._filters import _is_proper_name
-from .models import AliasGroup, CharacterRoster
+from .models import CharacterRecord, CharacterRoster, slugify
 
 if TYPE_CHECKING:
     from .llm import LLMClient
@@ -100,10 +100,10 @@ def _is_alias_of(candidate: str, canonical: str) -> bool:
     return all(w in canon_words for w in cand_words)
 
 
-def _cluster_by_heuristic(names: list[str]) -> list[AliasGroup]:
+def _cluster_by_heuristic(names: list[str]) -> list[CharacterRecord]:
     """Group *names* into alias clusters using word-overlap heuristics.
 
-    Returns a list of ``AliasGroup`` objects sorted by canonical name length
+    Returns a list of ``CharacterRecord`` objects sorted by canonical name length
     descending (most specific characters first).
     """
     # Deduplicate and sort: most words first, then longest string first.
@@ -113,7 +113,7 @@ def _cluster_by_heuristic(names: list[str]) -> list[AliasGroup]:
         reverse=True,
     )
 
-    groups: list[AliasGroup] = []
+    groups: list[CharacterRecord] = []
     claimed: set[str] = set()
 
     for name in unique:
@@ -127,7 +127,7 @@ def _cluster_by_heuristic(names: list[str]) -> list[AliasGroup]:
                 aliases.append(other)
                 claimed.add(other)
         claimed.add(name)
-        groups.append(AliasGroup(canonical=name, aliases=aliases))
+        groups.append(CharacterRecord(slug=slugify(name), canonical_name=name, aliases=aliases))
 
     return groups
 
@@ -273,7 +273,7 @@ def deduplicate_roster_with_llm(
     if len(roster.characters) < 2:
         return roster
 
-    name_lines = "\n".join(f"- {g.canonical}" for g in roster.characters)
+    name_lines = "\n".join(f"- {g.canonical_name}" for g in roster.characters)
     try:
         result: CanonicalMergeResult = llm.generate(
             _DEDUP_PROMPT.format(name_lines=name_lines),
@@ -283,7 +283,7 @@ def deduplicate_roster_with_llm(
         if not result.merges:
             return roster
 
-        canonical_set = {g.canonical for g in roster.characters}
+        canonical_set = {g.canonical_name for g in roster.characters}
         absorb_into: dict[str, str] = {}
         for entry in result.merges:
             if entry.canonical not in canonical_set:
@@ -295,7 +295,7 @@ def deduplicate_roster_with_llm(
         if not absorb_into:
             return roster
 
-        group_by_canonical = {g.canonical: g for g in roster.characters}
+        group_by_canonical = {g.canonical_name: g for g in roster.characters}
         merged = 0
         for dup_canonical, survivor_canonical in absorb_into.items():
             dup_group = group_by_canonical.get(dup_canonical)
@@ -309,7 +309,7 @@ def deduplicate_roster_with_llm(
                 survivor_group.gender = dup_group.gender
             merged += 1
 
-        remaining = [g for g in roster.characters if g.canonical not in absorb_into]
+        remaining = [g for g in roster.characters if g.canonical_name not in absorb_into]
         logger.info(
             "deduplicate_roster_with_llm: merged %d duplicate(s), %d → %d characters",
             merged, len(roster.characters), len(remaining),
@@ -358,8 +358,8 @@ def resolve_epithets_with_llm(
     if not common_phrases:
         return roster
 
-    canonical_set = {g.canonical for g in roster.characters}
-    roster_lines = "\n".join(f"- {g.canonical}" for g in roster.characters)
+    canonical_set = {g.canonical_name for g in roster.characters}
+    roster_lines = "\n".join(f"- {g.canonical_name}" for g in roster.characters)
     phrase_lines = "\n".join(f"- {p}" for p in common_phrases)
 
     try:
@@ -368,7 +368,7 @@ def resolve_epithets_with_llm(
             EpithetResolutionResult,
         )
 
-        canonical_to_group = {g.canonical: g for g in roster.characters}
+        canonical_to_group = {g.canonical_name: g for g in roster.characters}
         added = 0
         for mapping in result.mappings:
             epithet = mapping.epithet.strip()
@@ -417,7 +417,7 @@ def normalize_canonical_names_with_llm(
     if not roster.characters:
         return roster
 
-    name_lines = "\n".join(f"- {g.canonical}" for g in roster.characters)
+    name_lines = "\n".join(f"- {g.canonical_name}" for g in roster.characters)
     try:
         result: NameNormalizationResult = llm.generate(
             _NORMALIZE_PROMPT.format(name_lines=name_lines),
@@ -427,11 +427,11 @@ def normalize_canonical_names_with_llm(
         orig_to_simplified = {e.original.strip(): e.simplified.strip() for e in result.names}
         changed = 0
         for group in roster.characters:
-            simplified = orig_to_simplified.get(group.canonical, group.canonical)
-            if simplified and simplified != group.canonical:
-                if group.canonical not in group.aliases:
-                    group.aliases.append(group.canonical)
-                group.canonical = simplified
+            simplified = orig_to_simplified.get(group.canonical_name, group.canonical_name)
+            if simplified and simplified != group.canonical_name:
+                if group.canonical_name not in group.aliases:
+                    group.aliases.append(group.canonical_name)
+                group.canonical_name = simplified
                 changed += 1
 
         logger.info(
@@ -541,15 +541,15 @@ def _filter_roster_hallucinations(
             if len(a.strip()) >= 2 and a.lower() in text_lower
         ]
         if not kept:
-            logger.debug("filter_hallucinations: dropped entire entry %r", group.canonical)
+            logger.debug("filter_hallucinations: dropped entire entry %r", group.canonical_name)
             continue
 
         # Ensure canonical is among kept aliases; if not, promote longest.
-        if group.canonical not in kept:
+        if group.canonical_name not in kept:
             promoted = max(kept, key=len)
             logger.debug(
                 "filter_hallucinations: canonical %r hallucinated; promoting %r",
-                group.canonical, promoted,
+                group.canonical_name, promoted,
             )
         surviving_names.extend(kept)
 

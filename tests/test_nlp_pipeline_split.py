@@ -8,9 +8,9 @@ import pytest
 
 def _make_fast_scan_result():
     from kenkui.models import CharacterInfo, FastScanResult
-    from kenkui.nlp.models import AliasGroup, CharacterRoster
+    from kenkui.nlp.models import CharacterRecord, CharacterRoster
     roster = CharacterRoster(characters=[
-        AliasGroup(canonical="Alice", aliases=["Alice"], gender="she/her"),
+        CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"], gender="she/her"),
     ])
     characters = [CharacterInfo(character_id="Alice", display_name="Alice", mention_count=50)]
     return FastScanResult(roster=roster, characters=characters, book_hash="testhash")
@@ -35,7 +35,7 @@ class TestRosterCache:
                 restored = get_cached_roster(ebook)
                 assert restored is not None
                 assert restored.characters[0].mention_count == 50
-                assert restored.roster.characters[0].canonical == "Alice"
+                assert restored.roster.characters[0].canonical_name == "Alice"
 
     def test_get_cached_roster_returns_none_when_missing(self, tmp_path):
         from kenkui.nlp import get_cached_roster
@@ -70,11 +70,11 @@ class TestMentionCounting:
 
     def test_counts_canonical_occurrences(self):
         from kenkui.nlp import _count_mentions
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Alice", aliases=["Alice", "Al"]),
-            AliasGroup(canonical="Bob", aliases=["Bob"]),
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice", "Al"]),
+            CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"]),
         ])
         text = "Alice went to the store. Al was there too. Bob walked in. Alice left."
         counts = _count_mentions(roster, text)
@@ -83,20 +83,20 @@ class TestMentionCounting:
 
     def test_case_insensitive(self):
         from kenkui.nlp import _count_mentions
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Alice", aliases=["alice"]),
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["alice"]),
         ])
         counts = _count_mentions(roster, "ALICE said hello to alice.")
         assert counts["Alice"] == 2
 
     def test_word_boundary(self):
         from kenkui.nlp import _count_mentions
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Al", aliases=["Al"]),
+            CharacterRecord(slug="al", canonical_name="Al", aliases=["Al"]),
         ])
         # "Al" should not match inside "Alice" or "pal"
         counts = _count_mentions(roster, "Alice and Al and pal and Al")
@@ -104,10 +104,10 @@ class TestMentionCounting:
 
     def test_empty_text(self):
         from kenkui.nlp import _count_mentions
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Alice", aliases=["Alice"]),
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"]),
         ])
         counts = _count_mentions(roster, "")
         assert counts["Alice"] == 0

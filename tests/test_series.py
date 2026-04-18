@@ -16,13 +16,14 @@ from kenkui.series import (
     match_characters,
 )
 from kenkui.models import CharacterInfo, FastScanResult
-from kenkui.nlp.models import AliasGroup, CharacterRoster
+from kenkui.nlp.models import CharacterRecord, CharacterRoster
+from kenkui.nlp.models import slugify as nlp_slugify
 
 
 def _make_fast_result(canonical_aliases: dict[str, list[str]]) -> FastScanResult:
     """Build a minimal FastScanResult from a {canonical: [aliases]} dict."""
     groups = [
-        AliasGroup(canonical=c, aliases=a) for c, a in canonical_aliases.items()
+        CharacterRecord(slug=nlp_slugify(c), canonical_name=c, aliases=a) for c, a in canonical_aliases.items()
     ]
     roster = CharacterRoster(characters=groups)
     characters = [

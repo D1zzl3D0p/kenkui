@@ -131,7 +131,7 @@ def match_characters(
         pinned: set of char_ids that received an inherited voice
     """
     alias_map: dict[str, list[str]] = {
-        g.canonical: g.aliases for g in roster.roster.characters
+        g.canonical_name: g.aliases for g in roster.roster.characters
     }
 
     inherited_voices: dict[str, str] = {}
@@ -259,7 +259,7 @@ def build_manifest_from_predecessor(candidate: dict, name: str) -> SeriesManifes
 
     data = json.loads(Path(candidate["roster_path"]).read_text(encoding="utf-8"))
     roster = FastScanResult.from_dict(data)
-    alias_map = {g.canonical: g.aliases for g in roster.roster.characters}
+    alias_map = {g.canonical_name: g.aliases for g in roster.roster.characters}
     speaker_voices: dict[str, str] = candidate.get("speaker_voices", {})
 
     characters = []
@@ -297,7 +297,7 @@ def update_manifest(
     - New characters (not pinned) → appended if not already present
     Does not mutate the original manifest.
     """
-    alias_map = {g.canonical: g.aliases for g in roster.roster.characters}
+    alias_map = {g.canonical_name: g.aliases for g in roster.roster.characters}
 
     updated_chars = [
         SeriesCharacter(
