@@ -12,7 +12,9 @@ module searches for  $XDG_CONFIG_HOME/kenkui/<name>.toml  automatically.
 from __future__ import annotations
 
 import os
+import stat
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 import tomli_w
@@ -44,6 +46,76 @@ def _kenkui_config_dir() -> Path:
 CONFIG_DIR = _kenkui_config_dir()
 
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "default-config.toml"
+
+# ---------------------------------------------------------------------------
+# Provider credentials
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProviderCredentials:
+    api_key: str
+    default_model: str = ""
+
+
+_PROVIDER_ENV_VARS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GEMINI_API_KEY",
+}
+
+CREDENTIALS_PATH = CONFIG_DIR / "credentials.toml"
+
+
+def load_provider_credentials(
+    path: Path | None = None,
+) -> dict[str, ProviderCredentials]:
+    """Load provider credentials from *path* (defaults to CONFIG_DIR/credentials.toml).
+
+    Returns an empty dict if the file does not exist.
+    """
+    target = path or CREDENTIALS_PATH
+    if not target.exists():
+        return {}
+    try:
+        data = tomllib.loads(target.read_text(encoding="utf-8"))
+        providers = data.get("providers", {})
+        return {
+            name: ProviderCredentials(
+                api_key=cfg.get("api_key", ""),
+                default_model=cfg.get("default_model", ""),
+            )
+            for name, cfg in providers.items()
+        }
+    except Exception:
+        return {}
+
+
+def save_provider_credentials(
+    credentials: dict[str, ProviderCredentials],
+    path: Path | None = None,
+) -> Path:
+    """Write provider credentials to *path* with 0o600 permissions."""
+    target = path or CREDENTIALS_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "providers": {
+            name: {"api_key": creds.api_key, "default_model": creds.default_model}
+            for name, creds in credentials.items()
+        }
+    }
+    target.write_bytes(tomli_w.dumps(data).encode("utf-8"))
+    target.chmod(0o600)
+    return target
+
+
+def inject_provider_env_vars(credentials: dict[str, ProviderCredentials]) -> None:
+    """Set provider API keys as environment variables for LiteLLM."""
+    for provider_name, creds in credentials.items():
+        env_var = _PROVIDER_ENV_VARS.get(provider_name)
+        if env_var and creds.api_key:
+            os.environ[env_var] = creds.api_key
+
 
 # ---------------------------------------------------------------------------
 # Resolution helper
