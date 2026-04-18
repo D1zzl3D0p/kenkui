@@ -10,8 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .. import series as _series
+
+if TYPE_CHECKING:
+    from kenkui.nlp.models import CharacterRoster
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +205,29 @@ def match_series_characters(slug: str, fast_result_dict: dict) -> SeriesMatchRes
     )
 
 
+def get_roster(series_slug: str) -> "CharacterRoster":
+    """Return the cumulative CharacterRoster for *series_slug*.
+
+    Returns an empty roster for the first book in a series (no prior roster file).
+    """
+    from kenkui.nlp.models import CharacterRoster
+
+    existing = _series.load_series_roster(series_slug)
+    return existing if existing is not None else CharacterRoster(characters=[])
+
+
+def update_roster(series_slug: str, new_roster: "CharacterRoster", book_slug: str) -> None:
+    """Merge *new_roster* into the series roster and persist.
+
+    Existing characters are updated (new aliases unioned, counts summed,
+    last_appearance advanced). New characters are appended with
+    ``first_appearance = (book_slug, first_chapter_index)``.
+    """
+    existing = get_roster(series_slug)
+    merged = _series.merge_into_series_roster(existing, new_roster, book_slug)
+    _series.save_series_roster(series_slug, merged)
+
+
 __all__ = [
     "SeriesCharacterEntry",
     "SeriesEntry",
@@ -216,4 +243,6 @@ __all__ = [
     "create_empty_series",
     "build_series_from_candidate",
     "match_series_characters",
+    "get_roster",
+    "update_roster",
 ]

@@ -89,7 +89,7 @@ class TestBuildRosterFromBookNLP:
 
         assert result is not None
         assert isinstance(result.roster, CharacterRoster)
-        canonicals = {g.canonical for g in result.roster.characters}
+        canonicals = {g.canonical_name for g in result.roster.characters}
         assert any("Tiffany" in c for c in canonicals)
         assert any("Weatherwax" in c for c in canonicals)
 
@@ -173,7 +173,7 @@ class TestBuildRosterFromBookNLP:
 
         assert result is not None
         # _cluster_by_heuristic sorts longest first → "Tiffany Aching" is canonical
-        assert result.roster.characters[0].canonical == "Tiffany Aching"
+        assert result.roster.characters[0].canonical_name == "Tiffany Aching"
 
     def test_empty_characters_returns_empty_roster(self, mock_booknlp_module, tmp_path):
         from kenkui.nlp.booknlp_roster import build_roster_from_booknlp
@@ -220,7 +220,7 @@ class TestBuildRosterWithLLMBookNLPTier:
     def test_booknlp_tier_returns_roster(self, mock_booknlp_module, tmp_path):
         """When BookNLP returns a roster, the result is a CharacterRoster."""
         from kenkui.nlp.entities import build_roster_with_llm
-        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, NameNormalizationResult, NameNormalizationEntry, EpithetResolutionResult
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult, NameNormalizationEntry, EpithetResolutionResult
 
         bnlp_instance, bnlp_class, bnlp_mod = mock_booknlp_module
 
@@ -236,6 +236,7 @@ class TestBuildRosterWithLLMBookNLPTier:
         nlp = MagicMock()
         llm = MagicMock()
         # LLM cleanup passes return empty/no-op results
+        from kenkui.nlp.models import CharacterRecord
         def llm_generate(prompt, schema):
             if schema.__name__ == "CanonicalMergeResult":
                 return CanonicalMergeResult(merges=[])
@@ -245,7 +246,7 @@ class TestBuildRosterWithLLMBookNLPTier:
                 return NameNormalizationResult(names=[
                     NameNormalizationEntry(original="Tiffany Aching", simplified="Tiffany Aching"),
                 ])
-            return CharacterRoster(characters=[AliasGroup(canonical="Tiffany Aching", aliases=["Tiffany Aching"])])
+            return CharacterRoster(characters=[CharacterRecord(slug="tiffany_aching", canonical_name="Tiffany Aching", aliases=["Tiffany Aching"])])
         llm.generate.side_effect = llm_generate
 
         with patch("kenkui.nlp.booknlp_roster.tempfile.TemporaryDirectory") as mock_td:
@@ -255,12 +256,12 @@ class TestBuildRosterWithLLMBookNLPTier:
                 result = build_roster_with_llm("Tiffany Aching walked in.", nlp, llm)
 
         assert isinstance(result, CharacterRoster)
-        assert any("Tiffany" in g.canonical for g in result.characters)
+        assert any("Tiffany" in g.canonical_name for g in result.characters)
 
     def test_llm_tier_used_when_booknlp_missing(self):
         """When BookNLP is missing, the LLM tier must be attempted."""
         from kenkui.nlp.entities import build_roster_with_llm
-        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, NameNormalizationResult, NameNormalizationEntry
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult, NameNormalizationEntry, CharacterRecord
 
         nlp = MagicMock()
         doc = MagicMock()
@@ -278,7 +279,7 @@ class TestBuildRosterWithLLMBookNLPTier:
                     NameNormalizationEntry(original="Tiffany Aching", simplified="Tiffany Aching"),
                 ])
             return CharacterRoster(
-                characters=[AliasGroup(canonical="Tiffany Aching", aliases=["Tiffany Aching"])]
+                characters=[CharacterRecord(slug="tiffany_aching", canonical_name="Tiffany Aching", aliases=["Tiffany Aching"])]
             )
         llm.generate.side_effect = llm_generate
 
@@ -317,9 +318,9 @@ class TestBookNLPGenderPassthrough:
                 data = build_roster_from_booknlp("Tiffany Aching walked. Rob Anybody followed.")
 
         assert data is not None
-        groups = {g.canonical: g for g in data.roster.characters}
-        tiffany = next((g for g in data.roster.characters if "Tiffany" in g.canonical), None)
-        rob = next((g for g in data.roster.characters if "Rob" in g.canonical), None)
+        groups = {g.canonical_name: g for g in data.roster.characters}
+        tiffany = next((g for g in data.roster.characters if "Tiffany" in g.canonical_name), None)
+        rob = next((g for g in data.roster.characters if "Rob" in g.canonical_name), None)
         assert tiffany is not None and tiffany.gender == "she/her"
         assert rob is not None and rob.gender == "he/him"
 

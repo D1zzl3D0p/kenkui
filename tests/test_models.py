@@ -270,9 +270,9 @@ class TestNLPResult:
 class TestFastScanResult:
     def _make_result(self):
         from kenkui.models import FastScanResult
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Alice", aliases=["Alice", "Al"], gender="she/her"),
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice", "Al"], gender="she/her"),
         ])
         chars = [CharacterInfo(
             character_id="Alice", display_name="Alice", mention_count=99
@@ -285,7 +285,7 @@ class TestFastScanResult:
         restored = FastScanResult.from_dict(result.to_dict())
         assert restored.book_hash == "abc"
         assert restored.characters[0].mention_count == 99
-        assert restored.roster.characters[0].canonical == "Alice"
+        assert restored.roster.characters[0].canonical_name == "Alice"
 
     def test_roster_aliases_preserved(self):
         from kenkui.models import FastScanResult

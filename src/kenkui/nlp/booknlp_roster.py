@@ -114,7 +114,7 @@ def build_roster_from_booknlp(
         return None
 
     from .entities import _cluster_by_heuristic
-    from .models import AliasGroup, CharacterRoster
+    from .models import CharacterRoster
 
     logger.info(
         "build_roster_from_booknlp: running BookNLP (%s model, %d chars of text)",
@@ -208,7 +208,7 @@ def build_roster_from_booknlp(
 
     # Annotate each group with BookNLP's gender.
     for group in groups:
-        group.gender = name_to_gender.get(group.canonical, "")
+        group.gender = name_to_gender.get(group.canonical_name, "")
         if not group.gender:
             for alias in group.aliases:
                 if name_to_gender.get(alias):

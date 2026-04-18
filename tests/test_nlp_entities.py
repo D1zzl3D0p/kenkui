@@ -24,7 +24,8 @@ from kenkui.nlp.entities import (
     extract_person_names,
     infer_gender_pronouns,
 )
-from kenkui.nlp.models import AliasGroup, CharacterRoster
+from kenkui.nlp.models import CharacterRecord, CharacterRoster
+from kenkui.nlp.models import slugify as nlp_slugify
 
 
 # ---------------------------------------------------------------------------
@@ -116,18 +117,18 @@ class TestClusterByHeuristic:
     def test_single_name(self):
         groups = _cluster_by_heuristic(["Harry Potter"])
         assert len(groups) == 1
-        assert groups[0].canonical == "Harry Potter"
+        assert groups[0].canonical_name == "Harry Potter"
         assert groups[0].aliases == ["Harry Potter"]
 
     def test_harry_potter_cluster(self):
         names = ["Harry", "Harry Potter", "Mr. Potter", "Ron", "Ron Weasley"]
         groups = _cluster_by_heuristic(names)
-        canonicals = {g.canonical for g in groups}
+        canonicals = {g.canonical_name for g in groups}
         assert "Harry Potter" in canonicals
         assert "Ron Weasley" in canonicals
 
-        hp = next(g for g in groups if g.canonical == "Harry Potter")
-        rw = next(g for g in groups if g.canonical == "Ron Weasley")
+        hp = next(g for g in groups if g.canonical_name == "Harry Potter")
+        rw = next(g for g in groups if g.canonical_name == "Ron Weasley")
 
         assert "Harry" in hp.aliases
         assert "Mr. Potter" in hp.aliases
@@ -136,19 +137,19 @@ class TestClusterByHeuristic:
     def test_hermione_cluster(self):
         names = ["Hermione", "Hermione Granger", "Albus Dumbledore", "Dumbledore"]
         groups = _cluster_by_heuristic(names)
-        canonicals = {g.canonical for g in groups}
+        canonicals = {g.canonical_name for g in groups}
         assert "Hermione Granger" in canonicals
         assert "Albus Dumbledore" in canonicals
 
-        hg = next(g for g in groups if g.canonical == "Hermione Granger")
-        ad = next(g for g in groups if g.canonical == "Albus Dumbledore")
+        hg = next(g for g in groups if g.canonical_name == "Hermione Granger")
+        ad = next(g for g in groups if g.canonical_name == "Albus Dumbledore")
         assert "Hermione" in hg.aliases
         assert "Dumbledore" in ad.aliases
 
     def test_duplicates_deduplicated(self):
         groups = _cluster_by_heuristic(["Alice", "Alice", "Alice Wonderland"])
         assert len(groups) == 1
-        assert groups[0].canonical == "Alice Wonderland"
+        assert groups[0].canonical_name == "Alice Wonderland"
 
     def test_distinct_names_not_merged(self):
         names = ["Alice", "Bob"]
@@ -259,7 +260,7 @@ class TestBuildRoster:
             "Ron Weasley followed Ron."
         )
         result = build_roster(text, nlp)
-        canonicals = {g.canonical for g in result.characters}
+        canonicals = {g.canonical_name for g in result.characters}
         # At minimum, both canonical forms should exist
         assert any("Harry" in c for c in canonicals)
 
@@ -303,7 +304,7 @@ class TestSampleTextForRoster:
 class TestFilterRosterHallucinations:
     def _roster(self, *entries):
         return CharacterRoster(characters=[
-            AliasGroup(canonical=c, aliases=list(a)) for c, a in entries
+            CharacterRecord(slug=nlp_slugify(c), canonical_name=c, aliases=list(a)) for c, a in entries
         ])
 
     def test_verbatim_aliases_kept(self):
@@ -333,7 +334,7 @@ class TestFilterRosterHallucinations:
             ("Gandalf the Grey", ["Gandalf the Grey", "Gandalf"])  # not in text
         )
         result = _filter_roster_hallucinations(roster, text)
-        canonicals = {g.canonical for g in result.characters}
+        canonicals = {g.canonical_name for g in result.characters}
         assert not any("Gandalf" in c for c in canonicals)
 
     def test_hallucinated_canonical_promotes_longest_survivor(self):
@@ -382,7 +383,14 @@ def _mock_nlp_no_names():
 def _mock_llm_roster(characters: list[dict]) -> MagicMock:
     llm = MagicMock()
     llm.generate.return_value = CharacterRoster(
-        characters=[AliasGroup(**c) for c in characters]
+        characters=[
+            CharacterRecord(
+                slug=nlp_slugify(c["canonical_name"]),
+                canonical_name=c["canonical_name"],
+                aliases=c.get("aliases", []),
+            )
+            for c in characters
+        ]
     )
     return llm
 
@@ -391,23 +399,23 @@ class TestBuildRosterWithLLM:
     def test_happy_path_returns_correct_canonicals(self):
         text = "Harry Potter smiled. Harry nodded. Mr. Potter left. Ron Weasley followed Ron."
         llm = _mock_llm_roster([
-            {"canonical": "Harry Potter", "aliases": ["Harry Potter", "Harry", "Mr. Potter"]},
-            {"canonical": "Ron Weasley", "aliases": ["Ron Weasley", "Ron"]},
+            {"canonical_name": "Harry Potter", "aliases": ["Harry Potter", "Harry", "Mr. Potter"]},
+            {"canonical_name": "Ron Weasley", "aliases": ["Ron Weasley", "Ron"]},
         ])
         result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
-        canonicals = {g.canonical for g in result.characters}
+        canonicals = {g.canonical_name for g in result.characters}
         assert "Harry Potter" in canonicals
         assert "Ron Weasley" in canonicals
 
     def test_aliases_resolved_into_canonical(self):
         text = "Harry Potter smiled. Harry nodded. Mr. Potter left."
         llm = _mock_llm_roster([
-            {"canonical": "Harry Potter", "aliases": ["Harry Potter", "Harry", "Mr. Potter"]},
+            {"canonical_name": "Harry Potter", "aliases": ["Harry Potter", "Harry", "Mr. Potter"]},
         ])
         result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
         assert len(result.characters) == 1
         hp = result.characters[0]
-        assert hp.canonical == "Harry Potter"
+        assert hp.canonical_name == "Harry Potter"
         assert "Harry" in hp.aliases
         assert "Mr. Potter" in hp.aliases
 
@@ -432,24 +440,24 @@ class TestBuildRosterWithLLM:
     def test_hallucinated_character_removed(self):
         text = "Harry walked in."
         llm = _mock_llm_roster([
-            {"canonical": "Harry", "aliases": ["Harry"]},
-            {"canonical": "Gandalf", "aliases": ["Gandalf", "The Grey"]},  # not in text
+            {"canonical_name": "Harry", "aliases": ["Harry"]},
+            {"canonical_name": "Gandalf", "aliases": ["Gandalf", "The Grey"]},  # not in text
         ])
         result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
-        canonicals = {g.canonical for g in result.characters}
+        canonicals = {g.canonical_name for g in result.characters}
         assert not any("Gandalf" in c for c in canonicals)
 
     def test_duplicate_llm_entries_merged(self):
         text = "Harry Potter smiled. Harry nodded."
         # LLM returns "Harry Potter" and "Harry" as separate entries
         llm = _mock_llm_roster([
-            {"canonical": "Harry Potter", "aliases": ["Harry Potter"]},
-            {"canonical": "Harry", "aliases": ["Harry"]},
+            {"canonical_name": "Harry Potter", "aliases": ["Harry Potter"]},
+            {"canonical_name": "Harry", "aliases": ["Harry"]},
         ])
         result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
         # Heuristic should collapse these into a single canonical
         assert len(result.characters) == 1
-        assert result.characters[0].canonical == "Harry Potter"
+        assert result.characters[0].canonical_name == "Harry Potter"
 
     def test_empty_llm_roster_falls_back_to_heuristic(self):
         text = "Harry Potter walked in."
@@ -465,19 +473,19 @@ class TestBuildRosterWithLLM:
         result = build_roster_with_llm(text, nlp, llm)
         assert isinstance(result, CharacterRoster)
         # Falls back to heuristic; spaCy found "Harry Potter"
-        canonicals = {g.canonical for g in result.characters}
+        canonicals = {g.canonical_name for g in result.characters}
         assert "Harry Potter" in canonicals
 
 
 class TestDeduplicateRosterWithLLM:
     def test_merges_nickname_into_full_name(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+        from kenkui.nlp.models import CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Matrim Cauthon", aliases=["Matrim Cauthon", "Matrim"]),
-            AliasGroup(canonical="Mat", aliases=["Mat"]),
-            AliasGroup(canonical="Perrin Aybara", aliases=["Perrin Aybara", "Perrin"]),
+            CharacterRecord(slug="matrim_cauthon", canonical_name="Matrim Cauthon", aliases=["Matrim Cauthon", "Matrim"]),
+            CharacterRecord(slug="mat", canonical_name="Mat", aliases=["Mat"]),
+            CharacterRecord(slug="perrin_aybara", canonical_name="Perrin Aybara", aliases=["Perrin Aybara", "Perrin"]),
         ])
         llm = MagicMock()
         llm.generate.return_value = CanonicalMergeResult(merges=[
@@ -486,20 +494,20 @@ class TestDeduplicateRosterWithLLM:
 
         result = deduplicate_roster_with_llm(roster, llm)
 
-        canonicals = {g.canonical for g in result.characters}
+        canonicals = {g.canonical_name for g in result.characters}
         assert "Mat" not in canonicals
         assert "Matrim Cauthon" in canonicals
         assert "Perrin Aybara" in canonicals
-        merged = next(g for g in result.characters if g.canonical == "Matrim Cauthon")
+        merged = next(g for g in result.characters if g.canonical_name == "Matrim Cauthon")
         assert "Mat" in merged.aliases
 
     def test_preserves_gender_from_absorbed_entry(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+        from kenkui.nlp.models import CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Matrim Cauthon", aliases=["Matrim Cauthon"], gender=""),
-            AliasGroup(canonical="Mat", aliases=["Mat"], gender="he/him"),
+            CharacterRecord(slug="matrim_cauthon", canonical_name="Matrim Cauthon", aliases=["Matrim Cauthon"], gender=""),
+            CharacterRecord(slug="mat", canonical_name="Mat", aliases=["Mat"], gender="he/him"),
         ])
         llm = MagicMock()
         llm.generate.return_value = CanonicalMergeResult(merges=[
@@ -507,15 +515,15 @@ class TestDeduplicateRosterWithLLM:
         ])
 
         result = deduplicate_roster_with_llm(roster, llm)
-        survivor = next(g for g in result.characters if g.canonical == "Matrim Cauthon")
+        survivor = next(g for g in result.characters if g.canonical_name == "Matrim Cauthon")
         assert survivor.gender == "he/him"
 
     def test_llm_error_returns_roster_unchanged(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Alice", aliases=["Alice"]),
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"]),
         ])
         llm = MagicMock()
         llm.generate.side_effect = RuntimeError("ollama down")
@@ -525,10 +533,10 @@ class TestDeduplicateRosterWithLLM:
 
     def test_unknown_duplicate_canonical_ignored(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import AliasGroup, CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+        from kenkui.nlp.models import CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Alice", aliases=["Alice"]),
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"]),
         ])
         llm = MagicMock()
         # LLM hallucinates a name not in the roster
@@ -543,10 +551,10 @@ class TestDeduplicateRosterWithLLM:
 class TestResolveEpithetsWithLLM:
     def test_adds_epithet_as_alias(self):
         from kenkui.nlp.entities import resolve_epithets_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster, EpithetResolutionResult, EpithetMapping
+        from kenkui.nlp.models import CharacterRoster, EpithetResolutionResult, EpithetMapping
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Rand al'Thor", aliases=["Rand al'Thor", "Rand"]),
+            CharacterRecord(slug="rand_althor", canonical_name="Rand al'Thor", aliases=["Rand al'Thor", "Rand"]),
         ])
         llm = MagicMock()
         llm.generate.return_value = EpithetResolutionResult(mappings=[
@@ -559,9 +567,9 @@ class TestResolveEpithetsWithLLM:
 
     def test_empty_phrases_skips_llm(self):
         from kenkui.nlp.entities import resolve_epithets_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRoster
 
-        roster = CharacterRoster(characters=[AliasGroup(canonical="Alice", aliases=["Alice"])])
+        roster = CharacterRoster(characters=[CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"])])
         llm = MagicMock()
 
         result = resolve_epithets_with_llm(roster, [], llm)
@@ -570,9 +578,9 @@ class TestResolveEpithetsWithLLM:
 
     def test_unknown_canonical_in_mapping_ignored(self):
         from kenkui.nlp.entities import resolve_epithets_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster, EpithetResolutionResult, EpithetMapping
+        from kenkui.nlp.models import CharacterRoster, EpithetResolutionResult, EpithetMapping
 
-        roster = CharacterRoster(characters=[AliasGroup(canonical="Alice", aliases=["Alice"])])
+        roster = CharacterRoster(characters=[CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"])])
         llm = MagicMock()
         llm.generate.return_value = EpithetResolutionResult(mappings=[
             EpithetMapping(epithet="the chosen one", canonical_name="Bob"),  # Bob not in roster
@@ -585,10 +593,10 @@ class TestResolveEpithetsWithLLM:
 class TestNormalizeCanonicalNamesWithLLM:
     def test_strips_appositive_suffix(self):
         from kenkui.nlp.entities import normalize_canonical_names_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster, NameNormalizationResult, NameNormalizationEntry
+        from kenkui.nlp.models import CharacterRoster, NameNormalizationResult, NameNormalizationEntry
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Rand al'Thor, Dragon Reborn", aliases=["Rand al'Thor, Dragon Reborn"]),
+            CharacterRecord(slug="rand_althor_dragon_reborn", canonical_name="Rand al'Thor, Dragon Reborn", aliases=["Rand al'Thor, Dragon Reborn"]),
         ])
         llm = MagicMock()
         llm.generate.return_value = NameNormalizationResult(names=[
@@ -596,15 +604,15 @@ class TestNormalizeCanonicalNamesWithLLM:
         ])
 
         result = normalize_canonical_names_with_llm(roster, llm)
-        assert result.characters[0].canonical == "Rand al'Thor"
+        assert result.characters[0].canonical_name == "Rand al'Thor"
         assert "Rand al'Thor, Dragon Reborn" in result.characters[0].aliases
 
     def test_unchanged_name_not_modified(self):
         from kenkui.nlp.entities import normalize_canonical_names_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster, NameNormalizationResult, NameNormalizationEntry
+        from kenkui.nlp.models import CharacterRoster, NameNormalizationResult, NameNormalizationEntry
 
         roster = CharacterRoster(characters=[
-            AliasGroup(canonical="Harry Potter", aliases=["Harry Potter"]),
+            CharacterRecord(slug="harry_potter", canonical_name="Harry Potter", aliases=["Harry Potter"]),
         ])
         llm = MagicMock()
         llm.generate.return_value = NameNormalizationResult(names=[
@@ -612,17 +620,17 @@ class TestNormalizeCanonicalNamesWithLLM:
         ])
 
         result = normalize_canonical_names_with_llm(roster, llm)
-        assert result.characters[0].canonical == "Harry Potter"
+        assert result.characters[0].canonical_name == "Harry Potter"
         # No duplicate alias added for unchanged names
         assert result.characters[0].aliases.count("Harry Potter") == 1
 
     def test_llm_error_returns_unchanged(self):
         from kenkui.nlp.entities import normalize_canonical_names_with_llm
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRoster
 
-        roster = CharacterRoster(characters=[AliasGroup(canonical="Alice", aliases=["Alice"])])
+        roster = CharacterRoster(characters=[CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"])])
         llm = MagicMock()
         llm.generate.side_effect = RuntimeError("timeout")
 
         result = normalize_canonical_names_with_llm(roster, llm)
-        assert result.characters[0].canonical == "Alice"
+        assert result.characters[0].canonical_name == "Alice"

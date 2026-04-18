@@ -20,7 +20,7 @@ class TestSeriesStepSkipped:
     def test_single_mode_skips_series(self):
         from kenkui.cli.add import _run_series_setup
         from kenkui.models import FastScanResult
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRoster
         roster = FastScanResult(
             roster=CharacterRoster(characters=[]),
             characters=[],
@@ -45,11 +45,11 @@ class TestSeriesStepNewSeries:
 
         from kenkui.cli.add import _run_series_setup
         from kenkui.models import CharacterInfo, FastScanResult
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
         roster = FastScanResult(
             roster=CharacterRoster(characters=[
-                AliasGroup(canonical="Rand al'Thor", aliases=["Rand"]),
+                CharacterRecord(slug="rand_althor", canonical_name="Rand al'Thor", aliases=["Rand"]),
             ]),
             characters=[CharacterInfo(character_id="Rand al'Thor", display_name="Rand al'Thor")],
             book_hash="abc",
@@ -82,7 +82,7 @@ class TestSeriesStepExistingSeries:
         from kenkui.series import SeriesCharacter, SeriesManifest, save_series
         from kenkui.cli.add import _run_series_setup
         from kenkui.models import CharacterInfo, FastScanResult
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
         # Pre-save an existing series manifest
         manifest = SeriesManifest(
@@ -96,7 +96,7 @@ class TestSeriesStepExistingSeries:
         save_series(manifest)
 
         roster = FastScanResult(
-            roster=CharacterRoster(characters=[AliasGroup(canonical="Rand al'Thor", aliases=["Rand"])]),
+            roster=CharacterRoster(characters=[CharacterRecord(slug="rand_althor", canonical_name="Rand al'Thor", aliases=["Rand"])]),
             characters=[CharacterInfo(character_id="Rand al'Thor", display_name="Rand al'Thor")],
             book_hash="xyz",
         )
@@ -235,7 +235,7 @@ class TestManifestWritebackOnConfirm:
 
         from kenkui.series import SeriesCharacter, SeriesManifest, load_series, save_series
         from kenkui.models import CharacterInfo, FastScanResult
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
         from kenkui.cli.add import _state_to_job_kwargs
 
         manifest = SeriesManifest(
@@ -243,7 +243,7 @@ class TestManifestWritebackOnConfirm:
             characters=[SeriesCharacter(canonical="Rand", aliases=[], voice="alba")],
         )
         roster = FastScanResult(
-            roster=CharacterRoster(characters=[AliasGroup(canonical="Rand", aliases=[])]),
+            roster=CharacterRoster(characters=[CharacterRecord(slug="rand", canonical_name="Rand", aliases=[])]),
             characters=[CharacterInfo(character_id="Rand", display_name="Rand")],
             book_hash="abc",
         )

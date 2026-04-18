@@ -8,6 +8,37 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .chapter_classifier import ChapterTags
     from .chapter_filter import FilterOperation
+    from .nlp.models import TitleRecord
+
+
+_SLUG_RE = re.compile(r"^[a-z0-9_]+$")
+_PRESERVED_SPEAKER_KEYS = frozenset({"NARRATOR", "Unknown", "SCENE_BREAK"})
+
+
+def _migrate_speaker_voices_keys(d: dict[str, str]) -> dict[str, str]:
+    """Convert legacy canonical-name keys to slug form.
+
+    Called once in ``JobConfig.from_dict()`` to transparently upgrade saved jobs
+    that were written before the slug-keyed speaker_voices format.
+
+    Rules:
+    - ``NARRATOR``, ``Unknown``, ``SCENE_BREAK`` are preserved as-is.
+    - Keys that already match ``^[a-z0-9_]+$`` are left unchanged (already slugs).
+    - All other keys (contain spaces, uppercase, punctuation) are slugified:
+      lowercased, apostrophes stripped, non-alphanumeric runs → underscore.
+    """
+    result: dict[str, str] = {}
+    for key, voice in d.items():
+        if key in _PRESERVED_SPEAKER_KEYS or _SLUG_RE.match(key):
+            result[key] = voice
+        else:
+            # Inline slugify (mirrors kenkui.nlp.models.slugify)
+            s = key.lower()
+            s = re.sub(r"['\u2018\u2019]", "", s)
+            s = re.sub(r"[^a-z0-9]+", "_", s)
+            s = s.strip("_")
+            result[s] = voice
+    return result
 
 
 def _normalize_bitrate(value: str | None, default: str = "96k") -> str:
@@ -97,6 +128,57 @@ class CharacterInfo:
             quote_count=data.get("quote_count", 0),
             mention_count=data.get("mention_count", 0),
             gender_pronoun=data.get("gender_pronoun", ""),
+        )
+
+
+@dataclass
+class CharacterRecord:
+    """Rich app-layer character representation. Built from NLP pipeline output.
+
+    The ``slug`` is the canonical lookup key used in ``JobConfig.speaker_voices``.
+    ``CharacterInfo`` is the slimmer UI-facing view, built via ``to_character_info()``.
+    """
+
+    slug: str
+    canonical_name: str
+    aliases: list[str] = field(default_factory=list)
+    titles: list["TitleRecord"] = field(default_factory=list)
+    gender: str = ""
+    role: str = ""
+    description: str = ""
+    chapters: list[int] = field(default_factory=list)
+    first_appearance: tuple[str, int] | None = None   # (book_slug, chapter_index)
+    last_appearance: tuple[str, int] | None = None
+    mention_count: int = 0
+    quote_count: int = 0
+
+    @classmethod
+    def from_nlp(cls, record: Any) -> "CharacterRecord":
+        """Build from a kenkui.nlp.models.CharacterRecord Pydantic object."""
+        return cls(
+            slug=record.slug,
+            canonical_name=record.canonical_name,
+            aliases=list(record.aliases),
+            titles=list(record.titles),
+            gender=record.gender,
+            role=record.role,
+            description=record.description,
+            chapters=list(record.chapters),
+            first_appearance=record.first_appearance,
+            last_appearance=record.last_appearance,
+            mention_count=record.mention_count,
+            quote_count=record.quote_count,
+        )
+
+    def to_character_info(self) -> "CharacterInfo":
+        """Build a CharacterInfo for the UI / voice assignment layer."""
+        pronoun = self.gender.split("/")[0] if self.gender else ""
+        return CharacterInfo(
+            character_id=self.slug,
+            display_name=self.canonical_name,
+            quote_count=self.quote_count,
+            mention_count=self.mention_count,
+            gender_pronoun=pronoun,
         )
 
 
@@ -218,7 +300,7 @@ class JobConfig:
             output_path=Path(data["output_path"]) if data.get("output_path") else None,
             name=data.get("name", ""),
             narration_mode=NarrationMode(data.get("narration_mode", "single")),
-            speaker_voices=data.get("speaker_voices") or {},
+            speaker_voices=_migrate_speaker_voices_keys(data.get("speaker_voices") or {}),
             annotated_chapters_path=Path(data["annotated_chapters_path"])
             if data.get("annotated_chapters_path")
             else None,
@@ -332,9 +414,10 @@ class AppConfig:
     default_chapter_preset: str = "content-only"  # Chapter filter preset for CLI
     default_output_dir: Path | None = None  # Output directory for CLI runs
     # --- Multi-voice / NLP ---
-    nlp_model: str = "llama3.2"  # Ollama model name used for speaker attribution
-    nlp_confidence_threshold: int = 0  # 0 = disabled; >0 triggers second-pass retry
-    nlp_review_model: str = ""  # Ollama model for second pass; "" = same as nlp_model
+    nlp_provider: str = "ollama"  # "ollama" | "anthropic" | "openai" | "google" | any LiteLLM prefix
+    nlp_model: str = "llama3.2"   # model name; "" = use provider default from credentials.toml
+    nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
+    nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
     excluded_voices: list[str] = field(default_factory=list)
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
@@ -361,6 +444,7 @@ class AppConfig:
             "default_voice": self.default_voice,
             "default_chapter_preset": self.default_chapter_preset,
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
+            "nlp_provider": self.nlp_provider,
             "nlp_model": self.nlp_model,
             "nlp_confidence_threshold": self.nlp_confidence_threshold,
             "nlp_review_model": self.nlp_review_model,
@@ -393,6 +477,7 @@ class AppConfig:
             default_output_dir=Path(data["default_output_dir"])
             if data.get("default_output_dir")
             else None,
+            nlp_provider=data.get("nlp_provider", "ollama"),
             nlp_model=data.get("nlp_model", "llama3.2"),
             nlp_confidence_threshold=data.get("nlp_confidence_threshold", 0),
             nlp_review_model=data.get("nlp_review_model", ""),

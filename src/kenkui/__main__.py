@@ -17,6 +17,8 @@ Sub-commands
   kenkui queue stop                   Stop current job
 
   kenkui config path/to/config.toml   Create/edit a config at the given path
+
+  kenkui configure-provider           Configure a cloud NLP provider API key
 """
 
 from __future__ import annotations
@@ -148,7 +150,7 @@ def _build_bare_parser() -> argparse.ArgumentParser:
             "Pass an ebook path directly to run the interactive wizard then\n"
             "auto-start the queue with a live dashboard.  Add -c config.toml\n"
             "to skip the wizard and run headless instead.\n\n"
-            "Sub-commands: add, queue, config, voices"
+            "Sub-commands: add, queue, config, voices, configure-provider"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -172,7 +174,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Pass an ebook path directly to run the interactive wizard then\n"
             "auto-start the queue with a live dashboard.  Add -c config.toml\n"
             "to skip the wizard and run headless instead.\n\n"
-            "Sub-commands: add, queue, config, voices"
+            "Sub-commands: add, queue, config, voices, configure-provider"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -307,6 +309,12 @@ def _build_parser() -> argparse.ArgumentParser:
     voices_audition_p.add_argument(
         "--text", default=None, metavar="TEXT",
         help="Text to synthesize (default: built-in sample phrase).",
+    )
+
+    # ---- kenkui configure-provider -----------------------------------------
+    sub.add_parser(
+        "configure-provider",
+        help="Configure a cloud NLP provider API key (one-time setup).",
     )
 
     return parser
@@ -447,6 +455,12 @@ def main() -> None:
         else:
             # No subcommand: launch interactive TUI
             cmd_voices_tui(args)
+        sys.exit(0)
+
+    elif command == "configure-provider":
+        from .cli.add import configure_provider
+
+        configure_provider()
         sys.exit(0)
 
     else:
