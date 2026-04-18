@@ -80,7 +80,8 @@ class CharacterRecord(BaseModel):
     quote_count: int = 0
 
 
-# Backward-compat alias — existing code that imports AliasGroup continues to work.
+# Backward-compat alias — AliasGroup instances can still be constructed and imported.
+# However, they cannot be added to CharacterRoster.characters (which requires CharacterRecord).
 # New code should import CharacterRecord directly.
 class AliasGroup(BaseModel):
     """Deprecated — use CharacterRecord. Kept for backward compatibility."""

@@ -349,7 +349,7 @@ def resolve_epithets_with_llm(
 
     Passes canonical names and high-frequency common-noun phrases extracted
     by BookNLP to the LLM, which maps phrases to characters.  Matched phrases
-    are appended to the relevant ``AliasGroup.aliases``.
+    are appended to the relevant ``CharacterRecord.aliases``.
 
     Returns *roster* unchanged on any LLM error or when *common_phrases* is empty.
     """
@@ -432,6 +432,7 @@ def normalize_canonical_names_with_llm(
                 if group.canonical_name not in group.aliases:
                     group.aliases.append(group.canonical_name)
                 group.canonical_name = simplified
+                group.slug = slugify(simplified)
                 changed += 1
 
         logger.info(
