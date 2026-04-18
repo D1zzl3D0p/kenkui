@@ -11,6 +11,36 @@ if TYPE_CHECKING:
     from .nlp.models import TitleRecord
 
 
+_SLUG_RE = re.compile(r"^[a-z0-9_]+$")
+_PRESERVED_SPEAKER_KEYS = frozenset({"NARRATOR", "Unknown", "SCENE_BREAK"})
+
+
+def _migrate_speaker_voices_keys(d: dict[str, str]) -> dict[str, str]:
+    """Convert legacy canonical-name keys to slug form.
+
+    Called once in ``JobConfig.from_dict()`` to transparently upgrade saved jobs
+    that were written before the slug-keyed speaker_voices format.
+
+    Rules:
+    - ``NARRATOR``, ``Unknown``, ``SCENE_BREAK`` are preserved as-is.
+    - Keys that already match ``^[a-z0-9_]+$`` are left unchanged (already slugs).
+    - All other keys (contain spaces, uppercase, punctuation) are slugified:
+      lowercased, apostrophes stripped, non-alphanumeric runs → underscore.
+    """
+    result: dict[str, str] = {}
+    for key, voice in d.items():
+        if key in _PRESERVED_SPEAKER_KEYS or _SLUG_RE.match(key):
+            result[key] = voice
+        else:
+            # Inline slugify (mirrors kenkui.nlp.models.slugify)
+            s = key.lower()
+            s = re.sub(r"['\u2018\u2019]", "", s)
+            s = re.sub(r"[^a-z0-9]+", "_", s)
+            s = s.strip("_")
+            result[s] = voice
+    return result
+
+
 def _normalize_bitrate(value: str | None, default: str = "96k") -> str:
     """Ensure a bitrate string always has a unit suffix.
 
@@ -261,7 +291,7 @@ class JobConfig:
             output_path=Path(data["output_path"]) if data.get("output_path") else None,
             name=data.get("name", ""),
             narration_mode=NarrationMode(data.get("narration_mode", "single")),
-            speaker_voices=data.get("speaker_voices") or {},
+            speaker_voices=_migrate_speaker_voices_keys(data.get("speaker_voices") or {}),
             annotated_chapters_path=Path(data["annotated_chapters_path"])
             if data.get("annotated_chapters_path")
             else None,
