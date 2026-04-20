@@ -46,8 +46,10 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
     output_dir = state.get("output_dir", str(book_path.parent))
     roster_cache_path = state.get("roster_cache_path")
     series_slug = state.get("series_slug")
+    job_nlp_provider = state.get("job_nlp_provider")
+    job_nlp_model = state.get("job_nlp_model")
 
-    return dict(
+    kwargs: dict[str, Any] = dict(
         ebook_path=str(book_path),
         voice=voice,
         chapter_selection=chapter_selection,
@@ -60,6 +62,11 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
         series_slug=series_slug,
         **quality_overrides,
     )
+    if job_nlp_provider is not None:
+        kwargs["job_nlp_provider"] = job_nlp_provider
+    if job_nlp_model is not None:
+        kwargs["job_nlp_model"] = job_nlp_model
+    return kwargs
 
 
 __all__ = ["build_headless_job_kwargs", "build_job_kwargs_from_state"]

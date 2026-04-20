@@ -8,8 +8,16 @@ Pass 2 (attribute_chapter): Send each chapter + the full roster and get
 
 from __future__ import annotations
 
+import logging
+import time
 import os
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
+
+# Rate-limit retry settings
+_RATE_LIMIT_WAIT_S = 60   # seconds to wait between rate-limit retries
+_RATE_LIMIT_MAX_RETRIES = 3
 
 import instructor
 import litellm
@@ -17,8 +25,13 @@ import litellm
 from kenkui.models import AppConfig, Chapter
 from kenkui.nlp.models import (
     AttributionResult,
+    AttributionResultWire,
     CharacterRecord,
     CharacterRoster,
+    CharacterRosterFullWire,
+    CharacterRosterWire,
+    attribution_wire_to_full,
+    roster_wire_to_full,
     slugify,
 )
 
@@ -28,8 +41,10 @@ from kenkui.nlp.models import (
 
 _CHARS_PER_TOKEN = 4          # rough heuristic (conservative)
 _SYSTEM_PROMPT_TOKENS = 2_000  # headroom for system/instruction prompt
-_MIN_OUTPUT_RESERVE = 0.20     # always reserve at least 20% of context for output
-_TOKENS_PER_CHARACTER = 600    # estimated tokens per CharacterRecord in JSON output
+_TOKENS_PER_CHARACTER_WIRE = 80   # compact wire CharacterRecordWire (slug+name+aliases+role+gender)
+_TOKENS_PER_CHARACTER_FULL = 600  # full CharacterRecord with chapters/appearances/titles
+_TOKENS_PER_ATTRIBUTION_ITEM = 20 # slim AttributionItemWire (quote_id + speaker + confidence)
+_SERIES_ROSTER_CAP = 100          # max characters injected from a series roster
 
 
 def estimate_tokens(text: str) -> int:
@@ -37,15 +52,23 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // _CHARS_PER_TOKEN)
 
 
-def compute_output_budget(context_limit: int, estimated_chars: int) -> int:
-    """Compute how many tokens to reserve for LLM output.
+def compute_roster_output_budget(estimated_chars: int, compact: bool) -> int:
+    """Compute max_tokens for a roster extraction call.
 
-    Takes the larger of: 20% of context_limit, or tokens needed for
-    *estimated_chars* CharacterRecords.
+    Uses a compact per-character estimate when the wire model is in compact mode
+    (no chapters/appearances), and a fuller estimate otherwise.  Always allows
+    at least 2048 tokens for very small rosters.
     """
-    floor = int(context_limit * _MIN_OUTPUT_RESERVE)
-    character_estimate = estimated_chars * _TOKENS_PER_CHARACTER
-    return max(floor, character_estimate)
+    per_char = _TOKENS_PER_CHARACTER_WIRE if compact else _TOKENS_PER_CHARACTER_FULL
+    return max(2048, estimated_chars * per_char)
+
+
+def compute_attribution_output_budget(num_quotes: int) -> int:
+    """Compute max_tokens for a chapter attribution call.
+
+    Sized for the slim AttributionItemWire schema with a 4x safety margin.
+    """
+    return max(512, num_quotes * _TOKENS_PER_ATTRIBUTION_ITEM * 4)
 
 
 def needs_chunking(
@@ -53,9 +76,15 @@ def needs_chunking(
     output_budget: int,
     system_tokens: int,
     context_limit: int,
+    rate_limit_tpm: int | None = None,
 ) -> bool:
-    """Return True if the combined token count exceeds the model's context limit."""
-    return (input_tokens + output_budget + system_tokens) > context_limit
+    """Return True if chunking is needed — context overflow or rate-limit excess."""
+    if (input_tokens + output_budget + system_tokens) > context_limit:
+        return True
+    if rate_limit_tpm is not None:
+        if input_tokens > int(rate_limit_tpm * _RATE_LIMIT_CHUNK_SAFETY):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -80,21 +109,72 @@ def _context_limit_for(model: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Rate-limit registry  (input tokens per minute, keyed by model name prefix)
+# ---------------------------------------------------------------------------
+
+_RATE_LIMITS_TPM: dict[str, int] = {
+    "claude-haiku-": 100_000,  # Haiku has higher TPM than Sonnet/Opus
+    "claude-": 30_000,          # Sonnet, Opus, and other Claude models
+}
+_RATE_LIMIT_CHUNK_SAFETY = 0.75      # use 75% of TPM as max chunk input tokens
+_RATE_LIMIT_THROTTLE_BUFFER = 1.10   # sleep 10% longer than the calculated minimum
+
+
+def _rate_limit_tpm_for(model: str) -> int | None:
+    """Return tokens-per-minute input limit for *model*, or None if unconstrained."""
+    for prefix, tpm in _RATE_LIMITS_TPM.items():
+        if model.startswith(prefix):
+            return tpm
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
 
 
-def _build_roster_prompt(book_text: str, series_roster: "CharacterRoster | None") -> str:
+def _build_roster_prompt(
+    book_text: str,
+    series_roster: "CharacterRoster | None",
+    compact_roster: bool = False,
+    descriptions_protagonists_only: bool = False,
+) -> str:
     """Build the prompt for whole-book character extraction."""
     known_chars = ""
     if series_roster and series_roster.characters:
+        # Cap to the most-mentioned characters to avoid huge prompts for long series.
+        chars_to_inject = sorted(
+            series_roster.characters, key=lambda c: c.mention_count, reverse=True
+        )[:_SERIES_ROSTER_CAP]
         lines = []
-        for c in series_roster.characters:
-            aliases = ", ".join(c.aliases) if c.aliases else "none"
-            lines.append(f"  - slug={c.slug!r}, name={c.canonical_name!r}, aliases=[{aliases}]")
+        for c in chars_to_inject:
+            aliases = ", ".join(c.aliases) if c.aliases else ""
+            line = f"  {c.slug} | {c.canonical_name}"
+            if aliases:
+                line += f" | {aliases}"
+            lines.append(line)
         known_chars = (
-            "\n\nKNOWN CHARACTERS FROM SERIES (use their established slugs exactly):\n"
+            "\n\nKNOWN CHARACTERS FROM SERIES (reuse these slugs exactly):\n"
             + "\n".join(lines)
+        )
+
+    if descriptions_protagonists_only:
+        description_instruction = (
+            "- description: one sentence summarising the character — "
+            "only for protagonist and antagonist roles; leave empty for all others"
+        )
+    else:
+        description_instruction = (
+            '- description: one sentence summarising the character (or "" for very minor characters)'
+        )
+
+    if compact_roster:
+        position_fields = ""
+    else:
+        position_fields = (
+            "\n- chapters: list of chapter indices this character appears in"
+            "\n- first_appearance: [null, chapter_index] tuple (book_slug is set by the caller)"
+            "\n- last_appearance: [null, chapter_index] tuple"
         )
 
     return f"""You are a literary analyst. Extract every named character from the book text below.{known_chars}
@@ -103,42 +183,83 @@ For each character return:
 - slug: stable lowercase underscore identifier derived from canonical_name (e.g. "elizabeth_bennet")
 - canonical_name: the most complete formal name used in the text
 - aliases: all other name forms (nicknames, last-name-only references, epithets)
-- titles: positional titles with chapter indices and book_slug=null for this book
+- titles: list of positional titles or honorifics (e.g. "Mr.", "Queen of Andor") — title strings only
 - gender: pronouns used ("he/him", "she/her", "they/them", or "" if unclear)
 - role: one of protagonist, antagonist, supporting, minor
-- description: one sentence summarising the character (or "" for very minor characters)
-- chapters: list of chapter indices this character appears in
-- first_appearance: [null, chapter_index] tuple (book_slug is set by the caller)
-- last_appearance: [null, chapter_index] tuple
+- {description_instruction}{position_fields}
 
 BOOK TEXT:
 {book_text}"""
 
 
-def _build_attribution_prompt(chapter_text: str, roster: "CharacterRoster") -> str:
-    """Build the prompt for per-chapter quote attribution."""
-    roster_lines = []
+def _build_attribution_static_block(
+    roster: "CharacterRoster",
+    omit_echo: bool = False,
+    omit_emotion: bool = False,
+) -> str:
+    """Build the static (cacheable) part of the attribution prompt: instructions + roster.
+
+    This block is identical for every chapter in a book, so it can be cached once
+    and reused across all chapter calls.
+    """
+    roster_lines = ["SLUG | CANONICAL NAME | ALIASES"]
     for c in roster.characters:
-        aliases = ", ".join(c.aliases) if c.aliases else "none"
-        roster_lines.append(f"  slug={c.slug!r}  name={c.canonical_name!r}  aliases=[{aliases}]")
+        aliases = ", ".join(c.aliases) if c.aliases else ""
+        line = f"{c.slug} | {c.canonical_name}"
+        if aliases:
+            line += f" | {aliases}"
+        roster_lines.append(line)
     roster_block = "\n".join(roster_lines)
+
+    echo_fields = "" if omit_echo else (
+        "\n- char_start: the start value from above (copy exactly)"
+        "\n- char_end: the end value from above (copy exactly)"
+    )
+    emotion_field = "" if omit_emotion else (
+        "\n- emotion: one of neutral, happy, sad, angry, fearful, surprised, disgusted"
+    )
 
     return f"""You are a literary analyst performing speaker attribution.
 
 CHARACTER ROSTER (use the slug field as the speaker value):
 {roster_block}
 
-For each dialogue quote or inner monologue in the chapter text, return:
-- quote_id: sequential integer starting at 1
-- speaker: the character's slug from the roster above, or "NARRATOR", or "Unknown"
-- emotion: one of neutral, happy, sad, angry, fearful, surprised, disgusted
+For each quote return:
+- quote_id: the id from above (0-based){echo_fields}
+- speaker: character slug from roster, or "NARRATOR", or "Unknown"{emotion_field}
 - confidence: 1 (very uncertain) to 5 (very confident)
 
 Rules:
 - Use the exact slug from the roster — never a canonical name or alias
 - "NARRATOR" for narration, scene descriptions, or when no clear speaker
 - "Unknown" only when the speaker cannot be identified with any confidence
-- Scare quotes and titles (e.g. "The King") are not spoken dialogue — mark as NARRATOR
+- Scare quotes and titles (e.g. "The King") are not spoken dialogue — mark as NARRATOR"""
+
+
+def _build_attribution_dynamic_block(
+    chapter_text: str,
+    quotes: "list",
+    omit_echo: bool = False,
+) -> str:
+    """Build the dynamic (per-chapter) part of the attribution prompt: quotes + chapter text."""
+    import json as _json
+
+    if omit_echo:
+        # Compact table format: one quote per line as "ID KIND" — avoids JSON key overhead
+        # (~15 chars/quote saved vs JSON object format; significant at 50+ quotes/chapter).
+        lines = [f"{q.id} {q.kind}" for q in quotes]
+        quote_block = "\n".join(lines)
+        quote_header = "QUOTES (id kind — use exact ids in your response):"
+    else:
+        quote_entries = [
+            {"id": q.id, "start": q.char_offset, "end": q.char_offset + len(q.text), "kind": q.kind}
+            for q in quotes
+        ]
+        quote_block = _json.dumps(quote_entries, indent=2)
+        quote_header = "PRE-EXTRACTED QUOTES (use these exact IDs; echo start/end in your response):"
+
+    return f"""{quote_header}
+{quote_block}
 
 CHAPTER TEXT:
 {chapter_text}"""
@@ -236,6 +357,70 @@ def merge_rosters(rosters: "list[CharacterRoster]", book_slug: str) -> "Characte
 
 
 # ---------------------------------------------------------------------------
+# Rate-limit retry helper
+# ---------------------------------------------------------------------------
+
+
+def _call_with_rate_limit_retry(fn, *args, progress_callback=None, **kwargs):
+    """Call *fn(*args, **kwargs)*, retrying on RateLimitError after a delay.
+
+    Waits *_RATE_LIMIT_WAIT_S* seconds between attempts and retries up to
+    *_RATE_LIMIT_MAX_RETRIES* additional times before re-raising.
+    """
+    for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            is_rate_limit = (
+                "RateLimitError" in exc_type
+                or "rate_limit" in str(exc).lower()
+                or "rate limit" in str(exc).lower()
+            )
+            if is_rate_limit and attempt < _RATE_LIMIT_MAX_RETRIES:
+                wait = _RATE_LIMIT_WAIT_S
+                msg = f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/{_RATE_LIMIT_MAX_RETRIES}"
+                logger.warning(msg)
+                if progress_callback:
+                    progress_callback(msg)
+                time.sleep(wait)
+            else:
+                raise
+
+
+# ---------------------------------------------------------------------------
+# Compact roster helpers
+# ---------------------------------------------------------------------------
+
+
+def _fill_roster_positions(
+    roster: "CharacterRoster",
+    chapter_indices: "list[int]",
+) -> "CharacterRoster":
+    """Back-fill chapters/first_appearance/last_appearance when nlp_compact_roster is on.
+
+    The LLM was not asked to produce these fields, so they default to [] / None.
+    We conservatively assign all chapter indices in the segment to every character
+    found in that segment, and derive first/last appearance from the min/max index.
+    """
+    if not chapter_indices:
+        return roster
+    first_idx = min(chapter_indices)
+    last_idx = max(chapter_indices)
+    updated = []
+    for rec in roster.characters:
+        chapters = rec.chapters if rec.chapters else list(chapter_indices)
+        first = rec.first_appearance or (None, first_idx)
+        last = rec.last_appearance or (None, last_idx)
+        updated.append(rec.model_copy(update={
+            "chapters": chapters,
+            "first_appearance": first,
+            "last_appearance": last,
+        }))
+    return CharacterRoster(characters=updated)
+
+
+# ---------------------------------------------------------------------------
 # CloudProvider
 # ---------------------------------------------------------------------------
 
@@ -245,7 +430,7 @@ class CloudProvider:
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self._client = instructor.from_litellm(litellm.completion)
+        self._client = instructor.from_litellm(litellm.completion, mode=instructor.Mode.MD_JSON)
         self._inject_credentials()
 
     def _inject_credentials(self) -> None:
@@ -267,7 +452,7 @@ class CloudProvider:
             return provider_creds.default_model
         # Last resort defaults
         defaults = {
-            "anthropic": "claude-sonnet-4-6",
+            "anthropic": "claude-haiku-4-5-20251001",
             "openai": "gpt-4o",
             "google": "gemini/gemini-2.0-flash",
         }
@@ -278,10 +463,12 @@ class CloudProvider:
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        book_path: "Path | None" = None,
     ) -> CharacterRoster:
         """Extract character roster — whole-book pass, chunked if needed."""
         model = self._resolved_model()
         context_limit = _context_limit_for(model)
+        rate_limit_tpm = _rate_limit_tpm_for(model)
 
         chapter_texts = [
             f"[Chapter {ch.index}]\n" + "\n".join(ch.paragraphs)
@@ -289,25 +476,50 @@ class CloudProvider:
         ]
         full_text = "\n\n".join(chapter_texts)
 
+        compact_roster = self.config.nlp_compact_roster
         estimated_unique = max(20, len(full_text) // 5000)
-        output_budget = compute_output_budget(context_limit, estimated_unique)
+        output_budget = compute_roster_output_budget(estimated_unique, compact=compact_roster)
         input_tokens = estimate_tokens(full_text)
 
-        if needs_chunking(input_tokens, output_budget, _SYSTEM_PROMPT_TOKENS, context_limit):
+        if needs_chunking(input_tokens, output_budget, _SYSTEM_PROMPT_TOKENS, context_limit,
+                          rate_limit_tpm=rate_limit_tpm):
+            reason = (
+                "rate limit"
+                if rate_limit_tpm and input_tokens > int(rate_limit_tpm * _RATE_LIMIT_CHUNK_SAFETY)
+                else "context limit"
+            )
             if progress_callback:
-                progress_callback("Book exceeds context limit — chunking for roster extraction")
-            return self._build_roster_chunked(chapters, series_roster, model, output_budget, progress_callback)
+                progress_callback(f"Book requires chunking ({reason}) — splitting for roster extraction")
+            return self._build_roster_chunked(
+                chapters, series_roster, model, output_budget, progress_callback,
+                book_path=book_path, rate_limit_tpm=rate_limit_tpm,
+            )
 
         if progress_callback:
             progress_callback("Extracting character roster (single pass)")
 
-        prompt = _build_roster_prompt(full_text, series_roster)
-        return self._client.chat.completions.create(
+        desc_leads_only = self.config.nlp_descriptions_protagonists_only
+        prompt = _build_roster_prompt(
+            full_text, series_roster,
+            compact_roster=compact_roster,
+            descriptions_protagonists_only=desc_leads_only,
+        )
+        wire_model = CharacterRosterWire if compact_roster else CharacterRosterFullWire
+        wire = _call_with_rate_limit_retry(
+            self._client.chat.completions.create,
             model=model,
-            response_model=CharacterRoster,
+            response_model=wire_model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=output_budget,
+            max_retries=1,
+            num_retries=0,
+            progress_callback=progress_callback,
         )
+        roster = roster_wire_to_full(wire)
+        if compact_roster:
+            all_indices = [ch.index for ch in chapters]
+            roster = _fill_roster_positions(roster, all_indices)
+        return roster
 
     def _build_roster_chunked(
         self,
@@ -316,9 +528,23 @@ class CloudProvider:
         model: str,
         output_budget: int,
         progress_callback: "Callable[[str], None] | None",
+        book_path: "Path | None" = None,
+        rate_limit_tpm: "int | None" = None,
     ) -> "CharacterRoster":
+        from kenkui.nlp import cache_chunk_roster, get_cached_chunk_roster
+
+        compact_roster = self.config.nlp_compact_roster
+        # Re-derive output_budget using the correct per-character estimate for the wire model
+        # used in chunked mode (the caller passes a budget sized for the full book; per-segment
+        # rosters are smaller so a tighter budget reduces wasted context).
+        seg_estimated_unique = max(10, len(chapters) // 2)
+        output_budget = compute_roster_output_budget(seg_estimated_unique, compact=compact_roster)
+
         context_limit = _context_limit_for(model)
         max_input = context_limit - output_budget - _SYSTEM_PROMPT_TOKENS
+        if rate_limit_tpm is not None:
+            max_input = min(max_input, int(rate_limit_tpm * _RATE_LIMIT_CHUNK_SAFETY))
+
         segments = split_chapters_into_segments(chapters, max_tokens_per_segment=max_input)
 
         if progress_callback:
@@ -326,20 +552,62 @@ class CloudProvider:
 
         partial_rosters: list[CharacterRoster] = []
         for i, segment in enumerate(segments):
+            chapter_indices = [ch.index for ch in segment]
+
+            # Checkpoint resume — skip LLM call if this chunk is already cached
+            if book_path is not None:
+                cached = get_cached_chunk_roster(book_path, chapter_indices)
+                if cached is not None:
+                    if progress_callback:
+                        progress_callback(
+                            f"Resuming: segment {i + 1}/{len(segments)} loaded from cache"
+                        )
+                    partial_rosters.append(cached)
+                    continue  # no tokens sent — skip throttle
+
             if progress_callback:
                 progress_callback(f"Extracting characters from segment {i + 1}/{len(segments)}")
+
             segment_text = "\n\n".join(
                 f"[Chapter {ch.index}]\n" + "\n".join(ch.paragraphs)
                 for ch in segment
             )
-            prompt = _build_roster_prompt(segment_text, series_roster)
-            partial = self._client.chat.completions.create(
+            segment_tokens = estimate_tokens(segment_text)
+            desc_leads_only = self.config.nlp_descriptions_protagonists_only
+            prompt = _build_roster_prompt(
+                segment_text, series_roster,
+                compact_roster=compact_roster,
+                descriptions_protagonists_only=desc_leads_only,
+            )
+
+            wire_model = CharacterRosterWire if compact_roster else CharacterRosterFullWire
+            wire = _call_with_rate_limit_retry(
+                self._client.chat.completions.create,
                 model=model,
-                response_model=CharacterRoster,
+                response_model=wire_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=output_budget,
+                max_retries=1,
+                num_retries=0,
+                progress_callback=progress_callback,
             )
+            partial = roster_wire_to_full(wire)
+            if compact_roster:
+                partial = _fill_roster_positions(partial, chapter_indices)
             partial_rosters.append(partial)
+
+            # Checkpoint write — persisted before throttle sleep so a SIGINT still saves progress
+            if book_path is not None:
+                cache_chunk_roster(partial, book_path, chapter_indices)
+
+            # Proactive throttle — pace requests to stay under the per-minute token rate limit
+            if rate_limit_tpm is not None and i < len(segments) - 1:
+                sleep_s = (segment_tokens / rate_limit_tpm) * 60 * _RATE_LIMIT_THROTTLE_BUFFER
+                msg = f"Throttling {sleep_s:.1f}s to respect rate limit before next segment"
+                logger.debug(msg)
+                if progress_callback:
+                    progress_callback(msg)
+                time.sleep(sleep_s)
 
         book_slug = getattr(self.config, "_book_slug", "unknown")
         return merge_rosters(partial_rosters, book_slug=book_slug)
@@ -351,19 +619,58 @@ class CloudProvider:
         progress_callback: Callable[[str], None] | None = None,
     ) -> AttributionResult:
         """Attribute quotes in *chapter* to speakers — single chapter pass."""
+        from kenkui.nlp.quotes import extract_quotes
+
         model = self._resolved_model()
 
         if progress_callback:
             progress_callback(f"Attributing chapter {chapter.index}")
 
-        chapter_text = "\n".join(chapter.paragraphs)
-        prompt = _build_attribution_prompt(chapter_text, roster)
-        context_limit = _context_limit_for(model)
-        output_budget = compute_output_budget(context_limit, len(roster.characters))
+        quotes = extract_quotes(chapter.paragraphs)
+        if not quotes:
+            return AttributionResult(attributions=[])
 
-        return self._client.chat.completions.create(
+        # Must use "\n\n" join to match char_offset coordinate system in extract_quotes
+        chapter_text = "\n\n".join(chapter.paragraphs)
+        output_budget = compute_attribution_output_budget(len(quotes))
+
+        omit_echo = self.config.nlp_omit_position_echo
+        omit_emotion = self.config.nlp_omit_emotion
+
+        static_block = _build_attribution_static_block(roster, omit_echo=omit_echo, omit_emotion=omit_emotion)
+        dynamic_block = _build_attribution_dynamic_block(chapter_text, quotes, omit_echo=omit_echo)
+
+        # Prompt caching: cache only the static block (instructions + roster) which is
+        # identical for every chapter in this book.  The quotes and chapter text are
+        # dynamic and must NOT be included in the cached prefix.
+        # Only Anthropic models support cache_control; other providers get a plain string.
+        is_anthropic = _rate_limit_tpm_for(model) is not None
+        if is_anthropic and estimate_tokens(static_block) >= 1024:
+            messages: list[dict] = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": static_block, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": dynamic_block},
+                ],
+            }]
+        else:
+            messages = [{"role": "user", "content": f"{static_block}\n\n{dynamic_block}"}]
+
+        # Use slim wire model when both echo and emotion are omitted (the default).
+        # Fall back to the full AttributionResult when either is enabled so the
+        # schema the LLM sees matches what the prompt asks for.
+        use_slim = omit_echo and omit_emotion
+        attr_model = AttributionResultWire if use_slim else AttributionResult
+        result = _call_with_rate_limit_retry(
+            self._client.chat.completions.create,
             model=model,
-            response_model=AttributionResult,
-            messages=[{"role": "user", "content": prompt}],
+            response_model=attr_model,
+            messages=messages,
             max_tokens=output_budget,
+            max_retries=1,
+            num_retries=0,
+            progress_callback=progress_callback,
         )
+        if use_slim:
+            result = attribution_wire_to_full(result)
+        return result

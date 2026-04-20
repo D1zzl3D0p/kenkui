@@ -239,6 +239,9 @@ class JobConfig:
     chapter_voices: dict[str, str] = field(default_factory=dict)
     # Series slug for cross-book voice consistency (deferred cast assignment)
     series_slug: str | None = None
+    # Per-job NLP provider/model (None = inherit from AppConfig)
+    job_nlp_provider: str | None = None
+    job_nlp_model: str | None = None
     # Per-job quality overrides (None = inherit from AppConfig)
     job_temp: float | None = None
     job_lsd_decode_steps: int | None = None
@@ -274,6 +277,8 @@ class JobConfig:
         }
         # Only include per-job overrides when explicitly set (non-None)
         for key in (
+            "job_nlp_provider",
+            "job_nlp_model",
             "job_temp",
             "job_lsd_decode_steps",
             "job_noise_clamp",
@@ -309,6 +314,8 @@ class JobConfig:
             else None,
             chapter_voices=data.get("chapter_voices") or {},
             series_slug=data.get("series_slug"),
+            job_nlp_provider=data.get("job_nlp_provider"),
+            job_nlp_model=data.get("job_nlp_model"),
             job_temp=data.get("job_temp"),
             job_lsd_decode_steps=data.get("job_lsd_decode_steps"),
             job_noise_clamp=data.get("job_noise_clamp"),
@@ -418,6 +425,11 @@ class AppConfig:
     nlp_model: str = "llama3.2"   # model name; "" = use provider default from credentials.toml
     nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
     nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
+    # --- Output token reduction (on by default) ---
+    nlp_omit_position_echo: bool = True   # attribution: skip char_start/char_end echo
+    nlp_omit_emotion: bool = True         # attribution: skip emotion field
+    nlp_compact_roster: bool = True       # roster: skip chapters/appearances (derived server-side)
+    nlp_descriptions_protagonists_only: bool = True   # roster: only describe protagonist/antagonist roles
     excluded_voices: list[str] = field(default_factory=list)
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
@@ -448,6 +460,10 @@ class AppConfig:
             "nlp_model": self.nlp_model,
             "nlp_confidence_threshold": self.nlp_confidence_threshold,
             "nlp_review_model": self.nlp_review_model,
+            "nlp_omit_position_echo": self.nlp_omit_position_echo,
+            "nlp_omit_emotion": self.nlp_omit_emotion,
+            "nlp_compact_roster": self.nlp_compact_roster,
+            "nlp_descriptions_protagonists_only": self.nlp_descriptions_protagonists_only,
             "excluded_voices": list(self.excluded_voices),
             "post_processing": self.post_processing.to_dict(),
         }
@@ -481,6 +497,10 @@ class AppConfig:
             nlp_model=data.get("nlp_model", "llama3.2"),
             nlp_confidence_threshold=data.get("nlp_confidence_threshold", 0),
             nlp_review_model=data.get("nlp_review_model", ""),
+            nlp_omit_position_echo=data.get("nlp_omit_position_echo", True),
+            nlp_omit_emotion=data.get("nlp_omit_emotion", True),
+            nlp_compact_roster=data.get("nlp_compact_roster", True),
+            nlp_descriptions_protagonists_only=data.get("nlp_descriptions_protagonists_only", True),
             excluded_voices=list(data.get("excluded_voices") or []),
             post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
         )

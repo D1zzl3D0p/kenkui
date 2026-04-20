@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol
 
 from kenkui.models import Chapter
@@ -22,6 +23,7 @@ class NLPProvider(Protocol):
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        book_path: Path | None = None,
     ) -> CharacterRoster:
         """Extract the full character roster from *chapters*.
 

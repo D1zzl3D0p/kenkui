@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from kenkui.models import AppConfig
 from kenkui.nlp.providers import get_provider
@@ -67,7 +68,7 @@ def test_ollama_provider_build_roster_returns_character_roster():
     mock_chapter.paragraphs = ["It is a truth universally acknowledged."]
 
     with patch("kenkui.nlp.providers.ollama.run_fast_scan", return_value=mock_fast_scan_result):
-        roster = provider.build_roster([mock_chapter])
+        roster = provider.build_roster([mock_chapter], book_path=Path("/tmp/test_book.epub"))
 
     assert len(roster.characters) == 1
     c = roster.characters[0]

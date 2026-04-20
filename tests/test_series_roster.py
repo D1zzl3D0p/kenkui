@@ -195,7 +195,7 @@ def test_fast_scan_passes_series_roster_to_provider(tmp_path):
 
     captured_series_roster = []
 
-    def _capture_build_roster(chapters, series_roster=None, progress_callback=None):
+    def _capture_build_roster(chapters, series_roster=None, progress_callback=None, book_path=None):
         captured_series_roster.append(series_roster)
         return mock_roster_result
 

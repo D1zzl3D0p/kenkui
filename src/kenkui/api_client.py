@@ -96,6 +96,8 @@ class APIClient:
         chapter_voices: dict | None = None,
         roster_cache_path: str | None = None,
         series_slug: str | None = None,
+        job_nlp_provider: str | None = None,
+        job_nlp_model: str | None = None,
         job_temp: float | None = None,
         job_lsd_decode_steps: int | None = None,
         job_noise_clamp: float | None = None,
@@ -126,8 +128,10 @@ class APIClient:
             payload["roster_cache_path"] = roster_cache_path
         if series_slug:
             payload["series_slug"] = series_slug
-        # Per-job quality overrides — only include when explicitly set
+        # Per-job NLP and quality overrides — only include when explicitly set
         for key, val in {
+            "job_nlp_provider": job_nlp_provider,
+            "job_nlp_model": job_nlp_model,
             "job_temp": job_temp,
             "job_lsd_decode_steps": job_lsd_decode_steps,
             "job_noise_clamp": job_noise_clamp,
@@ -217,11 +221,14 @@ class APIClient:
             json={"book_hash": book_hash, "chapter_selection": chapter_selection},
         )
 
-    def scan_book(self, ebook_path: str, nlp_model: str | None = None) -> dict:
+    def scan_book(self, ebook_path: str, nlp_model: str | None = None,
+                  nlp_provider: str | None = None) -> dict:
         """Start async NLP scan of an ebook. Returns a task dict."""
         body: dict = {"ebook_path": ebook_path}
         if nlp_model:
             body["nlp_model"] = nlp_model
+        if nlp_provider:
+            body["nlp_provider"] = nlp_provider
         return self._request("POST", "/books/scan", json=body)
 
     # --- Voices ---

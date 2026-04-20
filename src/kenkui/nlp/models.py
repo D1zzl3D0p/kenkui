@@ -1,8 +1,13 @@
 """Pydantic schemas for LLM structured-output contracts.
 
-These are the *wire* types passed to and from the LLM.  They are intentionally
-separate from the core ``kenkui.models`` dataclasses so that the LLM layer
-stays self-contained.
+Two layers:
+  - Storage types (CharacterRecord, AttributionItem, …): full rich models used
+    for caching, series tracking, and the app's internal data model.
+  - Wire types (*Wire suffix): slim schemas sent to the LLM.  They omit fields
+    that are server-computed (mention_count, quote_count), server-derived from
+    context (chapters, first/last_appearance in compact mode), or intentionally
+    excluded to save output tokens (emotion, char_start/end).  After each LLM
+    call the wire result is converted back to the full storage type.
 """
 
 from __future__ import annotations
@@ -120,6 +125,7 @@ class AttributionItem(BaseModel):
         )
     )
     emotion: str = Field(
+        default="neutral",
         description=(
             "One of: neutral, happy, sad, angry, fearful, surprised, disgusted"
         )
@@ -128,6 +134,8 @@ class AttributionItem(BaseModel):
         default=3,
         description="Confidence 1-5: 1=very uncertain, 5=very confident"
     )
+    char_start: int | None = None  # LLM echoes back position for verification
+    char_end: int | None = None
 
 
 class AttributionResult(BaseModel):
@@ -156,3 +164,136 @@ class NameNormalizationEntry(BaseModel):
 
 class NameNormalizationResult(BaseModel):
     names: list[NameNormalizationEntry]
+
+
+# ---------------------------------------------------------------------------
+# Wire types — slim schemas sent to the LLM
+# ---------------------------------------------------------------------------
+
+
+class TitleWire(BaseModel):
+    """Slim title type for LLM extraction.
+
+    The full TitleRecord stores chapters/book_slug for series tracking; the LLM
+    only needs to identify the title string itself.  Chapter scope is back-filled
+    from context after extraction.
+    """
+    title: str = Field(description="Title or honorific, e.g. 'Queen of Andor', 'Mr.', 'The Dark One'")
+
+
+class CharacterRecordWire(BaseModel):
+    """Wire schema for LLM roster extraction (compact mode — default).
+
+    Omits: chapters, first/last_appearance (server-derived), mention_count,
+    quote_count (server-computed).  TitleRecord is simplified to TitleWire
+    (title string only; chapter scope back-filled from context).
+    """
+    slug: str = Field(description="Stable underscore slug, e.g. 'elizabeth_bennet'")
+    canonical_name: str = Field(description="Most complete / formal name form")
+    aliases: list[str] = Field(default_factory=list, description="All name variants for this character")
+    titles: list[TitleWire] = Field(default_factory=list, description="Positional titles or honorifics")
+    gender: str = Field(default="", description="Pronouns, e.g. 'he/him', 'she/her', 'they/them'")
+    role: str = Field(default="", description="protagonist, antagonist, supporting, or minor")
+    description: str = Field(default="", description="One-line summary (omit for minor/supporting)")
+
+
+class CharacterRosterWire(BaseModel):
+    """Wire container for compact roster extraction."""
+    characters: list[CharacterRecordWire] = Field(default_factory=list)
+
+
+class CharacterRecordFullWire(BaseModel):
+    """Wire schema for LLM roster extraction (full mode — non-default).
+
+    Includes chapter position fields but uses plain lists (not tuples) to avoid
+    JSON parse errors.  Still omits mention_count/quote_count (server-computed).
+    """
+    slug: str = Field(description="Stable underscore slug, e.g. 'elizabeth_bennet'")
+    canonical_name: str = Field(description="Most complete / formal name form")
+    aliases: list[str] = Field(default_factory=list, description="All name variants for this character")
+    titles: list[TitleWire] = Field(default_factory=list, description="Positional titles or honorifics")
+    gender: str = Field(default="", description="Pronouns, e.g. 'he/him', 'she/her', 'they/them'")
+    role: str = Field(default="", description="protagonist, antagonist, supporting, or minor")
+    description: str = Field(default="", description="One-line summary (omit for minor/supporting)")
+    chapters: list[int] = Field(default_factory=list, description="Chapter indices this character appears in")
+    first_appearance: list | None = Field(default=None, description="[null, chapter_index] for this book")
+    last_appearance: list | None = Field(default=None, description="[null, chapter_index] for this book")
+
+
+class CharacterRosterFullWire(BaseModel):
+    """Wire container for full (non-compact) roster extraction."""
+    characters: list[CharacterRecordFullWire] = Field(default_factory=list)
+
+
+class AttributionItemWire(BaseModel):
+    """Slim attribution wire — quote_id, speaker, confidence only.
+
+    Used when both omit_emotion and omit_echo are enabled (the default).
+    Omits: emotion (not used for TTS), char_start/char_end (not needed when
+    omit_echo is on).
+    """
+    quote_id: int
+    speaker: str = Field(description="Character slug from roster, 'NARRATOR', or 'Unknown'")
+    confidence: int = Field(default=3, description="1 (very uncertain) to 5 (very confident)")
+
+
+class AttributionResultWire(BaseModel):
+    """Wire container for slim attribution results."""
+    attributions: list[AttributionItemWire]
+
+
+# ---------------------------------------------------------------------------
+# Wire → storage type conversions
+# ---------------------------------------------------------------------------
+
+
+def _title_wire_to_record(t: TitleWire) -> TitleRecord:
+    return TitleRecord(title=t.title)
+
+
+def _char_wire_to_record(w: CharacterRecordWire) -> CharacterRecord:
+    return CharacterRecord(
+        slug=w.slug,
+        canonical_name=w.canonical_name,
+        aliases=w.aliases,
+        titles=[_title_wire_to_record(t) for t in w.titles],
+        gender=w.gender,
+        role=w.role,
+        description=w.description,
+    )
+
+
+def _char_full_wire_to_record(w: CharacterRecordFullWire) -> CharacterRecord:
+    first = None
+    if w.first_appearance and len(w.first_appearance) == 2:
+        first = (w.first_appearance[0], int(w.first_appearance[1]))
+    last = None
+    if w.last_appearance and len(w.last_appearance) == 2:
+        last = (w.last_appearance[0], int(w.last_appearance[1]))
+    return CharacterRecord(
+        slug=w.slug,
+        canonical_name=w.canonical_name,
+        aliases=w.aliases,
+        titles=[_title_wire_to_record(t) for t in w.titles],
+        gender=w.gender,
+        role=w.role,
+        description=w.description,
+        chapters=w.chapters,
+        first_appearance=first,
+        last_appearance=last,
+    )
+
+
+def roster_wire_to_full(wire: CharacterRosterWire | CharacterRosterFullWire) -> CharacterRoster:
+    """Convert a wire roster response to a full CharacterRoster."""
+    if isinstance(wire, CharacterRosterFullWire):
+        return CharacterRoster(characters=[_char_full_wire_to_record(c) for c in wire.characters])
+    return CharacterRoster(characters=[_char_wire_to_record(c) for c in wire.characters])
+
+
+def attribution_wire_to_full(wire: AttributionResultWire) -> AttributionResult:
+    """Convert a slim wire attribution to a full AttributionResult."""
+    return AttributionResult(attributions=[
+        AttributionItem(quote_id=w.quote_id, speaker=w.speaker, confidence=w.confidence)
+        for w in wire.attributions
+    ])

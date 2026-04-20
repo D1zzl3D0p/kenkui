@@ -241,6 +241,11 @@ def _build_parser() -> argparse.ArgumentParser:
     queue_resume = queue_sub.add_parser("resume", help="Resume a paused job.")
     queue_resume.add_argument("job_id", help="Job ID to resume.")
 
+    queue_remove = queue_sub.add_parser("remove", help="Remove a job from the queue.")
+    queue_remove.add_argument("job_id", help="Job ID to remove.")
+
+    queue_sub.add_parser("clear", help="Clear all jobs from the queue.")
+
     # ---- kenkui config -----------------------------------------------------
     cfg_p = sub.add_parser("config", help="Create or edit a config file.")
     cfg_p.add_argument(

@@ -46,6 +46,9 @@ class JobCreateRequest(BaseModel):
     roster_cache_path: str | None = None
     # Series slug for cross-book voice consistency (deferred cast assignment)
     series_slug: str | None = None
+    # Per-job NLP provider/model override
+    job_nlp_provider: str | None = None
+    job_nlp_model: str | None = None
     # Per-job quality overrides (None = inherit from AppConfig)
     job_temp: float | None = None
     job_lsd_decode_steps: int | None = None
@@ -124,6 +127,7 @@ class ChapterFilterResponse(BaseModel):
 class BookScanRequest(BaseModel):
     ebook_path: str
     nlp_model: str | None = None
+    nlp_provider: str | None = None
 
 
 # --- Voices ---
@@ -388,6 +392,8 @@ def add_job(request: JobCreateRequest):
         if request.roster_cache_path
         else None,
         series_slug=request.series_slug,
+        job_nlp_provider=request.job_nlp_provider,
+        job_nlp_model=request.job_nlp_model,
         job_temp=request.job_temp,
         job_lsd_decode_steps=request.job_lsd_decode_steps,
         job_noise_clamp=request.job_noise_clamp,
@@ -596,6 +602,7 @@ def scan_book(request: BookScanRequest):
         TaskType.FAST_SCAN, fast_scan,
         ebook_path=request.ebook_path,
         nlp_model=request.nlp_model,
+        nlp_provider=request.nlp_provider,
     )
     return _task_to_response(task)
 

@@ -347,12 +347,11 @@ class WorkerServer:
         from ..nlp import (
             CACHE_DIR,
             book_hash,
-            cache_result,
             get_cached_result,
-            run_attribution,
             run_fast_scan,
         )
         from ..readers import get_reader
+        from ..services.nlp_service import attribute_only
 
         job = item.job
         book_path = job.ebook_path
@@ -416,17 +415,20 @@ class WorkerServer:
             )
             roster = fast_result.roster
 
-        # Run Stage 3-4 attribution
-        nlp_result = run_attribution(
+        # Run Stage 3-4 attribution via the configured provider (cloud or ollama).
+        # Per-job overrides take precedence over the global app config.
+        nlp_provider = job.job_nlp_provider or self._app_config.nlp_provider
+        nlp_model = job.job_nlp_model or self._app_config.nlp_model
+        nlp_result = attribute_only(
             roster=roster,
             chapters=chapters,
-            book_path=book_path,
-            nlp_model=self._app_config.nlp_model,
-            use_cache=False,
-            progress_callback=_cb,
+            ebook_path=str(book_path),
+            nlp_model=nlp_model,
+            nlp_provider=nlp_provider,
+            progress_callback=lambda pct, msg: _cb(msg),
         )
 
-        cache_file = cache_result(nlp_result, book_path)
+        cache_file = CACHE_DIR / f"{book_hash(book_path)}.json"
         job.annotated_chapters_path = cache_file
         self._save()
 

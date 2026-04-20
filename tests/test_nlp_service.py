@@ -125,7 +125,7 @@ def test_fast_scan_progress_callback_receives_int_and_str(tmp_path):
 
     mock_roster = _make_mock_roster()
 
-    def _fake_build_roster(chapters, series_roster=None, progress_callback=None):
+    def _fake_build_roster(chapters, series_roster=None, progress_callback=None, book_path=None):
         if progress_callback:
             progress_callback("Loading spaCy…")
             progress_callback("Building roster…")
@@ -265,7 +265,7 @@ def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
 
     mock_roster = _make_mock_roster()
 
-    def _fake_build_roster(chapters, series_roster=None, progress_callback=None):
+    def _fake_build_roster(chapters, series_roster=None, progress_callback=None, book_path=None):
         if progress_callback:
             progress_callback("Extracting quotes…")
             progress_callback("Clustering entities…")

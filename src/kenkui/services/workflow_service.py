@@ -47,9 +47,11 @@ def apply_multi_voice_setup(
     speaker_voices: dict[str, str],
     roster_cache_path: str | None,
     manifest=None,
+    nlp_provider: str | None = None,
+    nlp_model: str | None = None,
 ) -> dict[str, Any]:
     """Apply the result of a completed multi-voice setup flow to wizard state."""
-    return {
+    update: dict[str, Any] = {
         **state,
         "narration_mode": "multi",
         "speaker_voices": speaker_voices,
@@ -58,6 +60,11 @@ def apply_multi_voice_setup(
         "_series_manifest": manifest,
         "series_slug": getattr(manifest, "slug", None) if manifest else None,
     }
+    if nlp_provider is not None:
+        update["job_nlp_provider"] = nlp_provider
+    if nlp_model is not None:
+        update["job_nlp_model"] = nlp_model
+    return update
 
 
 def apply_chapter_voice_setup(

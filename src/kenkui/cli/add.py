@@ -394,12 +394,13 @@ def _run_fast_scan_wizard(
     client,
     book_path: Path,
     nlp_model: str,
+    nlp_provider: str | None = None,
 ):
     """Run Stage 1-2 fast scan via server task. Returns result dict or None."""
     console.print(f"[cyan]Scanning characters in '{book_path.name}'…[/cyan]")
 
     try:
-        task_info = client.scan_book(str(book_path), nlp_model=nlp_model)
+        task_info = client.scan_book(str(book_path), nlp_model=nlp_model, nlp_provider=nlp_provider)
         task_id = task_info.get("task_id")
         if not task_id:
             console.print(f"[red]Server returned no task ID: {task_info}[/red]")
@@ -907,8 +908,12 @@ def _run_series_setup(
 # ---------------------------------------------------------------------------
 
 
-def _check_multivoice_requirements(client) -> bool:
+def _check_multivoice_requirements(client, app_config=None) -> bool:
     """Check multivoice readiness via server and show status table.
+
+    When ``app_config.nlp_provider`` is not ``"ollama"``, checks that
+    credentials are configured for the cloud provider instead of verifying
+    spaCy and Ollama.
 
     Returns True if all requirements are met or the user chooses to continue
     anyway.
@@ -917,6 +922,42 @@ def _check_multivoice_requirements(client) -> bool:
     from rich.table import Table
     from rich.text import Text
 
+    nlp_provider = getattr(app_config, "nlp_provider", "ollama") if app_config else "ollama"
+
+    if nlp_provider != "ollama":
+        # Cloud provider: check credentials instead of spaCy/Ollama.
+        from kenkui.config import load_provider_credentials
+        creds = load_provider_credentials()
+        provider_cred = creds.get(nlp_provider)
+        cred_ok = bool(provider_cred and provider_cred.api_key)
+
+        checks: list[tuple[str, bool, str]] = [
+            (
+                f"{nlp_provider} API key",
+                cred_ok,
+                "Run: kenkui configure-provider" if not cred_ok else "",
+            ),
+        ]
+        tbl = Table(title=f"Multi-Voice Requirements ({nlp_provider})", show_header=True, header_style="bold")
+        tbl.add_column("Requirement", min_width=30)
+        tbl.add_column("Status", width=10)
+        tbl.add_column("Fix", overflow="fold")
+        for name, ok, fix in checks:
+            row_status = Text("✓ Ready", style="green") if ok else Text("✗ Missing", style="red bold")
+            tbl.add_row(name, row_status, fix)
+        console.print(tbl)
+
+        all_ok = all(ok for _, ok, _ in checks)
+        if all_ok:
+            return True
+
+        proceed = _wizard_execute(inquirer.confirm(
+            message="Continue anyway? (will fail at runtime without a valid API key)",
+            default=False,
+        ))
+        return proceed
+
+    # Ollama provider: check spaCy + Ollama server.
     try:
         status = client.get_multivoice_status()
     except Exception as exc:
@@ -927,7 +968,7 @@ def _check_multivoice_requirements(client) -> bool:
     ollama_ok = status.get("ollama_ok", False)
     message = status.get("message", "")
 
-    checks: list[tuple[str, bool, str]] = [
+    ollama_checks: list[tuple[str, bool, str]] = [
         (
             "spaCy model (en_core_web_sm)",
             spacy_ok,
@@ -944,7 +985,7 @@ def _check_multivoice_requirements(client) -> bool:
     tbl.add_column("Requirement", min_width=30)
     tbl.add_column("Status", width=10)
     tbl.add_column("Fix", overflow="fold")
-    for name, ok, fix in checks:
+    for name, ok, fix in ollama_checks:
         row_status = Text("✓ Ready", style="green") if ok else Text("✗ Missing", style="red bold")
         tbl.add_row(name, row_status, fix)
     console.print(tbl)
@@ -952,7 +993,7 @@ def _check_multivoice_requirements(client) -> bool:
     if message:
         console.print(f"[dim]{message}[/dim]")
 
-    all_ok = all(ok for _, ok, _ in checks)
+    all_ok = all(ok for _, ok, _ in ollama_checks)
     if all_ok:
         return True
 
@@ -1240,11 +1281,17 @@ def _submenu_voice_mode(state: dict, app_config, client) -> dict:
     from InquirerPy import inquirer
     from ..services.workflow_service import set_single_voice_mode
 
+    nlp_provider = getattr(app_config, "nlp_provider", "ollama")
+    if nlp_provider == "ollama":
+        multi_label = "Multi-voice (NLP) — voice per character (requires spaCy + Ollama)"
+    else:
+        multi_label = f"Multi-voice (NLP) — voice per character (via {nlp_provider})"
+
     mode = _wizard_execute(inquirer.select(
         message="Narration mode:",
         choices=[
             {"name": "Single narrator  — one voice reads everything", "value": "single"},
-            {"name": "Multi-voice (NLP) — voice per character (requires spaCy + Ollama)", "value": "multi"},
+            {"name": multi_label, "value": "multi"},
             {"name": "Chapter-voice    — assign a voice per chapter", "value": "chapter"},
         ],
     ))
@@ -1257,18 +1304,54 @@ def _submenu_voice_mode(state: dict, app_config, client) -> dict:
     return state
 
 
+def _prompt_nlp_provider(app_config) -> tuple[str, str]:
+    """Let the user pick an NLP provider for this scan session.
+
+    Returns ``(provider_name, model_name)``.  Skips the prompt and returns
+    the configured defaults when no cloud credentials are stored (Ollama only).
+    """
+    from InquirerPy import inquirer
+    from ..config import load_provider_credentials
+
+    default_provider = getattr(app_config, "nlp_provider", "ollama")
+    default_model = getattr(app_config, "nlp_model", "llama3.2")
+
+    creds = load_provider_credentials()
+    choices = [{"name": "Ollama (local)", "value": ("ollama", default_model)}]
+    for provider, c in creds.items():
+        if c.api_key:
+            model = c.default_model or provider
+            choices.append({"name": f"{provider}  ({model})", "value": (provider, model)})
+
+    if len(choices) == 1:
+        return choices[0]["value"]
+
+    current_default = next(
+        (ch["value"] for ch in choices if ch["value"][0] == default_provider),
+        choices[0]["value"],
+    )
+    return _wizard_execute(inquirer.select(
+        message="NLP provider for this scan:",
+        choices=choices,
+        default=current_default,
+    ))
+
+
 def _setup_multi_voice(state: dict, app_config, client) -> dict:
     """Run the full multi-voice NLP setup flow. Returns updated state."""
+    from dataclasses import replace as _replace
     from ..services.setup_service import cache_roster_result, parse_fast_scan_result
     from ..services.workflow_service import apply_multi_voice_setup
 
-    if not _check_multivoice_requirements(client):
+    provider, nlp_model = _prompt_nlp_provider(app_config)
+    scan_config = _replace(app_config, nlp_provider=provider, nlp_model=nlp_model)
+
+    if not _check_multivoice_requirements(client, scan_config):
         return state
 
     book_path = state["_book_path"]
-    nlp_model = getattr(app_config, "nlp_model", None)
 
-    scan_raw = _run_fast_scan_wizard(client, book_path, nlp_model)
+    scan_raw = _run_fast_scan_wizard(client, book_path, nlp_model=nlp_model, nlp_provider=provider)
     if scan_raw is None:
         console.print("[yellow]Character scan failed; keeping current mode.[/yellow]")
         return state
@@ -1302,6 +1385,8 @@ def _setup_multi_voice(state: dict, app_config, client) -> dict:
         speaker_voices=speaker_voices,
         roster_cache_path=roster_cache_path,
         manifest=manifest,
+        nlp_provider=provider,
+        nlp_model=nlp_model,
     )
 
 

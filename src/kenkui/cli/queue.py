@@ -329,6 +329,32 @@ def cmd_queue(args) -> int:
                 return 1
             return 0
 
+        if queue_command == "remove":
+            job_id = getattr(args, "job_id", None)
+            if not job_id:
+                console.print("[red]Error: job_id is required.[/red]")
+                return 1
+            try:
+                success = client.remove_job(job_id)
+                if success:
+                    console.print(f"[green]Job {job_id} removed.[/green]")
+                else:
+                    console.print(f"[red]Cannot remove job {job_id} — it is currently processing.[/red]")
+                    return 1
+            except Exception as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                return 1
+            return 0
+
+        if queue_command == "clear":
+            try:
+                client.clear_queue()
+                console.print("[green]Queue cleared.[/green]")
+            except Exception as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                return 1
+            return 0
+
         if queue_command == "start":
             try:
                 client.start_processing()

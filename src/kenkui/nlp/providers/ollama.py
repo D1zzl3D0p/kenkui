@@ -84,12 +84,14 @@ class OllamaProvider:
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        book_path: Path | None = None,
     ) -> CharacterRoster:
         """Run run_fast_scan and convert output to CharacterRecord roster."""
         if progress_callback:
             progress_callback("Building character roster via Ollama")
 
-        book_path = Path(getattr(chapters[0], "_source_path", "/tmp/kenkui_tmp.epub"))
+        if book_path is None:
+            raise ValueError("OllamaProvider.build_roster() requires book_path")
 
         fast_scan_result = run_fast_scan(
             chapters,

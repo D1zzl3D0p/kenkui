@@ -204,6 +204,50 @@ def cache_roster(result: "FastScanResult", book_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Per-chunk checkpoint cache
+# ---------------------------------------------------------------------------
+
+
+def _chunk_cache_key(book_h: str, chapter_indices: list[int]) -> str:
+    """Deterministic 16-hex cache key for one roster chunk."""
+    indices_str = ",".join(str(i) for i in sorted(chapter_indices))
+    return hashlib.sha256(f"{book_h}:{indices_str}".encode()).hexdigest()[:16]
+
+
+def get_cached_chunk_roster(book_path: Path, chapter_indices: list[int]) -> "CharacterRoster | None":
+    """Return a cached ``CharacterRoster`` for one chunk, or None."""
+    from kenkui.nlp.models import CharacterRoster
+
+    bh = book_hash(book_path)
+    cache_dir = _get_config_dir() / "nlp_cache"
+    key = _chunk_cache_key(bh, chapter_indices)
+    cache_file = cache_dir / f"{bh}-chunk-{key}.json"
+    if not cache_file.exists():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        return CharacterRoster.model_validate(data)
+    except Exception as exc:
+        logger.warning("Failed to load chunk cache %s: %s", cache_file, exc)
+        return None
+
+
+def cache_chunk_roster(roster: "CharacterRoster", book_path: Path, chapter_indices: list[int]) -> Path:
+    """Write a partial ``CharacterRoster`` for one chunk to disk."""
+    bh = book_hash(book_path)
+    cache_dir = _get_config_dir() / "nlp_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = _chunk_cache_key(bh, chapter_indices)
+    cache_file = cache_dir / f"{bh}-chunk-{key}.json"
+    cache_file.write_text(
+        json.dumps(roster.model_dump(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.debug("Chunk roster cache written: %s", cache_file)
+    return cache_file
+
+
+# ---------------------------------------------------------------------------
 # Mention counting helper
 # ---------------------------------------------------------------------------
 
@@ -728,7 +772,39 @@ def _attribution_to_segments(
     """
     from kenkui.nlp.quotes import extract_quotes
     quotes = extract_quotes(chapter.paragraphs)
+    quote_by_id = {q.id: q for q in quotes}
+
+    # Verify LLM-returned char positions match pre-extracted quote positions.
+    # On mismatch, clear the position fields so downstream falls back to id-based matching.
+    for item in attr_result.attributions:
+        if item.char_start is not None and item.quote_id in quote_by_id:
+            expected = quote_by_id[item.quote_id]
+            if item.char_start != expected.char_offset:
+                logger.warning(
+                    "Attribution position mismatch for quote_id=%d "
+                    "(expected offset %d, got %d) — using id-based match",
+                    item.quote_id, expected.char_offset, item.char_start,
+                )
+                item.char_start = None
+                item.char_end = None
+
     attributions = {item.quote_id: item for item in attr_result.attributions}
+
+    # Fill in any quote IDs the LLM skipped — without this, skipped quotes fall
+    # through to NARRATOR in _split_paragraph_by_quotes instead of at least
+    # being rendered as Unknown (which uses the narrator voice but is isolated
+    # as its own segment rather than merged into surrounding narrative text).
+    from kenkui.nlp.models import AttributionItem as _AttributionItem
+    for q in quotes:
+        if q.id not in attributions:
+            logger.warning(
+                "Chapter %d: quote id=%d missing from LLM attribution — defaulting to Unknown",
+                chapter.index, q.id,
+            )
+            attributions[q.id] = _AttributionItem(
+                quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1
+            )
+
     return _build_segments(chapter.paragraphs, quotes, attributions)
 
 
@@ -778,6 +854,8 @@ __all__ = [
     "cache_result",
     "get_cached_roster",
     "cache_roster",
+    "get_cached_chunk_roster",
+    "cache_chunk_roster",
     "CACHE_DIR",
     "book_hash",
     "_count_mentions",
