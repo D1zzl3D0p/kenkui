@@ -37,7 +37,7 @@ class TestHelpAndVersion:
             text=True,
         )
         assert r.returncode == 0
-        assert "0." in r.stdout or "0." in r.stderr
+        assert "kenkui" in r.stdout.lower() or "kenkui" in r.stderr.lower()
 
     def test_subcommands_shown_in_help(self):
         r = subprocess.run(

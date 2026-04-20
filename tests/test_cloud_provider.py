@@ -2,7 +2,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 from kenkui.nlp.providers.cloud import (
     estimate_tokens,
-    compute_output_budget,
+    compute_roster_output_budget,
+    compute_attribution_output_budget,
     needs_chunking,
     CloudProvider,
 )
@@ -15,15 +16,28 @@ def test_estimate_tokens_approx():
     assert 900 <= estimate_tokens(text) <= 1100
 
 
-def test_compute_output_budget_reserves_20_percent():
-    budget = compute_output_budget(context_limit=100_000, estimated_chars=0)
-    assert budget == 20_000  # 20% of 100_000
+def test_compute_roster_output_budget_minimum():
+    # With 0 characters, should return minimum floor of 2048
+    budget = compute_roster_output_budget(estimated_chars=0, compact=True)
+    assert budget == 2048
 
 
-def test_compute_output_budget_scales_with_characters():
-    # More characters → larger budget (more characters in output)
-    budget_few = compute_output_budget(context_limit=500_000, estimated_chars=10)
-    budget_many = compute_output_budget(context_limit=500_000, estimated_chars=200)
+def test_compute_roster_output_budget_scales_with_characters():
+    # More characters → larger budget
+    budget_few = compute_roster_output_budget(estimated_chars=10, compact=True)
+    budget_many = compute_roster_output_budget(estimated_chars=200, compact=True)
+    assert budget_many > budget_few
+
+
+def test_compute_attribution_output_budget_minimum():
+    # With 0 quotes, should return floor of 512
+    budget = compute_attribution_output_budget(num_quotes=0)
+    assert budget == 512
+
+
+def test_compute_attribution_output_budget_scales_with_quotes():
+    budget_few = compute_attribution_output_budget(num_quotes=10)
+    budget_many = compute_attribution_output_budget(num_quotes=100)
     assert budget_many > budget_few
 
 
@@ -208,6 +222,35 @@ def test_split_chapters_into_segments_overlap():
             seg_indices = {ch.index for ch in segments[i]}
             next_indices = {ch.index for ch in segments[i + 1]}
             assert seg_indices & next_indices  # non-empty overlap
+
+
+from kenkui.nlp.providers.cloud import _call_with_rate_limit_retry
+from instructor.exceptions import IncompleteOutputException
+
+
+def test_call_with_rate_limit_retry_doubles_max_tokens_on_incomplete():
+    """IncompleteOutputException triggers a retry with doubled max_tokens."""
+    calls = []
+
+    def fake_fn(**kwargs):
+        calls.append(kwargs.get("max_tokens"))
+        if len(calls) == 1:
+            raise IncompleteOutputException(last_completion=None)
+        return "ok"
+
+    result = _call_with_rate_limit_retry(fake_fn, max_tokens=1000)
+    assert result == "ok"
+    assert calls[0] == 1000
+    assert calls[1] == 2000
+
+
+def test_call_with_rate_limit_retry_raises_after_max_incomplete_retries():
+    """After exhausting retries, IncompleteOutputException is re-raised."""
+    def always_incomplete(**kwargs):
+        raise IncompleteOutputException(last_completion=None)
+
+    with pytest.raises(IncompleteOutputException):
+        _call_with_rate_limit_retry(always_incomplete, max_tokens=512)
 
 
 from kenkui.nlp.models import AttributionItem, AttributionResult

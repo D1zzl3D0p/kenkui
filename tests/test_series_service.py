@@ -166,7 +166,7 @@ class TestCreateAndMatchSeriesHelpers:
 
         monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
         from kenkui.models import CharacterInfo, FastScanResult
-        from kenkui.nlp.models import AliasGroup, CharacterRoster
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
         from kenkui.services.series_service import match_series_characters, save_series, SeriesCharacterEntry, SeriesEntry
 
         save_series(
@@ -178,7 +178,7 @@ class TestCreateAndMatchSeriesHelpers:
         )
 
         fast_result = FastScanResult(
-            roster=CharacterRoster(characters=[AliasGroup(canonical="Rand al'Thor", aliases=["Rand"])]),
+            roster=CharacterRoster(characters=[CharacterRecord(slug="rand_althor", canonical_name="Rand al'Thor", aliases=["Rand"])]),
             characters=[CharacterInfo(character_id="Rand al'Thor", display_name="Rand al'Thor")],
             book_hash="abc",
         )

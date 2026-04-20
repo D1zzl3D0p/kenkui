@@ -395,7 +395,7 @@ class TestRenderMultiVoice:
             patch("kenkui.workers.load_voice", return_value="alba"),
             tempfile.TemporaryDirectory() as td,
         ):
-            result = _render_multi_voice(chapter, model, {}, Path(td), queue, 1, _noop_log)
+            result = _render_multi_voice(chapter, model, {"speak_chapter_titles": False}, Path(td), queue, 1, _noop_log)
         assert result is not None
         assert isinstance(result, AudioResult)
         # generate_audio called once per segment

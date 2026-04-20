@@ -423,6 +423,7 @@ class AppConfig:
     # --- Multi-voice / NLP ---
     nlp_provider: str = "ollama"  # "ollama" | "anthropic" | "openai" | "google" | any LiteLLM prefix
     nlp_model: str = "llama3.2"   # model name; "" = use provider default from credentials.toml
+    nlp_roster_model: str = ""          # model for character discovery pass; "" = same as nlp_model
     nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
     nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
     # --- Output token reduction (on by default) ---
@@ -431,6 +432,10 @@ class AppConfig:
     nlp_compact_roster: bool = True       # roster: skip chapters/appearances (derived server-side)
     nlp_descriptions_protagonists_only: bool = True   # roster: only describe protagonist/antagonist roles
     excluded_voices: list[str] = field(default_factory=list)
+    # --- Credits chapter (audio-only, appended after final chapter, no chapter marker) ---
+    credits_enabled: bool = True
+    credits_acknowledgements: str = ""
+    credits_license: str = ""
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
 
@@ -458,6 +463,7 @@ class AppConfig:
             "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
             "nlp_provider": self.nlp_provider,
             "nlp_model": self.nlp_model,
+            "nlp_roster_model": self.nlp_roster_model,
             "nlp_confidence_threshold": self.nlp_confidence_threshold,
             "nlp_review_model": self.nlp_review_model,
             "nlp_omit_position_echo": self.nlp_omit_position_echo,
@@ -465,6 +471,9 @@ class AppConfig:
             "nlp_compact_roster": self.nlp_compact_roster,
             "nlp_descriptions_protagonists_only": self.nlp_descriptions_protagonists_only,
             "excluded_voices": list(self.excluded_voices),
+            "credits_enabled": self.credits_enabled,
+            "credits_acknowledgements": self.credits_acknowledgements,
+            "credits_license": self.credits_license,
             "post_processing": self.post_processing.to_dict(),
         }
 
@@ -495,6 +504,7 @@ class AppConfig:
             else None,
             nlp_provider=data.get("nlp_provider", "ollama"),
             nlp_model=data.get("nlp_model", "llama3.2"),
+            nlp_roster_model=data.get("nlp_roster_model", ""),
             nlp_confidence_threshold=data.get("nlp_confidence_threshold", 0),
             nlp_review_model=data.get("nlp_review_model", ""),
             nlp_omit_position_echo=data.get("nlp_omit_position_echo", True),
@@ -502,6 +512,9 @@ class AppConfig:
             nlp_compact_roster=data.get("nlp_compact_roster", True),
             nlp_descriptions_protagonists_only=data.get("nlp_descriptions_protagonists_only", True),
             excluded_voices=list(data.get("excluded_voices") or []),
+            credits_enabled=data.get("credits_enabled", True),
+            credits_acknowledgements=data.get("credits_acknowledgements", ""),
+            credits_license=data.get("credits_license", ""),
             post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
         )
 

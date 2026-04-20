@@ -1196,26 +1196,65 @@ def _state_to_profile(state: dict) -> dict:
     return confirmation_state_to_profile(state)
 
 
+def _print_status_panel(state: dict, app_config) -> None:
+    """Print a read-only Rich panel showing current job settings above the hub menu."""
+    from rich.panel import Panel
+    from rich.text import Text
+
+    mode = state.get("narration_mode", "single")
+    voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
+    chapter_selection = state.get("chapter_selection", {})
+    preset = chapter_selection.get("preset", getattr(app_config, "default_chapter_preset", "content-only"))
+    included = chapter_selection.get("included", [])
+    chapter_count = f"{len(included)} selected" if included else "preset"
+    quality_overrides = state.get("quality_overrides") or {}
+
+    # Mode + NLP line
+    if state.get("chapter_voices"):
+        mode_str = "Chapter-voice"
+        nlp_str = "—"
+    elif mode == "multi":
+        nlp_provider = state.get("job_nlp_provider") or getattr(app_config, "nlp_provider", "ollama")
+        nlp_model = state.get("job_nlp_model") or getattr(app_config, "nlp_model", "llama3.2")
+        mode_str = "Multi-voice"
+        nlp_str = f"{nlp_provider} · {nlp_model}"
+    else:
+        mode_str = "Single narrator"
+        nlp_str = "—"
+
+    # Quality line
+    temp = quality_overrides.get("temp") or getattr(app_config, "temp", 0.7)
+    steps = quality_overrides.get("lsd_decode_steps") or getattr(app_config, "lsd_decode_steps", 1)
+    bitrate = getattr(app_config, "m4b_bitrate", "96k")
+
+    lines = [
+        f"  [bold]Mode:[/bold]          {mode_str}",
+        f"  [bold]NLP:[/bold]           {nlp_str}",
+        f"  [bold]TTS Provider:[/bold]  Kokoro · local",
+        f"  [bold]Narrator:[/bold]      {voice}",
+        f"  [bold]Chapters:[/bold]      {preset} ({chapter_count})",
+        f"  [bold]Quality:[/bold]       temp {temp} · {steps} LSD steps · {bitrate}",
+    ]
+
+    panel = Panel(
+        "\n".join(lines),
+        title="Current Settings",
+        expand=False,
+        border_style="dim",
+    )
+    console.print(panel)
+
+
 def _build_confirmation_choices(state: dict, app_config) -> list:
     """Build InquirerPy select choices for the confirmation screen."""
-    from InquirerPy.base.control import Choice, Separator
-    from ..services.confirmation_service import summarize_confirmation_state
-
-    summary = summarize_confirmation_state(state, app_config)
+    from InquirerPy.base.control import Choice
 
     return [
-        Separator(f"  Book:      {summary['book_name']}"),
-        Separator(f"  Chapters:  {summary['chapter_line']}"),
-        Separator(f"  Voice/NLP: {summary['voice_line']}"),
-        Separator(f"  Quality:   {summary['quality_line']}"),
-        Separator(f"  Output:    {summary['output_line']}"),
-        Separator(""),
         Choice(value="submit",         name="  Submit Job"),
-        Choice(value="chapters",       name="  Chapters \u2192"),
-        Choice(value="voice",          name="  Voice / NLP \u2192"),
+        Choice(value="narration",      name="  Narration Mode \u2192"),
         Choice(value="quality",        name="  Audio Quality \u2192"),
         Choice(value="postprocessing", name="  Post-Processing \u2192"),
-        Choice(value="voices",         name="  Manage Voices \u2192"),
+        Choice(value="advanced",       name="  Advanced \u2192"),
         Choice(value="cancel",         name="  Cancel"),
     ]
 
@@ -1248,59 +1287,78 @@ def _submenu_chapters(state: dict, app_config, client) -> dict:
     return state
 
 
-def _submenu_voice(state: dict, app_config, client) -> dict:
-    """Voice/NLP submenu. Returns updated state."""
+def _submenu_narration_mode(state: dict, app_config, client) -> dict:
+    """Narration Mode top-level submenu. Returns updated state."""
     from InquirerPy import inquirer
-    from ..services.workflow_service import describe_voice_mode, reset_voice_mode
+    from ..services.workflow_service import reset_voice_mode, set_single_voice_mode
 
-    mode_label = describe_voice_mode(state)
+    mode_label = _describe_mode_for_menu(state, app_config)
 
     action = _wizard_execute(inquirer.select(
-        message="Voice / NLP",
+        message="Narration Mode",
         choices=[
-            {"name": f"Keep current ({state.get('voice', '')} / {mode_label})", "value": "keep"},
-            {"name": "Change narrator voice...", "value": "select"},
-            {"name": "Change mode...", "value": "mode"},
+            {"name": f"Keep current ({mode_label})", "value": "keep"},
+            {"name": "Change mode / provider…", "value": "mode"},
+            {"name": "Change narrator voice…", "value": "voice"},
             {"name": "Reset to defaults (single narrator)", "value": "reset"},
             {"name": "Back", "value": "back"},
         ],
     ))
     if action == "reset":
         state = reset_voice_mode(state, app_config)
-    elif action == "select":
-        voice = _prompt_voice(default=state.get("voice", app_config.default_voice),
-                              message="Select narrator voice:", client=client)
+    elif action == "voice":
+        voice = _prompt_voice(
+            default=state.get("voice", app_config.default_voice),
+            message="Select narrator voice:",
+            client=client,
+        )
         state = {**state, "voice": voice}
     elif action == "mode":
-        state = _submenu_voice_mode(state, app_config, client)
+        mode = _wizard_execute(inquirer.select(
+            message="Narration mode:",
+            choices=[
+                {"name": "Single narrator  — one voice reads everything", "value": "single"},
+                {"name": "Multi-voice (NLP) — voice per character (deferred scan)", "value": "multi"},
+                {"name": "Chapter-voice    — assign a voice per chapter", "value": "chapter"},
+            ],
+        ))
+        if mode == "single":
+            state = set_single_voice_mode(state)
+        elif mode == "multi":
+            state = _setup_multi_voice(state, app_config, client)
+        elif mode == "chapter":
+            state = _setup_chapter_voice(state, client)
     return state
 
 
-def _submenu_voice_mode(state: dict, app_config, client) -> dict:
-    """Mode selection for Voice / NLP submenu."""
+def _describe_mode_for_menu(state: dict, app_config) -> str:
+    """Short label for current narration mode shown in the Narration Mode submenu."""
+    mode = state.get("narration_mode", "single")
+    if state.get("chapter_voices"):
+        return "chapter-voice"
+    if mode == "multi":
+        provider = state.get("job_nlp_provider") or getattr(app_config, "nlp_provider", "ollama")
+        model = state.get("job_nlp_model") or getattr(app_config, "nlp_model", "llama3.2")
+        return f"multi-voice · {provider} · {model}"
+    return "single narrator"
+
+
+def _submenu_advanced(state: dict, app_config, client) -> dict:
+    """Advanced submenu: chapter selection and voice management."""
     from InquirerPy import inquirer
-    from ..services.workflow_service import set_single_voice_mode
 
-    nlp_provider = getattr(app_config, "nlp_provider", "ollama")
-    if nlp_provider == "ollama":
-        multi_label = "Multi-voice (NLP) — voice per character (requires spaCy + Ollama)"
-    else:
-        multi_label = f"Multi-voice (NLP) — voice per character (via {nlp_provider})"
-
-    mode = _wizard_execute(inquirer.select(
-        message="Narration mode:",
+    action = _wizard_execute(inquirer.select(
+        message="Advanced",
         choices=[
-            {"name": "Single narrator  — one voice reads everything", "value": "single"},
-            {"name": multi_label, "value": "multi"},
-            {"name": "Chapter-voice    — assign a voice per chapter", "value": "chapter"},
+            {"name": "Chapter selection…", "value": "chapters"},
+            {"name": "Manage Voices…", "value": "voices"},
+            {"name": "Back", "value": "back"},
         ],
     ))
-    if mode == "single":
-        state = set_single_voice_mode(state)
-    elif mode == "multi":
-        state = _setup_multi_voice(state, app_config, client)
-    elif mode == "chapter":
-        state = _setup_chapter_voice(state, client)
+    if action == "chapters":
+        state = _submenu_chapters(state, app_config, client)
+    elif action == "voices":
+        _submenu_manage_voices(state, app_config, client)
     return state
 
 
@@ -1338,56 +1396,101 @@ def _prompt_nlp_provider(app_config) -> tuple[str, str]:
 
 
 def _setup_multi_voice(state: dict, app_config, client) -> dict:
-    """Run the full multi-voice NLP setup flow. Returns updated state."""
+    """Configure multi-voice mode with deferred NLP scan. Returns updated state.
+
+    The character scan and voice assignment now happen in the worker at processing
+    time. This function only collects the NLP provider/model, narrator fallback
+    voice, and optional series slug.
+    """
     from dataclasses import replace as _replace
-    from ..services.setup_service import cache_roster_result, parse_fast_scan_result
     from ..services.workflow_service import apply_multi_voice_setup
 
+    # 1. Choose NLP provider/model for this job
     provider, nlp_model = _prompt_nlp_provider(app_config)
     scan_config = _replace(app_config, nlp_provider=provider, nlp_model=nlp_model)
 
+    # 2. Check requirements (informational — non-blocking on proceed=True)
     if not _check_multivoice_requirements(client, scan_config):
         return state
 
-    book_path = state["_book_path"]
-
-    scan_raw = _run_fast_scan_wizard(client, book_path, nlp_model=nlp_model, nlp_provider=provider)
-    if scan_raw is None:
-        console.print("[yellow]Character scan failed; keeping current mode.[/yellow]")
-        return state
-
-    scan_result = parse_fast_scan_result(scan_raw)
-
-    manifest, inherited_voices, pinned = _run_series_setup(
-        fast_result=scan_result, mode="multi", client=client
-    )
-
+    # 3. Choose narrator/fallback voice
     voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
-    args = state.get("_args")
-    series_name = manifest.name if manifest else None
-
-    speaker_voices = _prompt_multivoice_character_voices(
-        scan_result,
-        default_voice=voice,
-        args=args,
+    console.print()
+    console.print("[bold]Select fallback narrator voice:[/bold]")
+    narrator_voice = _prompt_voice(
+        default=voice,
+        message="NARRATOR fallback voice:",
         client=client,
-        inherited_voices=inherited_voices,
-        pinned=pinned,
-        series_name=series_name,
     )
+    _check_hf_auth(narrator_voice, state.get("_args"))
 
-    roster_cache_path = cache_roster_result(scan_result, book_path)
-    if roster_cache_path is None:
-        console.print("[dim]Could not cache roster[/dim]")
+    # 4. Optional series selection (slug only — character matching deferred to worker)
+    manifest, series_slug = _prompt_series_slug(client)
 
+    # 5. Apply deferred multi-voice state (scan + voice assignment happen in worker)
     return apply_multi_voice_setup(
-        state,
-        speaker_voices=speaker_voices,
-        roster_cache_path=roster_cache_path,
+        {**state, "voice": narrator_voice},
+        speaker_voices={"NARRATOR": narrator_voice},
+        roster_cache_path=None,
         manifest=manifest,
         nlp_provider=provider,
         nlp_model=nlp_model,
     )
+
+
+def _prompt_series_slug(client) -> "tuple[object | None, str | None]":
+    """Prompt for series membership without running a character scan.
+
+    Returns (manifest_or_None, slug_or_None). Character matching is deferred
+    to the worker; only the series slug is stored in the job.
+    """
+    from InquirerPy import inquirer
+    from ..series import SeriesManifest, slugify
+
+    console.print()
+    wants_series = _wizard_execute(inquirer.confirm(
+        message="Is this book part of a series?",
+        default=False,
+    ))
+    if not wants_series:
+        return None, None
+
+    # Fetch series list
+    if client is not None:
+        try:
+            series_data = client.list_series()
+            series_entries = series_data.get("series", [])
+            series_choices = [{"name": s["name"], "value": s["slug"]} for s in series_entries]
+        except Exception as exc:
+            console.print(f"[yellow]Could not load series list: {exc}[/yellow]")
+            series_choices = []
+    else:
+        from ..series import list_series as _local_list_series
+        series_choices = [{"name": s.name, "value": s.slug} for s in _local_list_series()]
+
+    series_choices.append({"name": "[ + New series ]", "value": "__new__"})
+
+    chosen_slug = _wizard_execute(inquirer.select(
+        message="Select series:",
+        choices=series_choices,
+    ))
+
+    if chosen_slug == "__new__":
+        series_name = _wizard_execute(inquirer.text(message="Series name:")).strip()
+        if not series_name:
+            return None, None
+        slug = slugify(series_name)
+        if client is not None:
+            try:
+                created = client.create_empty_series(series_name)
+                slug = created.get("slug", slug)
+            except Exception as exc:
+                console.print(f"[yellow]Could not create series: {exc}[/yellow]")
+        manifest = SeriesManifest(name=series_name, slug=slug, updated_at="", characters=[])
+        return manifest, slug
+
+    # Existing series — return slug only (no character matching needed)
+    return None, chosen_slug
 
 
 def _setup_chapter_voice(state: dict, client) -> dict:
@@ -1506,31 +1609,92 @@ def _run_confirmation_screen(book_path, app_config, args, client=None):
 
     try:
         while True:
+            _print_status_panel(state, app_config)
             choices = _build_confirmation_choices(state, app_config)
             action = _wizard_execute(inquirer.select(
                 message=f"kenkui \u2014 {book_path.name}",
                 choices=choices,
-                max_height="80%",
+                max_height="60%",
             ))
 
             if action == "submit":
                 save_last_profile(_state_to_profile(state))
                 return _state_to_job_kwargs(state)
-            elif action == "chapters":
-                state = _submenu_chapters(state, app_config, client)
-            elif action == "voice":
-                state = _submenu_voice(state, app_config, client)
+            elif action == "narration":
+                state = _submenu_narration_mode(state, app_config, client)
             elif action == "quality":
                 state = _submenu_audio_quality(state, app_config)
             elif action == "postprocessing":
                 state = _submenu_post_processing(state, app_config)
-            elif action == "voices":
-                _submenu_manage_voices(state, app_config, client)
+            elif action == "advanced":
+                state = _submenu_advanced(state, app_config, client)
             elif action is None or action == "cancel":
                 return None
     finally:
         if _owns_client:
             client.close()
+
+
+# ---------------------------------------------------------------------------
+# Post-submission requirement validation
+# ---------------------------------------------------------------------------
+
+
+def _check_job_requirements(job_kwargs: dict, app_config) -> None:
+    """Print the post-submission confirmation block with requirement warnings.
+
+    Checks API key env vars for cloud providers, VRAM for Ollama.
+    Warnings are non-blocking — the job is already queued.
+    """
+    from ..system_check import (
+        check_api_key,
+        get_api_key_var,
+        get_available_vram_gb,
+        get_ollama_model_vram_gb,
+    )
+
+    mode = job_kwargs.get("narration_mode", "single")
+    if mode != "multi":
+        return
+
+    provider = job_kwargs.get("job_nlp_provider") or getattr(app_config, "nlp_provider", "ollama")
+    model = job_kwargs.get("job_nlp_model") or getattr(app_config, "nlp_model", "llama3.2")
+
+    if provider == "ollama":
+        required_gb = get_ollama_model_vram_gb(model)
+        available_gb = get_available_vram_gb()
+
+        console.print(f"  Mode:     Multi-voice · Ollama · {model}")
+        if required_gb:
+            console.print(f"  Requires: GPU recommended ({required_gb:.0f} GB VRAM)")
+
+        if (
+            available_gb is not None
+            and required_gb is not None
+            and available_gb < required_gb
+        ):
+            console.print()
+            console.print(
+                f"  [yellow]\u26a0  System reports {available_gb:.1f} GB available VRAM — you may not have[/yellow]"
+            )
+            console.print(
+                f"  [yellow]   enough to run this model reliably. Consider a smaller[/yellow]"
+            )
+            console.print(
+                "  [yellow]   model or switching to a cloud provider.[/yellow]"
+            )
+    else:
+        env_var = get_api_key_var(provider)
+        console.print(f"  Mode:     Multi-voice · {provider.capitalize()} · {model}")
+        if env_var:
+            console.print(f"  Requires: internet · {env_var}")
+
+        if not check_api_key(provider):
+            console.print()
+            console.print(f"  [yellow]\u26a0  {env_var} is not set.[/yellow]")
+            console.print(
+                "  [yellow]   Run `kenkui configure-provider` to add your credentials.[/yellow]"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1590,6 +1754,12 @@ def _poll_until_done(client, job_id: str) -> int:
                 console.print(
                     f"\n[green]Done! Output: {item.output_path or '(see output dir)'}[/green]"
                 )
+                if getattr(item, "job", None) and getattr(item.job, "narration_mode", None):
+                    if item.job.narration_mode.value == "multi":
+                        console.print(
+                            f"[dim]Cast saved \u2014 `kenkui voices cast {job_id}` to review "
+                            f"\u00b7 edit ~/.config/kenkui/series/<slug>.toml to adjust[/dim]"
+                        )
                 return 0
             elif item.status == "failed":
                 console.print(f"\n[red]Failed: {item.error_message}[/red]")
@@ -1630,8 +1800,11 @@ def cmd_add(args) -> int:
             return 0  # User cancelled
 
         job_info = client.add_job(**job_kwargs)
-        console.print(f"\n[green]Job queued: {job_info.id}[/green]")
-        console.print("Run [bold]kenkui queue start --live[/bold] to watch progress.")
+        console.print(f"\n[green]\u2713 Job queued: {job_info.id} \u2014 {book_path.stem}[/green]")
+        console.print()
+        _check_job_requirements(job_kwargs, app_config)
+        console.print()
+        console.print("Run [bold]kenkui queue start --live[/bold] to begin processing.")
         return 0
 
     except (KeyboardInterrupt, EOFError):

@@ -192,6 +192,14 @@ def cmd_config(args) -> int:
         .strip()
         or cfg.get("nlp_model", "llama3.2")
     )
+    nlp_roster_model = (
+        inquirer.text(
+            message="Model for character discovery / roster extraction (leave blank to use attribution model):",
+            default=cfg.get("nlp_roster_model", ""),
+        )
+        .execute()
+        .strip()
+    )
 
     # ---- Post-processing effects chain --------------------------------
     console.print()
@@ -348,6 +356,35 @@ def cmd_config(args) -> int:
     else:
         post_processing = {**pp, "enabled": False}
 
+    # ---- Credits chapter -----------------------------------------------
+    console.print()
+    console.print("[bold]Credits Chapter[/bold]  (synthesized audio appended to each audiobook)")
+
+    credits_enabled = inquirer.confirm(
+        message="Append a credits chapter at the end of each audiobook?",
+        default=cfg.get("credits_enabled", True),
+    ).execute()
+
+    credits_acknowledgements = ""
+    credits_license = ""
+    if credits_enabled:
+        credits_acknowledgements = (
+            inquirer.text(
+                message="Acknowledgements text (blank = none):",
+                default=cfg.get("credits_acknowledgements", ""),
+            )
+            .execute()
+            .strip()
+        )
+        credits_license = (
+            inquirer.text(
+                message="License text (blank = none):",
+                default=cfg.get("credits_license", ""),
+            )
+            .execute()
+            .strip()
+        )
+
     # ---- Confirmation summary -----------------------------------------
     console.print()
     tbl = Table(title="Config Summary", show_header=False, box=None)
@@ -365,6 +402,8 @@ def cmd_config(args) -> int:
     tbl.add_row("EOS threshold", str(eos_threshold))
     tbl.add_row("Frames after EOS", "auto" if frames_after_eos is None else str(frames_after_eos))
     tbl.add_row("NLP model", nlp_model)
+    tbl.add_row("NLP roster model", nlp_roster_model or f"(same as NLP model: {nlp_model})")
+    tbl.add_row("Credits chapter", "on" if credits_enabled else "off")
     tbl.add_row("Post-processing", "on" if post_processing["enabled"] else "off")
     if post_processing["enabled"]:
         tbl.add_row("  Noise reduction", "on" if post_processing["noise_reduce"] else "off")
@@ -395,6 +434,10 @@ def cmd_config(args) -> int:
         "default_chapter_preset": default_chapter_preset,
         "default_output_dir": default_output_dir,
         "nlp_model": nlp_model,
+        "nlp_roster_model": nlp_roster_model,
+        "credits_enabled": credits_enabled,
+        "credits_acknowledgements": credits_acknowledgements,
+        "credits_license": credits_license,
         "post_processing": post_processing,
     }
 

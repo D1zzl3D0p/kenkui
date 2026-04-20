@@ -447,6 +447,89 @@ def build_character_review_choices(
     return review_choices
 
 
+def apply_voice_pool_template(
+    roster: list,
+    template: "VoicePoolTemplate",
+    series_voices: dict[str, str],
+    narrator_voice: str,
+    excluded_voices: list[str] | None = None,
+    roster_roles: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Assign voices using the voice pool template for characters not in series_voices.
+
+    Three-tier priority:
+    1. series_voices — already inherited from series (skipped here, caller merges)
+    2. Voice pool template — role + gender + rank → voice
+    3. Round-robin fallback via suggest_cast for characters not covered by template
+
+    Args:
+        roster:          CharacterInfo-like objects (character_id, gender_pronoun, prominence).
+        template:        Loaded VoicePoolTemplate.
+        series_voices:   Already-assigned voices (highest priority, not overridden here).
+        narrator_voice:  NARRATOR fallback voice (excluded from character pools).
+        excluded_voices: Voices to exclude from pool assignment.
+        roster_roles:    Optional {character_id: role_string} from CharacterRecord data.
+
+    Returns:
+        dict mapping character_id → voice_name for previously unassigned characters.
+    """
+    from collections import defaultdict
+
+    from kenkui.voice_pool import _normalize_gender, _normalize_role
+
+    if template.is_empty():
+        # No template configured — fall through entirely to suggest_cast
+        unmatched = [c for c in roster if c.character_id not in series_voices]
+        if not unmatched:
+            return {}
+        result = suggest_cast(
+            roster=unmatched,
+            excluded_voices=excluded_voices or [],
+            default_voice=narrator_voice,
+        )
+        return result.speaker_voices
+
+    roles = roster_roles or {}
+
+    # Group unassigned characters by (role, gender), sorted by prominence desc within each group
+    buckets: dict[tuple[str, str], list] = defaultdict(list)
+    for ch in sorted(roster, key=lambda c: c.prominence, reverse=True):
+        if ch.character_id in series_voices:
+            continue
+        role_n = _normalize_role(roles.get(ch.character_id, "supporting"))
+        gender_n = _normalize_gender(getattr(ch, "gender_pronoun", "") or "")
+        buckets[(role_n, gender_n)].append(ch)
+
+    # Assign voices from template ranked slots / pool
+    assigned: dict[str, str] = {}
+    pool_counters: dict[tuple, int] = {}
+
+    for bucket_key, chars in buckets.items():
+        role_n, gender_n = bucket_key
+        slot = template.get_slot(role_n, gender_n)
+        for rank, ch in enumerate(chars, start=1):
+            voice = slot.pick(rank, pool_counters, bucket_key)
+            if voice is not None and voice != narrator_voice:
+                assigned[ch.character_id] = voice
+
+    # Characters not covered by template → suggest_cast fallback
+    uncovered = [
+        c for c in roster
+        if c.character_id not in series_voices and c.character_id not in assigned
+    ]
+    if uncovered:
+        result = suggest_cast(
+            roster=uncovered,
+            excluded_voices=excluded_voices or [],
+            default_voice=narrator_voice,
+        )
+        for char_id, voice in result.speaker_voices.items():
+            if char_id not in assigned:
+                assigned[char_id] = voice
+
+    return assigned
+
+
 def sort_cast(speaker_voices: dict) -> list[tuple[str, str]]:
     """Sort cast alphabetically with NARRATOR pinned last."""
     return sorted(
@@ -678,6 +761,7 @@ __all__ = [
     "exclude_voice",
     "include_voice",
     "audition_voice",
+    "apply_voice_pool_template",
     "assign_simple_cast",
     "build_roster_payload",
     "merge_speaker_voices",

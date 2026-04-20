@@ -326,8 +326,21 @@ class WorkerServer:
                 return
 
             if result:
-                output_path = str(cfg.output_path / f"{job.name}.m4b")
+                m4b_file = cfg.output_path / f"{job.name}.m4b"
+                output_path = str(m4b_file)
+
+                # Append synthesized credits audio (if enabled and file exists)
+                if self._app_config.credits_enabled and m4b_file.exists():
+                    self._append_credits(item, m4b_file)
+
                 self.complete_job(item.id, output_path)
+
+                # Post-job cast notification for multi-voice jobs
+                if job.narration_mode.value == "multi":
+                    logger.info(
+                        "Cast saved for job %s — run `kenkui voices cast %s` to review",
+                        item.id, item.id,
+                    )
             else:
                 self.fail_job(item.id, "Conversion failed")
 
@@ -447,7 +460,6 @@ class WorkerServer:
         from ..models import FastScanResult
         from ..nlp import CACHE_DIR, book_hash
         from ..series import load_series, match_characters, save_series, update_manifest
-        from ..services.voice_service import suggest_cast
 
         job = item.job
 
@@ -479,18 +491,35 @@ class WorkerServer:
                     nlp_result.characters, fast_scan_result, manifest
                 )
 
-        # 2. Auto-assign remaining characters (those not inherited from series)
+        # 2. Auto-assign remaining characters using voice pool template (then suggest_cast fallback)
+        from ..services.voice_service import apply_voice_pool_template
+        from ..voice_pool import load_voice_pool_template
+
+        template = load_voice_pool_template()
+
+        # Build role lookup from roster if available
+        roster_roles: dict[str, str] = {}
+        if fast_scan_result is not None:
+            for char_rec in getattr(fast_scan_result.roster, "characters", []):
+                slug = getattr(char_rec, "slug", None)
+                role = getattr(char_rec, "role", "supporting")
+                if slug:
+                    roster_roles[slug] = role
+
         unmatched = [c for c in nlp_result.characters if c.character_id not in inherited]
-        cast_result = suggest_cast(
+        new_voices = apply_voice_pool_template(
             roster=unmatched,
+            template=template,
+            series_voices=inherited,
+            narrator_voice=narrator_voice,
             excluded_voices=self._app_config.excluded_voices,
-            default_voice=narrator_voice,
+            roster_roles=roster_roles or None,
         )
 
-        # 3. Merge: preserved NARRATOR + auto-assigned + inherited (inherited wins)
+        # 3. Merge: preserved NARRATOR + template-assigned + inherited (inherited wins)
         job.speaker_voices = {
             "NARRATOR": narrator_voice,
-            **cast_result.speaker_voices,
+            **new_voices,
             **inherited,
         }
         self._save()
@@ -505,6 +534,121 @@ class WorkerServer:
                 pinned,
             )
             save_series(updated)
+
+    def _append_credits(self, item: QueueItem, m4b_path: "Path") -> None:
+        """Synthesize a credits segment and append it to the m4b without a chapter marker."""
+        import subprocess
+        import tempfile
+        from pathlib import Path as _Path
+
+        job = item.job
+        cfg = self._app_config
+
+        # Build credits script
+        parts = [f"This audiobook was generated with kenkui."]
+        if job.name:
+            parts.append(f"{job.name}.")
+        if job.narration_mode.value == "multi" and job.speaker_voices:
+            cast_lines = []
+            for char_id, voice in sorted(job.speaker_voices.items()):
+                if char_id == "NARRATOR":
+                    continue
+                cast_lines.append(f"{char_id.replace('_', ' ').title()}, voiced by {voice}")
+            if cast_lines:
+                parts.append("Cast: " + "; ".join(cast_lines) + ".")
+        if cfg.credits_acknowledgements:
+            parts.append(cfg.credits_acknowledgements)
+        if cfg.credits_license:
+            parts.append(cfg.credits_license)
+
+        credits_text = " ".join(parts)
+        narrator_voice = job.speaker_voices.get("NARRATOR", cfg.default_voice) or cfg.default_voice
+
+        try:
+            from ..workers import _get_or_load_model, _render_text
+
+            import logging as _logging
+            _log = _logging.getLogger(__name__)
+
+            model = _get_or_load_model(
+                temp=cfg.temp,
+                lsd_decode_steps=cfg.lsd_decode_steps,
+                noise_clamp=cfg.noise_clamp,
+                eos_threshold=cfg.eos_threshold,
+            )
+            from ..voice_loader import load_voice
+
+            voice_path = load_voice(narrator_voice)
+            voice_state = model.get_state_for_audio_prompt(voice_path)
+
+            credits_seg = _render_text(
+                model,
+                voice_state,
+                credits_text,
+                log_message=lambda msg: _log.debug(msg),
+                pid=0,
+                batch_idx=0,
+                total_batches=1,
+                frames_after_eos=0,
+            )
+            if credits_seg is None:
+                logger.warning("Credits synthesis returned no audio for job %s", item.id)
+                return
+        except Exception as exc:
+            logger.warning("Credits synthesis failed for job %s: %s", item.id, exc)
+            return
+
+        # Append credits audio to m4b via ffmpeg concat (no chapter marker)
+        try:
+            bitrate = _resolve(job.job_m4b_bitrate, cfg.m4b_bitrate) or "96k"
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp = _Path(tmpdir)
+                credits_wav = tmp / "credits.wav"
+                credits_aac = tmp / "credits.aac"
+                orig_aac = tmp / "original.aac"
+                combined_aac = tmp / "combined.aac"
+                output_m4b = tmp / "output.m4b"
+
+                credits_seg.export(str(credits_wav), format="wav")
+
+                # Encode credits WAV → ADTS AAC
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(credits_wav),
+                     "-c:a", "aac", "-b:a", str(bitrate), "-f", "adts",
+                     str(credits_aac)],
+                    check=True, capture_output=True,
+                )
+
+                # Extract original m4b audio → ADTS AAC (no re-encode)
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(m4b_path),
+                     "-vn", "-acodec", "copy", "-f", "adts",
+                     str(orig_aac)],
+                    check=True, capture_output=True,
+                )
+
+                # Binary concat ADTS streams
+                with open(combined_aac, "wb") as out_f:
+                    out_f.write(orig_aac.read_bytes())
+                    out_f.write(credits_aac.read_bytes())
+
+                # Re-mux: audio from combined stream, chapters from original m4b
+                subprocess.run(
+                    ["ffmpeg", "-y",
+                     "-i", str(combined_aac),
+                     "-i", str(m4b_path),
+                     "-map", "0:a",
+                     "-map_chapters", "1",
+                     "-c:a", "copy",
+                     str(output_m4b)],
+                    check=True, capture_output=True,
+                )
+
+                import shutil
+                shutil.move(str(output_m4b), str(m4b_path))
+                logger.info("Credits appended to %s", m4b_path.name)
+        except Exception as exc:
+            logger.warning("Could not append credits to %s: %s", m4b_path.name, exc)
 
     def _build_config(self, job: JobConfig):
         """Build ProcessingConfig from JobConfig and AppConfig."""

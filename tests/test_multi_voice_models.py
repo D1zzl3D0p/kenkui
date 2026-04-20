@@ -207,12 +207,12 @@ class TestJobConfigMultiVoice:
     def test_from_dict_round_trip(self):
         original = self._base_job(
             narration_mode=NarrationMode.MULTI,
-            speaker_voices={"ALICE-0": "cosette"},
+            speaker_voices={"alice_0": "cosette"},
             annotated_chapters_path=Path("/tmp/my_cache.json"),
         )
         restored = JobConfig.from_dict(original.to_dict())
         assert restored.narration_mode == NarrationMode.MULTI
-        assert restored.speaker_voices == {"ALICE-0": "cosette"}
+        assert restored.speaker_voices == {"alice_0": "cosette"}
         assert restored.annotated_chapters_path == Path("/tmp/my_cache.json")
 
     def test_backward_compat_missing_multi_voice_fields(self):

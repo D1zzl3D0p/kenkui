@@ -18,6 +18,8 @@ def init_confirmation_state(book_path: Path, app_config, profile: dict[str, Any]
         "_app_config": app_config,
         "voice": profile.get("voice") or app_config.default_voice,
         "narration_mode": profile.get("narration_mode", "single"),
+        "job_nlp_provider": profile.get("job_nlp_provider") or getattr(app_config, "nlp_provider", "ollama"),
+        "job_nlp_model": profile.get("job_nlp_model") or getattr(app_config, "nlp_model", "llama3.2"),
         "chapter_selection": {
             "preset": profile.get("chapter_preset", app_config.default_chapter_preset),
             "included": [],
@@ -39,7 +41,7 @@ def init_confirmation_state(book_path: Path, app_config, profile: dict[str, Any]
 def confirmation_state_to_profile(state: dict[str, Any]) -> dict[str, Any]:
     """Extract the persisted profile subset from confirmation-screen state."""
     chapter_selection = state.get("chapter_selection", {})
-    return {
+    profile: dict[str, Any] = {
         "voice": state.get("voice", ""),
         "narration_mode": state.get("narration_mode", "single"),
         "chapter_preset": chapter_selection.get("preset", "content-only"),
@@ -47,6 +49,11 @@ def confirmation_state_to_profile(state: dict[str, Any]) -> dict[str, Any]:
         "quality_overrides": state.get("quality_overrides") or {},
         "pp_overrides": state.get("pp_overrides") or {},
     }
+    if state.get("job_nlp_provider"):
+        profile["job_nlp_provider"] = state["job_nlp_provider"]
+    if state.get("job_nlp_model"):
+        profile["job_nlp_model"] = state["job_nlp_model"]
+    return profile
 
 
 def summarize_confirmation_state(state: dict[str, Any], app_config) -> dict[str, str]:

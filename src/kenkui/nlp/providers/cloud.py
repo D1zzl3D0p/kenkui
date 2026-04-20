@@ -366,6 +366,9 @@ def _call_with_rate_limit_retry(fn, *args, progress_callback=None, **kwargs):
 
     Waits *_RATE_LIMIT_WAIT_S* seconds between attempts and retries up to
     *_RATE_LIMIT_MAX_RETRIES* additional times before re-raising.
+
+    Also retries on IncompleteOutputException (instructor raises this when the
+    LLM hits max_tokens mid-response) by doubling max_tokens on each retry.
     """
     for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
         try:
@@ -377,6 +380,7 @@ def _call_with_rate_limit_retry(fn, *args, progress_callback=None, **kwargs):
                 or "rate_limit" in str(exc).lower()
                 or "rate limit" in str(exc).lower()
             )
+            is_incomplete = "IncompleteOutputException" in exc_type
             if is_rate_limit and attempt < _RATE_LIMIT_MAX_RETRIES:
                 wait = _RATE_LIMIT_WAIT_S
                 msg = f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/{_RATE_LIMIT_MAX_RETRIES}"
@@ -384,6 +388,17 @@ def _call_with_rate_limit_retry(fn, *args, progress_callback=None, **kwargs):
                 if progress_callback:
                     progress_callback(msg)
                 time.sleep(wait)
+            elif is_incomplete and attempt < _RATE_LIMIT_MAX_RETRIES:
+                old_budget = kwargs.get("max_tokens", 0)
+                new_budget = old_budget * 2
+                kwargs["max_tokens"] = new_budget
+                msg = (
+                    f"Output truncated at max_tokens={old_budget} — "
+                    f"retrying with max_tokens={new_budget} (attempt {attempt + 1}/{_RATE_LIMIT_MAX_RETRIES})"
+                )
+                logger.warning(msg)
+                if progress_callback:
+                    progress_callback(msg)
             else:
                 raise
 
@@ -439,7 +454,7 @@ class CloudProvider:
         inject_provider_env_vars(load_provider_credentials())
 
     def _resolved_model(self) -> str:
-        """Return the LiteLLM model string to use.
+        """Return the LiteLLM model string to use for attribution.
 
         Falls back to provider default from credentials.toml when nlp_model is empty.
         """
@@ -458,6 +473,17 @@ class CloudProvider:
         }
         return defaults.get(self.config.nlp_provider, "gpt-4o")
 
+    def _resolved_roster_model(self) -> str:
+        """Return the model to use for character discovery (roster extraction).
+
+        Uses nlp_roster_model when set, otherwise falls back to _resolved_model().
+        This allows using a cheaper model (e.g. haiku) for roster extraction while
+        using a more capable model for per-chapter attribution.
+        """
+        if self.config.nlp_roster_model:
+            return self.config.nlp_roster_model
+        return self._resolved_model()
+
     def build_roster(
         self,
         chapters: list[Chapter],
@@ -466,7 +492,7 @@ class CloudProvider:
         book_path: "Path | None" = None,
     ) -> CharacterRoster:
         """Extract character roster — whole-book pass, chunked if needed."""
-        model = self._resolved_model()
+        model = self._resolved_roster_model()
         context_limit = _context_limit_for(model)
         rate_limit_tpm = _rate_limit_tpm_for(model)
 
