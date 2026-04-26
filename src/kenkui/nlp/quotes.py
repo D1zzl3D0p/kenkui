@@ -3,7 +3,8 @@
 The LLM's job is *not* to find quotes — it is to classify who said them.
 This module finds every quoted span and italicised inner-monologue span
 deterministically so the LLM works from a fixed, numbered list rather than
-free-form text.
+free-form text.  ``strip_scare_quotes`` is a pre-processing step that removes
+quote marks from scare quotes and acronyms before extraction runs.
 
 Supported quote styles
 ----------------------
@@ -73,20 +74,30 @@ def strip_scare_quotes(paragraphs: list[str]) -> list[str]:
         # positions (open_pos, close_pos) of quote-mark pairs to strip,
         # collected in document order and applied right-to-left.
         to_strip: list[tuple[int, int]] = []
+        claimed_close_positions: set[int] = set()
 
         for i, ch in enumerate(para):
             if ch not in _OPEN_QUOTES:
                 continue
             # Determine matching close character: prefer the typographic pair,
-            # but also accept the straight-quote version.
+            # but also accept the straight-quote version as a fallback.
             preferred_close = _CLOSE_FOR_OPEN[ch]
-            # Find the nearest closing quote of any recognised kind after i.
+            # Find the nearest closing quote after i: first try the preferred
+            # close character, then fall back to any recognised close quote.
             close_pos = -1
             for j in range(i + 1, len(para)):
-                if para[j] in _CLOSE_QUOTES:
+                if para[j] == preferred_close:
                     close_pos = j
                     break
             if close_pos == -1:
+                for j in range(i + 1, len(para)):
+                    if para[j] in _CLOSE_QUOTES:
+                        close_pos = j
+                        break
+            if close_pos == -1:
+                continue
+            # C1: skip if this close position was already claimed by a prior span.
+            if close_pos in claimed_close_positions:
                 continue
 
             content = para[i + 1 : close_pos]
@@ -98,6 +109,7 @@ def strip_scare_quotes(paragraphs: list[str]) -> list[str]:
 
             if is_label or is_acronym:
                 to_strip.append((i, close_pos))
+                claimed_close_positions.add(close_pos)
 
         # Apply right-to-left so earlier offsets stay valid.
         for open_pos, close_pos in reversed(to_strip):

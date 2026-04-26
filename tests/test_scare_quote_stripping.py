@@ -89,3 +89,18 @@ def test_curly_quote_acronym_stripped():
     result = _strip(para)
     assert 'CIA' in result
     assert '\u201cCIA\u201d' not in result
+
+
+def test_two_acronyms_same_paragraph_both_stripped():
+    """Two qualifying acronym spans in one paragraph must both be stripped
+    without corrupting the text (guards against C1: shared close-pos bug)."""
+    para = 'Both "UNESCO" and "NATO" were mentioned.'
+    result = _strip(para)
+    assert 'UNESCO' in result
+    assert 'NATO' in result
+    assert '"UNESCO"' not in result
+    assert '"NATO"' not in result
+    # The non-quote content must survive intact.
+    assert 'Both ' in result
+    assert ' and ' in result
+    assert ' were mentioned.' in result
