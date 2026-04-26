@@ -37,21 +37,31 @@ _PRONOUN_THEY = re.compile(r"\b(they|them|their)\b", re.IGNORECASE)
 _CLOSE_QUOTE_RE = re.compile(r'["\u201d]')
 
 
-def _build_alias_pattern(alias_to_slug: dict[str, str]) -> re.Pattern | None:
-    """Compile a single OR-pattern from all known aliases (longest first)."""
+def _build_alias_pattern(
+    alias_to_slug: dict[str, str],
+) -> tuple[re.Pattern, str] | tuple[None, None]:
+    """Compile a single OR-pattern from all known aliases (longest first).
+
+    Returns:
+        A tuple ``(compiled_pattern, inner_group_str)`` where *inner_group_str*
+        is the raw ``"alias1|alias2|..."`` alternation string (before wrapping
+        in ``\\b(...)\\b``), or ``(None, None)`` when *alias_to_slug* is empty.
+    """
     if not alias_to_slug:
-        return None
+        return None, None
     # Sort by length descending so longer aliases match before substrings.
     aliases = sorted(alias_to_slug.keys(), key=len, reverse=True)
     escaped = [re.escape(a) for a in aliases]
-    return re.compile(r"\b(" + "|".join(escaped) + r")\b", re.IGNORECASE)
+    inner_group_str = "|".join(escaped)
+    return re.compile(r"\b(" + inner_group_str + r")\b", re.IGNORECASE), inner_group_str
 
 
 def _extract_hints(
     para: str,
     quote: Quote,
     alias_to_slug: dict[str, str],
-    slug_to_pronoun: dict[str, str],
+    alias_pat: re.Pattern | None,
+    alias_inner: str | None,
     para_start_offset: int,
 ) -> str:
     """Return the hint/pronoun suffix for a QUOTE tag.
@@ -59,12 +69,21 @@ def _extract_hints(
     Three independent tiers:
 
     1. Strong hint (``hint=``): attribution verb + alias within ±120 chars.
-    2. Weak guess (``guess=``): alias immediately after the closing quote mark.
+    2. Weak guess (``guess=``): alias immediately after the closing quote mark
+       (dialogue only — italic spans have no quote-mark boundary).
     3. Pronoun (``pronoun=``): gendered pronoun within ±60 chars.
 
     All three can coexist and are concatenated in hint → guess → pronoun order.
+
+    Args:
+        para:              Full paragraph text.
+        quote:             The quote being annotated.
+        alias_to_slug:     Mapping of ``alias.lower() → character_slug``.
+        alias_pat:         Pre-compiled alias regex (or ``None`` if no aliases).
+        alias_inner:       Raw ``"alias1|alias2|..."`` alternation string
+                           matching ``alias_pat``'s inner group (or ``None``).
+        para_start_offset: Character offset of *para* in the joined chapter.
     """
-    alias_pat = _build_alias_pattern(alias_to_slug)
     suffix = ""
 
     # Local position of the quote within *para*.
@@ -85,9 +104,9 @@ def _extract_hints(
 
         # Pattern: verb said alias  OR  alias said verb
         strong_pat = re.compile(
-            r"\b" + _VERB_GROUP + r"\s+(" + alias_pat.pattern[3:-3] + r")\b"
+            r"\b" + _VERB_GROUP + r"\s+(" + alias_inner + r")\b"
             r"|"
-            r"\b(" + alias_pat.pattern[3:-3] + r")\s+" + _VERB_GROUP + r"\b",
+            r"\b(" + alias_inner + r")\s+" + _VERB_GROUP + r"\b",
             re.IGNORECASE,
         )
         m = strong_pat.search(window)
@@ -103,14 +122,15 @@ def _extract_hints(
     #
     # The closing-quote character is the *last* character of quote.text, so
     # we start the scan one position back (local_end - 1) to include it.
+    # Only meaningful for dialogue — italic spans have no enclosing quote marks.
     # -----------------------------------------------------------------------
-    if alias_pat is not None:
+    if alias_pat is not None and quote.kind == "dialogue":
         after_start = max(0, local_end - 1)
         after_end = min(len(para), after_start + 80)
         after_text = para[after_start:after_end]
 
         guess_pat = re.compile(
-            r'^["\u201d][,.]?\s+(' + alias_pat.pattern[3:-3] + r")\b",
+            r'^["\u201d][,.]?\s+(' + alias_inner + r")\b",
             re.IGNORECASE,
         )
         gm = guess_pat.search(after_text)
@@ -157,12 +177,17 @@ def annotate_chapter(
         quotes:          Quotes extracted by ``extract_quotes()``.
         alias_to_slug:   Mapping of ``alias.lower() → character_slug``.
         slug_to_pronoun: Mapping of ``slug → "he/him" | "she/her" | "they/them" | ""``.
+                         Currently unused — pronoun hints are detected from raw text
+                         rather than roster lookup.
 
     Returns:
         A single string with ``\\n\\n``-joined annotated segments.
     """
     if not paragraphs:
         return ""
+
+    # Compile alias pattern once for the whole chapter (not per-quote).
+    alias_pat, alias_inner = _build_alias_pattern(alias_to_slug)
 
     # Build para_index → quotes map.
     para_quotes: dict[int, list[Quote]] = defaultdict(list)
@@ -205,7 +230,7 @@ def annotate_chapter(
 
             # Build the QUOTE tag.
             hint_suffix = _extract_hints(
-                para, quote, alias_to_slug, slug_to_pronoun, para_start
+                para, quote, alias_to_slug, alias_pat, alias_inner, para_start
             )
             segments.append(f"[QUOTE:{quote.id}{hint_suffix}] {quote.text}")
 

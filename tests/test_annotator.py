@@ -128,26 +128,14 @@ def test_hint_and_pronoun_coexist():
 
 
 def test_guess_alias_after_closing_quote():
-    para = '"Not now." Lyria turned to leave.'
-    paragraphs = [para]
-    offsets = _para_offsets(paragraphs)
-    quote_text = '"Not now."'
-    q_start = para.index(quote_text)
-    # Place the quote so the closing quote is followed by " Lyria"
-    quotes = [_make_quote(0, quote_text, 0, offsets[0] + q_start)]
-    alias_to_slug = {"lyria": "lyria_of_vox"}
-
-    # Tier-2 guess: the pattern looks for closing-quote char + alias
-    # We need the text right after the quote (para[local_end:]) to start with
-    # a close-quote or we adjust.  In this paragraph quote_text ends with '".'
-    # The annotator scans from local_end into the remaining para text.
-    # Adjust: use a para where the alias follows directly after the closing quote.
+    # Tier-2 guess: alias follows directly after the closing quote character.
     para2 = '"Not now," Lyria turned to leave.'
     paragraphs2 = [para2]
     offsets2 = _para_offsets(paragraphs2)
     quote_text2 = '"Not now,"'
     q_start2 = para2.index(quote_text2)
     quotes2 = [_make_quote(0, quote_text2, 0, offsets2[0] + q_start2)]
+    alias_to_slug = {"lyria": "lyria_of_vox"}
 
     result = annotate_chapter(paragraphs2, quotes2, alias_to_slug, {})
     assert 'guess="lyria_of_vox"' in result
@@ -183,3 +171,22 @@ def test_multiple_paragraphs():
 def test_empty_paragraphs():
     result = annotate_chapter([], [], {}, {})
     assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — Pronoun suppressed when no attribution verb nearby
+# ---------------------------------------------------------------------------
+
+
+def test_pronoun_suppressed_without_verb():
+    # "he" appears in the narration after the quote, but there is no
+    # attribution verb (said/asked/etc.) within ±60 chars — pronoun= must
+    # NOT appear in the tag.
+    para = '"He went home." The cat sat on the mat.'
+    paragraphs = [para]
+    offsets = _para_offsets(paragraphs)
+    quote_text = '"He went home."'
+    q_start = para.index(quote_text)
+    quotes = [_make_quote(0, quote_text, 0, offsets[0] + q_start)]
+    result = annotate_chapter(paragraphs, quotes, {}, {})
+    assert "pronoun=" not in result
