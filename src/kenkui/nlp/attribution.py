@@ -138,9 +138,20 @@ def _attribute_chunk(
         returned_ids = {a.quote_id for a in result.attributions}
         for q in chunk_quotes:
             if q.id not in returned_ids:
-                logger.debug("LLM skipped quote %d; defaulting to Unknown", q.id)
+                # Walk backwards for last non-NARRATOR/Unknown speaker from this chunk
+                last_speaker = next(
+                    (a.speaker for a in reversed(result.attributions) if a.speaker not in ("NARRATOR", "Unknown")),
+                    None,
+                )
+                speaker = last_speaker if last_speaker else "NARRATOR"
+                logger.debug("LLM skipped quote %d; fallback speaker=%s", q.id, speaker)
                 result.attributions.append(
-                    AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1)
+                    AttributionItem(
+                        quote_id=q.id,
+                        speaker=speaker,
+                        emotion="neutral",
+                        confidence=1,
+                    )
                 )
         return result
     except (ValidationError, Exception) as exc:
