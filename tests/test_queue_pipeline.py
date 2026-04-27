@@ -38,6 +38,12 @@ class TestJobConfig:
         job = JobConfig(ebook_path=TEST_EBOOK_PATH, voice="custom_voice")
         assert job.voice == "custom_voice"
 
+    def test_job_config_execution_mode_defaults_local(self):
+        from kenkui.models import JobConfig, TTSExecutionMode
+
+        job = JobConfig(ebook_path=TEST_EBOOK_PATH)
+        assert job.tts_execution_mode == TTSExecutionMode.LOCAL
+
     def test_job_config_to_dict(self):
         from kenkui.models import JobConfig
 
@@ -75,13 +81,21 @@ class TestQueueItem:
         assert item.progress == 0.0
 
     def test_queue_item_to_dict(self):
-        from kenkui.models import JobConfig, JobStatus, QueueItem
+        from kenkui.models import CostStatus, JobConfig, JobStatus, QueueItem
 
         job = JobConfig(ebook_path=TEST_EBOOK_PATH)
-        item = QueueItem(id="test123", job=job, status=JobStatus.PENDING)
+        item = QueueItem(
+            id="test123",
+            job=job,
+            status=JobStatus.PENDING,
+            execution_provider="modal",
+            cost_status=CostStatus.ESTIMATED,
+        )
         data = item.to_dict()
         assert data["id"] == "test123"
         assert data["status"] == "pending"
+        assert data["execution_provider"] == "modal"
+        assert data["cost_status"] == "estimated"
 
     def test_queue_item_from_dict(self):
         from kenkui.models import JobStatus, QueueItem

@@ -111,6 +111,14 @@ class TestBuildConfirmationChoices:
         values = [getattr(c, "value", None) for c in choices]
         assert "cancel" in values
 
+    def test_voice_and_series_actions_present(self):
+        from kenkui.cli.add import _build_confirmation_choices
+        cfg = self._app_config()
+        choices = _build_confirmation_choices(self._state(cfg), cfg)
+        values = [getattr(c, "value", None) for c in choices]
+        assert "voice" in values
+        assert "series" in values
+
     def test_default_voice_shows_default_tag(self):
         from kenkui.cli.add import _build_confirmation_choices
         cfg = self._app_config(default_voice="alba")
@@ -127,6 +135,20 @@ class TestBuildConfirmationChoices:
         names = [getattr(c, "title", getattr(c, "name", str(c))) for c in choices]
         assert any("[CUSTOM]" in str(n) for n in names)
 
+    def test_series_choice_shows_current_series_name(self):
+        from types import SimpleNamespace
+        from kenkui.cli.add import _build_confirmation_choices
+
+        cfg = self._app_config(default_voice="alba")
+        state = self._state(
+            cfg,
+            series_slug="wheel-of-time",
+            _series_manifest=SimpleNamespace(name="Wheel of Time", slug="wheel-of-time"),
+        )
+        choices = _build_confirmation_choices(state, cfg)
+        names = [getattr(c, "title", getattr(c, "name", str(c))) for c in choices]
+        assert any("Wheel of Time" in str(n) for n in names)
+
     def test_shared_summary_helper_matches_choice_lines(self):
         from kenkui.cli.add import _build_confirmation_choices
         from kenkui.services.confirmation_service import summarize_confirmation_state
@@ -136,8 +158,8 @@ class TestBuildConfirmationChoices:
         choices = _build_confirmation_choices(state, cfg)
         names = [getattr(c, "title", getattr(c, "name", str(c))) for c in choices]
         summary = summarize_confirmation_state(state, cfg)
-        assert any(summary["book_name"] in str(n) for n in names)
-        assert any(summary["voice_line"] in str(n) for n in names)
+        assert any("cosette" in str(n) for n in names)
+        assert any("[CUSTOM]" in str(n) for n in names)
 
 
 class TestWorkflowStateHelpers:
@@ -284,6 +306,94 @@ class TestRunConfirmationScreen:
 
         assert result is not None
         assert "ebook_path" in result
+
+    def test_top_level_voice_action_updates_voice_then_submit(self, tmp_path):
+        from kenkui.cli.add import _run_confirmation_screen
+        from kenkui.cli import add_profile
+        import argparse
+
+        cfg = self._app_config(default_voice="alba")
+
+        mock_client = MagicMock()
+        mock_client.list_voices.return_value = {"voices": []}
+
+        with patch.object(add_profile, "_profile_path", return_value=tmp_path / "p.toml"):
+            with patch("kenkui.cli.add._wizard_execute") as mock_exec, \
+                 patch("kenkui.cli.add._get_client", return_value=mock_client), \
+                 patch("kenkui.cli.add._prompt_voice", return_value="cosette"):
+                call_count = [0]
+
+                def side_effect(prompt):
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        return "voice"
+                    return "submit"
+
+                mock_exec.side_effect = side_effect
+
+                args = argparse.Namespace(server_host="127.0.0.1", server_port=45365,
+                                          output=None, voice=None, narration_mode=None,
+                                          chapter_preset=None, headless=False)
+                result = _run_confirmation_screen(tmp_path / "book.epub", cfg, args)
+
+        assert result is not None
+        assert result["voice"] == "cosette"
+
+    def test_top_level_series_action_can_clear_series_then_submit(self, tmp_path):
+        from kenkui.cli.add import _run_confirmation_screen
+        from kenkui.cli import add_profile
+        import argparse
+
+        cfg = self._app_config(default_voice="alba")
+        profile = {"narration_mode": "multi"}
+
+        mock_client = MagicMock()
+        mock_client.list_voices.return_value = {"voices": []}
+
+        with patch.object(add_profile, "_profile_path", return_value=tmp_path / "p.toml"):
+            add_profile.save_last_profile(profile)
+
+        with patch.object(add_profile, "_profile_path", return_value=tmp_path / "p.toml"):
+            with patch("kenkui.cli.add._wizard_execute") as mock_exec, \
+                 patch("kenkui.cli.add._get_client", return_value=mock_client), \
+                 patch("kenkui.cli.add._init_state_from_profile") as mock_init:
+                mock_init.return_value = {
+                    "_book_path": tmp_path / "book.epub",
+                    "_app_config": cfg,
+                    "voice": "alba",
+                    "narration_mode": "multi",
+                    "job_nlp_provider": "anthropic",
+                    "job_nlp_model": "claude-sonnet-4-6",
+                    "chapter_selection": {"preset": "content-only", "included": [], "excluded": []},
+                    "output_dir": str(tmp_path),
+                    "quality_overrides": {},
+                    "pp_overrides": {},
+                    "speaker_voices": {"NARRATOR": "alba"},
+                    "chapter_voices": {},
+                    "roster_cache_path": None,
+                    "series_slug": "wheel-of-time",
+                    "_series_manifest": object(),
+                }
+
+                call_count = [0]
+
+                def side_effect(prompt):
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        return "series"
+                    if call_count[0] == 2:
+                        return "clear"
+                    return "submit"
+
+                mock_exec.side_effect = side_effect
+
+                args = argparse.Namespace(server_host="127.0.0.1", server_port=45365,
+                                          output=None, voice=None, narration_mode=None,
+                                          chapter_preset=None, headless=False)
+                result = _run_confirmation_screen(tmp_path / "book.epub", cfg, args)
+
+        assert result is not None
+        assert result["series_slug"] is None
 
 
 class TestProfilePersistence:

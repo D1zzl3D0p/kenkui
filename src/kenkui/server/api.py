@@ -7,7 +7,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ..models import AppConfig, ChapterSelection, JobConfig, JobStatus, NarrationMode
+from ..models import (
+    AppConfig,
+    ChapterSelection,
+    JobConfig,
+    JobStatus,
+    NarrationMode,
+    TTSExecutionMode,
+)
 from .worker import get_server
 
 
@@ -36,6 +43,9 @@ class JobCreateRequest(BaseModel):
     chapter_selection: ChapterSelection | None = None
     output_path: str | None = None
     name: str | None = None
+    tts_execution_mode: str = "local"
+    modal_endpoint: str | None = None
+    modal_environment: str | None = None
     # Multi-voice fields
     narration_mode: str = "single"
     speaker_voices: dict[str, str] = {}
@@ -70,6 +80,14 @@ class JobResponse(BaseModel):
     output_path: str = ""
     started_at: float = 0.0
     completed_at: float = 0.0
+    execution_provider: str = ""
+    remote_job_id: str = ""
+    estimated_cost_usd: float | None = None
+    actual_cost_usd: float | None = None
+    cost_status: str = "none"
+    artifact_uri: str = ""
+    artifact_source: str = ""
+    provider_status: str = ""
 
 
 class QueueResponse(BaseModel):
@@ -320,6 +338,14 @@ def _job_to_response(item) -> JobResponse:
         output_path=item.output_path,
         started_at=item.started_at,
         completed_at=item.completed_at,
+        execution_provider=item.execution_provider,
+        remote_job_id=item.remote_job_id,
+        estimated_cost_usd=item.estimated_cost_usd,
+        actual_cost_usd=item.actual_cost_usd,
+        cost_status=item.cost_status.value,
+        artifact_uri=item.artifact_uri,
+        artifact_source=item.artifact_source,
+        provider_status=item.provider_status,
     )
 
 
@@ -382,6 +408,9 @@ def add_job(request: JobCreateRequest):
         chapter_selection=request.chapter_selection or ChapterSelection(),
         output_path=Path(request.output_path) if request.output_path else None,
         name=request.name or "",
+        tts_execution_mode=TTSExecutionMode(request.tts_execution_mode),
+        modal_endpoint=request.modal_endpoint,
+        modal_environment=request.modal_environment,
         narration_mode=NarrationMode(request.narration_mode),
         speaker_voices=request.speaker_voices or {},
         annotated_chapters_path=Path(request.annotated_chapters_path)

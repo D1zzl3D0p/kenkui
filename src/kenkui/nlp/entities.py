@@ -69,6 +69,11 @@ _PARTICLES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 
+def _escape_format_braces(text: str) -> str:
+    """Escape { and } so text can safely be used in str.format() calls."""
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _significant_words(name: str) -> list[str]:
     """Return lowercase significant words from *name*, stripping titles/particles.
 
@@ -273,7 +278,9 @@ def deduplicate_roster_with_llm(
     if len(roster.characters) < 2:
         return roster
 
-    name_lines = "\n".join(f"- {g.canonical_name}" for g in roster.characters)
+    name_lines = "\n".join(
+        f"- {_escape_format_braces(g.canonical_name)}" for g in roster.characters
+    )
     try:
         result: CanonicalMergeResult = llm.generate(
             _DEDUP_PROMPT.format(name_lines=name_lines),
@@ -359,8 +366,10 @@ def resolve_epithets_with_llm(
         return roster
 
     canonical_set = {g.canonical_name for g in roster.characters}
-    roster_lines = "\n".join(f"- {g.canonical_name}" for g in roster.characters)
-    phrase_lines = "\n".join(f"- {p}" for p in common_phrases)
+    roster_lines = "\n".join(
+        f"- {_escape_format_braces(g.canonical_name)}" for g in roster.characters
+    )
+    phrase_lines = "\n".join(f"- {_escape_format_braces(p)}" for p in common_phrases)
 
     try:
         result: EpithetResolutionResult = llm.generate(
@@ -417,7 +426,9 @@ def normalize_canonical_names_with_llm(
     if not roster.characters:
         return roster
 
-    name_lines = "\n".join(f"- {g.canonical_name}" for g in roster.characters)
+    name_lines = "\n".join(
+        f"- {_escape_format_braces(g.canonical_name)}" for g in roster.characters
+    )
     try:
         result: NameNormalizationResult = llm.generate(
             _NORMALIZE_PROMPT.format(name_lines=name_lines),
@@ -616,7 +627,7 @@ def build_roster_with_llm(
 
         sample = _sample_text_for_roster(text, sample_words)
         prompt = _ROSTER_PROMPT.format(
-            seed_names=", ".join(seed_names) if seed_names else "(none)",
+            seed_names=", ".join(_escape_format_braces(s) for s in seed_names) if seed_names else "(none)",
             sample_text=sample,
         )
 

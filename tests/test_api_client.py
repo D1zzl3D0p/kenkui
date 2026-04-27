@@ -134,6 +134,41 @@ class TestAddJob:
             )
             assert result.job["voice"] == "custom"
 
+    def test_add_job_with_modal_execution_fields(self, client):
+        mock_resp = make_mock_response(
+            {
+                "id": "modal123",
+                "job": {
+                    "ebook_path": "/tmp/test.epub",
+                    "voice": "alba",
+                    "tts_execution_mode": "modal",
+                },
+                "status": "pending",
+                "progress": 0.0,
+                "current_chapter": "",
+                "eta_seconds": 0,
+                "error_message": "",
+                "execution_provider": "modal",
+                "remote_job_id": "",
+                "cost_status": "none",
+            }
+        )
+
+        mock_request = Mock(return_value=mock_resp)
+        with patch.object(client._client, "request", mock_request):
+            result = client.add_job(
+                ebook_path="/tmp/test.epub",
+                voice="alba",
+                tts_execution_mode="modal",
+                modal_endpoint="book_render",
+                modal_environment="prod",
+            )
+        assert result.execution_provider == "modal"
+        payload = mock_request.call_args.kwargs["json"]
+        assert payload["tts_execution_mode"] == "modal"
+        assert payload["modal_endpoint"] == "book_render"
+        assert payload["modal_environment"] == "prod"
+
 
 class TestGetJob:
     def test_get_job_success(self, client):

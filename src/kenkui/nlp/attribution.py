@@ -23,6 +23,11 @@ from .models import AttributionItem, AttributionResult, Quote
 
 logger = logging.getLogger(__name__)
 
+
+def _escape_format_braces(text: str) -> str:
+    """Escape { and } so text can safely be used in str.format() calls."""
+    return text.replace("{", "{{").replace("}", "}}")
+
 _ATTRIBUTION_PROMPT = """\
 You are analysing dialogue in a novel chapter.
 Your only job is to identify who says each pre-extracted quote.
@@ -109,8 +114,8 @@ def _build_prompt(
     quotes_payload = [{"quote_id": q.id, "text": q.text, "kind": q.kind} for q in chunk_quotes]
     return _ATTRIBUTION_PROMPT.format(
         roster=roster_str,
-        last_speakers=last_str,
-        chunk_text=chunk.text,
+        last_speakers=_escape_format_braces(last_str),
+        chunk_text=_escape_format_braces(chunk.text),
         quotes_json=json.dumps(quotes_payload, ensure_ascii=False, indent=2),
     )
 

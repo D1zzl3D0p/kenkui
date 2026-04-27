@@ -193,7 +193,7 @@ def full_analysis(
         cfg = _replace(cfg, nlp_model=nlp_model)
 
     # Return cached result before the expensive parse + NLP pass.
-    cached = get_cached_result(Path(ebook_path))
+    cached = get_cached_result(Path(ebook_path), provider=cfg.nlp_provider)
     if cached is not None:
         if progress_callback:
             progress_callback(100, "Analysis complete (cached)")
@@ -261,7 +261,7 @@ def full_analysis(
         chapters=attributed_chapters,
         book_hash=book_hash(Path(ebook_path)),
     )
-    cache_result(result, Path(ebook_path))
+    cache_result(result, Path(ebook_path), provider=cfg.nlp_provider)
 
     if progress_callback:
         progress_callback(100, "Analysis complete")
@@ -339,7 +339,7 @@ def attribute_only(
         chapters=attributed_chapters,
         book_hash=book_hash(Path(ebook_path)),
     )
-    cache_result(result, Path(ebook_path))
+    cache_result(result, Path(ebook_path), provider=cfg.nlp_provider)
 
     if progress_callback:
         progress_callback(100, "Attribution complete")

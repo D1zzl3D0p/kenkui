@@ -41,10 +41,12 @@ from kenkui.nlp.models import (
 
 _CHARS_PER_TOKEN = 4          # rough heuristic (conservative)
 _SYSTEM_PROMPT_TOKENS = 2_000  # headroom for system/instruction prompt
-_TOKENS_PER_CHARACTER_WIRE = 80   # compact wire CharacterRecordWire (slug+name+aliases+role+gender)
-_TOKENS_PER_CHARACTER_FULL = 600  # full CharacterRecord with chapters/appearances/titles
-_TOKENS_PER_ATTRIBUTION_ITEM = 20 # slim AttributionItemWire (quote_id + speaker + confidence)
+_TOKENS_PER_CHARACTER_WIRE = 120  # compact wire CharacterRecordWire with alias/title/description overhead
+_TOKENS_PER_CHARACTER_FULL = 800  # full CharacterRecord with chapters/appearances/titles
+_TOKENS_PER_ATTRIBUTION_ITEM = 24 # slim AttributionItemWire (quote_id + speaker + confidence)
 _SERIES_ROSTER_CAP = 100          # max characters injected from a series roster
+_ROSTER_OUTPUT_FLOOR = 4096
+_ATTRIBUTION_OUTPUT_FLOOR = 1024
 
 
 def estimate_tokens(text: str) -> int:
@@ -60,15 +62,15 @@ def compute_roster_output_budget(estimated_chars: int, compact: bool) -> int:
     at least 2048 tokens for very small rosters.
     """
     per_char = _TOKENS_PER_CHARACTER_WIRE if compact else _TOKENS_PER_CHARACTER_FULL
-    return max(2048, estimated_chars * per_char)
+    return max(_ROSTER_OUTPUT_FLOOR, estimated_chars * per_char)
 
 
 def compute_attribution_output_budget(num_quotes: int) -> int:
     """Compute max_tokens for a chapter attribution call.
 
-    Sized for the slim AttributionItemWire schema with a 4x safety margin.
+    Sized for the slim AttributionItemWire schema with a 6x safety margin.
     """
-    return max(512, num_quotes * _TOKENS_PER_ATTRIBUTION_ITEM * 4)
+    return max(_ATTRIBUTION_OUTPUT_FLOOR, num_quotes * _TOKENS_PER_ATTRIBUTION_ITEM * 6)
 
 
 def needs_chunking(
@@ -137,6 +139,7 @@ def _build_roster_prompt(
     book_text: str,
     series_roster: "CharacterRoster | None",
     compact_roster: bool = False,
+    include_descriptions: bool = False,
     descriptions_protagonists_only: bool = False,
 ) -> str:
     """Build the prompt for whole-book character extraction."""
@@ -158,15 +161,17 @@ def _build_roster_prompt(
             + "\n".join(lines)
         )
 
-    if descriptions_protagonists_only:
-        description_instruction = (
-            "- description: one sentence summarising the character — "
-            "only for protagonist and antagonist roles; leave empty for all others"
-        )
-    else:
-        description_instruction = (
-            '- description: one sentence summarising the character (or "" for very minor characters)'
-        )
+    description_instruction = ""
+    if include_descriptions:
+        if descriptions_protagonists_only:
+            description_instruction = (
+                "\n- description: one sentence summarising the character — "
+                "only for protagonist and antagonist roles; leave empty for all others"
+            )
+        else:
+            description_instruction = (
+                '\n- description: one sentence summarising the character (or "" for very minor characters)'
+            )
 
     if compact_roster:
         position_fields = ""
@@ -183,10 +188,10 @@ For each character return:
 - slug: stable lowercase underscore identifier derived from canonical_name (e.g. "elizabeth_bennet")
 - canonical_name: the most complete formal name used in the text
 - aliases: all other name forms (nicknames, last-name-only references, epithets)
-- titles: list of positional titles or honorifics (e.g. "Mr.", "Queen of Andor") — title strings only
+- titles: list of objects, each with a "title" field (e.g. [{{"title": "Mr."}}, {{"title": "Queen of Andor"}}])
 - gender: pronouns used ("he/him", "she/her", "they/them", or "" if unclear)
 - role: one of protagonist, antagonist, supporting, minor
-- {description_instruction}{position_fields}
+{description_instruction}{position_fields}
 
 BOOK TEXT:
 {book_text}"""
@@ -347,7 +352,13 @@ def _call_with_rate_limit_retry(fn, *args, progress_callback=None, **kwargs):
                 or "rate_limit" in str(exc).lower()
                 or "rate limit" in str(exc).lower()
             )
-            is_incomplete = "IncompleteOutputException" in exc_type
+            exc_text = str(exc).lower()
+            is_incomplete = (
+                "IncompleteOutputException" in exc_type
+                or "output is incomplete" in exc_text
+                or "max_tokens length limit" in exc_text
+                or "finish_reason=length" in exc_text
+            )
             if is_rate_limit and attempt < _RATE_LIMIT_MAX_RETRIES:
                 wait = _RATE_LIMIT_WAIT_S
                 msg = f"Rate limit hit — waiting {wait}s before retry {attempt + 1}/{_RATE_LIMIT_MAX_RETRIES}"
@@ -491,10 +502,12 @@ class CloudProvider:
         if progress_callback:
             progress_callback("Extracting character roster (single pass)")
 
+        include_descriptions = self.config.nlp_include_character_descriptions
         desc_leads_only = self.config.nlp_descriptions_protagonists_only
         prompt = _build_roster_prompt(
             full_text, series_roster,
             compact_roster=compact_roster,
+            include_descriptions=include_descriptions,
             descriptions_protagonists_only=desc_leads_only,
         )
         wire_model = CharacterRosterWire if compact_roster else CharacterRosterFullWire
@@ -527,13 +540,10 @@ class CloudProvider:
         from kenkui.nlp import cache_chunk_roster, get_cached_chunk_roster
 
         compact_roster = self.config.nlp_compact_roster
-        # Re-derive output_budget using the correct per-character estimate for the wire model
-        # used in chunked mode (the caller passes a budget sized for the full book; per-segment
-        # rosters are smaller so a tighter budget reduces wasted context).
-        seg_estimated_unique = max(10, len(chapters) // 2)
-        output_budget = compute_roster_output_budget(seg_estimated_unique, compact=compact_roster)
 
         context_limit = _context_limit_for(model)
+        # max_input uses the caller-supplied output_budget (sized for the full book) as a
+        # conservative upper bound when splitting chapters into segments.
         max_input = context_limit - output_budget - _SYSTEM_PROMPT_TOKENS
         if rate_limit_tpm is not None:
             max_input = min(max_input, int(rate_limit_tpm * _RATE_LIMIT_CHUNK_SAFETY))
@@ -566,10 +576,16 @@ class CloudProvider:
                 for ch in segment
             )
             segment_tokens = estimate_tokens(segment_text)
+            # Size the output budget from the segment text length (same heuristic as the
+            # single-pass path) so large segments with many characters get enough tokens.
+            seg_estimated_unique = max(20, len(segment_text) // 5000)
+            seg_output_budget = compute_roster_output_budget(seg_estimated_unique, compact=compact_roster)
+            include_descriptions = self.config.nlp_include_character_descriptions
             desc_leads_only = self.config.nlp_descriptions_protagonists_only
             prompt = _build_roster_prompt(
                 segment_text, series_roster,
                 compact_roster=compact_roster,
+                include_descriptions=include_descriptions,
                 descriptions_protagonists_only=desc_leads_only,
             )
 
@@ -579,7 +595,7 @@ class CloudProvider:
                 model=model,
                 response_model=wire_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=output_budget,
+                max_tokens=seg_output_budget,
                 max_retries=1,
                 num_retries=0,
                 progress_callback=progress_callback,

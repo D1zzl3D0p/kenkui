@@ -26,6 +26,7 @@ from kenkui.models import (
     NarrationMode,
     ProcessingConfig,
     Segment,
+    TTSExecutionMode,
 )
 
 
@@ -227,6 +228,17 @@ class TestJobConfigMultiVoice:
         assert job.narration_mode == NarrationMode.SINGLE
         assert job.speaker_voices == {}
         assert job.annotated_chapters_path is None
+
+    def test_remote_execution_fields_round_trip(self):
+        original = self._base_job(
+            tts_execution_mode=TTSExecutionMode.MODAL,
+            modal_endpoint="book_render",
+            modal_environment="staging",
+        )
+        restored = JobConfig.from_dict(original.to_dict())
+        assert restored.tts_execution_mode == TTSExecutionMode.MODAL
+        assert restored.modal_endpoint == "book_render"
+        assert restored.modal_environment == "staging"
 
 
 # ---------------------------------------------------------------------------

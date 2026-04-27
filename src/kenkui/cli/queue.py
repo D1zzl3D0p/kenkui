@@ -56,6 +56,31 @@ def _eta_str(eta_seconds: int) -> str:
     return f"{s}s"
 
 
+def _job_mode_str(job) -> str:
+    """Return a short mode string for a job (dict or JobConfig)."""
+    if isinstance(job, dict):
+        mode = job.get("narration_mode", "single")
+        provider = job.get("job_nlp_provider") or ""
+        model = job.get("job_nlp_model") or ""
+        chapter_voices = job.get("chapter_voices") or {}
+    else:
+        mode = getattr(job, "narration_mode", None)
+        mode = mode.value if hasattr(mode, "value") else str(mode or "single")
+        provider = getattr(job, "job_nlp_provider", "") or ""
+        model = getattr(job, "job_nlp_model", "") or ""
+        chapter_voices = getattr(job, "chapter_voices", {}) or {}
+
+    if chapter_voices:
+        return "chapter"
+    if mode == "multi":
+        # Abbreviate long model names to first segment
+        short_model = model.split("/")[-1].split("-")[0] if model else ""
+        if provider and provider != "ollama":
+            return f"multi · {provider[:5]} · {short_model}" if short_model else f"multi · {provider[:8]}"
+        return f"multi · ollama · {short_model}" if short_model else "multi · ollama"
+    return "single"
+
+
 def _build_queue_table(queue_info, exclude_statuses: "set[str] | None" = None) -> Table:
     """Build a Rich Table from a QueueInfo object."""
     tbl = Table(
@@ -66,6 +91,7 @@ def _build_queue_table(queue_info, exclude_statuses: "set[str] | None" = None) -
     )
     tbl.add_column("ID", style="dim", width=10)
     tbl.add_column("Name", min_width=20, max_width=30, no_wrap=True)
+    tbl.add_column("Mode", width=20)
     tbl.add_column("Status", width=12)
     tbl.add_column("Progress", width=8, justify="right")
     tbl.add_column("Elapsed", width=8, justify="right")
@@ -90,10 +116,12 @@ def _build_queue_table(queue_info, exclude_statuses: "set[str] | None" = None) -
         else:
             detail_str = Text((item.current_chapter or "")[:60])
         job_name = item.job.get("name", item.id) if isinstance(item.job, dict) else item.id
+        mode_str = _job_mode_str(item.job)
 
         tbl.add_row(
             item.id,
             job_name,
+            Text(mode_str, style="dim"),
             Text(item.status, style=status_style),
             progress_str,
             elapsed_str,

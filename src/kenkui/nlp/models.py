@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +196,43 @@ class CharacterRecordWire(BaseModel):
     role: str = Field(default="", description="protagonist, antagonist, supporting, or minor")
     description: str = Field(default="", description="One-line summary (omit for minor/supporting)")
 
+    @field_validator("titles", mode="before")
+    @classmethod
+    def _coerce_titles(cls, v: object) -> object:
+        """Coerce bare title strings to TitleWire-compatible dicts.
+
+        LLMs occasionally return ``titles: ["Mr.", "DCI"]`` despite the prompt
+        requesting objects.  This validator normalises bare strings so a format
+        deviation doesn't crash the entire roster extraction.
+        """
+        if isinstance(v, list):
+            return [{"title": item} if isinstance(item, str) else item for item in v]
+        return v
+
 
 class CharacterRosterWire(BaseModel):
     """Wire container for compact roster extraction."""
     characters: list[CharacterRecordWire] = Field(default_factory=list)
+
+    @field_validator("characters", mode="before")
+    @classmethod
+    def _coerce_character_titles(cls, v: object) -> object:
+        """Coerce bare title strings to TitleWire objects in each character.
+
+        Fallback coercion in case the validator on CharacterRecordWire is not applied
+        in all scenarios (e.g., when using instructor's JSON parsing path).
+        """
+        if isinstance(v, list):
+            result = []
+            for char in v:
+                if isinstance(char, dict) and "titles" in char:
+                    char["titles"] = [
+                        {"title": t} if isinstance(t, str) else t
+                        for t in char["titles"]
+                    ]
+                result.append(char)
+            return result
+        return v
 
 
 class CharacterRecordFullWire(BaseModel):
@@ -219,10 +252,33 @@ class CharacterRecordFullWire(BaseModel):
     first_appearance: list | None = Field(default=None, description="[null, chapter_index] for this book")
     last_appearance: list | None = Field(default=None, description="[null, chapter_index] for this book")
 
+    @field_validator("titles", mode="before")
+    @classmethod
+    def _coerce_titles(cls, v: object) -> object:
+        if isinstance(v, list):
+            return [{"title": item} if isinstance(item, str) else item for item in v]
+        return v
+
 
 class CharacterRosterFullWire(BaseModel):
     """Wire container for full (non-compact) roster extraction."""
     characters: list[CharacterRecordFullWire] = Field(default_factory=list)
+
+    @field_validator("characters", mode="before")
+    @classmethod
+    def _coerce_character_titles(cls, v: object) -> object:
+        """Coerce bare title strings to TitleWire objects in each character."""
+        if isinstance(v, list):
+            result = []
+            for char in v:
+                if isinstance(char, dict) and "titles" in char:
+                    char["titles"] = [
+                        {"title": t} if isinstance(t, str) else t
+                        for t in char["titles"]
+                    ]
+                result.append(char)
+            return result
+        return v
 
 
 class AttributionItemWire(BaseModel):

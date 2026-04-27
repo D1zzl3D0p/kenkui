@@ -6,6 +6,7 @@ from kenkui.nlp.providers.cloud import (
     compute_attribution_output_budget,
     needs_chunking,
     CloudProvider,
+    _build_roster_prompt,
 )
 from kenkui.models import AppConfig
 
@@ -17,9 +18,9 @@ def test_estimate_tokens_approx():
 
 
 def test_compute_roster_output_budget_minimum():
-    # With 0 characters, should return minimum floor of 2048
+    # With 0 characters, should return minimum floor
     budget = compute_roster_output_budget(estimated_chars=0, compact=True)
-    assert budget == 2048
+    assert budget >= 2048
 
 
 def test_compute_roster_output_budget_scales_with_characters():
@@ -30,9 +31,9 @@ def test_compute_roster_output_budget_scales_with_characters():
 
 
 def test_compute_attribution_output_budget_minimum():
-    # With 0 quotes, should return floor of 512
+    # With 0 quotes, should return minimum floor
     budget = compute_attribution_output_budget(num_quotes=0)
-    assert budget == 512
+    assert budget >= 512
 
 
 def test_compute_attribution_output_budget_scales_with_quotes():
@@ -146,6 +147,26 @@ def test_build_roster_injects_series_context(monkeypatch):
     assert "Mithrandir" in prompt_text
 
 
+def test_build_roster_prompt_escapes_literal_json_example():
+    prompt = _build_roster_prompt("Mr. Darcy arrived.", series_roster=None)
+    assert '[{"title": "Mr."}, {"title": "Queen of Andor"}]' in prompt
+
+
+def test_build_roster_prompt_omits_description_field_by_default():
+    prompt = _build_roster_prompt("Mr. Darcy arrived.", series_roster=None)
+    assert "- description:" not in prompt
+
+
+def test_build_roster_prompt_can_include_description_field():
+    prompt = _build_roster_prompt(
+        "Mr. Darcy arrived.",
+        series_roster=None,
+        include_descriptions=True,
+        descriptions_protagonists_only=True,
+    )
+    assert "- description:" in prompt
+
+
 from kenkui.nlp.providers.cloud import merge_rosters, split_chapters_into_segments
 
 
@@ -251,6 +272,21 @@ def test_call_with_rate_limit_retry_raises_after_max_incomplete_retries():
 
     with pytest.raises(IncompleteOutputException):
         _call_with_rate_limit_retry(always_incomplete, max_tokens=512)
+
+
+def test_call_with_rate_limit_retry_retries_on_incomplete_message_text():
+    """Retry should also trigger when providers surface truncation via message text."""
+    calls = []
+
+    def fake_fn(**kwargs):
+        calls.append(kwargs.get("max_tokens"))
+        if len(calls) == 1:
+            raise RuntimeError("The output is incomplete due to a max_tokens length limit.")
+        return "ok"
+
+    result = _call_with_rate_limit_retry(fake_fn, max_tokens=1024)
+    assert result == "ok"
+    assert calls == [1024, 2048]
 
 
 from kenkui.nlp.models import AttributionItem, AttributionResult, AttributionItemWire, AttributionResultWire

@@ -130,12 +130,30 @@ def book_hash(book_path: Path) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-def get_cached_result(book_path: Path) -> "NLPResult | None":
-    """Return a cached ``NLPResult`` if a valid cache file exists, else None."""
+def _attribution_cache_name(book_path: Path, provider: "str | None" = None) -> str:
+    """Return the cache filename stem for a book + provider combination.
+
+    Ollama (or no provider) uses the legacy ``{hash}.json`` name so existing
+    caches remain valid.  Cloud providers use ``{hash}-{provider}.json`` so
+    their results are stored separately and are never confused with Ollama output.
+    """
+    h = book_hash(book_path)
+    if provider and provider != "ollama":
+        return f"{h}-{provider}.json"
+    return f"{h}.json"
+
+
+def get_cached_result(book_path: Path, provider: "str | None" = None) -> "NLPResult | None":
+    """Return a cached ``NLPResult`` if a valid cache file exists, else None.
+
+    When *provider* is a cloud provider name the lookup uses a provider-specific
+    cache file (``{hash}-{provider}.json``) so Ollama results are never reused
+    for cloud-provider jobs and vice versa.
+    """
     from ..models import NLPResult
 
     cache_dir = _get_config_dir() / "nlp_cache"
-    cache_file = cache_dir / f"{book_hash(book_path)}.json"
+    cache_file = cache_dir / _attribution_cache_name(book_path, provider)
     if not cache_file.exists():
         return None
     try:
@@ -146,11 +164,15 @@ def get_cached_result(book_path: Path) -> "NLPResult | None":
         return None
 
 
-def cache_result(result: "NLPResult", book_path: Path) -> Path:
-    """Serialise *result* to disk and return the cache file path."""
+def cache_result(result: "NLPResult", book_path: Path, provider: "str | None" = None) -> Path:
+    """Serialise *result* to disk and return the cache file path.
+
+    Uses a provider-specific filename for cloud providers so results from
+    different providers are stored independently.
+    """
     cache_dir = _get_config_dir() / "nlp_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / f"{book_hash(book_path)}.json"
+    cache_file = cache_dir / _attribution_cache_name(book_path, provider)
     cache_file.write_text(
         json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
         encoding="utf-8",

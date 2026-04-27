@@ -22,6 +22,14 @@ class JobInfo:
     output_path: str = ""
     started_at: float = 0.0
     completed_at: float = 0.0
+    execution_provider: str = ""
+    remote_job_id: str = ""
+    estimated_cost_usd: float | None = None
+    actual_cost_usd: float | None = None
+    cost_status: str = "none"
+    artifact_uri: str = ""
+    artifact_source: str = ""
+    provider_status: str = ""
 
 
 @dataclass
@@ -90,6 +98,9 @@ class APIClient:
         chapter_selection: dict | None = None,
         output_path: str | None = None,
         name: str | None = None,
+        tts_execution_mode: str = "local",
+        modal_endpoint: str | None = None,
+        modal_environment: str | None = None,
         narration_mode: str = "single",
         speaker_voices: dict | None = None,
         annotated_chapters_path: str | None = None,
@@ -110,6 +121,7 @@ class APIClient:
         payload: dict = {
             "ebook_path": ebook_path,
             "voice": voice,
+            "tts_execution_mode": tts_execution_mode,
             "narration_mode": narration_mode,
         }
         if chapter_selection:
@@ -118,6 +130,10 @@ class APIClient:
             payload["output_path"] = output_path
         if name:
             payload["name"] = name
+        if modal_endpoint:
+            payload["modal_endpoint"] = modal_endpoint
+        if modal_environment:
+            payload["modal_environment"] = modal_environment
         if speaker_voices:
             payload["speaker_voices"] = speaker_voices
         if annotated_chapters_path:

@@ -75,6 +75,17 @@ class JobStatus(Enum):
     PAUSED = "paused"
 
 
+class TTSExecutionMode(Enum):
+    LOCAL = "local"
+    MODAL = "modal"
+
+
+class CostStatus(Enum):
+    NONE = "none"
+    ESTIMATED = "estimated"
+    FINAL = "final"
+
+
 class NarrationMode(Enum):
     """Whether a job uses a single narrator voice or per-character multi-voice."""
 
@@ -230,6 +241,9 @@ class JobConfig:
     chapter_selection: ChapterSelection = field(default_factory=ChapterSelection)
     output_path: Path | None = None
     name: str = ""
+    tts_execution_mode: TTSExecutionMode = TTSExecutionMode.LOCAL
+    modal_endpoint: str | None = None
+    modal_environment: str | None = None
     # --- Multi-voice fields ---
     narration_mode: NarrationMode = NarrationMode.SINGLE
     speaker_voices: dict[str, str] = field(default_factory=dict)  # char_id → voice
@@ -266,6 +280,7 @@ class JobConfig:
             "chapter_selection": self.chapter_selection.to_dict(),
             "output_path": str(self.output_path) if self.output_path else None,
             "name": self.name,
+            "tts_execution_mode": self.tts_execution_mode.value,
             "narration_mode": self.narration_mode.value,
             "speaker_voices": self.speaker_voices,
             "annotated_chapters_path": str(self.annotated_chapters_path)
@@ -275,6 +290,10 @@ class JobConfig:
             "chapter_voices": self.chapter_voices,
             "series_slug": self.series_slug,
         }
+        for key in ("modal_endpoint", "modal_environment"):
+            val = getattr(self, key)
+            if val is not None:
+                d[key] = val
         # Only include per-job overrides when explicitly set (non-None)
         for key in (
             "job_nlp_provider",
@@ -304,6 +323,9 @@ class JobConfig:
             chapter_selection=ChapterSelection.from_dict(data.get("chapter_selection", {})),
             output_path=Path(data["output_path"]) if data.get("output_path") else None,
             name=data.get("name", ""),
+            tts_execution_mode=TTSExecutionMode(data.get("tts_execution_mode", "local")),
+            modal_endpoint=data.get("modal_endpoint"),
+            modal_environment=data.get("modal_environment"),
             narration_mode=NarrationMode(data.get("narration_mode", "single")),
             speaker_voices=_migrate_speaker_voices_keys(data.get("speaker_voices") or {}),
             annotated_chapters_path=Path(data["annotated_chapters_path"])
@@ -430,7 +452,8 @@ class AppConfig:
     nlp_omit_position_echo: bool = True   # attribution: skip char_start/char_end echo
     nlp_omit_emotion: bool = True         # attribution: skip emotion field
     nlp_compact_roster: bool = True       # roster: skip chapters/appearances (derived server-side)
-    nlp_descriptions_protagonists_only: bool = True   # roster: only describe protagonist/antagonist roles
+    nlp_include_character_descriptions: bool = False  # roster: request per-character descriptions from the LLM
+    nlp_descriptions_protagonists_only: bool = True   # roster: when descriptions are enabled, only describe protagonist/antagonist roles
     excluded_voices: list[str] = field(default_factory=list)
     # --- Credits chapter (audio-only, appended after final chapter, no chapter marker) ---
     credits_enabled: bool = True
@@ -469,6 +492,7 @@ class AppConfig:
             "nlp_omit_position_echo": self.nlp_omit_position_echo,
             "nlp_omit_emotion": self.nlp_omit_emotion,
             "nlp_compact_roster": self.nlp_compact_roster,
+            "nlp_include_character_descriptions": self.nlp_include_character_descriptions,
             "nlp_descriptions_protagonists_only": self.nlp_descriptions_protagonists_only,
             "excluded_voices": list(self.excluded_voices),
             "credits_enabled": self.credits_enabled,
@@ -510,6 +534,7 @@ class AppConfig:
             nlp_omit_position_echo=data.get("nlp_omit_position_echo", True),
             nlp_omit_emotion=data.get("nlp_omit_emotion", True),
             nlp_compact_roster=data.get("nlp_compact_roster", True),
+            nlp_include_character_descriptions=data.get("nlp_include_character_descriptions", False),
             nlp_descriptions_protagonists_only=data.get("nlp_descriptions_protagonists_only", True),
             excluded_voices=list(data.get("excluded_voices") or []),
             credits_enabled=data.get("credits_enabled", True),
@@ -531,6 +556,14 @@ class QueueItem:
     output_path: str = ""
     started_at: float = 0.0  # Unix timestamp set when job enters PROCESSING
     completed_at: float = 0.0  # Unix timestamp set when job completes
+    execution_provider: str = ""
+    remote_job_id: str = ""
+    estimated_cost_usd: float | None = None
+    actual_cost_usd: float | None = None
+    cost_status: CostStatus = CostStatus.NONE
+    artifact_uri: str = ""
+    artifact_source: str = ""
+    provider_status: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -544,6 +577,14 @@ class QueueItem:
             "output_path": self.output_path,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "execution_provider": self.execution_provider,
+            "remote_job_id": self.remote_job_id,
+            "estimated_cost_usd": self.estimated_cost_usd,
+            "actual_cost_usd": self.actual_cost_usd,
+            "cost_status": self.cost_status.value,
+            "artifact_uri": self.artifact_uri,
+            "artifact_source": self.artifact_source,
+            "provider_status": self.provider_status,
         }
 
     @classmethod
@@ -559,6 +600,14 @@ class QueueItem:
             output_path=data.get("output_path", ""),
             started_at=data.get("started_at", 0.0),
             completed_at=data.get("completed_at", 0.0),
+            execution_provider=data.get("execution_provider", ""),
+            remote_job_id=data.get("remote_job_id", ""),
+            estimated_cost_usd=data.get("estimated_cost_usd"),
+            actual_cost_usd=data.get("actual_cost_usd"),
+            cost_status=CostStatus(data.get("cost_status", "none")),
+            artifact_uri=data.get("artifact_uri", ""),
+            artifact_source=data.get("artifact_source", ""),
+            provider_status=data.get("provider_status", ""),
         )
 
 
@@ -687,11 +736,35 @@ class FastScanResult:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FastScanResult":
-        from .nlp.models import CharacterRoster
+        from .nlp.models import CharacterRoster, slugify
+
+        roster_data = data.get("roster", {"characters": []})
+
+        # Schema migration: handle old cache format (pre-slug generation)
+        # Old format: {"characters": [{"canonical": "...", "aliases": [...], "gender": "..."}]}
+        # New format: {"characters": [{"slug": "...", "canonical_name": "...", ...}]}
+        if roster_data.get("characters"):
+            first_char = roster_data["characters"][0]
+            if "canonical" in first_char and "slug" not in first_char:
+                # Legacy format detected - migrate to new schema
+                for char in roster_data["characters"]:
+                    # Generate slug from canonical name
+                    char["slug"] = slugify(char.get("canonical", ""))
+                    # Rename canonical -> canonical_name
+                    char["canonical_name"] = char.pop("canonical")
+                    # Set default values for missing fields
+                    char.setdefault("role", "")
+                    char.setdefault("description", "")
+                    char.setdefault("titles", [])
+                    char.setdefault("chapters", [])
+                    char.setdefault("first_appearance", None)
+                    char.setdefault("last_appearance", None)
+                    char.setdefault("mention_count", 0)
+                    char.setdefault("quote_count", 0)
 
         return cls(
             book_hash=data.get("book_hash", ""),
-            roster=CharacterRoster.model_validate(data.get("roster", {"characters": []})),
+            roster=CharacterRoster.model_validate(roster_data),
             characters=[CharacterInfo.from_dict(c) for c in data.get("characters", [])],
         )
 

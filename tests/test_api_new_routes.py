@@ -30,6 +30,26 @@ def _make_fake_task(task_id: str = "fake-task-id") -> Task:
 def _make_mock_server(task: Task | None = None):
     server = MagicMock()
     server.get_job.return_value = None
+    server.add_job.return_value = MagicMock(
+        id="job123",
+        job=MagicMock(to_dict=lambda: {"ebook_path": "/tmp/book.epub", "tts_execution_mode": "modal"}),
+        status=MagicMock(value="pending"),
+        progress=0.0,
+        current_chapter="",
+        eta_seconds=0,
+        error_message="",
+        output_path="",
+        started_at=0.0,
+        completed_at=0.0,
+        execution_provider="modal",
+        remote_job_id="",
+        estimated_cost_usd=None,
+        actual_cost_usd=None,
+        cost_status=MagicMock(value="none"),
+        artifact_uri="",
+        artifact_source="",
+        provider_status="",
+    )
     server.book_cache = MagicMock()
     server.task_registry = MagicMock()
     server.task_registry.get.return_value = None
@@ -72,6 +92,31 @@ def test_scan_book_returns_202(client):
     data = resp.json()
     assert data["task_id"] == "scan-task-001"
     assert data["status"] == TaskStatus.PENDING.value
+
+
+def test_add_job_accepts_modal_execution_fields(client):
+    with patch("kenkui.server.api.get_server") as mock_get_server:
+        mock_server = _make_mock_server()
+        mock_get_server.return_value = mock_server
+
+        resp = client.post(
+            "/queue",
+            json={
+                "ebook_path": "/tmp/book.epub",
+                "voice": "alba",
+                "tts_execution_mode": "modal",
+                "modal_endpoint": "book_render",
+                "modal_environment": "prod",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["execution_provider"] == "modal"
+    job = mock_server.add_job.call_args[0][0]
+    assert job.tts_execution_mode.value == "modal"
+    assert job.modal_endpoint == "book_render"
+    assert job.modal_environment == "prod"
 
 
 # ---------------------------------------------------------------------------

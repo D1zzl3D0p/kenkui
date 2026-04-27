@@ -316,6 +316,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text to synthesize (default: built-in sample phrase).",
     )
 
+    # ---- kenkui cache ---------------------------------------------------------
+    cache_p = sub.add_parser(
+        "cache",
+        help="Clear kenkui cache files.",
+    )
+    cache_p.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Skip confirmation prompt.",
+    )
+
     # ---- kenkui configure-provider -----------------------------------------
     sub.add_parser(
         "configure-provider",
@@ -460,6 +471,12 @@ def main() -> None:
         else:
             # No subcommand: launch interactive TUI
             cmd_voices_tui(args)
+        sys.exit(0)
+
+    elif command == "cache":
+        from .cli.cache import cmd_cache
+
+        cmd_cache(args)
         sys.exit(0)
 
     elif command == "configure-provider":

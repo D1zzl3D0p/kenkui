@@ -22,13 +22,16 @@ If you have ebooks and want audiobooks, kenkui is for you.
 - Super high-quality text-to-speech
 - Multithreaded
 - Supports EPUB, MOBI/AZW, and FB2
-- Interactive wizard with smart defaults and Escape to go back
+- Interactive hub with live status panel and Escape to go back
 - Job queue with live progress dashboard
-- **Multi-voice narration** — different voices for different characters, powered by an LLM
+- **Multi-voice narration** — different voices for different characters, powered by an LLM; NLP scan runs unattended during processing so you can queue and walk away
+- **Voice pool template** — persistent global defaults that map role + gender + rank to specific voices, applied automatically across every book
 - **Chapter-voice mode** — assign a distinct voice to each chapter
+- **Credits chapter** — synthesized audio appended to every m4b with title, author, and cast (configurable)
 - Three tiers of voices: compiled, built-in, and custom
 - Flexible chapter selection with presets and manual override
 - Broadcast-quality audio post-processing chain
+- Requirement validation at submission — warns about missing API keys or low VRAM before the job starts
 - Automatic cover embedding
 - Sensible defaults, minimal configuration
 
@@ -93,18 +96,33 @@ That's it. An interactive wizard walks you through the setup, then kenkui queues
 kenkui book.epub
 ```
 
-Walks you through:
+Opens a configuration hub showing a live status panel of your current settings, then a menu:
 
-1. Chapter selection
-2. Narration mode (single voice, multi-voice, or chapter-voice)
-3. Optional per-job quality overrides
-4. Output directory
-5. Voice assignment (fast character scan for multi-voice, then voice picker)
-6. Final confirmation
+```
+┌─ Current Settings ───────────────────────────────────────────┐
+│  Mode:          Multi-voice                                   │
+│  NLP:           Anthropic · claude-haiku-4-5                 │
+│  TTS Provider:  Kokoro · local                               │
+│  Narrator:      sarah                                         │
+│  Chapters:      content-only (42 selected)                   │
+│  Quality:       temp 0.8 · 30 LSD steps · 96k               │
+└───────────────────────────────────────────────────────────────┘
 
-Press **Escape** at any step to go back to the previous one.
+  > Submit Job
+    Narration Mode ↠
+    Audio Quality ↠
+    Post-Processing ↠
+    Advanced ↠
+    Cancel
+```
 
-Then auto-starts the queue with a live Rich dashboard.
+**Narration Mode** submenu: choose Single / Multi-voice / Chapter-voice, then (for multi-voice) NLP provider and model, then narrator voice. No character scan happens here — that runs unattended when the worker picks up the job.
+
+**Advanced** submenu: chapter selection (preset + checkbox list) and voice management.
+
+Press **Escape** at any step to go back. All settings persist to `~/.config/kenkui/last_job_profile.toml` and pre-load on the next run.
+
+After submitting, kenkui prints a confirmation with the job's requirements and any warnings (missing API key, low VRAM), then auto-starts the queue with a live Rich dashboard.
 
 ### Headless mode
 
@@ -160,6 +178,8 @@ The default. One voice narrates everything.
 
 kenkui uses an NLP pipeline to identify characters in the book and assigns each a distinct voice. The narrator gets its own voice too.
 
+**The NLP scan is deferred** — it runs unattended during job processing, not during setup. You pick your NLP provider, model, and narrator voice in the hub, then queue and walk away. Voice assignment happens automatically when the worker starts.
+
 Two NLP backends are available: **Ollama** (local, default) and **cloud providers** (Anthropic, OpenAI, Google). Cloud providers use large-context models that process the whole book in fewer passes and generally produce higher-quality results.
 
 #### Ollama (default)
@@ -168,8 +188,6 @@ Two NLP backends are available: **Ollama** (local, default) and **cloud provider
 - [Ollama](https://ollama.com) running locally (`ollama serve`)
 - NLP model pulled (default: `llama3.2`) — `ollama pull llama3.2`
 - spaCy model — kenkui downloads this automatically if missing
-
-The wizard checks all requirements and shows a status table before proceeding.
 
 #### Cloud providers (Anthropic, OpenAI, Google)
 
@@ -199,22 +217,73 @@ No Ollama or spaCy required when using a cloud provider.
 
 Override with `nlp_model` in your config. Any [LiteLLM-supported model string](https://docs.litellm.ai/docs/providers) works.
 
-**How it works:**
+**How voice assignment works:**
 
-The wizard runs a fast character scan (seconds) before voice assignment so you can assign voices and walk away — the slower LLM attribution phase runs unattended in the background before TTS begins.
+After the deferred scan completes, voices are assigned using a three-tier priority system:
 
-**Assignment modes in the wizard:**
+1. **Series record** — named character → pinned voice (highest priority)
+2. **Voice pool template** — role + gender + rank → voice (see below)
+3. **Round-robin pool** — any remaining characters
 
-- **Simple** — all male characters share one voice, all females share another
-- **Advanced** — individual voice per character; kenkui auto-assigns by gender and resolves conflicts for characters that appear in the same chapter, then lets you review and adjust
+When a multi-voice job finishes, kenkui prints a notification:
 
-When reviewing assignments, the voice picker shows which other characters are already using each voice (e.g. `← Rand al'Thor`) so you can avoid conflicts at a glance. Press **Enter** to accept all assignments.
+> *Cast saved — `kenkui voices cast <title>` to review · edit `~/.config/kenkui/series/<slug>.toml` to adjust*
 
 The NLP provider and model are configurable via `nlp_provider` and `nlp_model` in your config.
 
 ### Chapter-voice mode
 
 Assign a distinct voice to each chapter. The wizard presents each chapter title and lets you pick a voice for it.
+
+---
+
+## 🗂️ Voice Pool Template
+
+The voice pool template is a persistent file (`~/.config/kenkui/voice_pool.toml`) that pre-assigns voices by character role, gender, and rank. It applies automatically to every multi-voice job without any per-book setup.
+
+```toml
+[protagonist.male]
+1 = "david"
+2 = "james"
+pool = ["oliver", "ethan"]   # round-robin for rank 3+
+
+[protagonist.female]
+1 = "sarah"
+pool = ["emma", "claire"]
+
+[protagonist.other]
+pool = ["alex"]
+
+[supporting.male]
+pool = ["oliver", "ethan", "marcus"]
+
+[supporting.female]
+pool = ["emma", "claire", "nina"]
+
+[supporting.other]
+pool = ["alex"]
+
+[minor]
+pool = []  # fallback: any non-excluded voice
+```
+
+Characters are ranked by dialogue count within their gender group. Rank 1 is the character with the most dialogue. Series record assignments override template assignments for any character already pinned in a series file.
+
+If no template exists (or it's empty), kenkui falls back entirely to round-robin pool assignment (the previous behaviour).
+
+**Edit it directly,** or use `kenkui voices` → Manage voice pool to populate it from your active voice list.
+
+---
+
+## 🎬 Credits Chapter
+
+Every generated m4b ends with a synthesized credits segment narrated by the narrator voice. No chapter marker is added, so chapter navigation in players is unaffected.
+
+Default script:
+
+> *"This audiobook was generated with kenkui. [Title] by [Author]. [If multi-voice: Cast: Character Name, voiced by voice-name. ...] [Acknowledgements.] [License.]"*
+
+Single-voice jobs omit the cast list. Configure or disable in `kenkui configure` (Credits section) or via the config keys `credits_enabled`, `credits_acknowledgements`, and `credits_license`.
 
 ---
 
@@ -360,6 +429,9 @@ Named configs without a path separator are automatically looked up in `~/.config
 | `nlp_confidence_threshold` | `0` | Min attribution confidence score; 0 = second-pass disabled |
 | `nlp_review_model` | `""` | Ollama model for second-pass retry; `""` = same as `nlp_model` |
 | `excluded_voices` | `[]` | Voices excluded from auto-assignment (still available manually) |
+| `credits_enabled` | `true` | Append synthesized credits audio to every m4b |
+| `credits_acknowledgements` | `""` | Text appended to the credits after the cast list |
+| `credits_license` | `""` | License text appended at the end of the credits |
 
 ### Per-job quality overrides
 
@@ -420,10 +492,13 @@ EPUB, MOBI/AZW/AZW3/AZW4, and FB2.
 No. This is intentional — M4B is a significantly better format for audiobooks.
 
 **How does multi-voice narration work?**
-kenkui runs a two-stage NLP pipeline: first a character scan builds a roster of characters and their aliases; then an LLM pass attributes each dialogue segment to its speaker. The result is a speaker map where each character speaks in their assigned voice and the narrator fills everything else. With the default Ollama backend this runs entirely locally (BookNLP + spaCy + Ollama). With a cloud provider (Anthropic, OpenAI, Google) the whole-book pass runs in a single large-context call, which is faster and generally more accurate.
+kenkui runs a two-stage NLP pipeline: first a character scan builds a roster of characters and their aliases; then an LLM pass attributes each dialogue segment to its speaker. Both stages run **unattended during job processing** — not during the setup wizard. After the scan, voices are assigned using a three-tier priority system: series record (pinned) → voice pool template (role + gender + rank) → round-robin pool. The result is a speaker map where each character speaks in their assigned voice and the narrator fills everything else. With the default Ollama backend this runs entirely locally (BookNLP + spaCy + Ollama). With a cloud provider (Anthropic, OpenAI, Google) the whole-book pass runs in a single large-context call, which is faster and generally more accurate.
 
 **Do I need Ollama for multi-voice?**
-Not anymore. You can use Ollama (local, default) or a cloud provider (Anthropic, OpenAI, Google). With Ollama, nothing leaves your machine. With a cloud provider, your book text is sent to the provider's API for the character scan and attribution passes — the same text that's in the ebook file. Run `kenkui configure-provider` to set up a cloud provider.
+No. You can use Ollama (local, default) or a cloud provider (Anthropic, OpenAI, Google). With Ollama, nothing leaves your machine. With a cloud provider, your book text is sent to the provider's API — the same text that's in the ebook file. Run `kenkui configure-provider` to set up a cloud provider.
+
+**What is the voice pool template?**
+A TOML file (`~/.config/kenkui/voice_pool.toml`) that maps role + gender + rank to specific voices. It applies automatically to every multi-voice job, so your preferred voices are used without any per-book setup. See the Voice Pool Template section above.
 
 **Why do I need a HuggingFace account for custom voices?**
 The pocket-tts model is gated on HuggingFace, meaning the authors require users to accept their terms before downloading. This only applies to custom uncompiled `.wav` voices — compiled voices and built-ins require no authentication at all.
@@ -434,7 +509,7 @@ When you first use a custom voice, kenkui guides you through creating a free Hug
 Compiled voices are downloaded to `~/.local/share/kenkui/voices/compiled/` on first run. Custom voices go to `~/.local/share/kenkui/voices/uncompiled/`. Run `kenkui voices download --force` to re-download from scratch.
 
 **Does it upload my books anywhere?**
-No. Everything runs locally. Internet access is only needed to pull models from HuggingFace or Ollama the first time.
+With the default Ollama backend: no. Everything runs locally and no book text leaves your machine. If you configure a cloud NLP provider (Anthropic, OpenAI, Google), the book text is sent to that provider's API for the character scan and attribution pass. Nothing else is uploaded.
 
 **Why isn't kenkui finding my ebook in a hidden directory?**
 kenkui doesn't search hidden directories by default. Pass the file directly:

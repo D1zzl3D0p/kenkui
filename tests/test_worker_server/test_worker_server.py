@@ -1,14 +1,4 @@
-"""Tests for kenkui.server.worker.WorkerServer.
-
-Coverage:
-- _build_config() with single-voice and multi-voice fields
-- _build_config() propagates _included_indices as a proper field
-- _process_job() happy path: AudioBuilder success → complete_job()
-- _process_job() AnnotatedChaptersCacheMissError → fail_job("CACHE_MISS:…")
-- _process_job() generic exception → fail_job(error_message)
-- Queue state management: add / start / complete / fail cycle
-- get_server() / reset_server() singleton helpers
-"""
+"""Tests for kenkui.server.worker.WorkerServer."""
 
 from __future__ import annotations
 
@@ -26,8 +16,10 @@ from kenkui.models import (
     JobStatus,
     NarrationMode,
     ProcessingConfig,
+    TTSExecutionMode,
 )
 from kenkui.parsing import AnnotatedChaptersCacheMissError
+from kenkui.server.tts_execution import ExecutionOutcome
 from kenkui.server.worker import WorkerServer, get_server, reset_server
 
 
@@ -57,8 +49,11 @@ def _make_job(
 
 def _make_server(tmp_path: Path) -> WorkerServer:
     """Create a fresh WorkerServer that stores state in tmp_path."""
-    with patch("kenkui.server.worker.QUEUE_FILE", tmp_path / "queue.yaml"):
-        server = WorkerServer()
+    import kenkui.server.worker as worker_module
+
+    worker_module.QUEUE_FILE = tmp_path / "queue.toml"
+    worker_module._LEGACY_QUEUE_FILE = tmp_path / "queue.yaml"
+    server = WorkerServer()
     return server
 
 
@@ -219,42 +214,49 @@ class TestProcessJob:
     def _run_process_job(
         self,
         tmp_path: Path,
-        builder_result: bool = True,
-        builder_side_effect: Exception | None = None,
+        provider_outcome: ExecutionOutcome | None = None,
+        provider_side_effect: Exception | None = None,
+        job: JobConfig | None = None,
     ) -> tuple[WorkerServer, object]:
-        """Add a job, call _process_job with a mocked AudioBuilder, return server + item."""
+        """Add a job, call _process_job with a mocked provider, return server + item."""
         server = _make_server(tmp_path)
-        item = server.add_job(_make_job(ebook_path=tmp_path / "book.epub"))
+        item = server.add_job(job or _make_job(ebook_path=tmp_path / "book.epub"))
         item.status = JobStatus.PROCESSING  # manually mark as started
 
-        mock_builder = MagicMock()
-        if builder_side_effect is not None:
-            mock_builder.return_value.run.side_effect = builder_side_effect
+        mock_provider = MagicMock()
+        if provider_side_effect is not None:
+            mock_provider.execute.side_effect = provider_side_effect
         else:
-            mock_builder.return_value.run.return_value = builder_result
+            mock_provider.execute.return_value = provider_outcome or ExecutionOutcome(
+                success=True,
+                output_path=str(tmp_path / "book.m4b"),
+                artifact_source="local",
+                provider_status="completed",
+            )
 
-        with patch("kenkui.server.worker.AudioBuilder", mock_builder):
+        with patch("kenkui.server.worker.get_tts_execution_provider", return_value=mock_provider):
             server._process_job(item)
 
         return server, item
 
     def test_successful_job_marks_completed(self, tmp_path):
-        server, item = self._run_process_job(tmp_path, builder_result=True)
+        server, item = self._run_process_job(tmp_path)
         final = server.get_job(item.id)
         assert final is not None
         assert final.status == JobStatus.COMPLETED
 
-    def test_failed_builder_run_marks_failed(self, tmp_path):
-        """AudioBuilder.run() returning False marks the job as FAILED."""
-        server, item = self._run_process_job(tmp_path, builder_result=False)
+    def test_failed_provider_marks_failed(self, tmp_path):
+        server, item = self._run_process_job(
+            tmp_path,
+            provider_outcome=ExecutionOutcome(success=False, error_message="Conversion failed"),
+        )
         final = server.get_job(item.id)
         assert final is not None
         assert final.status == JobStatus.FAILED
         assert "Conversion failed" in final.error_message
 
     def test_generic_exception_marks_failed(self, tmp_path):
-        """An unexpected exception from AudioBuilder marks the job as FAILED."""
-        server, item = self._run_process_job(tmp_path, builder_side_effect=RuntimeError("boom"))
+        server, item = self._run_process_job(tmp_path, provider_side_effect=RuntimeError("boom"))
         final = server.get_job(item.id)
         assert final is not None
         assert final.status == JobStatus.FAILED
@@ -265,12 +267,39 @@ class TestProcessJob:
         so the UI's QueueScreen._handle_cache_miss() recovery flow triggers."""
         server, item = self._run_process_job(
             tmp_path,
-            builder_side_effect=AnnotatedChaptersCacheMissError("missing file"),
+            provider_side_effect=AnnotatedChaptersCacheMissError("missing file"),
         )
         final = server.get_job(item.id)
         assert final is not None
         assert final.status == JobStatus.FAILED
         assert final.error_message.startswith("CACHE_MISS:")
+
+    def test_modal_outcome_records_cost_and_remote_metadata(self, tmp_path):
+        job = _make_job(ebook_path=tmp_path / "book.epub")
+        job.tts_execution_mode = TTSExecutionMode.MODAL
+        server, item = self._run_process_job(
+            tmp_path,
+            job=job,
+            provider_outcome=ExecutionOutcome(
+                success=True,
+                output_path=str(tmp_path / "book.m4b"),
+                remote_job_id="modal-123",
+                estimated_cost_usd=1.25,
+                actual_cost_usd=1.5,
+                artifact_uri="modal://artifact/book.m4b",
+                artifact_source="modal",
+                provider_status="completed",
+            ),
+        )
+        final = server.get_job(item.id)
+        assert final is not None
+        assert final.status == JobStatus.COMPLETED
+        assert final.execution_provider == "modal"
+        assert final.remote_job_id == "modal-123"
+        assert final.estimated_cost_usd == 1.25
+        assert final.actual_cost_usd == 1.5
+        assert final.cost_status.value == "final"
+        assert final.artifact_source == "modal"
 
     def test_progress_callback_called_during_processing(self, tmp_path):
         """The progress_callback passed to start_processing is invoked."""
@@ -279,16 +308,21 @@ class TestProcessJob:
 
         progress_calls: list[tuple] = []
 
-        def mock_run():
-            # Simulate builder calling the progress callback
+        def mock_execute(**kwargs):
             if server._progress_callback:
                 server._progress_callback(50.0, "Chapter 1", 30)
-            return True
+            return ExecutionOutcome(
+                success=True,
+                output_path=str(tmp_path / "book.m4b"),
+                remote_job_id="modal-xyz",
+                estimated_cost_usd=2.0,
+                artifact_source="modal",
+            )
 
-        mock_builder = MagicMock()
-        mock_builder.return_value.run.side_effect = mock_run
+        mock_provider = MagicMock()
+        mock_provider.execute.side_effect = mock_execute
 
-        with patch("kenkui.server.worker.AudioBuilder", mock_builder):
+        with patch("kenkui.server.worker.get_tts_execution_provider", return_value=mock_provider):
             server.start_processing(
                 progress_callback=lambda p, c, e: progress_calls.append((p, c, e))
             )
@@ -296,6 +330,18 @@ class TestProcessJob:
             server._processing_thread.join(timeout=5)
 
         assert any(p == 50.0 for p, c, e in progress_calls)
+        item = server.all_items[0]
+        assert item.remote_job_id == "modal-xyz"
+        assert item.estimated_cost_usd == 2.0
+        assert item.cost_status.value == "estimated"
+
+    def test_pause_job_rejected_for_modal_execution(self, tmp_path):
+        server = _make_server(tmp_path)
+        job = _make_job(ebook_path=tmp_path / "book.epub")
+        job.tts_execution_mode = TTSExecutionMode.MODAL
+        item = server.add_job(job)
+        item.status = JobStatus.PROCESSING
+        assert server.pause_job(item.id) is False
 
 
 # ---------------------------------------------------------------------------

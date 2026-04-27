@@ -13,8 +13,9 @@ import tomli_w
 
 from ..chapter_filter import FilterOperation
 from ..config import CONFIG_DIR
-from ..models import AppConfig, JobConfig, JobStatus, QueueItem
-from ..parsing import AnnotatedChaptersCacheMissError, AudioBuilder
+from ..models import AppConfig, CostStatus, JobConfig, JobStatus, QueueItem
+from ..parsing import AnnotatedChaptersCacheMissError
+from .tts_execution import get_tts_execution_provider
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class WorkerServer:
         self._running = False
         self._progress_callback: Callable[[float, str, int], None] | None = None
         self._pause_requested: bool = False
+        self._modal_gateway = None
         self._load()
 
         from ..services.book_cache import BookCache
@@ -144,6 +146,7 @@ class WorkerServer:
                 id=str(uuid.uuid4())[:8],
                 job=job,
                 status=JobStatus.PENDING,
+                execution_provider=job.tts_execution_mode.value,
             )
             self._items.append(item)
             self._save()
@@ -221,6 +224,20 @@ class WorkerServer:
                     break
             self._save()
 
+    def update_job_metadata(self, job_id: str, **fields) -> None:
+        with self._lock:
+            item = next((i for i in self._items if i.id == job_id), None)
+            if item is None:
+                return
+
+            for key, value in fields.items():
+                if value is None:
+                    continue
+                if key == "cost_status" and not isinstance(value, CostStatus):
+                    value = CostStatus(str(value))
+                setattr(item, key, value)
+            self._save()
+
     def fail_job(self, job_id: str, error: str):
         with self._lock:
             for item in self._items:
@@ -243,6 +260,8 @@ class WorkerServer:
             item = next((i for i in self._items if i.id == job_id), None)
             if item is None or item.status != JobStatus.PROCESSING:
                 return False
+            if item.job.tts_execution_mode.value == "modal":
+                return False
             self._pause_requested = True
             return True
 
@@ -250,6 +269,8 @@ class WorkerServer:
         with self._lock:
             item = next((i for i in self._items if i.id == job_id), None)
             if item is None or item.status != JobStatus.PAUSED:
+                return False
+            if item.job.tts_execution_mode.value == "modal":
                 return False
             item.status = JobStatus.PENDING
             # started_at will be set by start_next_job() when the loop picks it up
@@ -281,6 +302,13 @@ class WorkerServer:
 
     def stop_processing(self):
         """Stop the current processing job."""
+        current = self.current_item
+        if current is not None:
+            try:
+                provider = get_tts_execution_provider(current, gateway=self._modal_gateway)
+                provider.cancel(current)
+            except Exception as exc:
+                logger.warning("Could not cancel provider job %s: %s", current.id, exc)
         self._running = False
         if self._processing_thread:
             self._processing_thread.join(timeout=5)
@@ -311,12 +339,22 @@ class WorkerServer:
                 job = item.job
 
             cfg = self._build_config(job)
-            builder = AudioBuilder(cfg, progress_callback=self._progress_callback)
-            builder.pause_check = lambda: self._pause_requested
+            provider = get_tts_execution_provider(item, gateway=self._modal_gateway)
+            self.update_job_metadata(
+                item.id,
+                execution_provider=job.tts_execution_mode.value,
+                provider_status="starting",
+            )
+            outcome = provider.execute(
+                item=item,
+                cfg=cfg,
+                app_config=self._app_config,
+                progress_callback=self._progress_callback,
+                metadata_callback=lambda **fields: self.update_job_metadata(item.id, **fields),
+                pause_check=lambda: self._pause_requested,
+            )
 
-            result = builder.run()
-
-            if getattr(builder, "was_paused", False) is True:
+            if outcome.paused is True:
                 with self._lock:
                     item = next((i for i in self._items if i.id == self._current_id), None)
                     if item is not None:
@@ -325,9 +363,23 @@ class WorkerServer:
                         self._save()
                 return
 
-            if result:
-                m4b_file = cfg.output_path / f"{job.name}.m4b"
-                output_path = str(m4b_file)
+            if outcome.success:
+                output_path = outcome.output_path or str(cfg.output_path / f"{job.name}.m4b")
+                m4b_file = job.output_path if (job.output_path and job.output_path.suffix) else None
+                if m4b_file is None:
+                    m4b_file = cfg.output_path / f"{job.name}.m4b"
+                self.update_job_metadata(
+                    item.id,
+                    remote_job_id=outcome.remote_job_id,
+                    estimated_cost_usd=outcome.estimated_cost_usd,
+                    actual_cost_usd=outcome.actual_cost_usd,
+                    cost_status="final" if outcome.actual_cost_usd is not None else (
+                        "estimated" if outcome.estimated_cost_usd is not None else "none"
+                    ),
+                    artifact_uri=outcome.artifact_uri,
+                    artifact_source=outcome.artifact_source,
+                    provider_status=outcome.provider_status or "completed",
+                )
 
                 # Append synthesized credits audio (if enabled and file exists)
                 if self._app_config.credits_enabled and m4b_file.exists():
@@ -342,7 +394,17 @@ class WorkerServer:
                         item.id, item.id,
                     )
             else:
-                self.fail_job(item.id, "Conversion failed")
+                self.update_job_metadata(
+                    item.id,
+                    remote_job_id=outcome.remote_job_id,
+                    estimated_cost_usd=outcome.estimated_cost_usd,
+                    actual_cost_usd=outcome.actual_cost_usd,
+                    cost_status="final" if outcome.actual_cost_usd is not None else (
+                        "estimated" if outcome.estimated_cost_usd is not None else "none"
+                    ),
+                    provider_status=outcome.provider_status or "failed",
+                )
+                self.fail_job(item.id, outcome.error_message or "Conversion failed")
 
         except AnnotatedChaptersCacheMissError as e:
             logger.error("Job %s failed (cache miss): %s", item.id, e)
@@ -359,9 +421,9 @@ class WorkerServer:
         """
         from ..nlp import (
             CACHE_DIR,
+            _attribution_cache_name,
             book_hash,
             get_cached_result,
-            run_fast_scan,
         )
         from ..readers import get_reader
         from ..services.nlp_service import attribute_only
@@ -369,11 +431,14 @@ class WorkerServer:
         job = item.job
         book_path = job.ebook_path
 
-        # Return early if full NLP cache already exists
-        cached = get_cached_result(book_path)
+        # Resolve provider early so the cache lookup uses the correct namespace.
+        _nlp_provider_early = job.job_nlp_provider or self._app_config.nlp_provider
+
+        # Return early if full NLP cache already exists for this provider
+        cached = get_cached_result(book_path, provider=_nlp_provider_early)
         if cached is not None:
             h = book_hash(book_path)
-            job.annotated_chapters_path = CACHE_DIR / f"{h}.json"
+            job.annotated_chapters_path = CACHE_DIR / _attribution_cache_name(book_path, _nlp_provider_early)
             return
 
         _attrib_step: list[int] = [0]
@@ -403,7 +468,26 @@ class WorkerServer:
         else:
             chapters = all_chapters
 
-        # Get roster — load from roster_cache_path, or re-run fast scan as fallback
+        # Per-job overrides take precedence over the global app config.
+        nlp_provider = job.job_nlp_provider or self._app_config.nlp_provider
+        nlp_model = job.job_nlp_model or self._app_config.nlp_model
+
+        # For cloud providers, validate that credentials are available before starting.
+        if nlp_provider != "ollama":
+            from ..config import load_provider_credentials
+            creds = load_provider_credentials()
+            cred = creds.get(nlp_provider)
+            if not (cred and cred.api_key):
+                import os as _os
+                env_var_map = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "google": "GEMINI_API_KEY"}
+                env_var = env_var_map.get(nlp_provider, f"{nlp_provider.upper()}_API_KEY")
+                if not _os.environ.get(env_var):
+                    raise RuntimeError(
+                        f"No API key found for provider '{nlp_provider}'. "
+                        f"Run `kenkui configure-provider` or set {env_var}."
+                    )
+
+        # Get roster — load from roster_cache_path, or re-run fast scan as fallback.
         roster = None
         if job.roster_cache_path and job.roster_cache_path.exists():
             try:
@@ -417,21 +501,18 @@ class WorkerServer:
                 )
 
         if roster is None:
-            # Fallback: run fast scan to rebuild roster
+            # Roster cache missing — rebuild using the configured provider (not Ollama-only).
             _cb("rebuilding character roster…")
-            fast_result = run_fast_scan(
-                chapters=chapters,
-                book_path=book_path,
-                nlp_model=self._app_config.nlp_model,
-                use_cache=False,
-                progress_callback=_cb,
+            from ..services.nlp_service import fast_scan as _svc_fast_scan
+            fast_result = _svc_fast_scan(
+                ebook_path=str(book_path),
+                nlp_model=nlp_model,
+                nlp_provider=nlp_provider,
+                progress_callback=lambda pct, msg: _cb(msg),
             )
             roster = fast_result.roster
 
         # Run Stage 3-4 attribution via the configured provider (cloud or ollama).
-        # Per-job overrides take precedence over the global app config.
-        nlp_provider = job.job_nlp_provider or self._app_config.nlp_provider
-        nlp_model = job.job_nlp_model or self._app_config.nlp_model
         nlp_result = attribute_only(
             roster=roster,
             chapters=chapters,
@@ -441,7 +522,7 @@ class WorkerServer:
             progress_callback=lambda pct, msg: _cb(msg),
         )
 
-        cache_file = CACHE_DIR / f"{book_hash(book_path)}.json"
+        cache_file = CACHE_DIR / _attribution_cache_name(book_path, nlp_provider)
         job.annotated_chapters_path = cache_file
         self._save()
 

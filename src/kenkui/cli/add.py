@@ -1226,12 +1226,16 @@ def _print_status_panel(state: dict, app_config) -> None:
     temp = quality_overrides.get("temp") or getattr(app_config, "temp", 0.7)
     steps = quality_overrides.get("lsd_decode_steps") or getattr(app_config, "lsd_decode_steps", 1)
     bitrate = getattr(app_config, "m4b_bitrate", "96k")
+    series_slug = state.get("series_slug")
+    series_manifest = state.get("_series_manifest")
+    series_label = getattr(series_manifest, "name", None) or series_slug or "None"
 
     lines = [
         f"  [bold]Mode:[/bold]          {mode_str}",
         f"  [bold]NLP:[/bold]           {nlp_str}",
         f"  [bold]TTS Provider:[/bold]  Kokoro · local",
         f"  [bold]Narrator:[/bold]      {voice}",
+        f"  [bold]Series:[/bold]        {series_label}",
         f"  [bold]Chapters:[/bold]      {preset} ({chapter_count})",
         f"  [bold]Quality:[/bold]       temp {temp} · {steps} LSD steps · {bitrate}",
     ]
@@ -1249,8 +1253,23 @@ def _build_confirmation_choices(state: dict, app_config) -> list:
     """Build InquirerPy select choices for the confirmation screen."""
     from InquirerPy.base.control import Choice
 
+    voice = state.get("voice", getattr(app_config, "default_voice", "alba"))
+    default_voice = getattr(app_config, "default_voice", "alba")
+    mode = state.get("narration_mode", "single")
+    has_chapter_voices = bool(state.get("chapter_voices"))
+    voice_tag = (
+        "[DEFAULT]"
+        if (voice == default_voice and mode == "single" and not has_chapter_voices)
+        else "[CUSTOM]"
+    )
+    series_slug = state.get("series_slug")
+    series_manifest = state.get("_series_manifest")
+    series_name = getattr(series_manifest, "name", None) or series_slug or "None"
+
     return [
         Choice(value="submit",         name="  Submit Job"),
+        Choice(value="voice",          name=f"  Narrator / Fallback Voice  {voice}  {voice_tag} \u2192"),
+        Choice(value="series",         name=f"  Series                    {series_name} \u2192"),
         Choice(value="narration",      name="  Narration Mode \u2192"),
         Choice(value="quality",        name="  Audio Quality \u2192"),
         Choice(value="postprocessing", name="  Post-Processing \u2192"),
@@ -1307,12 +1326,7 @@ def _submenu_narration_mode(state: dict, app_config, client) -> dict:
     if action == "reset":
         state = reset_voice_mode(state, app_config)
     elif action == "voice":
-        voice = _prompt_voice(
-            default=state.get("voice", app_config.default_voice),
-            message="Select narrator voice:",
-            client=client,
-        )
-        state = {**state, "voice": voice}
+        state = _edit_narrator_voice(state, app_config, client)
     elif action == "mode":
         mode = _wizard_execute(inquirer.select(
             message="Narration mode:",
@@ -1329,6 +1343,16 @@ def _submenu_narration_mode(state: dict, app_config, client) -> dict:
         elif mode == "chapter":
             state = _setup_chapter_voice(state, client)
     return state
+
+
+def _edit_narrator_voice(state: dict, app_config, client) -> dict:
+    """Prompt for the job's narrator/fallback voice and update state."""
+    voice = _prompt_voice(
+        default=state.get("voice", app_config.default_voice),
+        message="Select narrator / fallback voice:",
+        client=client,
+    )
+    return {**state, "voice": voice}
 
 
 def _describe_mode_for_menu(state: dict, app_config) -> str:
@@ -1362,11 +1386,67 @@ def _submenu_advanced(state: dict, app_config, client) -> dict:
     return state
 
 
-def _prompt_nlp_provider(app_config) -> tuple[str, str]:
-    """Let the user pick an NLP provider for this scan session.
+_CLOUD_PROVIDER_MODELS: dict[str, list[str]] = {
+    "anthropic": [
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+    ],
+    "openai": [
+        "gpt-4o-mini",
+        "gpt-4o",
+        "gpt-4.1-mini",
+        "gpt-4.1",
+    ],
+    "google": [
+        "gemini/gemini-2.0-flash",
+        "gemini/gemini-2.5-flash-preview-04-17",
+        "gemini/gemini-2.5-pro-preview-03-25",
+    ],
+}
 
-    Returns ``(provider_name, model_name)``.  Skips the prompt and returns
-    the configured defaults when no cloud credentials are stored (Ollama only).
+
+def _prompt_nlp_model(provider: str, current_model: str) -> str:
+    """Prompt the user to pick or enter an NLP model for *provider*.
+
+    For cloud providers, shows a short list of common models plus a
+    "Custom…" escape hatch.  For Ollama, shows the current default and
+    lets the user type any pulled model name.
+    """
+    from InquirerPy import inquirer
+
+    if provider == "ollama":
+        return _wizard_execute(inquirer.text(
+            message=f"Ollama model (current: {current_model}):",
+            default=current_model,
+        )).strip() or current_model
+
+    known = _CLOUD_PROVIDER_MODELS.get(provider, [])
+    choices = [{"name": m, "value": m} for m in known]
+    choices.append({"name": "Custom model ID…", "value": "__custom__"})
+
+    default_choice = current_model if current_model in known else (known[0] if known else current_model)
+    selected = _wizard_execute(inquirer.select(
+        message=f"Model for {provider}:",
+        choices=choices,
+        default=default_choice,
+    ))
+
+    if selected == "__custom__":
+        return _wizard_execute(inquirer.text(
+            message="Enter model ID:",
+            default=current_model,
+        )).strip() or current_model
+
+    return selected
+
+
+def _prompt_nlp_provider(app_config) -> tuple[str, str]:
+    """Let the user pick an NLP provider and model for this scan session.
+
+    Returns ``(provider_name, model_name)``.  Skips the provider prompt and
+    returns the configured defaults when no cloud credentials are stored
+    (Ollama only).  Always offers a second step to choose or enter a model.
     """
     from InquirerPy import inquirer
     from ..config import load_provider_credentials
@@ -1375,24 +1455,27 @@ def _prompt_nlp_provider(app_config) -> tuple[str, str]:
     default_model = getattr(app_config, "nlp_model", "llama3.2")
 
     creds = load_provider_credentials()
-    choices = [{"name": "Ollama (local)", "value": ("ollama", default_model)}]
+    provider_choices = [{"name": "Ollama (local)", "value": "ollama"}]
+    model_defaults: dict[str, str] = {"ollama": default_model}
     for provider, c in creds.items():
         if c.api_key:
-            model = c.default_model or provider
-            choices.append({"name": f"{provider}  ({model})", "value": (provider, model)})
+            provider_choices.append({"name": provider, "value": provider})
+            model_defaults[provider] = c.default_model or (_CLOUD_PROVIDER_MODELS.get(provider) or [provider])[0]
 
-    if len(choices) == 1:
-        return choices[0]["value"]
+    # Only one provider available — skip provider prompt but still offer model selection.
+    if len(provider_choices) == 1:
+        chosen_provider = provider_choices[0]["value"]
+    else:
+        current_provider = default_provider if default_provider in model_defaults else "ollama"
+        chosen_provider = _wizard_execute(inquirer.select(
+            message="NLP provider for this scan:",
+            choices=provider_choices,
+            default=current_provider,
+        ))
 
-    current_default = next(
-        (ch["value"] for ch in choices if ch["value"][0] == default_provider),
-        choices[0]["value"],
-    )
-    return _wizard_execute(inquirer.select(
-        message="NLP provider for this scan:",
-        choices=choices,
-        default=current_default,
-    ))
+    current_model = model_defaults.get(chosen_provider, default_model)
+    chosen_model = _prompt_nlp_model(chosen_provider, current_model)
+    return chosen_provider, chosen_model
 
 
 def _setup_multi_voice(state: dict, app_config, client) -> dict:
@@ -1491,6 +1574,41 @@ def _prompt_series_slug(client) -> "tuple[object | None, str | None]":
 
     # Existing series — return slug only (no character matching needed)
     return None, chosen_slug
+
+
+def _edit_series(state: dict, client) -> dict:
+    """Top-level series editor for the confirmation screen."""
+    from InquirerPy import inquirer
+
+    current_slug = state.get("series_slug")
+    current_manifest = state.get("_series_manifest")
+    current_name = getattr(current_manifest, "name", None) or current_slug or "None"
+
+    choices = []
+    if current_slug:
+        choices.extend([
+            {"name": f"Keep current ({current_name})", "value": "keep"},
+            {"name": "Change series…", "value": "change"},
+            {"name": "Remove series link", "value": "clear"},
+            {"name": "Back", "value": "back"},
+        ])
+    else:
+        choices.extend([
+            {"name": "Set series…", "value": "change"},
+            {"name": "Back", "value": "back"},
+        ])
+
+    action = _wizard_execute(inquirer.select(
+        message="Series",
+        choices=choices,
+    ))
+
+    if action == "clear":
+        return {**state, "series_slug": None, "_series_manifest": None}
+    if action == "change":
+        manifest, series_slug = _prompt_series_slug(client)
+        return {**state, "series_slug": series_slug, "_series_manifest": manifest}
+    return state
 
 
 def _setup_chapter_voice(state: dict, client) -> dict:
@@ -1620,6 +1738,10 @@ def _run_confirmation_screen(book_path, app_config, args, client=None):
             if action == "submit":
                 save_last_profile(_state_to_profile(state))
                 return _state_to_job_kwargs(state)
+            elif action == "voice":
+                state = _edit_narrator_voice(state, app_config, client)
+            elif action == "series":
+                state = _edit_series(state, client)
             elif action == "narration":
                 state = _submenu_narration_mode(state, app_config, client)
             elif action == "quality":

@@ -31,11 +31,24 @@ def get_api_key_var(provider: str) -> str | None:
 
 
 def check_api_key(provider: str) -> bool:
-    """Return True if the required env var for the provider is set."""
+    """Return True if the required API key for the provider is available.
+
+    Checks the environment variable first, then falls back to credentials.toml
+    (written by ``kenkui configure-provider``).
+    """
     var = get_api_key_var(provider)
     if not var:
         return True  # Unknown provider — no env var to check
-    return bool(os.environ.get(var))
+    if os.environ.get(var):
+        return True
+    # Also check credentials.toml so keys saved via configure-provider are detected
+    try:
+        from kenkui.config import load_provider_credentials
+        creds = load_provider_credentials()
+        c = creds.get(provider.lower())
+        return bool(c and c.api_key)
+    except Exception:
+        return False
 
 
 def get_available_vram_gb() -> float | None:

@@ -8,10 +8,12 @@ from kenkui.models import (
     AppConfig,
     Chapter,
     CharacterInfo,
+    CostStatus,
     ChapterPreset,
     ChapterSelection,
     NLPResult,
     Segment,
+    TTSExecutionMode,
 )
 
 
@@ -335,6 +337,52 @@ class TestJobConfigRosterCachePath:
         old_data = {"ebook_path": "/tmp/book.epub"}
         job = JobConfig.from_dict(old_data)
         assert job.roster_cache_path is None
+
+    def test_execution_mode_defaults_local(self):
+        from kenkui.models import JobConfig
+
+        job = JobConfig(ebook_path=Path("/tmp/book.epub"))
+        assert job.tts_execution_mode == TTSExecutionMode.LOCAL
+
+    def test_execution_mode_round_trip(self):
+        from kenkui.models import JobConfig
+
+        job = JobConfig(
+            ebook_path=Path("/tmp/book.epub"),
+            tts_execution_mode=TTSExecutionMode.MODAL,
+            modal_endpoint="book_render",
+            modal_environment="prod",
+        )
+        restored = JobConfig.from_dict(job.to_dict())
+        assert restored.tts_execution_mode == TTSExecutionMode.MODAL
+        assert restored.modal_endpoint == "book_render"
+        assert restored.modal_environment == "prod"
+
+
+class TestQueueItemExecutionMetadata:
+    def test_queue_item_round_trip_with_cost_metadata(self):
+        from kenkui.models import JobConfig, QueueItem
+
+        item = QueueItem(
+            id="job123",
+            job=JobConfig(ebook_path=Path("/tmp/book.epub")),
+            execution_provider="modal",
+            remote_job_id="modal-1",
+            estimated_cost_usd=1.25,
+            actual_cost_usd=1.5,
+            cost_status=CostStatus.FINAL,
+            artifact_uri="modal://artifact/book.m4b",
+            artifact_source="modal",
+            provider_status="completed",
+        )
+        restored = QueueItem.from_dict(item.to_dict())
+        assert restored.execution_provider == "modal"
+        assert restored.remote_job_id == "modal-1"
+        assert restored.estimated_cost_usd == 1.25
+        assert restored.actual_cost_usd == 1.5
+        assert restored.cost_status == CostStatus.FINAL
+        assert restored.artifact_uri == "modal://artifact/book.m4b"
+        assert restored.provider_status == "completed"
 
 
 class TestAppConfigExcludedVoices:
