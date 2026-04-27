@@ -6,6 +6,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from enum import Enum
 from pathlib import Path
 
 # Re-export from voice_registry — the registry is the single source of truth.
@@ -97,15 +98,27 @@ def batch_text(
     return result
 
 
+class ApostropheMode(str, Enum):
+    """Controls how apostrophes/contractions are processed before TTS.
+
+    keep              – pass text through unchanged
+    always_remove     – strip every apostrophe (straight + curly U+2018/U+2019)
+    remove_contractions – strip apostrophe only from known contractions
+    expand_contractions – expand all known contractions to full form (default)
+    """
+
+    KEEP = "keep"
+    ALWAYS_REMOVE = "always_remove"
+    REMOVE_CONTRACTIONS = "remove_contractions"
+    EXPAND_CONTRACTIONS = "expand_contractions"
+
+
 # ---------------------------------------------------------------------------
 # TTS text normalization
 # ---------------------------------------------------------------------------
 
-# n't contractions that are commonly mispronounced by the TTS engine.
-# Handles both straight apostrophe (') and right single quotation mark (').
-# Only n't forms are expanded — other contractions ("I'm", "we're") are left
-# alone to preserve natural speech cadence.
-_NONT_MAP: dict[str, str] = {
+_ALL_CONTRACTIONS_MAP: dict[str, str] = {
+    # n't forms (superset of _NONT_MAP)
     "won't": "will not",
     "can't": "cannot",
     "don't": "do not",
@@ -124,20 +137,68 @@ _NONT_MAP: dict[str, str] = {
     "mustn't": "must not",
     "needn't": "need not",
     "shan't": "shall not",
+    # Subject + verb: I
+    "i'm": "i am",
+    "i've": "i have",
+    "i'll": "i will",
+    "i'd": "i would",
+    # Subject + verb: you
+    "you're": "you are",
+    "you've": "you have",
+    "you'll": "you will",
+    "you'd": "you would",
+    # Subject + verb: he
+    "he's": "he is",
+    "he'll": "he will",
+    "he'd": "he would",
+    # Subject + verb: she
+    "she's": "she is",
+    "she'll": "she will",
+    "she'd": "she would",
+    # Subject + verb: it
+    "it's": "it is",
+    "it'll": "it will",
+    # Subject + verb: we
+    "we're": "we are",
+    "we've": "we have",
+    "we'll": "we will",
+    "we'd": "we would",
+    # Subject + verb: they
+    "they're": "they are",
+    "they've": "they have",
+    "they'll": "they will",
+    "they'd": "they would",
+    # Impersonal
+    "that's": "that is",
+    "that'll": "that will",
+    "that'd": "that would",
+    "there's": "there is",
+    "there'll": "there will",
+    "let's": "let us",
+    "who's": "who is",
+    "who'd": "who would",
+    "who'll": "who will",
+    "what's": "what is",
+    "what'd": "what did",
+    "what'll": "what will",
+    "where's": "where is",
+    "when's": "when is",
+    "why's": "why is",
+    "how's": "how is",
 }
 
-# Build a single compiled regex that matches any contraction (case-insensitive).
-# The right single quotation mark (U+2019) is treated as an apostrophe.
-_NONT_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(k) for k in _NONT_MAP) + r")\b",
+_ALL_CONTRACTIONS_PATTERN = re.compile(
+    r"\b("
+    + "|".join(re.escape(k) for k in sorted(_ALL_CONTRACTIONS_MAP, key=len, reverse=True))
+    + r")\b",
     re.IGNORECASE,
 )
 
 
-def _replace_contraction(m: re.Match) -> str:
-    """Return the expansion with the same capitalisation as the matched token."""
+def _expand_all_contraction(m: re.Match) -> str:
+    """Expand a contraction from `_ALL_CONTRACTIONS_MAP` preserving case."""
     token = m.group(0)
-    expansion = _NONT_MAP[token.lower().replace("\u2019", "'")]
+    expansion = _ALL_CONTRACTIONS_MAP[token.lower()]
     if token.isupper():
         return expansion.upper()
     if token[0].isupper():
@@ -145,23 +206,33 @@ def _replace_contraction(m: re.Match) -> str:
     return expansion
 
 
-def normalize_for_tts(text: str) -> str:
-    """Expand n't contractions so the TTS engine pronounces them correctly.
+def normalize_for_tts(text: str, mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS) -> str:
+    """Normalize apostrophes/contractions for TTS according to *mode*.
 
-    Examples::
+    keep              → text unchanged
+    always_remove     → strip all apostrophes (straight + curly)
+    remove_contractions → strip apostrophe only from known contractions
+    expand_contractions → expand all known contractions to full form (default)
 
-        >>> normalize_for_tts("He doesn't know and wasn't sure.")
-        'He does not know and was not sure.'
-        >>> normalize_for_tts("DON'T")
-        'DO NOT'
-        >>> normalize_for_tts("Don't")
-        'Do not'
-        >>> normalize_for_tts("I'm ready")   # non-n't contraction → unchanged
-        "I'm ready"
+    Case is preserved: ALL_CAPS → ALL_CAPS, Title → Title, else lower.
+    Non-contraction possessives and proper names (e.g. ``O'Brien``) are
+    untouched in ``remove_contractions`` and ``expand_contractions`` modes
+    because they do not appear in ``_ALL_CONTRACTIONS_MAP``.
+
+    Note: ``remove_contractions`` and ``expand_contractions`` normalize
+    U+2019 (right single quote) to a straight apostrophe before matching,
+    but leave U+2018 (left single quote) unchanged.
     """
-    # Normalise curly apostrophes to straight so the pattern matches both forms.
+    if mode == ApostropheMode.KEEP:
+        return text
+    if mode == ApostropheMode.ALWAYS_REMOVE:
+        return re.sub(r"['\u2018\u2019]", "", text)
+    # Contraction modes: normalise curly right-quote to straight apostrophe first.
     text = text.replace("\u2019", "'")
-    return _NONT_PATTERN.sub(_replace_contraction, text)
+    if mode == ApostropheMode.REMOVE_CONTRACTIONS:
+        return _ALL_CONTRACTIONS_PATTERN.sub(lambda m: m.group(0).replace("'", ""), text)
+    # EXPAND_CONTRACTIONS (default)
+    return _ALL_CONTRACTIONS_PATTERN.sub(_expand_all_contraction, text)
 
 
 def extract_epub_cover(epub_path: Path) -> tuple[bytes | None, str | None]:
@@ -260,10 +331,12 @@ def clean_text(text: str) -> str:
 
 
 __all__ = [
+    "ApostropheMode",
     "DEFAULT_VOICES",
     "VOICE_DESCRIPTIONS",
     "batch_text",
     "extract_epub_cover",
+    "normalize_for_tts",
     "sanitize_filename",
     "clean_text",
 ]

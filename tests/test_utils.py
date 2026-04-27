@@ -168,16 +168,16 @@ class TestNormalizeForTts:
         assert normalize_for_tts("DON\u2019T") == "DO NOT"
 
     def test_non_nont_im_unchanged(self):
-        assert normalize_for_tts("I'm ready") == "I'm ready"
+        assert normalize_for_tts("I'm ready", mode=ApostropheMode.KEEP) == "I'm ready"
 
     def test_non_nont_were_unchanged(self):
-        assert normalize_for_tts("we're here") == "we're here"
+        assert normalize_for_tts("we're here", mode=ApostropheMode.KEEP) == "we're here"
 
     def test_non_nont_its_unchanged(self):
-        assert normalize_for_tts("it's fine") == "it's fine"
+        assert normalize_for_tts("it's fine", mode=ApostropheMode.KEEP) == "it's fine"
 
     def test_non_nont_theyre_unchanged(self):
-        assert normalize_for_tts("they're going") == "they're going"
+        assert normalize_for_tts("they're going", mode=ApostropheMode.KEEP) == "they're going"
 
     def test_mid_sentence(self):
         result = normalize_for_tts("He doesn't know.")
@@ -201,3 +201,86 @@ class TestNormalizeForTts:
 
     def test_empty_string(self):
         assert normalize_for_tts("") == ""
+
+
+# ---------------------------------------------------------------------------
+# normalize_for_tts — apostrophe_mode parameter
+# ---------------------------------------------------------------------------
+
+from kenkui.utils import ApostropheMode
+
+
+class TestNormalizeForTtsMode:
+    """Tests for the four apostrophe_mode dispatch paths."""
+
+    # ── keep ────────────────────────────────────────────────────────────────
+    def test_keep_leaves_dont_unchanged(self):
+        assert normalize_for_tts("don't", mode=ApostropheMode.KEEP) == "don't"
+
+    def test_keep_leaves_im_unchanged(self):
+        assert normalize_for_tts("I'm ready", mode=ApostropheMode.KEEP) == "I'm ready"
+
+    def test_keep_leaves_curly_unchanged(self):
+        assert normalize_for_tts("don\u2019t", mode=ApostropheMode.KEEP) == "don\u2019t"
+
+    def test_keep_leaves_obrien_unchanged(self):
+        assert normalize_for_tts("O'Brien", mode=ApostropheMode.KEEP) == "O'Brien"
+
+    # ── always_remove ────────────────────────────────────────────────────────
+    def test_always_remove_strips_contraction(self):
+        assert normalize_for_tts("don't", mode=ApostropheMode.ALWAYS_REMOVE) == "dont"
+
+    def test_always_remove_strips_proper_name(self):
+        assert normalize_for_tts("O'Brien", mode=ApostropheMode.ALWAYS_REMOVE) == "OBrien"
+
+    def test_always_remove_strips_curly_apostrophe(self):
+        assert normalize_for_tts("don\u2019t", mode=ApostropheMode.ALWAYS_REMOVE) == "dont"
+
+    def test_always_remove_strips_curly_left_quote(self):
+        # U+2018 left single quotation mark
+        assert normalize_for_tts("\u2018twas", mode=ApostropheMode.ALWAYS_REMOVE) == "twas"
+
+    # ── remove_contractions ──────────────────────────────────────────────────
+    def test_remove_contractions_strips_apostrophe_from_contraction(self):
+        assert normalize_for_tts("don't", mode=ApostropheMode.REMOVE_CONTRACTIONS) == "dont"
+
+    def test_remove_contractions_preserves_proper_name(self):
+        assert normalize_for_tts("O'Brien", mode=ApostropheMode.REMOVE_CONTRACTIONS) == "O'Brien"
+
+    def test_remove_contractions_strips_im(self):
+        assert normalize_for_tts("I'm ready", mode=ApostropheMode.REMOVE_CONTRACTIONS) == "Im ready"
+
+    def test_remove_contractions_curly_apostrophe(self):
+        assert normalize_for_tts("don\u2019t", mode=ApostropheMode.REMOVE_CONTRACTIONS) == "dont"
+
+    def test_remove_contractions_curly_apostrophe_non_nont(self):
+        # U+2019 in a subject contraction → strip apostrophe
+        assert normalize_for_tts("I\u2019m ready", mode=ApostropheMode.REMOVE_CONTRACTIONS) == "Im ready"
+
+    # ── expand_contractions ──────────────────────────────────────────────────
+    def test_expand_contractions_dont(self):
+        assert normalize_for_tts("don't", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "do not"
+
+    def test_expand_contractions_im(self):
+        assert normalize_for_tts("I'm ready", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "I am ready"
+
+    def test_expand_contractions_its(self):
+        assert normalize_for_tts("it's fine", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "it is fine"
+
+    def test_expand_contractions_preserves_proper_name(self):
+        assert normalize_for_tts("O'Brien", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "O'Brien"
+
+    def test_expand_contractions_curly(self):
+        assert normalize_for_tts("don\u2019t", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "do not"
+
+    def test_expand_contractions_uppercase(self):
+        assert normalize_for_tts("I'M READY", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "I AM READY"
+
+    def test_expand_contractions_title_case(self):
+        assert normalize_for_tts("I'm ready", mode=ApostropheMode.EXPAND_CONTRACTIONS) == "I am ready"
+
+    # ── default mode ─────────────────────────────────────────────────────────
+    def test_default_mode_is_expand_contractions(self):
+        # no mode arg → behaves like expand_contractions
+        assert normalize_for_tts("don't") == "do not"
+        assert normalize_for_tts("I'm ready") == "I am ready"
