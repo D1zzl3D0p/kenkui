@@ -402,7 +402,7 @@ def run_attribution(
     from .chunker import chunk_paragraphs
     from .entities import extract_person_names
     from .llm import LLMClient
-    from .quotes import extract_quotes
+    from .quotes import extract_quotes, strip_scare_quotes
 
     if use_cache:
         cached = get_cached_result(book_path)
@@ -440,11 +440,14 @@ def run_attribution(
         group.canonical_name: group.aliases for group in roster.characters
     }
 
-    # Stage 1: Extract quotes per chapter
+    # Stage 1: Extract quotes per chapter (using scare-quote-stripped paragraphs)
     _cb("Extracting dialogue quotes…")
     chapter_quotes: dict[int, list] = {}
+    chapter_clean_paras: dict[int, list[str]] = {}
     for chapter in chapters:
-        chapter_quotes[chapter.index] = extract_quotes(chapter.paragraphs)
+        clean_paras = strip_scare_quotes(chapter.paragraphs)
+        chapter_clean_paras[chapter.index] = clean_paras
+        chapter_quotes[chapter.index] = extract_quotes(clean_paras)
 
     # Stages 3+4: Per-chapter chunking and attribution
     attributed_chapters: list[Chapter] = []
@@ -466,17 +469,18 @@ def run_attribution(
             _cb(f"Attributing: {title}…")
 
         quotes = chapter_quotes[chapter.index]
+        clean_paras = chapter_clean_paras[chapter.index]
 
         if not quotes:
             segments = [
                 Segment(
-                    text="\n\n".join(chapter.paragraphs),
+                    text="\n\n".join(clean_paras),
                     speaker="NARRATOR",
                     index=0,
                 )
             ]
         else:
-            chapter_text = " ".join(chapter.paragraphs)
+            chapter_text = " ".join(clean_paras)
             raw_names = extract_person_names(chapter_text, nlp)
             chapter_canonicals = sorted({
                 canonical
@@ -485,7 +489,7 @@ def run_attribution(
             })
             roster_names = chapter_canonicals + ["NARRATOR", "Unknown"]
 
-            chunks = chunk_paragraphs(chapter.paragraphs, quotes)
+            chunks = chunk_paragraphs(clean_paras, quotes)
             all_attributions = attribute_all_chunks(
                 chunks, quotes, roster_names, llm, roster_aliases=roster_aliases,
                 confidence_threshold=confidence_threshold, review_llm=review_llm,
@@ -496,7 +500,7 @@ def run_attribution(
                     item.speaker, alias_to_canonical, chapter_canonicals
                 )
 
-            segments = _build_segments(chapter.paragraphs, quotes, all_attributions)
+            segments = _build_segments(clean_paras, quotes, all_attributions)
 
             for item in all_attributions.values():
                 if item.speaker not in ("NARRATOR", "Unknown"):
@@ -770,8 +774,9 @@ def _attribution_to_segments(
 
     Used by NLPService when dispatching through the provider protocol.
     """
-    from kenkui.nlp.quotes import extract_quotes
-    quotes = extract_quotes(chapter.paragraphs)
+    from kenkui.nlp.quotes import extract_quotes, strip_scare_quotes
+    clean_paragraphs = strip_scare_quotes(chapter.paragraphs)
+    quotes = extract_quotes(clean_paragraphs)
     quote_by_id = {q.id: q for q in quotes}
 
     # Verify LLM-returned char positions match pre-extracted quote positions.
@@ -790,22 +795,31 @@ def _attribution_to_segments(
 
     attributions = {item.quote_id: item for item in attr_result.attributions}
 
-    # Fill in any quote IDs the LLM skipped — without this, skipped quotes fall
-    # through to NARRATOR in _split_paragraph_by_quotes instead of at least
-    # being rendered as Unknown (which uses the narrator voice but is isolated
-    # as its own segment rather than merged into surrounding narrative text).
+    # Fill in any quote IDs the LLM skipped using last-known-speaker fallback.
+    # Walk quotes in document order so each missing quote can inherit from its
+    # nearest resolved predecessor rather than defaulting to Unknown.
     from kenkui.nlp.models import AttributionItem as _AttributionItem
-    for q in quotes:
+    ordered_quotes = sorted(quotes, key=lambda q: (q.para_index, q.char_offset))
+    resolved_in_order: list[str] = []
+
+    for q in ordered_quotes:
         if q.id not in attributions:
+            # Walk backwards for last non-NARRATOR/Unknown speaker
+            last_speaker = next(
+                (s for s in reversed(resolved_in_order) if s not in ("NARRATOR", "Unknown")),
+                None,
+            )
+            speaker = last_speaker if last_speaker else "NARRATOR"
             logger.warning(
-                "Chapter %d: quote id=%d missing from LLM attribution — defaulting to Unknown",
-                chapter.index, q.id,
+                "Chapter %d: quote id=%d missing from LLM attribution — "
+                "fallback speaker=%s", chapter.index, q.id, speaker,
             )
             attributions[q.id] = _AttributionItem(
-                quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1
+                quote_id=q.id, speaker=speaker, emotion="neutral", confidence=1
             )
+        resolved_in_order.append(attributions[q.id].speaker)
 
-    return _build_segments(chapter.paragraphs, quotes, attributions)
+    return _build_segments(clean_paragraphs, quotes, attributions)
 
 
 def _normalize_speaker(
