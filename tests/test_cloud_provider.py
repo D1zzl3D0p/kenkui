@@ -312,6 +312,56 @@ def test_build_attribution_static_block_has_pronouns():
     assert "darrow_of_lykos" in block
 
 
+def test_alias_to_slug_first_writer_wins():
+    """When two characters share an alias, first-writer-wins and no crash occurs."""
+    config = AppConfig(nlp_provider="anthropic", nlp_model="claude-sonnet-4-6")
+
+    roster = CharacterRoster(characters=[
+        CharacterRecord(
+            slug="darrow_of_lykos",
+            canonical_name="Darrow of Lykos",
+            aliases=["the reaper"],
+        ),
+        CharacterRecord(
+            slug="ares",
+            canonical_name="Ares",
+            aliases=["the reaper"],  # same alias — collision
+        ),
+    ])
+
+    mock_result = AttributionResultWire(attributions=[])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_result
+
+    captured_alias_to_slug: dict = {}
+
+    def fake_annotate(paragraphs, quotes, alias_to_slug, slug_to_pronoun):
+        captured_alias_to_slug.update(alias_to_slug)
+        return ""  # empty annotated text → 0 quotes → early return below
+
+    with patch("kenkui.config.load_provider_credentials", return_value={}):
+        with patch("kenkui.config.inject_provider_env_vars"):
+            with patch("kenkui.nlp.annotator.annotate_chapter", fake_annotate):
+                provider = CloudProvider.__new__(CloudProvider)
+                provider.config = config
+                provider._client = mock_client
+
+                chapter = MagicMock()
+                chapter.index = 0
+                chapter.paragraphs = ['"Come," said the Reaper.']
+
+                result = provider.attribute_chapter(chapter, roster)
+
+    # The collision key "the reaper" must map to exactly one slug (first writer wins)
+    reaper_slug = captured_alias_to_slug.get("the reaper")
+    assert reaper_slug == "darrow_of_lykos", (
+        f"Expected first-writer slug 'darrow_of_lykos', got {reaper_slug!r}"
+    )
+    # The second character's unambiguous canonical name is still present
+    assert "ares" in captured_alias_to_slug
+
+
 def test_attribute_chapter_uses_annotated_format():
     """Dynamic block uses ANNOTATED CHAPTER: header (not old CHAPTER TEXT: header)."""
     from kenkui.nlp.quotes import extract_quotes, strip_scare_quotes

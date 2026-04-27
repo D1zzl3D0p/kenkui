@@ -625,12 +625,20 @@ class CloudProvider:
         if not quotes:
             return AttributionResult(attributions=[])
 
-        alias_to_slug = {
-            alias.lower(): c.slug
-            for c in roster.characters
-            for alias in [c.canonical_name] + c.aliases
-        }
+        alias_to_slug: dict[str, str] = {}
+        for c in roster.characters:
+            for alias in [c.canonical_name] + c.aliases:
+                key = alias.lower()
+                if key not in alias_to_slug:
+                    alias_to_slug[key] = c.slug
+                elif alias_to_slug[key] != c.slug:
+                    logger.debug(
+                        "alias_to_slug collision: %r claimed by %r, ignoring %r",
+                        key, alias_to_slug[key], c.slug,
+                    )
         slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
+        # slug_to_pronoun is currently unused by annotate_chapter (pronoun hints are
+        # detected from raw text); kept in the API for future roster-based pronoun lookup.
         annotated_text = annotate_chapter(clean_paragraphs, quotes, alias_to_slug, slug_to_pronoun)
 
         output_budget = compute_attribution_output_budget(len(quotes))
@@ -642,6 +650,7 @@ class CloudProvider:
         # identical for every chapter in this book.  The annotated chapter text is
         # dynamic and must NOT be included in the cached prefix.
         # Only Anthropic models support cache_control; other providers get a plain string.
+        # cache_control is only supported for Anthropic/Claude models; non-None TPM = Claude.
         is_anthropic = _rate_limit_tpm_for(model) is not None
         if is_anthropic and estimate_tokens(static_block) >= 1024:
             messages: list[dict] = [{
