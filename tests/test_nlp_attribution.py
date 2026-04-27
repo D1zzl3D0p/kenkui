@@ -65,14 +65,14 @@ class TestAttributeChunk:
         assert result.attributions == []
         llm.generate.assert_not_called()
 
-    def test_missing_quote_id_filled_with_unknown(self):
-        """LLM returns attribution for quote 0 but skips quote 1 — quote 1 → Unknown."""
+    def test_missing_quote_id_filled_with_last_speaker(self):
+        """LLM returns attribution for quote 0 but skips quote 1 — quote 1 → Alice (last-known)."""
         chunk = _make_chunk([0], [0, 1])
         quotes = [_make_quote(0), _make_quote(1)]
         llm = _mock_llm([{"quote_id": 0, "speaker": "Alice", "emotion": "happy"}])
         result = _attribute_chunk(chunk, quotes, ["Alice"], [], llm)
         ids = {a.quote_id: a for a in result.attributions}
-        assert ids[1].speaker == "Unknown"
+        assert ids[1].speaker == "Alice"
         assert ids[1].emotion == "neutral"
 
     def test_llm_failure_defaults_all_unknown(self):
