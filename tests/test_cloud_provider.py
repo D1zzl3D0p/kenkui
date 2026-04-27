@@ -253,7 +253,8 @@ def test_call_with_rate_limit_retry_raises_after_max_incomplete_retries():
         _call_with_rate_limit_retry(always_incomplete, max_tokens=512)
 
 
-from kenkui.nlp.models import AttributionItem, AttributionResult
+from kenkui.nlp.models import AttributionItem, AttributionResult, AttributionItemWire, AttributionResultWire
+from kenkui.nlp.providers.cloud import _build_attribution_static_block, _build_attribution_dynamic_block
 
 
 def test_attribute_chapter_returns_slug_speakers():
@@ -265,9 +266,8 @@ def test_attribute_chapter_returns_slug_speakers():
         CharacterRecord(slug="gandalf", canonical_name="Gandalf"),
     ])
 
-    mock_result = AttributionResult(attributions=[
-        AttributionItem(quote_id=1, speaker="frodo_baggins", emotion="neutral", confidence=5),
-        AttributionItem(quote_id=2, speaker="NARRATOR", emotion="neutral", confidence=5),
+    mock_result = AttributionResultWire(attributions=[
+        AttributionItemWire(quote_id=0, speaker="frodo_baggins", confidence=5),
     ])
 
     mock_client = MagicMock()
@@ -285,7 +285,44 @@ def test_attribute_chapter_returns_slug_speakers():
 
             result = provider.attribute_chapter(chapter, roster)
 
-    assert len(result.attributions) == 2
+    assert len(result.attributions) == 1
     speakers = {a.quote_id: a.speaker for a in result.attributions}
-    assert speakers[1] == "frodo_baggins"
-    assert speakers[2] == "NARRATOR"
+    assert speakers[0] == "frodo_baggins"
+
+
+def test_build_attribution_static_block_has_pronouns():
+    """Static block includes PRONOUNS column and character gender values."""
+    roster = CharacterRoster(characters=[
+        CharacterRecord(
+            slug="darrow_of_lykos",
+            canonical_name="Darrow of Lykos",
+            aliases=["The Reaper", "Darrow"],
+            gender="he/him",
+        ),
+        CharacterRecord(
+            slug="lysander_au_lune",
+            canonical_name="Lysander au Lune",
+            aliases=["Lysander"],
+            gender="he/him",
+        ),
+    ])
+    block = _build_attribution_static_block(roster)
+    assert "PRONOUNS" in block
+    assert "he/him" in block
+    assert "darrow_of_lykos" in block
+
+
+def test_attribute_chapter_uses_annotated_format():
+    """Dynamic block uses ANNOTATED CHAPTER: header (not old CHAPTER TEXT: header)."""
+    from kenkui.nlp.quotes import extract_quotes, strip_scare_quotes
+    from kenkui.nlp.annotator import annotate_chapter
+
+    paragraphs = ['"I will take the Ring," said Frodo.']
+    clean = strip_scare_quotes(paragraphs)
+    quotes = extract_quotes(clean)
+    alias_to_slug = {"frodo": "frodo_baggins", "frodo baggins": "frodo_baggins"}
+    slug_to_pronoun = {"frodo_baggins": "he/him"}
+    annotated = annotate_chapter(clean, quotes, alias_to_slug, slug_to_pronoun)
+    dynamic_block = _build_attribution_dynamic_block(annotated)
+    assert dynamic_block.startswith("ANNOTATED CHAPTER:")
+    assert "CHAPTER TEXT:" not in dynamic_block

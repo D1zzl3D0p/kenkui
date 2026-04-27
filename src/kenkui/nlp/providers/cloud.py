@@ -194,75 +194,42 @@ BOOK TEXT:
 
 def _build_attribution_static_block(
     roster: "CharacterRoster",
-    omit_echo: bool = False,
-    omit_emotion: bool = False,
 ) -> str:
     """Build the static (cacheable) part of the attribution prompt: instructions + roster.
 
     This block is identical for every chapter in a book, so it can be cached once
     and reused across all chapter calls.
     """
-    roster_lines = ["SLUG | CANONICAL NAME | ALIASES"]
+    roster_lines = ["SLUG | CANONICAL NAME | ALIASES | PRONOUNS"]
     for c in roster.characters:
         aliases = ", ".join(c.aliases) if c.aliases else ""
-        line = f"{c.slug} | {c.canonical_name}"
-        if aliases:
-            line += f" | {aliases}"
+        line = f"{c.slug} | {c.canonical_name} | {aliases} | {c.gender}"
         roster_lines.append(line)
     roster_block = "\n".join(roster_lines)
-
-    echo_fields = "" if omit_echo else (
-        "\n- char_start: the start value from above (copy exactly)"
-        "\n- char_end: the end value from above (copy exactly)"
-    )
-    emotion_field = "" if omit_emotion else (
-        "\n- emotion: one of neutral, happy, sad, angry, fearful, surprised, disgusted"
-    )
 
     return f"""You are a literary analyst performing speaker attribution.
 
 CHARACTER ROSTER (use the slug field as the speaker value):
 {roster_block}
 
-For each quote return:
-- quote_id: the id from above (0-based){echo_fields}
-- speaker: character slug from roster, or "NARRATOR", or "Unknown"{emotion_field}
-- confidence: 1 (very uncertain) to 5 (very confident)
+For each [QUOTE:N] tag in the annotated chapter, return:
+- quote_id: the N from [QUOTE:N]
+- speaker: character slug, "NARRATOR", or "Unknown"
+- confidence: 1–5
 
 Rules:
-- Use the exact slug from the roster — never a canonical name or alias
-- "NARRATOR" for narration, scene descriptions, or when no clear speaker
-- "Unknown" only when the speaker cannot be identified with any confidence
-- Scare quotes and titles (e.g. "The King") are not spoken dialogue — mark as NARRATOR"""
+- Every [QUOTE:N] present MUST appear in your response — no exceptions, no skipping
+- hint= is strong guidance (~90% accurate) — override only if context clearly contradicts it
+- guess= is a weaker signal (~50% accurate) — use as a tiebreaker, not a determination
+- pronoun= filters the roster to characters with matching pronouns
+- "NARRATOR" for scare quotes, titles, labels, non-spoken text
+- "Unknown" only when you have genuinely no basis for any guess
+- Read [NARRATOR] passages for context — they are pre-labeled, do not return them"""
 
 
-def _build_attribution_dynamic_block(
-    chapter_text: str,
-    quotes: "list",
-    omit_echo: bool = False,
-) -> str:
-    """Build the dynamic (per-chapter) part of the attribution prompt: quotes + chapter text."""
-    import json as _json
-
-    if omit_echo:
-        # Compact table format: one quote per line as "ID KIND" — avoids JSON key overhead
-        # (~15 chars/quote saved vs JSON object format; significant at 50+ quotes/chapter).
-        lines = [f"{q.id} {q.kind}" for q in quotes]
-        quote_block = "\n".join(lines)
-        quote_header = "QUOTES (id kind — use exact ids in your response):"
-    else:
-        quote_entries = [
-            {"id": q.id, "start": q.char_offset, "end": q.char_offset + len(q.text), "kind": q.kind}
-            for q in quotes
-        ]
-        quote_block = _json.dumps(quote_entries, indent=2)
-        quote_header = "PRE-EXTRACTED QUOTES (use these exact IDs; echo start/end in your response):"
-
-    return f"""{quote_header}
-{quote_block}
-
-CHAPTER TEXT:
-{chapter_text}"""
+def _build_attribution_dynamic_block(annotated_text: str) -> str:
+    """Build the dynamic (per-chapter) part: annotated chapter text."""
+    return f"ANNOTATED CHAPTER:\n{annotated_text}"
 
 
 # ---------------------------------------------------------------------------
@@ -645,29 +612,34 @@ class CloudProvider:
         progress_callback: Callable[[str], None] | None = None,
     ) -> AttributionResult:
         """Attribute quotes in *chapter* to speakers — single chapter pass."""
-        from kenkui.nlp.quotes import extract_quotes
+        from kenkui.nlp.quotes import strip_scare_quotes, extract_quotes
+        from kenkui.nlp.annotator import annotate_chapter
 
         model = self._resolved_model()
 
         if progress_callback:
             progress_callback(f"Attributing chapter {chapter.index}")
 
-        quotes = extract_quotes(chapter.paragraphs)
+        clean_paragraphs = strip_scare_quotes(chapter.paragraphs)
+        quotes = extract_quotes(clean_paragraphs)
         if not quotes:
             return AttributionResult(attributions=[])
 
-        # Must use "\n\n" join to match char_offset coordinate system in extract_quotes
-        chapter_text = "\n\n".join(chapter.paragraphs)
+        alias_to_slug = {
+            alias.lower(): c.slug
+            for c in roster.characters
+            for alias in [c.canonical_name] + c.aliases
+        }
+        slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
+        annotated_text = annotate_chapter(clean_paragraphs, quotes, alias_to_slug, slug_to_pronoun)
+
         output_budget = compute_attribution_output_budget(len(quotes))
 
-        omit_echo = self.config.nlp_omit_position_echo
-        omit_emotion = self.config.nlp_omit_emotion
-
-        static_block = _build_attribution_static_block(roster, omit_echo=omit_echo, omit_emotion=omit_emotion)
-        dynamic_block = _build_attribution_dynamic_block(chapter_text, quotes, omit_echo=omit_echo)
+        static_block = _build_attribution_static_block(roster)
+        dynamic_block = _build_attribution_dynamic_block(annotated_text)
 
         # Prompt caching: cache only the static block (instructions + roster) which is
-        # identical for every chapter in this book.  The quotes and chapter text are
+        # identical for every chapter in this book.  The annotated chapter text is
         # dynamic and must NOT be included in the cached prefix.
         # Only Anthropic models support cache_control; other providers get a plain string.
         is_anthropic = _rate_limit_tpm_for(model) is not None
@@ -682,11 +654,9 @@ class CloudProvider:
         else:
             messages = [{"role": "user", "content": f"{static_block}\n\n{dynamic_block}"}]
 
-        # Use slim wire model when both echo and emotion are omitted (the default).
-        # Fall back to the full AttributionResult when either is enabled so the
-        # schema the LLM sees matches what the prompt asks for.
-        use_slim = omit_echo and omit_emotion
-        attr_model = AttributionResultWire if use_slim else AttributionResult
+        # Use slim wire model (AttributionResultWire) which has only quote_id, speaker,
+        # confidence — exactly what the new annotated format asks for.
+        attr_model = AttributionResultWire
         result = _call_with_rate_limit_retry(
             self._client.chat.completions.create,
             model=model,
@@ -697,6 +667,4 @@ class CloudProvider:
             num_retries=0,
             progress_callback=progress_callback,
         )
-        if use_slim:
-            result = attribution_wire_to_full(result)
-        return result
+        return attribution_wire_to_full(result)
