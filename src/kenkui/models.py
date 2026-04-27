@@ -5,6 +5,8 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .utils import ApostropheMode
+
 if TYPE_CHECKING:
     from .chapter_classifier import ChapterTags
     from .chapter_filter import FilterOperation
@@ -268,6 +270,7 @@ class JobConfig:
     job_pause_before_chapter_title_ms: int | None = None
     job_pause_after_chapter_title_ms: int | None = None
     job_frames_after_eos: int | None = None
+    job_apostrophe_mode: ApostropheMode | None = None
 
     def __post_init__(self):
         if not self.name:
@@ -309,10 +312,11 @@ class JobConfig:
             "job_pause_before_chapter_title_ms",
             "job_pause_after_chapter_title_ms",
             "job_frames_after_eos",
+            "job_apostrophe_mode",
         ):
             val = getattr(self, key)
             if val is not None:
-                d[key] = val
+                d[key] = val.value if isinstance(val, Enum) else val
         return d
 
     @classmethod
@@ -349,6 +353,9 @@ class JobConfig:
             job_pause_before_chapter_title_ms=data.get("job_pause_before_chapter_title_ms"),
             job_pause_after_chapter_title_ms=data.get("job_pause_after_chapter_title_ms"),
             job_frames_after_eos=data.get("job_frames_after_eos"),
+            job_apostrophe_mode=ApostropheMode(data["job_apostrophe_mode"])
+            if data.get("job_apostrophe_mode")
+            else None,
         )
 
 
@@ -459,6 +466,7 @@ class AppConfig:
     credits_enabled: bool = True
     credits_acknowledgements: str = ""
     credits_license: str = ""
+    apostrophe_mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS
     # --- Audio post-processing ---
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
 
@@ -498,6 +506,7 @@ class AppConfig:
             "credits_enabled": self.credits_enabled,
             "credits_acknowledgements": self.credits_acknowledgements,
             "credits_license": self.credits_license,
+            "apostrophe_mode": self.apostrophe_mode.value,
             "post_processing": self.post_processing.to_dict(),
         }
 
@@ -540,6 +549,7 @@ class AppConfig:
             credits_enabled=data.get("credits_enabled", True),
             credits_acknowledgements=data.get("credits_acknowledgements", ""),
             credits_license=data.get("credits_license", ""),
+            apostrophe_mode=ApostropheMode(data.get("apostrophe_mode", "expand_contractions")),
             post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
         )
 
@@ -817,6 +827,7 @@ class ProcessingConfig:
     # JobConfig.chapter_selection.included so that multi-voice jobs respect
     # the user's chapter selection without needing a runtime-injected attribute.
     _included_indices: list[int] = field(default_factory=list)
+    apostrophe_mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS
 
     @property
     def epub_path(self) -> Path:

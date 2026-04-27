@@ -284,3 +284,57 @@ class TestNormalizeForTtsMode:
         # no mode arg → behaves like expand_contractions
         assert normalize_for_tts("don't") == "do not"
         assert normalize_for_tts("I'm ready") == "I am ready"
+
+
+# ---------------------------------------------------------------------------
+# ApostropheMode round-trip through AppConfig / JobConfig
+# ---------------------------------------------------------------------------
+
+from kenkui.models import AppConfig, JobConfig
+from pathlib import Path
+
+
+class TestApostropheModeModels:
+    """AppConfig and JobConfig serialization round-trips."""
+
+    def test_appconfig_default_is_expand_contractions(self):
+        cfg = AppConfig()
+        assert cfg.apostrophe_mode == ApostropheMode.EXPAND_CONTRACTIONS
+
+    def test_appconfig_to_dict_includes_apostrophe_mode(self):
+        cfg = AppConfig()
+        d = cfg.to_dict()
+        assert d["apostrophe_mode"] == "expand_contractions"
+
+    def test_appconfig_from_dict_roundtrip(self):
+        cfg = AppConfig.from_dict({"apostrophe_mode": "keep"})
+        assert cfg.apostrophe_mode == ApostropheMode.KEEP
+
+    def test_appconfig_from_dict_missing_key_defaults_to_expand(self):
+        cfg = AppConfig.from_dict({})
+        assert cfg.apostrophe_mode == ApostropheMode.EXPAND_CONTRACTIONS
+
+    def test_jobconfig_default_job_apostrophe_mode_is_none(self):
+        job = JobConfig(ebook_path=Path("book.epub"))
+        assert job.job_apostrophe_mode is None
+
+    def test_jobconfig_to_dict_omits_none_job_apostrophe_mode(self):
+        job = JobConfig(ebook_path=Path("book.epub"))
+        d = job.to_dict()
+        assert "job_apostrophe_mode" not in d
+
+    def test_jobconfig_to_dict_includes_when_set(self):
+        job = JobConfig(ebook_path=Path("book.epub"), job_apostrophe_mode=ApostropheMode.ALWAYS_REMOVE)
+        d = job.to_dict()
+        assert d["job_apostrophe_mode"] == "always_remove"
+
+    def test_jobconfig_from_dict_roundtrip(self):
+        job = JobConfig.from_dict({
+            "ebook_path": "book.epub",
+            "job_apostrophe_mode": "remove_contractions",
+        })
+        assert job.job_apostrophe_mode == ApostropheMode.REMOVE_CONTRACTIONS
+
+    def test_jobconfig_from_dict_missing_job_apostrophe_mode_is_none(self):
+        job = JobConfig.from_dict({"ebook_path": "book.epub"})
+        assert job.job_apostrophe_mode is None
