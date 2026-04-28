@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..utils import ApostropheMode
+
 
 def build_headless_job_kwargs(args, app_config) -> dict[str, Any]:
     """Build add_job kwargs for a non-interactive submission path."""
@@ -26,16 +28,15 @@ def build_headless_job_kwargs(args, app_config) -> dict[str, Any]:
         )
     )
 
-    from ..utils import ApostropheMode
-
     kwargs = {
         "ebook_path": str(args.book),
         "voice": app_config.default_voice,
         "chapter_selection": chapter_selection,
         "output_path": output_dir,
     }
-    if getattr(args, "apostrophe_mode", None):
-        kwargs["job_apostrophe_mode"] = ApostropheMode(args.apostrophe_mode)
+    apostrophe_mode = getattr(args, "apostrophe_mode", None)
+    if apostrophe_mode is not None:
+        kwargs["job_apostrophe_mode"] = ApostropheMode(apostrophe_mode)
     return kwargs
 
 
