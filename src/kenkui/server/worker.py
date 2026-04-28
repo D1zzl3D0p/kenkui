@@ -787,6 +787,8 @@ class WorkerServer:
             # Chapter-voice mode
             chapter_voices=job.chapter_voices,
             # Audio post-processing
+            # post_processing is an object — use dataclasses.replace to override only
+            # the enabled flag while preserving all other effect-chain settings.
             post_processing=(
                 dataclasses.replace(self._app_config.post_processing, enabled=job.job_post_processing_enabled)
                 if job.job_post_processing_enabled is not None

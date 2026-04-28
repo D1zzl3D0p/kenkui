@@ -414,3 +414,13 @@ def test_job_config_pp_enabled_round_trip():
     d = job.to_dict()
     job2 = JobConfig.from_dict(d)
     assert job2.job_post_processing_enabled is True
+
+
+def test_job_config_pp_disabled_round_trip():
+    from pathlib import Path
+    from kenkui.models import JobConfig
+    job = JobConfig(ebook_path=Path("book.epub"), job_post_processing_enabled=False)
+    d = job.to_dict()
+    assert d.get("job_post_processing_enabled") is False
+    job2 = JobConfig.from_dict(d)
+    assert job2.job_post_processing_enabled is False
