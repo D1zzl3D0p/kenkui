@@ -24,8 +24,6 @@ console = Console()
 
 def cmd_config(args) -> int:
     """Handle 'kenkui config [profile]'."""
-    from InquirerPy import inquirer
-
     class _RangeValidator:
         """Validate numeric text input within optional min/max bounds.
 
@@ -69,6 +67,8 @@ def cmd_config(args) -> int:
     except Exception as exc:
         console.print(f"[red]Error fetching config: {exc}[/red]")
         return 1
+
+    from InquirerPy import inquirer
 
     # ---- Voice choices ------------------------------------------------
     voice_choices = []
@@ -200,6 +200,18 @@ def cmd_config(args) -> int:
         .execute()
         .strip()
     )
+
+    apostrophe_mode_choices = [
+        {"name": "expand_contractions  (expand all contractions — default)", "value": "expand_contractions"},
+        {"name": "keep  (pass text unchanged — TTS handles it natively)", "value": "keep"},
+        {"name": "remove_contractions  (strip apostrophe from contractions only)", "value": "remove_contractions"},
+        {"name": "always_remove  (strip every apostrophe, including names)", "value": "always_remove"},
+    ]
+    apostrophe_mode = inquirer.select(
+        message="Apostrophe/contraction mode:",
+        choices=apostrophe_mode_choices,
+        default=cfg.get("apostrophe_mode", "expand_contractions"),
+    ).execute()
 
     # ---- Post-processing effects chain --------------------------------
     console.print()
@@ -403,6 +415,7 @@ def cmd_config(args) -> int:
     tbl.add_row("Frames after EOS", "auto" if frames_after_eos is None else str(frames_after_eos))
     tbl.add_row("NLP model", nlp_model)
     tbl.add_row("NLP roster model", nlp_roster_model or f"(same as NLP model: {nlp_model})")
+    tbl.add_row("Apostrophe mode", apostrophe_mode)
     tbl.add_row("Credits chapter", "on" if credits_enabled else "off")
     tbl.add_row("Post-processing", "on" if post_processing["enabled"] else "off")
     if post_processing["enabled"]:
@@ -435,6 +448,7 @@ def cmd_config(args) -> int:
         "default_output_dir": default_output_dir,
         "nlp_model": nlp_model,
         "nlp_roster_model": nlp_roster_model,
+        "apostrophe_mode": apostrophe_mode,
         "credits_enabled": credits_enabled,
         "credits_acknowledgements": credits_acknowledgements,
         "credits_license": credits_license,

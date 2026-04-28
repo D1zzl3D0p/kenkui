@@ -15,6 +15,7 @@ from ..models import (
     NarrationMode,
     TTSExecutionMode,
 )
+from ..utils import ApostropheMode
 from .worker import get_server
 
 
@@ -67,6 +68,7 @@ class JobCreateRequest(BaseModel):
     job_pause_line_ms: int | None = None
     job_pause_chapter_ms: int | None = None
     job_frames_after_eos: int | None = None
+    job_apostrophe_mode: ApostropheMode | None = None
 
 
 class JobResponse(BaseModel):
@@ -430,6 +432,7 @@ def add_job(request: JobCreateRequest):
         job_pause_line_ms=request.job_pause_line_ms,
         job_pause_chapter_ms=request.job_pause_chapter_ms,
         job_frames_after_eos=request.job_frames_after_eos,
+        job_apostrophe_mode=request.job_apostrophe_mode,
     )
 
     server = get_server()

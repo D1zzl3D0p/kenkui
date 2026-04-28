@@ -26,12 +26,17 @@ def build_headless_job_kwargs(args, app_config) -> dict[str, Any]:
         )
     )
 
-    return {
+    from ..utils import ApostropheMode
+
+    kwargs = {
         "ebook_path": str(args.book),
         "voice": app_config.default_voice,
         "chapter_selection": chapter_selection,
         "output_path": output_dir,
     }
+    if getattr(args, "apostrophe_mode", None):
+        kwargs["job_apostrophe_mode"] = ApostropheMode(args.apostrophe_mode)
+    return kwargs
 
 
 def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:

@@ -161,6 +161,14 @@ def _build_bare_parser() -> argparse.ArgumentParser:
     parser.add_argument("book", type=Path, help="Ebook file path.")
     parser.add_argument("-c", "--config", default=None, metavar="PATH_OR_NAME")
     parser.add_argument("-o", "--output", default=None, metavar="DIR")
+    parser.add_argument(
+        "--apostrophe-mode",
+        choices=["keep", "always_remove", "remove_contractions", "expand_contractions"],
+        default=None,
+        dest="apostrophe_mode",
+        metavar="MODE",
+        help="Per-job apostrophe/contraction normalization (default: inherit from config).",
+    )
     return parser
 
 
@@ -218,6 +226,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Config file/name. Triggers headless mode (queue only, no auto-start).",
     )
     add_p.add_argument("-o", "--output", default=None, metavar="DIR")
+    add_p.add_argument(
+        "--apostrophe-mode",
+        choices=["keep", "always_remove", "remove_contractions", "expand_contractions"],
+        default=None,
+        dest="apostrophe_mode",
+        metavar="MODE",
+        help="Per-job apostrophe/contraction normalization (default: inherit from config).",
+    )
     _add_server_flags(add_p)
 
     # ---- kenkui queue ------------------------------------------------------

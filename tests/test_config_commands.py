@@ -155,29 +155,36 @@ class TestCmdConfig:
     # Default answers covering all prompts when enable_pp=False:
     # workers, default_output_dir, default_voice, default_chapter_preset,
     # m4b_bitrate, pause_line_ms, pause_chapter_ms, temp, lsd_decode_steps,
-    # eos_threshold, frames_after_eos, nlp_model, enable_pp, confirm_save
+    # eos_threshold, frames_after_eos, nlp_model, nlp_roster_model,
+    # apostrophe_mode, enable_pp, credits_enabled, confirm_save
     _DEFAULT_ANSWERS = [
-        4,              # workers
-        "",             # default_output_dir (blank -> None)
-        "alba",         # default_voice
-        "content-only", # default_chapter_preset
-        "96k",          # m4b_bitrate
-        800,            # pause_line_ms
-        2000,           # pause_chapter_ms
-        0.7,            # temp
-        1,              # lsd_decode_steps
-        -4.0,           # eos_threshold
-        0,              # frames_after_eos (0 -> None/auto)
-        "llama3.2",     # nlp_model
-        False,          # enable_pp -> skips pp fields
-        True,           # confirm save
+        4,                       # workers
+        "",                      # default_output_dir (blank -> None)
+        "alba",                  # default_voice
+        "content-only",          # default_chapter_preset
+        "96k",                   # m4b_bitrate
+        800,                     # pause_line_ms
+        2000,                    # pause_chapter_ms
+        0.7,                     # temp
+        1,                       # lsd_decode_steps
+        -4.0,                    # eos_threshold
+        0,                       # frames_after_eos (0 -> None/auto)
+        "llama3.2",              # nlp_model
+        "",                      # nlp_roster_model (blank -> use attribution model)
+        "expand_contractions",   # apostrophe_mode
+        False,                   # enable_pp -> skips pp fields
+        False,                   # credits_enabled -> skips credits fields
+        True,                    # confirm save
     ]
 
     _CANCEL_ANSWERS = [
         4, "", "alba", "content-only", "96k",
         800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
-        False,  # enable_pp
-        False,  # cancel
+        "",                    # nlp_roster_model
+        "expand_contractions", # apostrophe_mode
+        False,                 # enable_pp
+        False,                 # credits_enabled
+        False,                 # cancel
     ]
 
     def _run_wizard(self, monkeypatch, api_cm, answers=None):
@@ -262,8 +269,11 @@ class TestCmdConfig:
         answers = [
             4, "", "cosette", "content-only", "96k",
             800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
-            False,  # enable_pp
-            True,   # confirm
+            "",                    # nlp_roster_model
+            "expand_contractions", # apostrophe_mode
+            False,                 # enable_pp
+            False,                 # credits_enabled
+            True,                  # confirm
         ]
         self._run_wizard(monkeypatch, api_cm, answers=answers)
 
@@ -325,22 +335,25 @@ class TestCmdConfig:
         answers = [
             4, "", "alba", "content-only", "96k",
             800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
-            True,   # enable_pp -> enter pp block
-            True,   # noise_reduce
-            0.8,    # noise_reduce_prop_decrease
-            80,     # highpass_hz
-            250,    # lowshelf_hz
-            -3.0,   # lowshelf_db
-            3500,   # presence_hz
-            2.0,    # presence_db
-            True,   # deesser
-            True,   # autogain
-            -23.0,  # autogain_target_lufs
-            -18.0,  # comp_thresh
-            3.0,    # comp_ratio
-            -1.0,   # limiter_thresh
-            False,  # normalize
-            True,   # confirm
+            "",                    # nlp_roster_model
+            "expand_contractions", # apostrophe_mode
+            True,                  # enable_pp -> enter pp block
+            True,                  # noise_reduce
+            0.8,                   # noise_reduce_prop_decrease
+            80,                    # highpass_hz
+            250,                   # lowshelf_hz
+            -3.0,                  # lowshelf_db
+            3500,                  # presence_hz
+            2.0,                   # presence_db
+            True,                  # deesser
+            True,                  # autogain
+            -23.0,                 # autogain_target_lufs
+            -18.0,                 # comp_thresh
+            3.0,                   # comp_ratio
+            -1.0,                  # limiter_thresh
+            False,                 # normalize
+            False,                 # credits_enabled
+            True,                  # confirm
         ]
 
         self._run_wizard(monkeypatch, api_cm, answers=answers)
@@ -378,8 +391,11 @@ class TestCmdConfig:
         answers = [
             4, "", "alba", "content-only", "96k",
             800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
-            False,  # enable_pp -> skip pp block
-            True,   # confirm
+            "",                    # nlp_roster_model
+            "expand_contractions", # apostrophe_mode
+            False,                 # enable_pp -> skip pp block
+            False,                 # credits_enabled
+            True,                  # confirm
         ]
         self._run_wizard(monkeypatch, api_cm, answers=answers)
 
