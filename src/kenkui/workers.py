@@ -30,7 +30,7 @@ from pydub import AudioSegment
 
 from .models import AudioResult, Chapter, Segment
 from .text_rules import SCENE_BREAK_RE, is_scene_break, split_at_scene_breaks
-from .utils import batch_text
+from .utils import ApostropheMode, batch_text, normalize_for_tts
 from .voice_loader import load_voice
 
 logger = logging.getLogger(__name__)
@@ -259,13 +259,13 @@ def _process_chapter_inner(
             eos_threshold=config_dict.get("eos_threshold", -4.0),
         )
 
-        from .utils import ApostropheMode
         apostrophe_mode = ApostropheMode(config_dict.get("apostrophe_mode", "expand_contractions"))
 
         # ── Multi-voice path (NLP segments present) ──────────────────────
         if chapter.segments is not None:
             return _render_multi_voice(
-                chapter, model, config_dict, temp_dir, queue, pid, log_message, apostrophe_mode
+                chapter, model, config_dict, temp_dir, queue, pid, log_message,
+                apostrophe_mode=apostrophe_mode,
             )
 
         # ── Per-chapter voice override (chapter-voice mode) ───────────────
@@ -375,7 +375,7 @@ def _render_multi_voice(
     queue: multiprocessing.Queue,
     pid: int,
     log_message,
-    apostrophe_mode=None,
+    apostrophe_mode: ApostropheMode | None = None,
 ) -> AudioResult | None:
     """Render a chapter that has NLP-assigned speaker segments.
 
@@ -520,7 +520,7 @@ def _render_text(
     batch_idx: int,
     total_batches: int,
     frames_after_eos: int = 0,
-    apostrophe_mode=None,
+    apostrophe_mode: ApostropheMode | None = None,
 ) -> AudioSegment | None:
     """Generate audio for one text batch, retrying once on failure.
 
@@ -534,8 +534,6 @@ def _render_text(
             # segment (e.g. in single-voice mode that bypasses the NLP pipeline).
             text = text.replace("\x02", "").replace("\x03", "")
             # Expand n't contractions so TTS pronounces them correctly.
-            from .utils import ApostropheMode, normalize_for_tts
-
             effective_mode = apostrophe_mode if apostrophe_mode is not None else ApostropheMode.EXPAND_CONTRACTIONS
             text = normalize_for_tts(text, mode=effective_mode)
             log_message(f"  Batch {batch_idx + 1}/{total_batches}: {text[:80]}…")
