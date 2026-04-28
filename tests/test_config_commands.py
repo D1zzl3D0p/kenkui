@@ -158,23 +158,27 @@ def _stub_inquirerpy(monkeypatch, answers: list):
 class TestCmdConfig:
     """Tests that cmd_config talks only to APIClient (no local file / registry access)."""
 
-    # Default answers covering all prompts when enable_pp=False:
+    # Default answers covering all prompts when enable_pp=False, speak_chapter_titles=False:
     # workers, default_output_dir, default_voice, default_chapter_preset,
-    # m4b_bitrate, pause_line_ms, pause_chapter_ms, temp, lsd_decode_steps,
-    # eos_threshold, frames_after_eos, nlp_model, nlp_roster_model,
+    # temp, lsd_decode_steps, eos_threshold, frames_after_eos, noise_clamp,
+    # pause_line_ms, pause_chapter_ms, pause_scene_break_ms, speak_chapter_titles,
+    # m4b_bitrate, nlp_model, nlp_roster_model,
     # apostrophe_mode, enable_pp, credits_enabled, confirm_save
     _DEFAULT_ANSWERS = [
         4,                       # workers
         "",                      # default_output_dir (blank -> None)
         "alba",                  # default_voice
         "content-only",          # default_chapter_preset
-        "96k",                   # m4b_bitrate
-        800,                     # pause_line_ms
-        2000,                    # pause_chapter_ms
         0.7,                     # temp
         1,                       # lsd_decode_steps
         -4.0,                    # eos_threshold
         0,                       # frames_after_eos (0 -> None/auto)
+        0.0,                     # noise_clamp (0.0 -> None/disabled)
+        800,                     # pause_line_ms
+        2000,                    # pause_chapter_ms
+        4000,                    # pause_scene_break_ms
+        False,                   # speak_chapter_titles (False -> skips title pause prompts)
+        "96k",                   # m4b_bitrate
         "llama3.2",              # nlp_model
         "",                      # nlp_roster_model (blank -> use attribution model)
         "expand_contractions",   # apostrophe_mode
@@ -184,8 +188,12 @@ class TestCmdConfig:
     ]
 
     _CANCEL_ANSWERS = [
-        4, "", "alba", "content-only", "96k",
-        800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
+        4, "", "alba", "content-only",
+        0.7, 1, -4.0, 0, 0.0,
+        800, 2000, 4000,
+        False,                 # speak_chapter_titles
+        "96k",
+        "llama3.2",
         "",                    # nlp_roster_model
         "expand_contractions", # apostrophe_mode
         False,                 # enable_pp
@@ -273,8 +281,12 @@ class TestCmdConfig:
         api_cm = _make_client(list_voices=voices_data)
 
         answers = [
-            4, "", "cosette", "content-only", "96k",
-            800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
+            4, "", "cosette", "content-only",
+            0.7, 1, -4.0, 0, 0.0,
+            800, 2000, 4000,
+            False,                 # speak_chapter_titles
+            "96k",
+            "llama3.2",
             "",                    # nlp_roster_model
             "expand_contractions", # apostrophe_mode
             False,                 # enable_pp
@@ -339,8 +351,12 @@ class TestCmdConfig:
         """When enable_pp=True, all pp prompts are visited and pp dict is in payload."""
         api_cm = _make_client()
         answers = [
-            4, "", "alba", "content-only", "96k",
-            800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
+            4, "", "alba", "content-only",
+            0.7, 1, -4.0, 0, 0.0,
+            800, 2000, 4000,
+            False,                 # speak_chapter_titles
+            "96k",
+            "llama3.2",
             "",                    # nlp_roster_model
             "expand_contractions", # apostrophe_mode
             True,                  # enable_pp -> enter pp block
@@ -395,8 +411,12 @@ class TestCmdConfig:
 
         # Wizard answers: enable_pp=False (skips all pp prompts), then confirm
         answers = [
-            4, "", "alba", "content-only", "96k",
-            800, 2000, 0.7, 1, -4.0, 0, "llama3.2",
+            4, "", "alba", "content-only",
+            0.7, 1, -4.0, 0, 0.0,
+            800, 2000, 4000,
+            False,                 # speak_chapter_titles
+            "96k",
+            "llama3.2",
             "",                    # nlp_roster_model
             "expand_contractions", # apostrophe_mode
             False,                 # enable_pp -> skip pp block

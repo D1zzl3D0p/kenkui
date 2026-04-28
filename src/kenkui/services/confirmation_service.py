@@ -49,8 +49,9 @@ def confirmation_state_to_profile(state: dict[str, Any]) -> dict[str, Any]:
         "output_dir": state.get("output_dir", ""),
         "quality_overrides": state.get("quality_overrides") or {},
         "pp_overrides": state.get("pp_overrides") or {},
-        "pp_enabled_override": state.get("pp_enabled_override"),
     }
+    if state.get("pp_enabled_override") is not None:
+        profile["pp_enabled_override"] = state["pp_enabled_override"]
     if state.get("job_nlp_provider"):
         profile["job_nlp_provider"] = state["job_nlp_provider"]
     if state.get("job_nlp_model"):
