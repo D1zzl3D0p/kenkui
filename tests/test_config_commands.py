@@ -4,9 +4,14 @@ from __future__ import annotations
 import multiprocessing
 import sys
 from argparse import Namespace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from kenkui.models import AppConfig, JobConfig
+from kenkui.services.job_service import build_headless_job_kwargs
+from kenkui.utils import ApostropheMode
 
 
 # ---------------------------------------------------------------------------
@@ -412,13 +417,6 @@ class TestCmdConfig:
 # ---------------------------------------------------------------------------
 # apostrophe_mode — CLI flag and model round-trip
 # ---------------------------------------------------------------------------
-
-from argparse import Namespace
-from pathlib import Path
-
-from kenkui.models import AppConfig, JobConfig
-from kenkui.services.job_service import build_headless_job_kwargs
-from kenkui.utils import ApostropheMode
 
 
 class TestApostropheModeCliFlag:
