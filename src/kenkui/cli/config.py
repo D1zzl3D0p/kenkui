@@ -162,7 +162,7 @@ def cmd_config(args) -> int:
         validate=_RangeValidator(min_val=0.0, max_val=10.0, float_ok=True),
         filter=lambda x: float(x.strip()),
     ).execute()
-    noise_clamp_val: float | None = None if float(noise_clamp_raw) == 0.0 else float(noise_clamp_raw)
+    noise_clamp_val: float | None = None if noise_clamp_raw == 0.0 else noise_clamp_raw
 
     console.print("\n[bold cyan]── Timing & Pauses ──[/bold cyan]")
 
@@ -448,19 +448,19 @@ def cmd_config(args) -> int:
     tbl.add_row("Default output dir", default_output_dir or "(same as ebook)")
     tbl.add_row("Default voice", default_voice)
     tbl.add_row("Default chapter preset", default_chapter_preset)
-    tbl.add_row("M4B bitrate", m4b_bitrate)
+    tbl.add_row("Temperature", str(temp))
+    tbl.add_row("Generation steps", str(lsd_decode_steps))
+    tbl.add_row("EOS threshold", str(eos_threshold))
+    tbl.add_row("Frames after EOS", "auto" if frames_after_eos is None else str(frames_after_eos))
+    tbl.add_row("Noise clamp", "disabled" if noise_clamp_val is None else str(noise_clamp_val))
     tbl.add_row("Pause between lines", f"{pause_line_ms} ms")
     tbl.add_row("Pause between chapters", f"{pause_chapter_ms} ms")
-    tbl.add_row("Noise clamp", "disabled" if noise_clamp_val is None else str(noise_clamp_val))
     tbl.add_row("Pause at scene breaks", f"{pause_scene_break_ms} ms")
     tbl.add_row("Speak chapter titles", "yes" if speak_chapter_titles else "no")
     if speak_chapter_titles:
         tbl.add_row("  Pause before title", f"{pause_before_chapter_title_ms} ms")
         tbl.add_row("  Pause after title", f"{pause_after_chapter_title_ms} ms")
-    tbl.add_row("Temperature", str(temp))
-    tbl.add_row("Generation steps", str(lsd_decode_steps))
-    tbl.add_row("EOS threshold", str(eos_threshold))
-    tbl.add_row("Frames after EOS", "auto" if frames_after_eos is None else str(frames_after_eos))
+    tbl.add_row("M4B bitrate", m4b_bitrate)
     tbl.add_row("NLP model", nlp_model)
     tbl.add_row("NLP roster model", nlp_roster_model or f"(same as NLP model: {nlp_model})")
     tbl.add_row("Apostrophe mode", apostrophe_mode)
