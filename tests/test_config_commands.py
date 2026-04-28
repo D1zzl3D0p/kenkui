@@ -57,6 +57,7 @@ _DEFAULT_CONFIG = {
     "default_output_dir": None,
     "nlp_model": "llama3.2",
     "excluded_voices": [],
+    "apostrophe_mode": "expand_contractions",
     "post_processing": _DEFAULT_PP,
 }
 
@@ -406,3 +407,54 @@ class TestCmdConfig:
         # Existing fields from server config must be preserved
         assert pp["highpass_hz"] == 120
         assert pp["compressor_ratio"] == 5.0
+
+
+# ---------------------------------------------------------------------------
+# apostrophe_mode — CLI flag and model round-trip
+# ---------------------------------------------------------------------------
+
+from argparse import Namespace
+from pathlib import Path
+
+from kenkui.models import AppConfig, JobConfig
+from kenkui.services.job_service import build_headless_job_kwargs
+from kenkui.utils import ApostropheMode
+
+
+class TestApostropheModeCliFlag:
+    """build_headless_job_kwargs maps --apostrophe-mode to job_apostrophe_mode."""
+
+    def test_apostrophe_mode_flag_maps_to_job_config(self):
+        args = Namespace(book=Path("book.epub"), output=None, apostrophe_mode="always_remove")
+        kwargs = build_headless_job_kwargs(args, AppConfig())
+        assert kwargs.get("job_apostrophe_mode") == ApostropheMode.ALWAYS_REMOVE
+
+    def test_no_apostrophe_mode_flag_omits_key(self):
+        args = Namespace(book=Path("book.epub"), output=None, apostrophe_mode=None)
+        kwargs = build_headless_job_kwargs(args, AppConfig())
+        assert "job_apostrophe_mode" not in kwargs
+
+    def test_remove_contractions_flag(self):
+        args = Namespace(book=Path("book.epub"), output=None, apostrophe_mode="remove_contractions")
+        kwargs = build_headless_job_kwargs(args, AppConfig())
+        assert kwargs["job_apostrophe_mode"] == ApostropheMode.REMOVE_CONTRACTIONS
+
+    def test_keep_flag(self):
+        args = Namespace(book=Path("book.epub"), output=None, apostrophe_mode="keep")
+        kwargs = build_headless_job_kwargs(args, AppConfig())
+        assert kwargs["job_apostrophe_mode"] == ApostropheMode.KEEP
+
+    def test_jobconfig_roundtrip_with_job_apostrophe_mode(self):
+        job = JobConfig(
+            ebook_path=Path("book.epub"),
+            job_apostrophe_mode=ApostropheMode.ALWAYS_REMOVE,
+        )
+        d = job.to_dict()
+        restored = JobConfig.from_dict(d)
+        assert restored.job_apostrophe_mode == ApostropheMode.ALWAYS_REMOVE
+
+    def test_appconfig_roundtrip_keep_mode(self):
+        cfg = AppConfig(apostrophe_mode=ApostropheMode.KEEP)
+        d = cfg.to_dict()
+        restored = AppConfig.from_dict(d)
+        assert restored.apostrophe_mode == ApostropheMode.KEEP
