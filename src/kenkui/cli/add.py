@@ -1246,8 +1246,8 @@ def _print_status_panel(state: dict, app_config) -> None:
         nlp_str = "—"
 
     # Quality line
-    temp = quality_overrides.get("temp") or getattr(app_config, "temp", 0.7)
-    steps = quality_overrides.get("lsd_decode_steps") or getattr(app_config, "lsd_decode_steps", 1)
+    temp = quality_overrides.get("job_temp") or getattr(app_config, "temp", 0.7)
+    steps = quality_overrides.get("job_lsd_decode_steps") or getattr(app_config, "lsd_decode_steps", 1)
     bitrate = getattr(app_config, "m4b_bitrate", "96k")
     series_slug = state.get("series_slug")
     series_manifest = state.get("_series_manifest")
@@ -1699,23 +1699,23 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
 
         temp_str = _wizard_execute(inquirer.text(
             message="Temperature [0.0-1.5] (blank=inherit from config):",
-            default=str(overrides.get("temp", "")),
+            default=str(overrides.get("job_temp", "")),
             validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True, allow_blank=True),
         )).strip()
         if temp_str:
-            overrides["temp"] = float(temp_str)
-        elif "temp" in overrides:
-            del overrides["temp"]
+            overrides["job_temp"] = float(temp_str)
+        elif "job_temp" in overrides:
+            del overrides["job_temp"]
 
         steps_str = _wizard_execute(inquirer.text(
             message="Generation steps [1-50] (blank=inherit):",
-            default=str(overrides.get("lsd_decode_steps", "")),
+            default=str(overrides.get("job_lsd_decode_steps", "")),
             validate=_RangeValidator(min_val=1, max_val=50, float_ok=False, allow_blank=True),
         )).strip()
         if steps_str:
-            overrides["lsd_decode_steps"] = int(steps_str)
-        elif "lsd_decode_steps" in overrides:
-            del overrides["lsd_decode_steps"]
+            overrides["job_lsd_decode_steps"] = int(steps_str)
+        elif "job_lsd_decode_steps" in overrides:
+            del overrides["job_lsd_decode_steps"]
 
         eos_str = _wizard_execute(inquirer.text(
             message="EOS threshold [-10.0\u20130.0] (blank=inherit; -2.0=later cutoff, -6.0=earlier):",
@@ -1734,7 +1734,11 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
         )).strip()
         if noise_str:
             val = float(noise_str)
-            overrides["job_noise_clamp"] = None if val == 0.0 else val
+            if val == 0.0:
+                if "job_noise_clamp" in overrides:
+                    del overrides["job_noise_clamp"]
+            else:
+                overrides["job_noise_clamp"] = val
         elif "job_noise_clamp" in overrides:
             del overrides["job_noise_clamp"]
 
@@ -1863,7 +1867,8 @@ def _submenu_text_preprocessing(state: dict, app_config) -> dict:
         default=overrides.get("job_apostrophe_mode"),
     ))
     if apostrophe_mode is not None:
-        overrides["job_apostrophe_mode"] = apostrophe_mode
+        from ..utils import ApostropheMode
+        overrides["job_apostrophe_mode"] = ApostropheMode(apostrophe_mode)
     elif "job_apostrophe_mode" in overrides:
         del overrides["job_apostrophe_mode"]
     return {**state, "quality_overrides": overrides}
@@ -1914,8 +1919,7 @@ def _state_to_job_kwargs(state: dict) -> dict:
     from ..services.job_service import build_job_kwargs_from_state
 
     job_kwargs = build_job_kwargs_from_state(state)
-    # pp_overrides are tracked in state for future API support but not yet forwarded
-    # to add_job (the API does not yet accept per-job post-processing overrides).
+    # pp_enabled_override → job_post_processing_enabled is forwarded via build_job_kwargs_from_state
     return job_kwargs
 
 
