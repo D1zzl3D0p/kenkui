@@ -27,7 +27,8 @@ def cmd_config(args) -> int:
     class _RangeValidator:
         """Validate numeric text input within optional min/max bounds.
 
-        Duck-typed prompt_toolkit validator — no InquirerPy base class needed.
+        Implements both __call__ (so InquirerPy 0.3.x's Validator.from_callable
+        path works) and validate(document) for prompt_toolkit duck-typing.
         """
 
         def __init__(self, min_val=None, max_val=None, float_ok=False):
@@ -35,26 +36,26 @@ def cmd_config(args) -> int:
             self._max = max_val
             self._float_ok = float_ok
 
-        def validate(self, document) -> None:
+        def __call__(self, value: str) -> bool:
             from prompt_toolkit.validation import ValidationError as _PTKValidationError
-            text = document.text.strip()
+            text = (value or "").strip()
+            if not text:
+                raise _PTKValidationError(message="Value is required.", cursor_position=0)
             try:
                 val = float(text) if self._float_ok else int(text)
             except ValueError:
                 raise _PTKValidationError(
                     message=f"Enter a {'decimal' if self._float_ok else 'whole'} number.",
-                    cursor_position=len(document.text),
+                    cursor_position=len(value or ""),
                 )
             if self._min is not None and val < self._min:
-                raise _PTKValidationError(
-                    message=f"Minimum value is {self._min}.",
-                    cursor_position=len(document.text),
-                )
+                raise _PTKValidationError(message=f"Minimum value is {self._min}.", cursor_position=len(value or ""))
             if self._max is not None and val > self._max:
-                raise _PTKValidationError(
-                    message=f"Maximum value is {self._max}.",
-                    cursor_position=len(document.text),
-                )
+                raise _PTKValidationError(message=f"Maximum value is {self._max}.", cursor_position=len(value or ""))
+            return True
+
+        def validate(self, document) -> None:
+            self(document.text)
 
     # ---- Fetch current config and available voices from server -----------
     try:
@@ -77,6 +78,8 @@ def cmd_config(args) -> int:
         voice_choices.append({"name": label, "value": v["name"]})
 
     # ---- Prompt each field --------------------------------------------
+
+    console.print("\n[bold cyan]── Core Settings ──[/bold cyan]")
 
     workers = inquirer.text(
         message="Parallel TTS workers:",
@@ -115,32 +118,7 @@ def cmd_config(args) -> int:
         default=cfg.get("default_chapter_preset", "content-only"),
     ).execute()
 
-    bitrate_choices = [
-        {"name": "64k  (small files, lower quality)", "value": "64k"},
-        {"name": "96k  (default)", "value": "96k"},
-        {"name": "128k", "value": "128k"},
-        {"name": "192k", "value": "192k"},
-        {"name": "256k  (large files, high quality)", "value": "256k"},
-    ]
-    m4b_bitrate = inquirer.select(
-        message="M4B output bitrate:",
-        choices=bitrate_choices,
-        default=cfg.get("m4b_bitrate", "96k"),
-    ).execute()
-
-    pause_line_ms = inquirer.text(
-        message="Pause between lines (ms):",
-        default=str(cfg.get("pause_line_ms", 800)),
-        validate=_RangeValidator(min_val=0),
-        filter=lambda x: int(x.strip()),
-    ).execute()
-
-    pause_chapter_ms = inquirer.text(
-        message="Pause between chapters (ms):",
-        default=str(cfg.get("pause_chapter_ms", 2000)),
-        validate=_RangeValidator(min_val=0),
-        filter=lambda x: int(x.strip()),
-    ).execute()
+    console.print("\n[bold cyan]── pocket-tts Quality ──[/bold cyan]")
 
     temp = inquirer.text(
         message="Temperature: 0.3=conservative/robotic, 0.7=balanced, 0.9=expressive/unstable [0.0–1.5]:",
@@ -177,12 +155,74 @@ def cmd_config(args) -> int:
     ).execute()
     frames_after_eos: int | None = None if int(frames_after_eos_raw) == 0 else int(frames_after_eos_raw)
 
-    # Keep noise_clamp value from existing config (not exposed in wizard)
-    noise_clamp_val = cfg.get("noise_clamp")
+    noise_clamp_default = cfg.get("noise_clamp") or 0.0
+    noise_clamp_raw = inquirer.text(
+        message="Noise clamp (0=disabled, ~3.0 reduces audio glitches) [0.0–10.0]:",
+        default=str(noise_clamp_default),
+        validate=_RangeValidator(min_val=0.0, max_val=10.0, float_ok=True),
+        filter=lambda x: float(x.strip()),
+    ).execute()
+    noise_clamp_val: float | None = None if float(noise_clamp_raw) == 0.0 else float(noise_clamp_raw)
 
-    # ---- NLP / autoprocessing -----------------------------------------
-    console.print()
-    console.print("[bold]NLP / Autoprocessing[/bold]  (multi-voice speaker attribution)")
+    console.print("\n[bold cyan]── Timing & Pauses ──[/bold cyan]")
+
+    pause_line_ms = inquirer.text(
+        message="Pause between lines (ms):",
+        default=str(cfg.get("pause_line_ms", 800)),
+        validate=_RangeValidator(min_val=0),
+        filter=lambda x: int(x.strip()),
+    ).execute()
+
+    pause_chapter_ms = inquirer.text(
+        message="Pause between chapters (ms):",
+        default=str(cfg.get("pause_chapter_ms", 2000)),
+        validate=_RangeValidator(min_val=0),
+        filter=lambda x: int(x.strip()),
+    ).execute()
+
+    pause_scene_break_ms = inquirer.text(
+        message="Pause at scene breaks (ms) [0+]:",
+        default=str(cfg.get("pause_scene_break_ms", 4000)),
+        validate=_RangeValidator(min_val=0),
+        filter=lambda x: int(x.strip()),
+    ).execute()
+
+    speak_chapter_titles = inquirer.confirm(
+        message="Speak chapter titles aloud?",
+        default=cfg.get("speak_chapter_titles", True),
+    ).execute()
+
+    pause_before_chapter_title_ms = cfg.get("pause_before_chapter_title_ms", 2000)
+    pause_after_chapter_title_ms = cfg.get("pause_after_chapter_title_ms", 3000)
+    if speak_chapter_titles:
+        pause_before_chapter_title_ms = inquirer.text(
+            message="Pause before chapter title (ms) [0+]:",
+            default=str(cfg.get("pause_before_chapter_title_ms", 2000)),
+            validate=_RangeValidator(min_val=0),
+            filter=lambda x: int(x.strip()),
+        ).execute()
+        pause_after_chapter_title_ms = inquirer.text(
+            message="Pause after chapter title (ms) [0+]:",
+            default=str(cfg.get("pause_after_chapter_title_ms", 3000)),
+            validate=_RangeValidator(min_val=0),
+            filter=lambda x: int(x.strip()),
+        ).execute()
+
+    bitrate_choices = [
+        {"name": "64k  (small files, lower quality)", "value": "64k"},
+        {"name": "96k  (default)", "value": "96k"},
+        {"name": "128k", "value": "128k"},
+        {"name": "192k", "value": "192k"},
+        {"name": "256k  (large files, high quality)", "value": "256k"},
+    ]
+    m4b_bitrate = inquirer.select(
+        message="M4B output bitrate:",
+        choices=bitrate_choices,
+        default=cfg.get("m4b_bitrate", "96k"),
+    ).execute()
+
+    console.print("\n[bold cyan]── NLP / Speaker Attribution ──[/bold cyan]")
+
     nlp_model = (
         inquirer.text(
             message="Ollama model for speaker attribution (e.g. llama3.2, phi3:mini):",
@@ -201,6 +241,8 @@ def cmd_config(args) -> int:
         .strip()
     )
 
+    console.print("\n[bold cyan]── Text Preprocessing ──[/bold cyan]")
+
     apostrophe_mode_choices = [
         {"name": "expand_contractions  (expand all contractions — default)", "value": "expand_contractions"},
         {"name": "keep  (pass text unchanged — TTS handles it natively)", "value": "keep"},
@@ -214,8 +256,8 @@ def cmd_config(args) -> int:
     ).execute()
 
     # ---- Post-processing effects chain --------------------------------
-    console.print()
-    console.print("[bold]Audio Post-Processing[/bold]  (broadcast-quality effects chain)")
+    console.print("\n[bold cyan]── Audio Post-Processing ──[/bold cyan]")
+    console.print("[dim](broadcast-quality effects chain)[/dim]")
     pp = cfg.get("post_processing") or {}
 
     enable_pp = inquirer.confirm(
@@ -369,8 +411,8 @@ def cmd_config(args) -> int:
         post_processing = {**pp, "enabled": False}
 
     # ---- Credits chapter -----------------------------------------------
-    console.print()
-    console.print("[bold]Credits Chapter[/bold]  (synthesized audio appended to each audiobook)")
+    console.print("\n[bold cyan]── Credits Chapter ──[/bold cyan]")
+    console.print("[dim](synthesized audio appended to each audiobook)[/dim]")
 
     credits_enabled = inquirer.confirm(
         message="Append a credits chapter at the end of each audiobook?",
@@ -409,6 +451,12 @@ def cmd_config(args) -> int:
     tbl.add_row("M4B bitrate", m4b_bitrate)
     tbl.add_row("Pause between lines", f"{pause_line_ms} ms")
     tbl.add_row("Pause between chapters", f"{pause_chapter_ms} ms")
+    tbl.add_row("Noise clamp", "disabled" if noise_clamp_val is None else str(noise_clamp_val))
+    tbl.add_row("Pause at scene breaks", f"{pause_scene_break_ms} ms")
+    tbl.add_row("Speak chapter titles", "yes" if speak_chapter_titles else "no")
+    if speak_chapter_titles:
+        tbl.add_row("  Pause before title", f"{pause_before_chapter_title_ms} ms")
+        tbl.add_row("  Pause after title", f"{pause_after_chapter_title_ms} ms")
     tbl.add_row("Temperature", str(temp))
     tbl.add_row("Generation steps", str(lsd_decode_steps))
     tbl.add_row("EOS threshold", str(eos_threshold))
@@ -438,9 +486,13 @@ def cmd_config(args) -> int:
         "m4b_bitrate": m4b_bitrate,
         "pause_line_ms": int(pause_line_ms),
         "pause_chapter_ms": int(pause_chapter_ms),
+        "pause_scene_break_ms": int(pause_scene_break_ms),
+        "speak_chapter_titles": speak_chapter_titles,
+        "pause_before_chapter_title_ms": int(pause_before_chapter_title_ms),
+        "pause_after_chapter_title_ms": int(pause_after_chapter_title_ms),
         "temp": float(temp),
         "lsd_decode_steps": int(lsd_decode_steps),
-        "noise_clamp": float(noise_clamp_val) if noise_clamp_val is not None else None,
+        "noise_clamp": noise_clamp_val,
         "eos_threshold": float(eos_threshold),
         "frames_after_eos": frames_after_eos,
         "default_voice": default_voice,
