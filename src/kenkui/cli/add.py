@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 
+
 # ---------------------------------------------------------------------------
 # Back-navigation support
 # ---------------------------------------------------------------------------
@@ -49,35 +50,40 @@ console = Console()
 class _RangeValidator:
     """Validate numeric text input within optional min/max bounds.
 
-    Duck-typed prompt_toolkit validator — no InquirerPy base class needed.
-    The prompt_toolkit validate= kwarg accepts any object with .validate(document).
+    Implements both __call__ (so InquirerPy 0.3.x's Validator.from_callable
+    path works) and validate(document) for prompt_toolkit duck-typing.
+    prompt_toolkit re-raises ValidationError raised inside from_callable, so
+    custom per-value messages are preserved.
     """
 
-    def __init__(self, min_val=None, max_val=None, float_ok=False):
+    def __init__(self, min_val=None, max_val=None, float_ok=False, allow_blank=False):
         self._min = min_val
         self._max = max_val
         self._float_ok = float_ok
+        self._allow_blank = allow_blank
 
-    def validate(self, document) -> None:
+    def __call__(self, value: str) -> bool:
         from prompt_toolkit.validation import ValidationError as _PTKValidationError
-        text = document.text.strip()
+        text = (value or "").strip()
+        if not text:
+            if self._allow_blank:
+                return True
+            raise _PTKValidationError(message="Value is required.", cursor_position=0)
         try:
             val = float(text) if self._float_ok else int(text)
         except ValueError:
             raise _PTKValidationError(
                 message=f"Enter a {'decimal' if self._float_ok else 'whole'} number.",
-                cursor_position=len(document.text),
+                cursor_position=len(value or ""),
             )
         if self._min is not None and val < self._min:
-            raise _PTKValidationError(
-                message=f"Minimum value is {self._min}.",
-                cursor_position=len(document.text),
-            )
+            raise _PTKValidationError(message=f"Minimum value is {self._min}.", cursor_position=len(value or ""))
         if self._max is not None and val > self._max:
-            raise _PTKValidationError(
-                message=f"Maximum value is {self._max}.",
-                cursor_position=len(document.text),
-            )
+            raise _PTKValidationError(message=f"Maximum value is {self._max}.", cursor_position=len(value or ""))
+        return True
+
+    def validate(self, document) -> None:
+        self(document.text)
 
 # ---------------------------------------------------------------------------
 # Helpers shared between wizard paths
@@ -1174,6 +1180,23 @@ def _prompt_quality_overrides(app_config) -> dict:
     if int(pause_chapter) != app_config.pause_chapter_ms:
         overrides["job_pause_chapter_ms"] = int(pause_chapter)
 
+    apostrophe_default = getattr(app_config, "apostrophe_mode", None)
+    apostrophe_default_val = apostrophe_default.value if apostrophe_default is not None else "expand_contractions"
+    apostrophe_choices = [
+        {"name": "expand_contractions  (expand contractions — default)", "value": "expand_contractions"},
+        {"name": "keep  (pass text unchanged)", "value": "keep"},
+        {"name": "remove_contractions  (strip apostrophe from contractions only)", "value": "remove_contractions"},
+        {"name": "always_remove  (strip every apostrophe, including names)", "value": "always_remove"},
+    ]
+    apostrophe = _wizard_execute(inquirer.select(
+        message=f"Apostrophe/contraction mode (current default {apostrophe_default_val}):",
+        choices=apostrophe_choices,
+        default=apostrophe_default_val,
+    ))
+    if apostrophe != apostrophe_default_val:
+        from ..utils import ApostropheMode
+        overrides["job_apostrophe_mode"] = ApostropheMode(apostrophe)
+
     return overrides
 
 
@@ -1230,10 +1253,16 @@ def _print_status_panel(state: dict, app_config) -> None:
     series_manifest = state.get("_series_manifest")
     series_label = getattr(series_manifest, "name", None) or series_slug or "None"
 
+    output_dir = state.get("output_dir", str(book_path.parent if hasattr(state.get("_book_path"), "parent") else ""))
+    book_path = state.get("_book_path")
+    if not output_dir and book_path and hasattr(book_path, "parent"):
+        output_dir = str(book_path.parent)
+
     lines = [
         f"  [bold]Mode:[/bold]          {mode_str}",
         f"  [bold]NLP:[/bold]           {nlp_str}",
-        f"  [bold]TTS Provider:[/bold]  Kokoro · local",
+        f"  [bold]TTS Provider:[/bold]  pocket-tts · local",
+        f"  [bold]Output:[/bold]        {output_dir}",
         f"  [bold]Narrator:[/bold]      {voice}",
         f"  [bold]Series:[/bold]        {series_label}",
         f"  [bold]Chapters:[/bold]      {preset} ({chapter_count})",
@@ -1266,15 +1295,19 @@ def _build_confirmation_choices(state: dict, app_config) -> list:
     series_manifest = state.get("_series_manifest")
     series_name = getattr(series_manifest, "name", None) or series_slug or "None"
 
+    chapter_selection = state.get("chapter_selection", {})
+    chapter_preset = chapter_selection.get("preset", getattr(app_config, "default_chapter_preset", "content-only"))
+    default_preset = getattr(app_config, "default_chapter_preset", "content-only")
+    chapter_tag = "[DEFAULT]" if chapter_preset == default_preset else "[CUSTOM]"
+
     return [
-        Choice(value="submit",         name="  Submit Job"),
-        Choice(value="voice",          name=f"  Narrator / Fallback Voice  {voice}  {voice_tag} \u2192"),
-        Choice(value="series",         name=f"  Series                    {series_name} \u2192"),
-        Choice(value="narration",      name="  Narration Mode \u2192"),
-        Choice(value="quality",        name="  Audio Quality \u2192"),
-        Choice(value="postprocessing", name="  Post-Processing \u2192"),
-        Choice(value="advanced",       name="  Advanced \u2192"),
-        Choice(value="cancel",         name="  Cancel"),
+        Choice(value="submit",    name="  Submit Job"),
+        Choice(value="voice",     name=f"  Narrator Voice              {voice}  {voice_tag} \u2192"),
+        Choice(value="chapters",  name=f"  Chapters                    {chapter_preset}  {chapter_tag} \u2192"),
+        Choice(value="narration", name="  Narration Mode \u2192"),
+        Choice(value="series",    name=f"  Series                      {series_name} \u2192"),
+        Choice(value="advanced",  name="  Advanced Options \u2192"),
+        Choice(value="cancel",    name="  Cancel"),
     ]
 
 
@@ -1318,15 +1351,12 @@ def _submenu_narration_mode(state: dict, app_config, client) -> dict:
         choices=[
             {"name": f"Keep current ({mode_label})", "value": "keep"},
             {"name": "Change mode / provider…", "value": "mode"},
-            {"name": "Change narrator voice…", "value": "voice"},
             {"name": "Reset to defaults (single narrator)", "value": "reset"},
             {"name": "Back", "value": "back"},
         ],
     ))
     if action == "reset":
         state = reset_voice_mode(state, app_config)
-    elif action == "voice":
-        state = _edit_narrator_voice(state, app_config, client)
     elif action == "mode":
         mode = _wizard_execute(inquirer.select(
             message="Narration mode:",
@@ -1656,7 +1686,7 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
         temp_str = _wizard_execute(inquirer.text(
             message="Temperature [0.0-1.5] (blank=inherit from config):",
             default=str(overrides.get("temp", "")),
-            validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True),
+            validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True, allow_blank=True),
         )).strip()
         if temp_str:
             try:
@@ -1666,13 +1696,28 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
         steps_str = _wizard_execute(inquirer.text(
             message="Generation steps [1-50] (blank=inherit):",
             default=str(overrides.get("lsd_decode_steps", "")),
-            validate=_RangeValidator(min_val=1, max_val=50, float_ok=False),
+            validate=_RangeValidator(min_val=1, max_val=50, float_ok=False, allow_blank=True),
         )).strip()
         if steps_str:
             try:
                 overrides["lsd_decode_steps"] = int(steps_str)
             except ValueError:
                 pass
+        apostrophe_choices = [
+            {"name": "expand_contractions  (expand contractions — default)", "value": "expand_contractions"},
+            {"name": "keep  (pass text unchanged)", "value": "keep"},
+            {"name": "remove_contractions  (strip apostrophe from contractions only)", "value": "remove_contractions"},
+            {"name": "always_remove  (strip every apostrophe, including names)", "value": "always_remove"},
+        ]
+        apostrophe_mode = _wizard_execute(inquirer.select(
+            message="Apostrophe/contraction mode (blank=inherit from config):",
+            choices=[{"name": "inherit from config", "value": None}] + apostrophe_choices,
+            default=overrides.get("job_apostrophe_mode"),
+        ))
+        if apostrophe_mode is not None:
+            overrides["job_apostrophe_mode"] = apostrophe_mode
+        elif "job_apostrophe_mode" in overrides:
+            del overrides["job_apostrophe_mode"]
         state = {**state, "quality_overrides": overrides}
     return state
 
@@ -1740,14 +1785,12 @@ def _run_confirmation_screen(book_path, app_config, args, client=None):
                 return _state_to_job_kwargs(state)
             elif action == "voice":
                 state = _edit_narrator_voice(state, app_config, client)
+            elif action == "chapters":
+                state = _submenu_chapters(state, app_config, client)
             elif action == "series":
                 state = _edit_series(state, client)
             elif action == "narration":
                 state = _submenu_narration_mode(state, app_config, client)
-            elif action == "quality":
-                state = _submenu_audio_quality(state, app_config)
-            elif action == "postprocessing":
-                state = _submenu_post_processing(state, app_config)
             elif action == "advanced":
                 state = _submenu_advanced(state, app_config, client)
             elif action is None or action == "cancel":
