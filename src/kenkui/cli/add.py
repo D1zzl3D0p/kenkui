@@ -1253,10 +1253,8 @@ def _print_status_panel(state: dict, app_config) -> None:
     series_manifest = state.get("_series_manifest")
     series_label = getattr(series_manifest, "name", None) or series_slug or "None"
 
-    output_dir = state.get("output_dir", str(book_path.parent if hasattr(state.get("_book_path"), "parent") else ""))
-    book_path = state.get("_book_path")
-    if not output_dir and book_path and hasattr(book_path, "parent"):
-        output_dir = str(book_path.parent)
+    book_path_obj = state.get("_book_path")
+    output_dir = state.get("output_dir") or (str(book_path_obj.parent) if book_path_obj and hasattr(book_path_obj, "parent") else "")
 
     lines = [
         f"  [bold]Mode:[/bold]          {mode_str}",
