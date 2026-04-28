@@ -363,6 +363,7 @@ class AudioBuilder:
             "chapter_voices": self.cfg.chapter_voices,
             # Audio post-processing effects chain
             "post_processing": self.cfg.post_processing.to_dict(),
+            "apostrophe_mode": self.cfg.apostrophe_mode.value,
         }
 
         pool: ProcessPoolExecutor | None = None

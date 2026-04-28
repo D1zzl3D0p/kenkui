@@ -259,10 +259,13 @@ def _process_chapter_inner(
             eos_threshold=config_dict.get("eos_threshold", -4.0),
         )
 
+        from .utils import ApostropheMode
+        apostrophe_mode = ApostropheMode(config_dict.get("apostrophe_mode", "expand_contractions"))
+
         # ── Multi-voice path (NLP segments present) ──────────────────────
         if chapter.segments is not None:
             return _render_multi_voice(
-                chapter, model, config_dict, temp_dir, queue, pid, log_message
+                chapter, model, config_dict, temp_dir, queue, pid, log_message, apostrophe_mode
             )
 
         # ── Per-chapter voice override (chapter-voice mode) ───────────────
@@ -311,6 +314,7 @@ def _process_chapter_inner(
                 0,
                 total_batches,
                 frames_after_eos=0,
+                apostrophe_mode=apostrophe_mode,
             )
             if title_audio is not None:
                 full_audio += title_audio
@@ -332,6 +336,7 @@ def _process_chapter_inner(
                     global_batch_idx,
                     total_batches,
                     frames_after_eos=batch_fae,
+                    apostrophe_mode=apostrophe_mode,
                 )
                 if audio_seg is not None:
                     if autogain_enabled:
@@ -370,6 +375,7 @@ def _render_multi_voice(
     queue: multiprocessing.Queue,
     pid: int,
     log_message,
+    apostrophe_mode=None,
 ) -> AudioResult | None:
     """Render a chapter that has NLP-assigned speaker segments.
 
@@ -433,6 +439,7 @@ def _render_multi_voice(
             0,
             total_segments,
             frames_after_eos=0,
+            apostrophe_mode=apostrophe_mode,
         )
         if title_audio is not None:
             initial_audio += title_audio
@@ -456,6 +463,7 @@ def _render_multi_voice(
             seg_idx,
             total_segments,
             frames_after_eos=seg_fae,
+            apostrophe_mode=apostrophe_mode,
         )
         if audio_seg is not None and autogain_enabled:
             audio_seg = _autogain_segment(audio_seg, autogain_target_db)
@@ -512,6 +520,7 @@ def _render_text(
     batch_idx: int,
     total_batches: int,
     frames_after_eos: int = 0,
+    apostrophe_mode=None,
 ) -> AudioSegment | None:
     """Generate audio for one text batch, retrying once on failure.
 
@@ -525,9 +534,10 @@ def _render_text(
             # segment (e.g. in single-voice mode that bypasses the NLP pipeline).
             text = text.replace("\x02", "").replace("\x03", "")
             # Expand n't contractions so TTS pronounces them correctly.
-            from .utils import normalize_for_tts
+            from .utils import ApostropheMode, normalize_for_tts
 
-            text = normalize_for_tts(text)
+            effective_mode = apostrophe_mode if apostrophe_mode is not None else ApostropheMode.EXPAND_CONTRACTIONS
+            text = normalize_for_tts(text, mode=effective_mode)
             log_message(f"  Batch {batch_idx + 1}/{total_batches}: {text[:80]}…")
             tensor = model.generate_audio(
                 voice_state,

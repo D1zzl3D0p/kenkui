@@ -787,6 +787,7 @@ class WorkerServer:
             chapter_voices=job.chapter_voices,
             # Audio post-processing
             post_processing=self._app_config.post_processing,
+            apostrophe_mode=_resolve(job.job_apostrophe_mode, self._app_config.apostrophe_mode),
         )
         return cfg
 
