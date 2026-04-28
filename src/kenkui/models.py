@@ -271,6 +271,7 @@ class JobConfig:
     job_pause_after_chapter_title_ms: int | None = None
     job_frames_after_eos: int | None = None
     job_apostrophe_mode: ApostropheMode | None = None
+    job_post_processing_enabled: bool | None = None
 
     def __post_init__(self):
         if not self.name:
@@ -313,6 +314,7 @@ class JobConfig:
             "job_pause_after_chapter_title_ms",
             "job_frames_after_eos",
             "job_apostrophe_mode",
+            "job_post_processing_enabled",
         ):
             val = getattr(self, key)
             if val is not None:
@@ -356,6 +358,7 @@ class JobConfig:
             job_apostrophe_mode=ApostropheMode(data["job_apostrophe_mode"])
             if data.get("job_apostrophe_mode")
             else None,
+            job_post_processing_enabled=data.get("job_post_processing_enabled"),
         )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import threading
@@ -786,7 +787,11 @@ class WorkerServer:
             # Chapter-voice mode
             chapter_voices=job.chapter_voices,
             # Audio post-processing
-            post_processing=self._app_config.post_processing,
+            post_processing=(
+                dataclasses.replace(self._app_config.post_processing, enabled=job.job_post_processing_enabled)
+                if job.job_post_processing_enabled is not None
+                else self._app_config.post_processing
+            ),
             apostrophe_mode=_resolve(job.job_apostrophe_mode, self._app_config.apostrophe_mode),
         )
         return cfg

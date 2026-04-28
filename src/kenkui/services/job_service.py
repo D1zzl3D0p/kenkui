@@ -49,6 +49,7 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
     speaker_voices = state.get("speaker_voices", {})
     chapter_voices = state.get("chapter_voices", {})
     quality_overrides = state.get("quality_overrides", {})
+    pp_enabled_override = state.get("pp_enabled_override")  # None | bool
     output_dir = state.get("output_dir", str(book_path.parent))
     roster_cache_path = state.get("roster_cache_path")
     series_slug = state.get("series_slug")
@@ -72,6 +73,8 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
         kwargs["job_nlp_provider"] = job_nlp_provider
     if job_nlp_model is not None:
         kwargs["job_nlp_model"] = job_nlp_model
+    if pp_enabled_override is not None:
+        kwargs["job_post_processing_enabled"] = pp_enabled_override
     return kwargs
 
 

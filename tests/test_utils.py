@@ -1,4 +1,4 @@
-"""Tests for kenkui.utils — batch_text and _normalize_bitrate."""
+"""Tests for kenkui.utils — batch_text, ensure_terminal_punct, and _normalize_bitrate."""
 
 from __future__ import annotations
 
@@ -338,3 +338,79 @@ class TestApostropheModeModels:
     def test_jobconfig_from_dict_missing_job_apostrophe_mode_is_none(self):
         job = JobConfig.from_dict({"ebook_path": "book.epub"})
         assert job.job_apostrophe_mode is None
+
+
+# ---------------------------------------------------------------------------
+# ensure_terminal_punct
+# ---------------------------------------------------------------------------
+
+from kenkui.utils import ensure_terminal_punct
+
+
+class TestEnsureTerminalPunct:
+    @pytest.mark.parametrize("text", [
+        "Hello world.",
+        "Really?",
+        "Stop!",
+        "Wait\u2026",
+        "Continue…",
+    ])
+    def test_already_punctuated_unchanged(self, text):
+        assert ensure_terminal_punct(text) == text
+
+    def test_no_punct_appends_period(self):
+        assert ensure_terminal_punct("Hello world") == "Hello world."
+
+    def test_trailing_whitespace_stripped_then_period(self):
+        assert ensure_terminal_punct("Hello world  ") == "Hello world."
+
+    def test_empty_string_unchanged(self):
+        assert ensure_terminal_punct("") == ""
+
+    def test_whitespace_only_unchanged(self):
+        assert ensure_terminal_punct("   ") == "   "
+
+    def test_closing_double_quote_with_punct_unchanged(self):
+        assert ensure_terminal_punct('"Hello."') == '"Hello."'
+
+    def test_closing_curly_quote_with_punct_unchanged(self):
+        assert ensure_terminal_punct("\u201cHello.\u201d") == "\u201cHello.\u201d"
+
+    def test_closing_quote_without_punct_gets_period(self):
+        result = ensure_terminal_punct('"Hello"')
+        assert result == '"Hello."'
+
+    def test_closing_curly_quote_without_punct_gets_period(self):
+        result = ensure_terminal_punct("\u201cHello\u201d")
+        assert result == "\u201cHello.\u201d"
+
+    def test_question_mark_before_closing_quote_unchanged(self):
+        assert ensure_terminal_punct('"Hello?"') == '"Hello?"'
+
+
+# ---------------------------------------------------------------------------
+# JobConfig per-job override fields
+# ---------------------------------------------------------------------------
+
+
+def test_job_config_eos_threshold_override():
+    from pathlib import Path
+    from kenkui.models import JobConfig
+    job = JobConfig(ebook_path=Path("book.epub"), job_eos_threshold=-2.5)
+    assert job.job_eos_threshold == -2.5
+
+
+def test_job_config_post_processing_enabled_override():
+    from pathlib import Path
+    from kenkui.models import JobConfig
+    job = JobConfig(ebook_path=Path("book.epub"), job_post_processing_enabled=False)
+    assert job.job_post_processing_enabled is False
+
+
+def test_job_config_pp_enabled_round_trip():
+    from pathlib import Path
+    from kenkui.models import JobConfig
+    job = JobConfig(ebook_path=Path("book.epub"), job_post_processing_enabled=True)
+    d = job.to_dict()
+    job2 = JobConfig.from_dict(d)
+    assert job2.job_post_processing_enabled is True

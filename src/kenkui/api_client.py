@@ -112,10 +112,13 @@ class APIClient:
         job_temp: float | None = None,
         job_lsd_decode_steps: int | None = None,
         job_noise_clamp: float | None = None,
+        job_eos_threshold: float | None = None,
+        job_post_processing_enabled: bool | None = None,
         job_m4b_bitrate: str | None = None,
         job_pause_line_ms: int | None = None,
         job_pause_chapter_ms: int | None = None,
         job_frames_after_eos: int | None = None,
+        job_apostrophe_mode: str | None = None,
     ) -> JobInfo:
         """Add a new job to the queue."""
         payload: dict = {
@@ -151,10 +154,13 @@ class APIClient:
             "job_temp": job_temp,
             "job_lsd_decode_steps": job_lsd_decode_steps,
             "job_noise_clamp": job_noise_clamp,
+            "job_eos_threshold": job_eos_threshold,
+            "job_post_processing_enabled": job_post_processing_enabled,
             "job_m4b_bitrate": job_m4b_bitrate,
             "job_pause_line_ms": job_pause_line_ms,
             "job_pause_chapter_ms": job_pause_chapter_ms,
             "job_frames_after_eos": job_frames_after_eos,
+            "job_apostrophe_mode": job_apostrophe_mode,
         }.items():
             if val is not None:
                 payload[key] = val
