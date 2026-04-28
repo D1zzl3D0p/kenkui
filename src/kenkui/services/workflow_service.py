@@ -90,6 +90,13 @@ def reset_post_processing_overrides(state: dict[str, Any]) -> dict[str, Any]:
     return {**state, "pp_overrides": {}}
 
 
+def reset_output_location(state: dict[str, Any], app_config) -> dict[str, Any]:
+    """Reset output directory to app config default."""
+    from pathlib import Path
+    default = str(getattr(app_config, "default_output_dir", None) or Path(state["_book_path"]).parent)
+    return {**state, "output_dir": default}
+
+
 def describe_voice_mode(state: dict[str, Any]) -> str:
     """Return a short human-readable label for the current voice mode."""
     current_mode = state.get("narration_mode", "single")
@@ -109,5 +116,6 @@ __all__ = [
     "apply_chapter_voice_setup",
     "reset_quality_overrides",
     "reset_post_processing_overrides",
+    "reset_output_location",
     "describe_voice_mode",
 ]

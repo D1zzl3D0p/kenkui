@@ -1396,21 +1396,36 @@ def _describe_mode_for_menu(state: dict, app_config) -> str:
 
 
 def _submenu_advanced(state: dict, app_config, client) -> dict:
-    """Advanced submenu: chapter selection and voice management."""
+    """Advanced Options — organized by pipeline stage."""
     from InquirerPy import inquirer
 
-    action = _wizard_execute(inquirer.select(
-        message="Advanced",
-        choices=[
-            {"name": "Chapter selection…", "value": "chapters"},
-            {"name": "Manage Voices…", "value": "voices"},
-            {"name": "Back", "value": "back"},
-        ],
-    ))
-    if action == "chapters":
-        state = _submenu_chapters(state, app_config, client)
-    elif action == "voices":
-        _submenu_manage_voices(state, app_config, client)
+    while True:
+        action = _wizard_execute(inquirer.select(
+            message="Advanced Options",
+            choices=[
+                {"name": "pocket-tts Quality        temp, generation steps, EOS, noise clamp \u2192", "value": "tts_quality"},
+                {"name": "Audio Encoding            bitrate, pauses, chapter titles \u2192", "value": "encoding"},
+                {"name": "Audio Post-Processing     enable/disable effects chain \u2192", "value": "postprocessing"},
+                {"name": "Text Preprocessing        apostrophe/contraction handling \u2192", "value": "text_prep"},
+                {"name": "Output Location           where the audiobook file goes \u2192", "value": "output"},
+                {"name": "Voice Management          browse, audition, exclude voices \u2192", "value": "voices"},
+                {"name": "Back", "value": "back"},
+            ],
+        ))
+        if action == "tts_quality":
+            state = _submenu_tts_quality(state, app_config)
+        elif action == "encoding":
+            state = _submenu_audio_encoding(state, app_config)
+        elif action == "postprocessing":
+            state = _submenu_post_processing(state, app_config)
+        elif action == "text_prep":
+            state = _submenu_text_preprocessing(state, app_config)
+        elif action == "output":
+            state = _submenu_output_location(state, app_config)
+        elif action == "voices":
+            _submenu_manage_voices(state, app_config, client)
+        else:
+            break
     return state
 
 
@@ -1663,16 +1678,16 @@ def _setup_chapter_voice(state: dict, client) -> dict:
     return apply_chapter_voice_setup(state, chapter_voices)
 
 
-def _submenu_audio_quality(state: dict, app_config) -> dict:
-    """Per-job audio quality overrides submenu."""
+def _submenu_tts_quality(state: dict, app_config) -> dict:
+    """pocket-tts quality overrides: temp, LSD steps, EOS threshold, noise clamp, frames after EOS."""
     from InquirerPy import inquirer
     from ..services.workflow_service import reset_quality_overrides
 
     action = _wizard_execute(inquirer.select(
-        message="Audio Quality",
+        message="pocket-tts Quality",
         choices=[
             {"name": f"Keep current ({'custom' if state.get('quality_overrides') else 'defaults'})", "value": "keep"},
-            {"name": "Edit quality overrides...", "value": "edit"},
+            {"name": "Edit quality overrides\u2026", "value": "edit"},
             {"name": "Reset to defaults (clear overrides)", "value": "reset"},
             {"name": "Back", "value": "back"},
         ],
@@ -1681,60 +1696,207 @@ def _submenu_audio_quality(state: dict, app_config) -> dict:
         state = reset_quality_overrides(state)
     elif action == "edit":
         overrides = dict(state.get("quality_overrides") or {})
+
         temp_str = _wizard_execute(inquirer.text(
             message="Temperature [0.0-1.5] (blank=inherit from config):",
             default=str(overrides.get("temp", "")),
             validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True, allow_blank=True),
         )).strip()
         if temp_str:
-            try:
-                overrides["temp"] = float(temp_str)
-            except ValueError:
-                pass
+            overrides["temp"] = float(temp_str)
+        elif "temp" in overrides:
+            del overrides["temp"]
+
         steps_str = _wizard_execute(inquirer.text(
             message="Generation steps [1-50] (blank=inherit):",
             default=str(overrides.get("lsd_decode_steps", "")),
             validate=_RangeValidator(min_val=1, max_val=50, float_ok=False, allow_blank=True),
         )).strip()
         if steps_str:
-            try:
-                overrides["lsd_decode_steps"] = int(steps_str)
-            except ValueError:
-                pass
-        apostrophe_choices = [
-            {"name": "expand_contractions  (expand contractions — default)", "value": "expand_contractions"},
-            {"name": "keep  (pass text unchanged)", "value": "keep"},
-            {"name": "remove_contractions  (strip apostrophe from contractions only)", "value": "remove_contractions"},
-            {"name": "always_remove  (strip every apostrophe, including names)", "value": "always_remove"},
+            overrides["lsd_decode_steps"] = int(steps_str)
+        elif "lsd_decode_steps" in overrides:
+            del overrides["lsd_decode_steps"]
+
+        eos_str = _wizard_execute(inquirer.text(
+            message="EOS threshold [-10.0\u20130.0] (blank=inherit; -2.0=later cutoff, -6.0=earlier):",
+            default=str(overrides.get("job_eos_threshold", "")),
+            validate=_RangeValidator(min_val=-10.0, max_val=0.0, float_ok=True, allow_blank=True),
+        )).strip()
+        if eos_str:
+            overrides["job_eos_threshold"] = float(eos_str)
+        elif "job_eos_threshold" in overrides:
+            del overrides["job_eos_threshold"]
+
+        noise_str = _wizard_execute(inquirer.text(
+            message="Noise clamp [0.0\u201310.0] (0=disabled, ~3.0 reduces glitches; blank=inherit):",
+            default=str(overrides.get("job_noise_clamp", "")),
+            validate=_RangeValidator(min_val=0.0, max_val=10.0, float_ok=True, allow_blank=True),
+        )).strip()
+        if noise_str:
+            val = float(noise_str)
+            overrides["job_noise_clamp"] = None if val == 0.0 else val
+        elif "job_noise_clamp" in overrides:
+            del overrides["job_noise_clamp"]
+
+        frames_str = _wizard_execute(inquirer.text(
+            message="Frames after EOS [0\u201350] (0=auto; blank=inherit):",
+            default=str(overrides.get("job_frames_after_eos", "")),
+            validate=_RangeValidator(min_val=0, max_val=50, float_ok=False, allow_blank=True),
+        )).strip()
+        if frames_str:
+            overrides["job_frames_after_eos"] = int(frames_str)
+        elif "job_frames_after_eos" in overrides:
+            del overrides["job_frames_after_eos"]
+
+        state = {**state, "quality_overrides": overrides}
+    return state
+
+
+def _submenu_audio_encoding(state: dict, app_config) -> dict:
+    """Audio encoding overrides: bitrate, pauses, chapter title speech."""
+    from InquirerPy import inquirer
+
+    overrides = dict(state.get("quality_overrides") or {})
+    has_overrides = any(k in overrides for k in ("job_m4b_bitrate", "job_pause_line_ms", "job_pause_chapter_ms"))
+
+    action = _wizard_execute(inquirer.select(
+        message="Audio Encoding",
+        choices=[
+            {"name": f"Keep current ({'custom' if has_overrides else 'defaults'})", "value": "keep"},
+            {"name": "Edit encoding settings\u2026", "value": "edit"},
+            {"name": "Back", "value": "back"},
+        ],
+    ))
+    if action == "edit":
+        bitrate_choices = [
+            {"name": "inherit from config", "value": None},
+            {"name": "64k  (small files)", "value": "64k"},
+            {"name": "96k  (default)", "value": "96k"},
+            {"name": "128k", "value": "128k"},
+            {"name": "192k", "value": "192k"},
+            {"name": "256k  (high quality)", "value": "256k"},
         ]
-        apostrophe_mode = _wizard_execute(inquirer.select(
-            message="Apostrophe/contraction mode (blank=inherit from config):",
-            choices=[{"name": "inherit from config", "value": None}] + apostrophe_choices,
-            default=overrides.get("job_apostrophe_mode"),
+        bitrate = _wizard_execute(inquirer.select(
+            message="M4B bitrate (inherit = use config default):",
+            choices=bitrate_choices,
+            default=overrides.get("job_m4b_bitrate"),
         ))
-        if apostrophe_mode is not None:
-            overrides["job_apostrophe_mode"] = apostrophe_mode
-        elif "job_apostrophe_mode" in overrides:
-            del overrides["job_apostrophe_mode"]
+        if bitrate is not None:
+            overrides["job_m4b_bitrate"] = bitrate
+        elif "job_m4b_bitrate" in overrides:
+            del overrides["job_m4b_bitrate"]
+
+        pause_line_str = _wizard_execute(inquirer.text(
+            message="Pause between lines ms [0\u20135000] (blank=inherit):",
+            default=str(overrides.get("job_pause_line_ms", "")),
+            validate=_RangeValidator(min_val=0, max_val=5000, allow_blank=True),
+        )).strip()
+        if pause_line_str:
+            overrides["job_pause_line_ms"] = int(pause_line_str)
+        elif "job_pause_line_ms" in overrides:
+            del overrides["job_pause_line_ms"]
+
+        pause_chap_str = _wizard_execute(inquirer.text(
+            message="Pause between chapters ms [0\u201330000] (blank=inherit):",
+            default=str(overrides.get("job_pause_chapter_ms", "")),
+            validate=_RangeValidator(min_val=0, max_val=30000, allow_blank=True),
+        )).strip()
+        if pause_chap_str:
+            overrides["job_pause_chapter_ms"] = int(pause_chap_str)
+        elif "job_pause_chapter_ms" in overrides:
+            del overrides["job_pause_chapter_ms"]
+
         state = {**state, "quality_overrides": overrides}
     return state
 
 
 def _submenu_post_processing(state: dict, app_config) -> dict:
-    """Post-processing per-job override submenu."""
+    """Per-job post-processing: enable or disable the effects chain for this job."""
     from InquirerPy import inquirer
-    from ..services.workflow_service import reset_post_processing_overrides
+
+    current_override = state.get("pp_enabled_override")  # None | True | False
+    pp_cfg = getattr(app_config, "post_processing", None)
+    global_enabled = getattr(pp_cfg, "enabled", True) if pp_cfg else True
+
+    if current_override is False:
+        current_label = "disabled for this job"
+    elif current_override is True:
+        current_label = "enabled for this job"
+    else:
+        current_label = f"inherit from config ({'on' if global_enabled else 'off'})"
 
     action = _wizard_execute(inquirer.select(
-        message="Post-Processing",
+        message=f"Audio Post-Processing  [{current_label}]",
         choices=[
-            {"name": f"Keep current ({'custom' if state.get('pp_overrides') else 'inherit from config'})", "value": "keep"},
-            {"name": "Reset to defaults (inherit from config)", "value": "reset"},
+            {"name": f"Keep current ({current_label})", "value": "keep"},
+            {"name": "Enable for this job (override config)", "value": "enable"},
+            {"name": "Disable for this job (override config)", "value": "disable"},
+            {"name": "Inherit from config (clear override)", "value": "inherit"},
+            {"name": "Back", "value": "back"},
+        ],
+    ))
+    if action == "enable":
+        state = {**state, "pp_enabled_override": True}
+    elif action == "disable":
+        state = {**state, "pp_enabled_override": False}
+    elif action == "inherit":
+        state = {**state, "pp_enabled_override": None}
+    return state
+
+
+def _submenu_text_preprocessing(state: dict, app_config) -> dict:
+    """Text preprocessing overrides: apostrophe/contraction handling."""
+    from InquirerPy import inquirer
+
+    overrides = dict(state.get("quality_overrides") or {})
+
+    apostrophe_choices = [
+        {"name": "inherit from config", "value": None},
+        {"name": "expand_contractions  (expand: don\u2019t \u2192 do not)", "value": "expand_contractions"},
+        {"name": "keep  (pass text unchanged)", "value": "keep"},
+        {"name": "remove_contractions  (strip apostrophe from contractions only)", "value": "remove_contractions"},
+        {"name": "always_remove  (strip every apostrophe, including names)", "value": "always_remove"},
+    ]
+    apostrophe_mode = _wizard_execute(inquirer.select(
+        message="Apostrophe/contraction mode:",
+        choices=apostrophe_choices,
+        default=overrides.get("job_apostrophe_mode"),
+    ))
+    if apostrophe_mode is not None:
+        overrides["job_apostrophe_mode"] = apostrophe_mode
+    elif "job_apostrophe_mode" in overrides:
+        del overrides["job_apostrophe_mode"]
+    return {**state, "quality_overrides": overrides}
+
+
+def _submenu_output_location(state: dict, app_config) -> dict:
+    """Set per-job output directory."""
+    from InquirerPy import inquirer
+    from pathlib import Path
+    from ..services.workflow_service import reset_output_location
+
+    current = state.get("output_dir") or str(Path(state["_book_path"]).parent)
+
+    action = _wizard_execute(inquirer.select(
+        message=f"Output Location  [{current}]",
+        choices=[
+            {"name": f"Keep current ({current})", "value": "keep"},
+            {"name": "Edit output directory\u2026", "value": "edit"},
+            {"name": "Reset to default", "value": "reset"},
             {"name": "Back", "value": "back"},
         ],
     ))
     if action == "reset":
-        state = reset_post_processing_overrides(state)
+        state = reset_output_location(state, app_config)
+    elif action == "edit":
+        new_dir = _wizard_execute(inquirer.text(
+            message="Output directory (absolute path, or blank to reset to default):",
+            default=current,
+        )).strip()
+        if new_dir:
+            state = {**state, "output_dir": new_dir}
+        else:
+            state = reset_output_location(state, app_config)
     return state
 
 

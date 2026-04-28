@@ -30,6 +30,7 @@ def init_confirmation_state(book_path: Path, app_config, profile: dict[str, Any]
         ),
         "quality_overrides": quality_overrides_from_profile(profile),
         "pp_overrides": dict(profile.get("pp_overrides") or {}),
+        "pp_enabled_override": profile.get("pp_enabled_override"),
         "speaker_voices": {},
         "chapter_voices": {},
         "roster_cache_path": None,
@@ -48,6 +49,7 @@ def confirmation_state_to_profile(state: dict[str, Any]) -> dict[str, Any]:
         "output_dir": state.get("output_dir", ""),
         "quality_overrides": state.get("quality_overrides") or {},
         "pp_overrides": state.get("pp_overrides") or {},
+        "pp_enabled_override": state.get("pp_enabled_override"),
     }
     if state.get("job_nlp_provider"):
         profile["job_nlp_provider"] = state["job_nlp_provider"]
