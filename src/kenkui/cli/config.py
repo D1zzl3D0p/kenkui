@@ -22,8 +22,50 @@ from ..api_client import APIClient
 console = Console()
 
 
+def _cmd_config_set(args) -> int:
+    """Non-interactive: apply KEY=VALUE pairs to the active config file."""
+    import os
+    from ..config import (
+        DEFAULT_CONFIG_PATH,
+        load_app_config,
+        resolve_config_path,
+        save_app_config,
+    )
+    from ..models import AppConfig
+
+    raw_path = getattr(args, "path", None) or os.environ.get("KENKUI_CONFIG")
+    path = resolve_config_path(raw_path)
+    config = load_app_config(raw_path)
+
+    overrides: dict = {}
+    for pair in args.set_values:
+        if "=" not in pair:
+            console.print(f"[red]Invalid format: {pair!r}. Expected KEY=VALUE.[/red]")
+            return 1
+        key, val = pair.split("=", 1)
+        overrides[key.strip()] = val.strip()
+
+    base = config.to_dict()
+    base.update(overrides)
+    try:
+        updated = AppConfig.from_dict(base)
+    except Exception as exc:
+        console.print(f"[red]Invalid config value: {exc}[/red]")
+        return 1
+
+    save_path = path if path.exists() else DEFAULT_CONFIG_PATH
+    save_app_config(updated, save_path)
+    console.print(f"[green]Config saved: {save_path}[/green]")
+    for pair in args.set_values:
+        console.print(f"  {pair}")
+    return 0
+
+
 def cmd_config(args) -> int:
-    """Handle 'kenkui config [profile]'."""
+    """Handle 'kenkui config [profile] [--set key=val ...]'."""
+    if getattr(args, "set_values", None):
+        return _cmd_config_set(args)
+
     class _RangeValidator:
         """Validate numeric text input within optional min/max bounds.
 
@@ -76,6 +118,52 @@ def cmd_config(args) -> int:
     for v in voices_data.get("voices") or []:
         label = v.get("description") or v["name"]
         voice_choices.append({"name": label, "value": v["name"]})
+
+    # ---- API Keys (absorbs configure-provider) ------------------------
+    console.print("\n[bold cyan]── API Keys ──[/bold cyan]")
+
+    from ..config import (
+        CREDENTIALS_PATH,
+        ProviderCredentials,
+        load_provider_credentials,
+        save_provider_credentials,
+    )
+
+    _PROVIDER_MODELS = {
+        "anthropic": "claude-sonnet-4-6",
+        "openai": "gpt-4o",
+        "google": "gemini/gemini-2.0-flash",
+    }
+    existing_creds = load_provider_credentials()
+    existing_summary = (
+        ", ".join(existing_creds.keys()) if existing_creds else "none configured"
+    )
+    console.print(f"[dim]Currently configured: {existing_summary}[/dim]")
+
+    configure_api = inquirer.confirm(
+        message="Configure a cloud NLP provider API key?",
+        default=False,
+    ).execute()
+
+    if configure_api:
+        api_provider = inquirer.select(
+            message="Select provider:",
+            choices=["anthropic", "openai", "google"],
+        ).execute()
+        api_key = inquirer.secret(
+            message=f"Enter {api_provider} API key:",
+        ).execute()
+        api_model = inquirer.text(
+            message="Default model (Enter for recommended):",
+            default=_PROVIDER_MODELS.get(api_provider, ""),
+        ).execute()
+        existing_creds[api_provider] = ProviderCredentials(
+            api_key=api_key,
+            default_model=api_model.strip() or _PROVIDER_MODELS.get(api_provider, ""),
+        )
+        save_provider_credentials(existing_creds)
+        console.print(f"[green]✓ Credentials for '{api_provider}' saved to {CREDENTIALS_PATH}.[/green]")
+        console.print(f'[dim]Set nlp_provider = "{api_provider}" in your config to use it.[/dim]')
 
     # ---- Prompt each field --------------------------------------------
 
@@ -240,6 +328,24 @@ def cmd_config(args) -> int:
         .execute()
         .strip()
     )
+
+    execution_mode_choices = [
+        {"name": "local   — run on this machine (spaCy/BookNLP + Ollama)", "value": "local"},
+        {"name": "modal   — offload to Modal GPU cloud", "value": "modal"},
+        {"name": "litellm — use configured cloud LLM API", "value": "litellm"},
+    ]
+
+    nlp_execution_mode = inquirer.select(
+        message="NLP execution mode (entity clustering):",
+        choices=execution_mode_choices,
+        default=cfg.get("nlp_execution_mode", "local"),
+    ).execute()
+
+    attribution_execution_mode = inquirer.select(
+        message="Attribution execution mode (speaker attribution):",
+        choices=execution_mode_choices,
+        default=cfg.get("attribution_execution_mode", "local"),
+    ).execute()
 
     console.print("\n[bold cyan]── Text Preprocessing ──[/bold cyan]")
 
@@ -463,6 +569,8 @@ def cmd_config(args) -> int:
     tbl.add_row("M4B bitrate", m4b_bitrate)
     tbl.add_row("NLP model", nlp_model)
     tbl.add_row("NLP roster model", nlp_roster_model or f"(same as NLP model: {nlp_model})")
+    tbl.add_row("NLP execution mode", nlp_execution_mode)
+    tbl.add_row("Attribution execution mode", attribution_execution_mode)
     tbl.add_row("Apostrophe mode", apostrophe_mode)
     tbl.add_row("Credits chapter", "on" if credits_enabled else "off")
     tbl.add_row("Post-processing", "on" if post_processing["enabled"] else "off")
@@ -500,6 +608,8 @@ def cmd_config(args) -> int:
         "default_output_dir": default_output_dir,
         "nlp_model": nlp_model,
         "nlp_roster_model": nlp_roster_model,
+        "nlp_execution_mode": nlp_execution_mode,
+        "attribution_execution_mode": attribution_execution_mode,
         "apostrophe_mode": apostrophe_mode,
         "credits_enabled": credits_enabled,
         "credits_acknowledgements": credits_acknowledgements,

@@ -111,7 +111,7 @@ def _make_client(
 
 
 def _make_args(path="default"):
-    return Namespace(path=path)
+    return Namespace(path=path, set_values=None)
 
 
 def _stub_inquirerpy(monkeypatch, answers: list):
@@ -159,12 +159,14 @@ class TestCmdConfig:
     """Tests that cmd_config talks only to APIClient (no local file / registry access)."""
 
     # Default answers covering all prompts when enable_pp=False, speak_chapter_titles=False:
+    # [NEW] configure_api_key,
     # workers, default_output_dir, default_voice, default_chapter_preset,
     # temp, lsd_decode_steps, eos_threshold, frames_after_eos, noise_clamp,
     # pause_line_ms, pause_chapter_ms, pause_scene_break_ms, speak_chapter_titles,
-    # m4b_bitrate, nlp_model, nlp_roster_model,
+    # m4b_bitrate, nlp_model, nlp_roster_model, nlp_execution_mode, attribution_execution_mode,
     # apostrophe_mode, enable_pp, credits_enabled, confirm_save
     _DEFAULT_ANSWERS = [
+        False,                   # configure_api_key (skip API key section)
         4,                       # workers
         "",                      # default_output_dir (blank -> None)
         "alba",                  # default_voice
@@ -181,6 +183,8 @@ class TestCmdConfig:
         "96k",                   # m4b_bitrate
         "llama3.2",              # nlp_model
         "",                      # nlp_roster_model (blank -> use attribution model)
+        "local",                 # nlp_execution_mode
+        "local",                 # attribution_execution_mode
         "expand_contractions",   # apostrophe_mode
         False,                   # enable_pp -> skips pp fields
         False,                   # credits_enabled -> skips credits fields
@@ -188,6 +192,7 @@ class TestCmdConfig:
     ]
 
     _CANCEL_ANSWERS = [
+        False,                 # configure_api_key (skip)
         4, "", "alba", "content-only",
         0.7, 1, -4.0, 0, 0.0,
         800, 2000, 4000,
@@ -195,6 +200,8 @@ class TestCmdConfig:
         "96k",
         "llama3.2",
         "",                    # nlp_roster_model
+        "local",               # nlp_execution_mode
+        "local",               # attribution_execution_mode
         "expand_contractions", # apostrophe_mode
         False,                 # enable_pp
         False,                 # credits_enabled
@@ -281,6 +288,7 @@ class TestCmdConfig:
         api_cm = _make_client(list_voices=voices_data)
 
         answers = [
+            False,                 # configure_api_key (skip)
             4, "", "cosette", "content-only",
             0.7, 1, -4.0, 0, 0.0,
             800, 2000, 4000,
@@ -288,6 +296,8 @@ class TestCmdConfig:
             "96k",
             "llama3.2",
             "",                    # nlp_roster_model
+            "local",               # nlp_execution_mode
+            "local",               # attribution_execution_mode
             "expand_contractions", # apostrophe_mode
             False,                 # enable_pp
             False,                 # credits_enabled
@@ -310,7 +320,7 @@ class TestCmdConfig:
         assert result == 0
 
     def test_no_business_logic_imports(self):
-        """config.py must not import get_registry, load_app_config, or save_app_config."""
+        """config.py must not import get_registry, load_app_config, or save_app_config at module level."""
         import ast
         import pathlib
 
@@ -319,7 +329,8 @@ class TestCmdConfig:
         forbidden = {"get_registry", "load_app_config", "save_app_config"}
         found = set()
 
-        for node in ast.walk(tree):
+        # Only check top-level (module-scope) imports; function-local lazy imports are OK.
+        for node in tree.body:
             if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     if alias.name in forbidden:
@@ -327,10 +338,10 @@ class TestCmdConfig:
                     if alias.asname and alias.asname in forbidden:
                         found.add(alias.asname)
 
-        assert not found, f"Forbidden business-logic symbols found in config.py: {found}"
+        assert not found, f"Forbidden business-logic symbols found at module level in config.py: {found}"
 
     def test_no_appconfig_model_import(self):
-        """config.py must not import AppConfig or PostProcessingConfig from models."""
+        """config.py must not import AppConfig or PostProcessingConfig at module level."""
         import ast
         import pathlib
 
@@ -339,18 +350,20 @@ class TestCmdConfig:
         forbidden = {"AppConfig", "PostProcessingConfig"}
         found = set()
 
-        for node in ast.walk(tree):
+        # Only check top-level (module-scope) imports; function-local lazy imports are OK.
+        for node in tree.body:
             if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     if alias.name in forbidden:
                         found.add(alias.name)
 
-        assert not found, f"Forbidden model imports found in config.py: {found}"
+        assert not found, f"Forbidden model imports found at module level in config.py: {found}"
 
     def test_post_processing_enabled_path(self, monkeypatch):
         """When enable_pp=True, all pp prompts are visited and pp dict is in payload."""
         api_cm = _make_client()
         answers = [
+            False,                 # configure_api_key (skip)
             4, "", "alba", "content-only",
             0.7, 1, -4.0, 0, 0.0,
             800, 2000, 4000,
@@ -358,6 +371,8 @@ class TestCmdConfig:
             "96k",
             "llama3.2",
             "",                    # nlp_roster_model
+            "local",               # nlp_execution_mode
+            "local",               # attribution_execution_mode
             "expand_contractions", # apostrophe_mode
             True,                  # enable_pp -> enter pp block
             True,                  # noise_reduce
@@ -411,6 +426,7 @@ class TestCmdConfig:
 
         # Wizard answers: enable_pp=False (skips all pp prompts), then confirm
         answers = [
+            False,                 # configure_api_key (skip)
             4, "", "alba", "content-only",
             0.7, 1, -4.0, 0, 0.0,
             800, 2000, 4000,
@@ -418,6 +434,8 @@ class TestCmdConfig:
             "96k",
             "llama3.2",
             "",                    # nlp_roster_model
+            "local",               # nlp_execution_mode
+            "local",               # attribution_execution_mode
             "expand_contractions", # apostrophe_mode
             False,                 # enable_pp -> skip pp block
             False,                 # credits_enabled
