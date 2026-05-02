@@ -5,6 +5,9 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from .utils import ApostropheMode
 
 if TYPE_CHECKING:
@@ -80,6 +83,18 @@ class JobStatus(Enum):
 class TTSExecutionMode(Enum):
     LOCAL = "local"
     MODAL = "modal"
+
+
+class NlpExecutionMode(Enum):
+    LOCAL = "local"
+    MODAL = "modal"
+    LITELLM = "litellm"
+
+
+class AttributionExecutionMode(Enum):
+    LOCAL = "local"
+    MODAL = "modal"
+    LITELLM = "litellm"
 
 
 class CostStatus(Enum):
@@ -272,6 +287,8 @@ class JobConfig:
     job_frames_after_eos: int | None = None
     job_apostrophe_mode: ApostropheMode | None = None
     job_post_processing_enabled: bool | None = None
+    job_nlp_execution_mode: NlpExecutionMode | None = None
+    job_attribution_execution_mode: AttributionExecutionMode | None = None
 
     def __post_init__(self):
         if not self.name:
@@ -315,6 +332,8 @@ class JobConfig:
             "job_frames_after_eos",
             "job_apostrophe_mode",
             "job_post_processing_enabled",
+            "job_nlp_execution_mode",
+            "job_attribution_execution_mode",
         ):
             val = getattr(self, key)
             if val is not None:
@@ -359,80 +378,58 @@ class JobConfig:
             if data.get("job_apostrophe_mode")
             else None,
             job_post_processing_enabled=data.get("job_post_processing_enabled"),
+            job_nlp_execution_mode=NlpExecutionMode(data["job_nlp_execution_mode"])
+            if data.get("job_nlp_execution_mode")
+            else None,
+            job_attribution_execution_mode=AttributionExecutionMode(data["job_attribution_execution_mode"])
+            if data.get("job_attribution_execution_mode")
+            else None,
         )
 
 
-@dataclass
-class PostProcessingConfig:
+class PostProcessingConfig(BaseModel):
     """Broadcast-quality audio effects chain applied per-chapter WAV."""
 
     enabled: bool = True
-    # 1. Noise reduction
     noise_reduce: bool = True
     noise_reduce_prop_decrease: float = 0.8
-    # 2. High-pass filter (removes low-end rumble)
     highpass_hz: int = 80
-    # 3. Low shelf (reduces boominess)
     lowshelf_hz: int = 250
     lowshelf_db: float = -3.0
-    # 4. Presence / clarity boost
     presence_hz: int = 3500
     presence_db: float = 2.0
-    # 5. De-esser
     deesser: bool = True
     deesser_hz: int = 6500
     deesser_db: float = -4.0
-    # 6. Compressor
     compressor_threshold_db: float = -18.0
     compressor_ratio: float = 3.0
     compressor_attack_ms: float = 5.0
     compressor_release_ms: float = 50.0
-    # 7. Limiter
     limiter_threshold_db: float = -1.0
-    # 8. Autogain — normalize each clip's RMS to a common level before stitching
     autogain: bool = True
-    autogain_target_lufs: float = -23.0  # EBU R128 reference level for RMS normalization
-    # 9. Final loudness normalization (applied to output M4B/MP3)
+    autogain_target_lufs: float = -23.0
     normalize: bool = False
-    normalize_target_db: float = -3.0  # dBFS peak target (ACX ceiling)
-    normalize_lufs: float | None = None  # EBU R128 LUFS target (None = peak mode)
+    normalize_target_db: float = -3.0
+    normalize_lufs: float | None = None
 
     def to_dict(self) -> dict:
-        import dataclasses as _dc
-
-        return _dc.asdict(self)
+        return self.model_dump(mode="json", exclude_none=True)
 
     @classmethod
     def from_dict(cls, data: dict) -> "PostProcessingConfig":
-        return cls(
-            enabled=data.get("enabled", True),
-            noise_reduce=data.get("noise_reduce", True),
-            noise_reduce_prop_decrease=data.get("noise_reduce_prop_decrease", 0.8),
-            highpass_hz=data.get("highpass_hz", 80),
-            lowshelf_hz=data.get("lowshelf_hz", 250),
-            lowshelf_db=data.get("lowshelf_db", -3.0),
-            presence_hz=data.get("presence_hz", 3500),
-            presence_db=data.get("presence_db", 2.0),
-            deesser=data.get("deesser", True),
-            deesser_hz=data.get("deesser_hz", 6500),
-            deesser_db=data.get("deesser_db", -4.0),
-            compressor_threshold_db=data.get("compressor_threshold_db", -18.0),
-            compressor_ratio=data.get("compressor_ratio", 3.0),
-            compressor_attack_ms=data.get("compressor_attack_ms", 5.0),
-            compressor_release_ms=data.get("compressor_release_ms", 50.0),
-            limiter_threshold_db=data.get("limiter_threshold_db", -1.0),
-            autogain=data.get("autogain", True),
-            autogain_target_lufs=data.get("autogain_target_lufs", -23.0),
-            normalize=data.get("normalize", False),
-            normalize_target_db=data.get("normalize_target_db", -3.0),
-            normalize_lufs=data.get("normalize_lufs"),
-        )
+        return cls.model_validate(data)
 
 
-@dataclass
-class AppConfig:
-    name: str = "default"  # Config name for saving/loading
-    workers: int = max(2, multiprocessing.cpu_count() - 2)
+class AppConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="KENKUI_",
+        env_nested_delimiter="__",
+        arbitrary_types_allowed=True,
+        populate_by_name=True,
+    )
+
+    name: str = "default"
+    workers: int = Field(default_factory=lambda: max(2, multiprocessing.cpu_count() - 2))
     verbose: bool = False
     log_path: Path | None = None
     keep_temp: bool = False
@@ -443,118 +440,68 @@ class AppConfig:
     speak_chapter_titles: bool = True
     pause_before_chapter_title_ms: int = 2000
     pause_after_chapter_title_ms: int = 3000
-    temp: float = 0.7  # Sampling temperature (lower = stable, higher = expressive)
-    lsd_decode_steps: int = 1  # LSD decode steps (higher = better quality, slower)
-    noise_clamp: float | None = None  # Noise clamp (None = off; ~3.0 reduces audio glitches)
-    eos_threshold: float = -4.0  # EOS detection threshold; higher (→0) = later cut-off
-    frames_after_eos: int | None = None  # Frames after EoS (None = auto from text length)
-    # --- Job defaults (used by CLI / headless mode) ---
-    default_voice: str = "alba"  # Voice used when no per-job override
-    default_chapter_preset: str = "content-only"  # Chapter filter preset for CLI
-    default_output_dir: Path | None = None  # Output directory for CLI runs
-    # --- Multi-voice / NLP ---
-    nlp_provider: str = "ollama"  # "ollama" | "anthropic" | "openai" | "google" | any LiteLLM prefix
-    nlp_model: str = "llama3.2"   # model name; "" = use provider default from credentials.toml
-    nlp_roster_model: str = ""          # model for character discovery pass; "" = same as nlp_model
-    nlp_confidence_threshold: int = 0   # 0 = disabled; >0 triggers second-pass retry
-    nlp_review_model: str = ""          # Ollama model for second pass; "" = same as nlp_model
-    # --- Output token reduction (on by default) ---
-    nlp_omit_position_echo: bool = True   # attribution: skip char_start/char_end echo
-    nlp_omit_emotion: bool = True         # attribution: skip emotion field
-    nlp_compact_roster: bool = True       # roster: skip chapters/appearances (derived server-side)
-    nlp_include_character_descriptions: bool = False  # roster: request per-character descriptions from the LLM
-    nlp_descriptions_protagonists_only: bool = True   # roster: when descriptions are enabled, only describe protagonist/antagonist roles
-    excluded_voices: list[str] = field(default_factory=list)
-    # --- Credits chapter (audio-only, appended after final chapter, no chapter marker) ---
+    temp: float = 0.7
+    lsd_decode_steps: int = 1
+    noise_clamp: float | None = None
+    eos_threshold: float = -4.0
+    frames_after_eos: int | None = None
+    default_voice: str = "alba"
+    default_chapter_preset: str = "content-only"
+    default_output_dir: Path | None = None
+    nlp_provider: str = "ollama"
+    nlp_model: str = "llama3.2"
+    nlp_roster_model: str = ""
+    nlp_confidence_threshold: int = 0
+    nlp_review_model: str = ""
+    nlp_omit_position_echo: bool = True
+    nlp_omit_emotion: bool = True
+    nlp_compact_roster: bool = True
+    nlp_include_character_descriptions: bool = False
+    nlp_descriptions_protagonists_only: bool = True
+    excluded_voices: list[str] = Field(default_factory=list)
     credits_enabled: bool = True
     credits_acknowledgements: str = ""
     credits_license: str = ""
     apostrophe_mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS
-    # --- Audio post-processing ---
-    post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
+    post_processing: PostProcessingConfig = Field(default_factory=PostProcessingConfig)
+    server_host: str = "127.0.0.1"
+    server_port: int = 45365
+    ollama_url: str = "http://localhost:11434"
+    nlp_execution_mode: NlpExecutionMode = NlpExecutionMode.LOCAL
+    attribution_execution_mode: AttributionExecutionMode = AttributionExecutionMode.LOCAL
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["tauri://localhost", "http://tauri.localhost"]
+    )
+
+    @field_validator("m4b_bitrate", mode="before")
+    @classmethod
+    def _normalize_m4b_bitrate(cls, v: Any) -> str:
+        return _normalize_bitrate(str(v) if v is not None else None, default="96k")
+
+    @field_validator("excluded_voices", mode="before")
+    @classmethod
+    def _coerce_excluded_voices(cls, v: Any) -> list:
+        return list(v) if v else []
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "workers": self.workers,
-            "verbose": self.verbose,
-            "log_path": str(self.log_path) if self.log_path else None,
-            "keep_temp": self.keep_temp,
-            "m4b_bitrate": self.m4b_bitrate,
-            "pause_line_ms": self.pause_line_ms,
-            "pause_chapter_ms": self.pause_chapter_ms,
-            "pause_scene_break_ms": self.pause_scene_break_ms,
-            "speak_chapter_titles": self.speak_chapter_titles,
-            "pause_before_chapter_title_ms": self.pause_before_chapter_title_ms,
-            "pause_after_chapter_title_ms": self.pause_after_chapter_title_ms,
-            "temp": self.temp,
-            "lsd_decode_steps": self.lsd_decode_steps,
-            "noise_clamp": self.noise_clamp,
-            "eos_threshold": self.eos_threshold,
-            "frames_after_eos": self.frames_after_eos,
-            "default_voice": self.default_voice,
-            "default_chapter_preset": self.default_chapter_preset,
-            "default_output_dir": str(self.default_output_dir) if self.default_output_dir else None,
-            "nlp_provider": self.nlp_provider,
-            "nlp_model": self.nlp_model,
-            "nlp_roster_model": self.nlp_roster_model,
-            "nlp_confidence_threshold": self.nlp_confidence_threshold,
-            "nlp_review_model": self.nlp_review_model,
-            "nlp_omit_position_echo": self.nlp_omit_position_echo,
-            "nlp_omit_emotion": self.nlp_omit_emotion,
-            "nlp_compact_roster": self.nlp_compact_roster,
-            "nlp_include_character_descriptions": self.nlp_include_character_descriptions,
-            "nlp_descriptions_protagonists_only": self.nlp_descriptions_protagonists_only,
-            "excluded_voices": list(self.excluded_voices),
-            "credits_enabled": self.credits_enabled,
-            "credits_acknowledgements": self.credits_acknowledgements,
-            "credits_license": self.credits_license,
-            "apostrophe_mode": self.apostrophe_mode.value,
-            "post_processing": self.post_processing.to_dict(),
-        }
+        return self.model_dump(mode="json", exclude_none=True)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
-        return cls(
-            name=data.get("name", "default"),
-            workers=data.get("workers", max(2, multiprocessing.cpu_count() - 2)),
-            verbose=data.get("verbose", False),
-            log_path=Path(data["log_path"]) if data.get("log_path") else None,
-            keep_temp=data.get("keep_temp", False),
-            m4b_bitrate=_normalize_bitrate(data.get("m4b_bitrate"), default="96k"),
-            pause_line_ms=data.get("pause_line_ms", 800),
-            pause_chapter_ms=data.get("pause_chapter_ms", 2000),
-            pause_scene_break_ms=data.get("pause_scene_break_ms", 4000),
-            speak_chapter_titles=data.get("speak_chapter_titles", True),
-            pause_before_chapter_title_ms=data.get("pause_before_chapter_title_ms", 2000),
-            pause_after_chapter_title_ms=data.get("pause_after_chapter_title_ms", 3000),
-            temp=data.get("temp", 0.7),
-            lsd_decode_steps=data.get("lsd_decode_steps", 1),
-            noise_clamp=data.get("noise_clamp"),
-            eos_threshold=data.get("eos_threshold", -4.0),
-            frames_after_eos=data.get("frames_after_eos"),
-            default_voice=data.get("default_voice", "alba"),
-            default_chapter_preset=data.get("default_chapter_preset", "content-only"),
-            default_output_dir=Path(data["default_output_dir"])
-            if data.get("default_output_dir")
-            else None,
-            nlp_provider=data.get("nlp_provider", "ollama"),
-            nlp_model=data.get("nlp_model", "llama3.2"),
-            nlp_roster_model=data.get("nlp_roster_model", ""),
-            nlp_confidence_threshold=data.get("nlp_confidence_threshold", 0),
-            nlp_review_model=data.get("nlp_review_model", ""),
-            nlp_omit_position_echo=data.get("nlp_omit_position_echo", True),
-            nlp_omit_emotion=data.get("nlp_omit_emotion", True),
-            nlp_compact_roster=data.get("nlp_compact_roster", True),
-            nlp_include_character_descriptions=data.get("nlp_include_character_descriptions", False),
-            nlp_descriptions_protagonists_only=data.get("nlp_descriptions_protagonists_only", True),
-            excluded_voices=list(data.get("excluded_voices") or []),
-            credits_enabled=data.get("credits_enabled", True),
-            credits_acknowledgements=data.get("credits_acknowledgements", ""),
-            credits_license=data.get("credits_license", ""),
-            apostrophe_mode=ApostropheMode(data.get("apostrophe_mode", "expand_contractions")),
-            post_processing=PostProcessingConfig.from_dict(data.get("post_processing") or {}),
-        )
+        """Create AppConfig from a dict only, bypassing env-var settings sources."""
+        class _InitOnly(cls):  # type: ignore[valid-type]
+            @classmethod
+            def settings_customise_sources(
+                cls,
+                settings_cls,
+                init_settings,
+                env_settings,
+                dotenv_settings,
+                file_secret_settings,
+            ):
+                return (init_settings,)
+
+        return _InitOnly(**data)  # type: ignore[return-value]
 
 
 @dataclass
