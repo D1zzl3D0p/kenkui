@@ -23,7 +23,7 @@ dependencies = [
   "tomli-w>=1.0.0",
   "scipy>=1.17.0",
   "pydub>=0.25.0",
-  "pocket-tts>=1.0.0",
+  "pocket-tts>=2.0.0",
   "mutagen>=1.45.0",
   "imageio-ffmpeg>=0.5.0",
   "mobi>=0.4.0",
@@ -35,6 +35,7 @@ dependencies = [
   "booknlp>=1.0.8",
   "psutil>=5.9.0",
   "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
   "setuptools>=40.0,<70",
   "pedalboard>=0.9",
   "noisereduce>=3.0",
@@ -46,9 +47,11 @@ dependencies = [
 
 [project.scripts]
 kenkui = "kenkui.__main__:main"
+kenkui-server = "kenkui.server.server:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
+modal = ["modal>=0.73", "boto3>=1.35.0"]
 
 [project.urls]
 "Homepage" = "https://github.com/D1zzl3D0p/kenkui"
