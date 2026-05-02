@@ -99,10 +99,12 @@ class BotoStorageBackend:
         return obj["Body"].read()
 
     def exists(self, key: str) -> bool:
+        from botocore.exceptions import ClientError  # type: ignore[import]
+
         try:
             self._s3.head_object(Bucket=self._bucket, Key=key)
             return True
-        except self._s3.exceptions.ClientError:
+        except ClientError:
             return False
 
 
