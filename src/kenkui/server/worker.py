@@ -14,7 +14,7 @@ import tomli_w
 
 from ..chapter_filter import FilterOperation
 from ..config import CONFIG_DIR
-from ..models import AppConfig, CostStatus, JobConfig, JobStatus, QueueItem
+from ..models import AppConfig, AttributionExecutionMode, CostStatus, JobConfig, JobStatus, NlpExecutionMode, QueueItem
 from ..parsing import AnnotatedChaptersCacheMissError
 from .tts_execution import get_tts_execution_provider
 
@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 
 QUEUE_FILE = CONFIG_DIR / "queue.toml"
 _LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
+
+
+def _build_nlp_result_from_cache(chapters_data: list[dict], roster_data: dict):
+    """Reconstruct a minimal NLPResult-compatible object from cached JSON for cast assignment."""
+    from ..models import CharacterInfo
+
+    characters = [
+        CharacterInfo(
+            character_id=c.get("slug", c.get("character_id", "")),
+            display_name=c.get("canonical_name", c.get("display_name", "")),
+        )
+        for c in roster_data.get("characters", [])
+    ]
+
+    class _MinimalNLPResult:
+        def __init__(self, chars):
+            self.characters = chars
+            self.chapters = []
+
+    return _MinimalNLPResult(characters)
 
 
 def _resolve(job_val, app_val):
@@ -415,6 +435,26 @@ class WorkerServer:
             self.fail_job(item.id, str(e))
 
     def _run_attribution_phase(self, item: QueueItem) -> None:
+        """Dispatch NLP attribution to local or Modal execution based on config."""
+        job = item.job
+
+        nlp_mode: NlpExecutionMode = (
+            job.job_nlp_execution_mode
+            if job.job_nlp_execution_mode is not None
+            else self._app_config.nlp_execution_mode
+        )
+        attr_mode: AttributionExecutionMode = (
+            job.job_attribution_execution_mode
+            if job.job_attribution_execution_mode is not None
+            else self._app_config.attribution_execution_mode
+        )
+
+        if nlp_mode == NlpExecutionMode.MODAL or attr_mode == AttributionExecutionMode.MODAL:
+            self._run_attribution_phase_modal(item, nlp_mode, attr_mode)
+        else:
+            self._run_attribution_phase_local(item)
+
+    def _run_attribution_phase_local(self, item: QueueItem) -> None:
         """Run Stage 3-4 speaker attribution and update item.job.annotated_chapters_path.
 
         Loads the roster from ``roster_cache_path`` if available; falls back to a
@@ -438,8 +478,8 @@ class WorkerServer:
         # Return early if full NLP cache already exists for this provider
         cached = get_cached_result(book_path, provider=_nlp_provider_early)
         if cached is not None:
-            h = book_hash(book_path)
             job.annotated_chapters_path = CACHE_DIR / _attribution_cache_name(book_path, _nlp_provider_early)
+            self._assign_cast_deferred(item, cached)
             return
 
         _attrib_step: list[int] = [0]
@@ -530,6 +570,128 @@ class WorkerServer:
         # Deferred cast assignment: auto-assign voices now that characters are known.
         self._assign_cast_deferred(item, nlp_result)
 
+    def _run_attribution_phase_modal(
+        self,
+        item: QueueItem,
+        nlp_mode: NlpExecutionMode,
+        attr_mode: AttributionExecutionMode,
+    ) -> None:
+        """Run NLP/attribution stages on Modal, with R2 artifact handoffs."""
+        import json as _json
+        import shutil as _shutil
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+
+        from ..modal.storage import build_storage_backend
+        from .nlp_execution import EnvNlpGateway, NlpModalProvider
+
+        job = item.job
+        nlp_provider_val = job.job_nlp_provider or self._app_config.nlp_provider
+        nlp_model_val = job.job_nlp_model or self._app_config.nlp_model
+
+        gateway = EnvNlpGateway()
+        storage = build_storage_backend()
+        modal_provider = NlpModalProvider(gateway=gateway, storage=storage)
+
+        def _progress(pct: float, msg: str, eta: int = 0) -> None:
+            if self._progress_callback:
+                self._progress_callback(int(pct), f"[Modal NLP] {msg}", eta)
+
+        # Read ebook chapters for payload.
+        from ..readers import get_reader as _get_reader
+        _progress(0.0, "reading ebook…")
+        try:
+            reader = _get_reader(job.ebook_path, verbose=False)
+            all_chapters = reader.get_chapters()
+        except Exception as exc:
+            raise RuntimeError(f"Could not read ebook for modal attribution: {exc}") from exc
+
+        included = set(job.chapter_selection.included)
+        if included:
+            chapters = [ch for ch in all_chapters if ch.index in included] or all_chapters
+        else:
+            chapters = all_chapters
+        chapters_dicts = [ch.to_dict() for ch in chapters]
+
+        base_payload = {
+            "job_id": item.id,
+            "chapters": chapters_dicts,
+            "nlp_provider": nlp_provider_val,
+            "nlp_model": nlp_model_val,
+            "ebook_path": str(job.ebook_path),
+        }
+
+        roster_local_path: _Path | None = None
+
+        # ── Stage 1: NLP entity clustering ────────────────────────────────
+        if nlp_mode == NlpExecutionMode.MODAL:
+            result = modal_provider.run_nlp_stage(
+                job_id=item.id,
+                payload=base_payload,
+                progress_callback=lambda pct, msg, eta=0: _progress(pct * 0.3, msg, eta),
+            )
+            if not result.success:
+                raise RuntimeError(f"Modal NLP stage failed: {result.error_message}")
+            roster_local_path = result.roster_local_path
+
+        elif nlp_mode == NlpExecutionMode.LOCAL:
+            from ..services.nlp_service import fast_scan as _fast_scan
+            fast_result = _fast_scan(
+                ebook_path=str(job.ebook_path),
+                nlp_model=nlp_model_val,
+                nlp_provider=nlp_provider_val,
+                progress_callback=lambda pct, msg: _progress(pct * 0.3, msg),
+            )
+            roster_local_path = _Path(_tempfile.mktemp(suffix="-roster.json"))
+            roster_data_dump = fast_result.roster.model_dump(mode="json")
+            roster_local_path.write_text(_json.dumps(roster_data_dump), encoding="utf-8")
+
+        # ── Stage 2: Quote attribution ─────────────────────────────────────
+        if attr_mode == AttributionExecutionMode.MODAL:
+            attr_result = modal_provider.run_attribution_stage(
+                job_id=item.id,
+                payload=base_payload,
+                progress_callback=lambda pct, msg, eta=0: _progress(pct * 0.7 + 30, msg, eta),
+                roster_local_path=roster_local_path if nlp_mode != NlpExecutionMode.MODAL else None,
+            )
+            if not attr_result.success:
+                raise RuntimeError(f"Modal attribution stage failed: {attr_result.error_message}")
+
+            from ..nlp import CACHE_DIR as _CACHE_DIR, _attribution_cache_name as _acn
+            cache_file = _CACHE_DIR / _acn(job.ebook_path, nlp_provider_val)
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            if attr_result.chapters_local_path:
+                _shutil.move(str(attr_result.chapters_local_path), str(cache_file))
+            job.annotated_chapters_path = cache_file
+            self._save()
+
+            roster_data_for_cast = (
+                _json.loads(roster_local_path.read_text()) if roster_local_path and roster_local_path.exists() else {}
+            )
+            chapters_data = _json.loads(cache_file.read_text()).get("chapters", [])
+            nlp_result = _build_nlp_result_from_cache(chapters_data, roster_data_for_cast)
+            self._assign_cast_deferred(item, nlp_result)
+
+        elif attr_mode == AttributionExecutionMode.LOCAL:
+            from ..nlp.models import CharacterRoster as _CR
+            from ..services.nlp_service import attribute_only as _attribute_only
+
+            roster_data_local = _json.loads(roster_local_path.read_text()) if roster_local_path else {}
+            roster = _CR.model_validate(roster_data_local)
+            nlp_result = _attribute_only(
+                roster=roster,
+                chapters=chapters,
+                ebook_path=str(job.ebook_path),
+                nlp_model=nlp_model_val,
+                nlp_provider=nlp_provider_val,
+                progress_callback=lambda pct, msg: _progress(pct * 0.7 + 30, msg),
+            )
+            from ..nlp import CACHE_DIR as _CACHE_DIR2, _attribution_cache_name as _acn2
+            cache_file = _CACHE_DIR2 / _acn2(job.ebook_path, nlp_provider_val)
+            job.annotated_chapters_path = cache_file
+            self._save()
+            self._assign_cast_deferred(item, nlp_result)
+
     def _assign_cast_deferred(self, item: QueueItem, nlp_result) -> None:
         """Auto-assign character voices after NLP attribution completes.
 
@@ -549,7 +711,7 @@ class WorkerServer:
         if any(k != "NARRATOR" for k in job.speaker_voices):
             return
 
-        narrator_voice = job.speaker_voices.get("NARRATOR", self._app_config.default_voice)
+        narrator_voice = job.speaker_voices.get("NARRATOR") or job.voice or self._app_config.default_voice
 
         # Load the roster cache for alias lookup (written by run_fast_scan)
         h = book_hash(job.ebook_path)
@@ -787,10 +949,9 @@ class WorkerServer:
             # Chapter-voice mode
             chapter_voices=job.chapter_voices,
             # Audio post-processing
-            # post_processing is an object — use dataclasses.replace to override only
-            # the enabled flag while preserving all other effect-chain settings.
+            # Override only the enabled flag while preserving all other effect-chain settings.
             post_processing=(
-                dataclasses.replace(self._app_config.post_processing, enabled=job.job_post_processing_enabled)
+                self._app_config.post_processing.model_copy(update={"enabled": job.job_post_processing_enabled})
                 if job.job_post_processing_enabled is not None
                 else self._app_config.post_processing
             ),
