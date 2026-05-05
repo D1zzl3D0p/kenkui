@@ -63,22 +63,31 @@ def _job_mode_str(job) -> str:
         provider = job.get("job_nlp_provider") or ""
         model = job.get("job_nlp_model") or ""
         chapter_voices = job.get("chapter_voices") or {}
+        nlp_exec = job.get("job_nlp_execution_mode") or job.get("nlp_execution_mode") or ""
+        attr_exec = job.get("job_attribution_execution_mode") or job.get("attribution_execution_mode") or ""
     else:
         mode = getattr(job, "narration_mode", None)
         mode = mode.value if hasattr(mode, "value") else str(mode or "single")
         provider = getattr(job, "job_nlp_provider", "") or ""
         model = getattr(job, "job_nlp_model", "") or ""
         chapter_voices = getattr(job, "chapter_voices", {}) or {}
+        _nlp = getattr(job, "job_nlp_execution_mode", None)
+        nlp_exec = _nlp.value if hasattr(_nlp, "value") else str(_nlp or "")
+        _attr = getattr(job, "job_attribution_execution_mode", None)
+        attr_exec = _attr.value if hasattr(_attr, "value") else str(_attr or "")
+
+    has_modal = nlp_exec == "modal" or attr_exec == "modal"
 
     if chapter_voices:
-        return "chapter"
+        return "chapter·modal" if has_modal else "chapter"
     if mode == "multi":
-        # Abbreviate long model names to first segment
         short_model = model.split("/")[-1].split("-")[0] if model else ""
         if provider and provider != "ollama":
-            return f"multi · {provider[:5]} · {short_model}" if short_model else f"multi · {provider[:8]}"
-        return f"multi · ollama · {short_model}" if short_model else "multi · ollama"
-    return "single"
+            base = f"multi · {provider[:5]} · {short_model}" if short_model else f"multi · {provider[:8]}"
+        else:
+            base = f"multi · ollama · {short_model}" if short_model else "multi · ollama"
+        return f"{base} · modal" if has_modal else base
+    return "single·modal" if has_modal else "single"
 
 
 def _build_queue_table(queue_info, exclude_statuses: "set[str] | None" = None) -> Table:
@@ -309,12 +318,30 @@ def _live_dashboard(client) -> int:
 # ---------------------------------------------------------------------------
 
 
-def cmd_queue(args) -> int:
-    """Handle 'kenkui queue [--live] [start [--live] | stop]'."""
+def cmd_queue_run(args) -> int:
+    """Handle 'kenkui run [--live]' — start processing the queue."""
     from ..api_client import APIClient
 
-    # For nested sub-commands (start/stop) the server flags may be on the
-    # parent 'queue' namespace; fall back gracefully.
+    host = getattr(args, "server_host", "127.0.0.1")
+    port = getattr(args, "server_port", 45365)
+    client = APIClient(host=host, port=port)
+    try:
+        client.start_processing()
+        console.print("[green]Processing started.[/green]")
+        if getattr(args, "live", False):
+            return _live_dashboard(client)
+        return 0
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        return 1
+    finally:
+        client.close()
+
+
+def cmd_queue(args) -> int:
+    """Handle 'kenkui queue <ls|pause|resume|stop|rm|clear>'."""
+    from ..api_client import APIClient
+
     host = getattr(args, "server_host", "127.0.0.1")
     port = getattr(args, "server_port", 45365)
     client = APIClient(host=host, port=port)
@@ -357,7 +384,7 @@ def cmd_queue(args) -> int:
                 return 1
             return 0
 
-        if queue_command == "remove":
+        if queue_command in ("rm", "remove"):
             job_id = getattr(args, "job_id", None)
             if not job_id:
                 console.print("[red]Error: job_id is required.[/red]")
@@ -383,22 +410,7 @@ def cmd_queue(args) -> int:
                 return 1
             return 0
 
-        if queue_command == "start":
-            try:
-                client.start_processing()
-                console.print("[green]Processing started.[/green]")
-            except Exception as exc:
-                console.print(f"[red]Error: {exc}[/red]")
-                return 1
-
-            if getattr(args, "live", False):
-                return _live_dashboard(client)
-            return 0
-
-        # No sub-command — snapshot or live.
-        if getattr(args, "live", False):
-            return _live_dashboard(client)
-
+        # No sub-command or 'ls' — show snapshot
         return _snapshot(client)
 
     finally:
