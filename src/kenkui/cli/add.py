@@ -98,8 +98,10 @@ def _get_client(args):
 
 def _load_config(args):
     from ..config import load_app_config
+    from ..__main__ import _apply_flag_overrides
 
-    return load_app_config(getattr(args, "config", None))
+    config = load_app_config(getattr(args, "config", None))
+    return _apply_flag_overrides(config, args)
 
 
 def _build_voice_choices(client=None) -> list[dict]:
@@ -1380,7 +1382,12 @@ def _edit_narrator_voice(state: dict, app_config, client) -> dict:
         message="Select narrator / fallback voice:",
         client=client,
     )
-    return {**state, "voice": voice}
+    new_state = {**state, "voice": voice}
+    if state.get("narration_mode") == "multi":
+        speaker_voices = dict(state.get("speaker_voices") or {})
+        speaker_voices["NARRATOR"] = voice
+        new_state["speaker_voices"] = speaker_voices
+    return new_state
 
 
 def _describe_mode_for_menu(state: dict, app_config) -> str:
@@ -1408,6 +1415,7 @@ def _submenu_advanced(state: dict, app_config, client) -> dict:
                 {"name": "Audio Post-Processing     enable/disable effects chain \u2192", "value": "postprocessing"},
                 {"name": "Text Preprocessing        apostrophe/contraction handling \u2192", "value": "text_prep"},
                 {"name": "Output Location           where the audiobook file goes \u2192", "value": "output"},
+                {"name": "Execution Modes           NLP/attribution local vs Modal \u2192", "value": "execution_modes"},
                 {"name": "Voice Management          browse, audition, exclude voices \u2192", "value": "voices"},
                 {"name": "Back", "value": "back"},
             ],
@@ -1422,10 +1430,40 @@ def _submenu_advanced(state: dict, app_config, client) -> dict:
             state = _submenu_text_preprocessing(state, app_config)
         elif action == "output":
             state = _submenu_output_location(state, app_config)
+        elif action == "execution_modes":
+            state = _submenu_execution_modes(state, app_config)
         elif action == "voices":
             _submenu_manage_voices(state, app_config, client)
         else:
             break
+    return state
+
+
+def _submenu_execution_modes(state: dict, app_config) -> dict:
+    """Per-job execution mode overrides for NLP and attribution stages."""
+    from InquirerPy import inquirer
+
+    mode_choices = [
+        {"name": "inherit from global config", "value": None},
+        {"name": "local   — run on this machine", "value": "local"},
+        {"name": "modal   — offload to Modal GPU cloud", "value": "modal"},
+        {"name": "litellm — use configured cloud LLM API", "value": "litellm"},
+    ]
+
+    nlp_mode = _wizard_execute(inquirer.select(
+        message="NLP execution mode for this job:",
+        choices=mode_choices,
+        default=state.get("job_nlp_execution_mode"),
+    ))
+    state["job_nlp_execution_mode"] = nlp_mode
+
+    attr_mode = _wizard_execute(inquirer.select(
+        message="Attribution execution mode for this job:",
+        choices=mode_choices,
+        default=state.get("job_attribution_execution_mode"),
+    ))
+    state["job_attribution_execution_mode"] = attr_mode
+
     return state
 
 
@@ -1528,12 +1566,11 @@ def _setup_multi_voice(state: dict, app_config, client) -> dict:
     time. This function only collects the NLP provider/model, narrator fallback
     voice, and optional series slug.
     """
-    from dataclasses import replace as _replace
     from ..services.workflow_service import apply_multi_voice_setup
 
     # 1. Choose NLP provider/model for this job
     provider, nlp_model = _prompt_nlp_provider(app_config)
-    scan_config = _replace(app_config, nlp_provider=provider, nlp_model=nlp_model)
+    scan_config = app_config.model_copy(update={"nlp_provider": provider, "nlp_model": nlp_model})
 
     # 2. Check requirements (informational — non-blocking on proceed=True)
     if not _check_multivoice_requirements(client, scan_config):
@@ -1697,8 +1734,14 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
     elif action == "edit":
         overrides = dict(state.get("quality_overrides") or {})
 
+        cfg_temp = getattr(app_config, "temp", 0.7)
+        cfg_steps = getattr(app_config, "lsd_decode_steps", 1)
+        cfg_eos = getattr(app_config, "eos_threshold", -4.0)
+        cfg_noise = getattr(app_config, "noise_clamp", None)
+        cfg_frames = getattr(app_config, "frames_after_eos", None)
+
         temp_str = _wizard_execute(inquirer.text(
-            message="Temperature [0.0-1.5] (blank=inherit from config):",
+            message=f"Temperature [0.0-1.5] (blank = {cfg_temp}, inherited from config):",
             default=str(overrides.get("job_temp", "")),
             validate=_RangeValidator(min_val=0.0, max_val=1.5, float_ok=True, allow_blank=True),
         )).strip()
@@ -1708,7 +1751,7 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
             del overrides["job_temp"]
 
         steps_str = _wizard_execute(inquirer.text(
-            message="Generation steps [1-50] (blank=inherit):",
+            message=f"Generation steps [1-50] (blank = {cfg_steps}, inherited from config):",
             default=str(overrides.get("job_lsd_decode_steps", "")),
             validate=_RangeValidator(min_val=1, max_val=50, float_ok=False, allow_blank=True),
         )).strip()
@@ -1718,7 +1761,7 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
             del overrides["job_lsd_decode_steps"]
 
         eos_str = _wizard_execute(inquirer.text(
-            message="EOS threshold [-10.0\u20130.0] (blank=inherit; -2.0=later cutoff, -6.0=earlier):",
+            message=f"EOS threshold [-10.0\u20130.0] (blank = {cfg_eos}, inherited from config; -2.0=later cutoff, -6.0=earlier):",
             default=str(overrides.get("job_eos_threshold", "")),
             validate=_RangeValidator(min_val=-10.0, max_val=0.0, float_ok=True, allow_blank=True),
         )).strip()
@@ -1727,8 +1770,9 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
         elif "job_eos_threshold" in overrides:
             del overrides["job_eos_threshold"]
 
+        noise_cfg_label = "disabled" if cfg_noise is None else str(cfg_noise)
         noise_str = _wizard_execute(inquirer.text(
-            message="Noise clamp [0.0\u201310.0] (0=disabled, ~3.0 reduces glitches; blank=inherit):",
+            message=f"Noise clamp [0.0\u201310.0] (0=disabled, ~3.0 reduces glitches; blank = {noise_cfg_label}, inherited from config):",
             default=str(overrides.get("job_noise_clamp", "")),
             validate=_RangeValidator(min_val=0.0, max_val=10.0, float_ok=True, allow_blank=True),
         )).strip()
@@ -1742,8 +1786,9 @@ def _submenu_tts_quality(state: dict, app_config) -> dict:
         elif "job_noise_clamp" in overrides:
             del overrides["job_noise_clamp"]
 
+        frames_cfg_label = "auto" if cfg_frames is None else str(cfg_frames)
         frames_str = _wizard_execute(inquirer.text(
-            message="Frames after EOS [0\u201350] (0=auto; blank=inherit):",
+            message=f"Frames after EOS [0\u201350] (0=auto; blank = {frames_cfg_label}, inherited from config):",
             default=str(overrides.get("job_frames_after_eos", "")),
             validate=_RangeValidator(min_val=0, max_val=50, float_ok=False, allow_blank=True),
         )).strip()
@@ -1772,16 +1817,20 @@ def _submenu_audio_encoding(state: dict, app_config) -> dict:
         ],
     ))
     if action == "edit":
+        cfg_bitrate = getattr(app_config, "m4b_bitrate", "96k")
+        cfg_pause_line = getattr(app_config, "pause_line_ms", 800)
+        cfg_pause_chap = getattr(app_config, "pause_chapter_ms", 2000)
+
         bitrate_choices = [
-            {"name": "inherit from config", "value": None},
+            {"name": f"{cfg_bitrate}  (inherited from config)", "value": None},
             {"name": "64k  (small files)", "value": "64k"},
-            {"name": "96k  (default)", "value": "96k"},
+            {"name": "96k", "value": "96k"},
             {"name": "128k", "value": "128k"},
             {"name": "192k", "value": "192k"},
             {"name": "256k  (high quality)", "value": "256k"},
         ]
         bitrate = _wizard_execute(inquirer.select(
-            message="M4B bitrate (inherit = use config default):",
+            message="M4B bitrate:",
             choices=bitrate_choices,
             default=overrides.get("job_m4b_bitrate"),
         ))
@@ -1791,7 +1840,7 @@ def _submenu_audio_encoding(state: dict, app_config) -> dict:
             del overrides["job_m4b_bitrate"]
 
         pause_line_str = _wizard_execute(inquirer.text(
-            message="Pause between lines ms [0\u20135000] (blank=inherit):",
+            message=f"Pause between lines ms [0\u20135000] (blank = {cfg_pause_line}, inherited from config):",
             default=str(overrides.get("job_pause_line_ms", "")),
             validate=_RangeValidator(min_val=0, max_val=5000, allow_blank=True),
         )).strip()
@@ -1801,7 +1850,7 @@ def _submenu_audio_encoding(state: dict, app_config) -> dict:
             del overrides["job_pause_line_ms"]
 
         pause_chap_str = _wizard_execute(inquirer.text(
-            message="Pause between chapters ms [0\u201330000] (blank=inherit):",
+            message=f"Pause between chapters ms [0\u201330000] (blank = {cfg_pause_chap}, inherited from config):",
             default=str(overrides.get("job_pause_chapter_ms", "")),
             validate=_RangeValidator(min_val=0, max_val=30000, allow_blank=True),
         )).strip()
@@ -1835,7 +1884,7 @@ def _submenu_post_processing(state: dict, app_config) -> dict:
             {"name": f"Keep current ({current_label})", "value": "keep"},
             {"name": "Enable for this job (override config)", "value": "enable"},
             {"name": "Disable for this job (override config)", "value": "disable"},
-            {"name": "Inherit from config (clear override)", "value": "inherit"},
+            {"name": f"{'on' if global_enabled else 'off'}  (inherited from config, clear override)", "value": "inherit"},
             {"name": "Back", "value": "back"},
         ],
     ))
@@ -1854,8 +1903,10 @@ def _submenu_text_preprocessing(state: dict, app_config) -> dict:
 
     overrides = dict(state.get("quality_overrides") or {})
 
+    cfg_apostrophe = getattr(app_config, "apostrophe_mode", "expand_contractions")
+    cfg_apostrophe_str = cfg_apostrophe.value if hasattr(cfg_apostrophe, "value") else str(cfg_apostrophe)
     apostrophe_choices = [
-        {"name": "inherit from config", "value": None},
+        {"name": f"{cfg_apostrophe_str}  (inherited from config)", "value": None},
         {"name": "expand_contractions  (expand: don\u2019t \u2192 do not)", "value": "expand_contractions"},
         {"name": "keep  (pass text unchanged)", "value": "keep"},
         {"name": "remove_contractions  (strip apostrophe from contractions only)", "value": "remove_contractions"},
@@ -2035,8 +2086,9 @@ def _headless_submit(args, client) -> str:
     """Submit a job using config defaults. Returns the job ID."""
     from ..config import load_app_config
     from ..services.job_service import build_headless_job_kwargs
+    from ..__main__ import _apply_flag_overrides
 
-    app_config = load_app_config(args.config)
+    app_config = _apply_flag_overrides(load_app_config(getattr(args, "config", None)), args)
 
     client.update_config(app_config.to_dict())
     job_info = client.add_job(**build_headless_job_kwargs(args, app_config))
@@ -2103,8 +2155,8 @@ def _poll_until_done(client, job_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def cmd_add(args) -> int:
-    """Handle 'kenkui add book.epub [-c config]'."""
+def cmd_convert(args) -> int:
+    """Handle 'kenkui convert book.epub [-c config] [--flag overrides]'."""
     book_path: Path = args.book
     if not book_path.exists():
         console.print(f"[red]Error: file not found: {book_path}[/red]")
@@ -2119,7 +2171,7 @@ def cmd_add(args) -> int:
             # Headless: queue only.
             job_id = _headless_submit(args, client)
             console.print(f"[green]Job queued: {job_id}[/green]")
-            console.print("Run [bold]kenkui queue start --live[/bold] to watch progress.")
+            console.print("Run [bold]kenkui run --live[/bold] to watch progress.")
             return 0
 
         # Interactive: hub-and-spoke confirmation screen.
@@ -2133,7 +2185,7 @@ def cmd_add(args) -> int:
         console.print()
         _check_job_requirements(job_kwargs, app_config)
         console.print()
-        console.print("Run [bold]kenkui queue start --live[/bold] to begin processing.")
+        console.print("Run [bold]kenkui run --live[/bold] to begin processing.")
         return 0
 
     except (KeyboardInterrupt, EOFError):
@@ -2142,6 +2194,10 @@ def cmd_add(args) -> int:
 
     finally:
         client.close()
+
+
+# Backwards-compat alias used by existing tests / scripts
+cmd_add = cmd_convert
 
 
 def cmd_bare(args) -> int:

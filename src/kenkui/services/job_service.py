@@ -75,6 +75,14 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
         kwargs["job_nlp_model"] = job_nlp_model
     if pp_enabled_override is not None:
         kwargs["job_post_processing_enabled"] = pp_enabled_override
+    job_nlp_execution_mode = state.get("job_nlp_execution_mode")
+    if job_nlp_execution_mode is not None:
+        from kenkui.models import NlpExecutionMode
+        kwargs["job_nlp_execution_mode"] = NlpExecutionMode(job_nlp_execution_mode)
+    job_attribution_execution_mode = state.get("job_attribution_execution_mode")
+    if job_attribution_execution_mode is not None:
+        from kenkui.models import AttributionExecutionMode
+        kwargs["job_attribution_execution_mode"] = AttributionExecutionMode(job_attribution_execution_mode)
     return kwargs
 
 
