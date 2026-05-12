@@ -196,29 +196,244 @@ def _get_config_dir() -> Path:
     return _cfg
 
 
-def get_cached_roster(book_path: Path) -> "FastScanResult | None":
-    """Return a cached ``FastScanResult`` if a valid roster cache file exists, else None."""
+def _roster_cache_name(
+    book_path: Path,
+    method: "str | None" = None,
+    provider: "str | None" = None,
+) -> str:
+    """Return roster cache filename for the given method/provider combination.
+
+    New format: ``{hash}-roster-{method}-{provider}.json``
+    Legacy format: ``{hash}-roster.json`` (treated as method=llm, provider=ollama on read).
+    """
+    h = book_hash(book_path)
+    m = (method or "llm").lower()
+    p = (provider or "ollama").lower() if m != "booknlp" else "none"
+    return f"{h}-roster-{m}-{p}.json"
+
+
+def _legacy_roster_cache_name(book_path: Path) -> str:
+    return f"{book_hash(book_path)}-roster.json"
+
+
+class RosterCacheMeta:
+    """Metadata for a single cached roster file."""
+
+    def __init__(
+        self,
+        path: Path,
+        method: str,
+        provider: str,
+        model: str,
+        description: str,
+        created_at: str,
+        data: dict,
+    ):
+        self.path = path
+        self.method = method
+        self.provider = provider
+        self.model = model
+        self.description = description
+        self.created_at = created_at
+        self._data = data
+
+    def load(self) -> "FastScanResult":
+        from ..models import FastScanResult
+        return FastScanResult.from_dict(self._data.get("roster_data") or self._data)
+
+
+def list_cached_rosters(book_path: Path) -> "list[RosterCacheMeta]":
+    """Return all available roster cache files for *book_path*, newest first."""
+    h = book_hash(book_path)
+    cache_dir = _get_config_dir() / "nlp_cache"
+    results: list[RosterCacheMeta] = []
+
+    # New-format files: {hash}-roster-{method}-{provider}.json
+    for p in cache_dir.glob(f"{h}-roster-*.json"):
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if "method" in raw and "created_at" in raw:
+            results.append(RosterCacheMeta(
+                path=p,
+                method=raw.get("method", "llm"),
+                provider=raw.get("provider", "ollama"),
+                model=raw.get("model", ""),
+                description=raw.get("description", ""),
+                created_at=raw.get("created_at", ""),
+                data=raw,
+            ))
+
+    # Legacy file: {hash}-roster.json treated as llm/ollama
+    legacy = cache_dir / f"{h}-roster.json"
+    if legacy.exists():
+        try:
+            raw = json.loads(legacy.read_text(encoding="utf-8"))
+            if "method" not in raw:
+                results.append(RosterCacheMeta(
+                    path=legacy,
+                    method="llm",
+                    provider="ollama",
+                    model="",
+                    description="llm · ollama (legacy)",
+                    created_at="",
+                    data=raw,
+                ))
+        except Exception:
+            pass
+
+    results.sort(key=lambda r: r.created_at, reverse=True)
+    return results
+
+
+def get_cached_roster(book_path: Path, method: "str | None" = None, provider: "str | None" = None) -> "FastScanResult | None":
+    """Return a cached ``FastScanResult`` if a valid roster cache file exists, else None.
+
+    When *method* and *provider* are given, looks up only the matching file.
+    When both are None, falls back to the first available roster (legacy behaviour
+    for callers that don't have per-step context).
+    """
     from ..models import FastScanResult
 
     cache_dir = _get_config_dir() / "nlp_cache"
-    cache_file = cache_dir / f"{book_hash(book_path)}-roster.json"
-    if not cache_file.exists():
+
+    if method is not None or provider is not None:
+        cache_file = cache_dir / _roster_cache_name(book_path, method, provider)
+        if not cache_file.exists():
+            return None
+        try:
+            raw = json.loads(cache_file.read_text(encoding="utf-8"))
+            data = raw.get("roster_data") or raw
+            return FastScanResult.from_dict(data)
+        except Exception as exc:
+            logger.warning("Failed to load roster cache %s: %s", cache_file, exc)
+            return None
+
+    # No method/provider specified — try legacy file first, then any new-format file
+    legacy_file = cache_dir / _legacy_roster_cache_name(book_path)
+    if legacy_file.exists():
+        try:
+            data = json.loads(legacy_file.read_text(encoding="utf-8"))
+            return FastScanResult.from_dict(data)
+        except Exception as exc:
+            logger.warning("Failed to load roster cache %s: %s", legacy_file, exc)
+
+    # Try first new-format match
+    metas = list_cached_rosters(book_path)
+    for meta in metas:
+        if meta.path != legacy_file:
+            try:
+                return meta.load()
+            except Exception as exc:
+                logger.warning("Failed to load roster cache %s: %s", meta.path, exc)
+
+    return None
+
+
+def get_cached_roster_or_prompt(
+    book_path: Path,
+    method: "str | None" = None,
+    provider: "str | None" = None,
+) -> "FastScanResult | None":
+    """Return a matching cached roster, or show an InquirerPy picker when multiple exist.
+
+    - 0 matches → return None (caller should run fresh)
+    - 1 match → return silently
+    - 2+ matches, method+provider disambiguate → return matching one
+    - 2+ matches, ambiguous → show InquirerPy picker with description + timestamp
+    """
+    from ..models import FastScanResult
+
+    metas = list_cached_rosters(book_path)
+    if not metas:
         return None
+
+    # Try exact match first
+    if method is not None or provider is not None:
+        for meta in metas:
+            if (method is None or meta.method == method) and (provider is None or meta.provider == provider):
+                try:
+                    return meta.load()
+                except Exception:
+                    pass
+
+    if len(metas) == 1:
+        try:
+            return metas[0].load()
+        except Exception:
+            return None
+
+    # Multiple candidates — show picker
     try:
-        data = json.loads(cache_file.read_text(encoding="utf-8"))
-        return FastScanResult.from_dict(data)
-    except Exception as exc:
-        logger.warning("Failed to load roster cache %s: %s", cache_file, exc)
-        return None
+        from InquirerPy import inquirer
+
+        choices = []
+        for meta in metas:
+            label = meta.description or f"{meta.method} · {meta.provider} · {meta.model}"
+            if meta.created_at:
+                label = f"{label}  [{meta.created_at[:19]}]"
+            choices.append({"name": label, "value": meta})
+
+        choices.append({"name": "(run fresh — skip cache)", "value": None})
+
+        selected = inquirer.select(
+            message="Multiple cached rosters found — which would you like to use?",
+            choices=choices,
+        ).execute()
+
+        if selected is None:
+            return None
+        try:
+            return selected.load()
+        except Exception:
+            return None
+    except Exception:
+        # If InquirerPy is unavailable, fall back to newest
+        try:
+            return metas[0].load()
+        except Exception:
+            return None
 
 
-def cache_roster(result: "FastScanResult", book_path: Path) -> Path:
-    """Serialise *result* to disk and return the roster cache file path."""
+def cache_roster(
+    result: "FastScanResult",
+    book_path: Path,
+    method: "str | None" = None,
+    provider: "str | None" = None,
+    model: "str | None" = None,
+    description: "str | None" = None,
+) -> Path:
+    """Serialise *result* to disk with a metadata envelope and return the cache file path."""
+    import datetime
+
     cache_dir = _get_config_dir() / "nlp_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / f"{book_hash(book_path)}-roster.json"
+
+    _method = method or "llm"
+    _provider = provider or "ollama"
+    _model = model or ""
+
+    cache_file = cache_dir / _roster_cache_name(book_path, _method, _provider)
+
+    if _method == "booknlp":
+        auto_desc = "booknlp"
+    else:
+        parts = [_method, _provider]
+        if _model:
+            parts.append(_model.split("/")[-1])
+        auto_desc = " · ".join(parts)
+
+    envelope = {
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "description": description or auto_desc,
+        "method": _method,
+        "provider": _provider,
+        "model": _model,
+        "roster_data": result.to_dict(),
+    }
     cache_file.write_text(
-        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+        json.dumps(envelope, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     logger.debug("Roster cache written: %s", cache_file)
@@ -300,6 +515,7 @@ def run_fast_scan(
     nlp_model: str,
     use_cache: bool = True,
     progress_callback: Callable[[str], None] | None = None,
+    method: str = "auto",
 ) -> "FastScanResult":
     """Run Stage 1-2 only: quote extraction + entity clustering + mention counting.
 
@@ -347,7 +563,7 @@ def run_fast_scan(
     # Stage 2: Build character roster
     _cb("Building character roster…")
     full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
-    roster = build_roster_with_llm(full_text, nlp, llm)
+    roster = build_roster_with_llm(full_text, nlp, llm, method=method)
 
     char_names = ", ".join(g.canonical_name for g in roster.characters[:8])
     overflow = len(roster.characters) - 8
@@ -889,9 +1105,12 @@ __all__ = [
     "get_cached_result",
     "cache_result",
     "get_cached_roster",
+    "get_cached_roster_or_prompt",
+    "list_cached_rosters",
     "cache_roster",
     "get_cached_chunk_roster",
     "cache_chunk_roster",
+    "RosterCacheMeta",
     "CACHE_DIR",
     "book_hash",
     "_count_mentions",

@@ -7,7 +7,7 @@ Voice sources, in display priority order:
 1. **compiled** — ``.safetensors`` files in ``kenkui/voices/compiled-voices/``.
    Filename schema: ``{Name}-{Gender}-{Dataset}-{SpeakerId}-{Accent}.safetensors``
    These require no HuggingFace authentication.
-2. **builtin** — The eight pocket-tts built-in voice names (``alba``, ``cosette``, …).
+2. **builtin** — The 21 pocket-tts built-in voice names (``alba``, ``cosette``, …).
    No file path; passed as a string directly to the TTS model.
 3. **uncompiled** — ``.wav`` audio-prompt files, either from the package
    ``kenkui/voices/uncompiled-voices/`` directory or from the XDG user data dir
@@ -30,15 +30,33 @@ logger = logging.getLogger(__name__)
 # Built-in voice metadata (pocket-tts defaults, no file needed)
 # ---------------------------------------------------------------------------
 
-_BUILTIN_VOICE_DATA: dict[str, dict[str, str]] = {
-    "alba":    {"gender": "Male",   "accent": "American"},
-    "marius":  {"gender": "Male",   "accent": "American"},
-    "javert":  {"gender": "Male",   "accent": "American"},
-    "jean":    {"gender": "Male",   "accent": "American"},
-    "fantine": {"gender": "Female", "accent": "British"},
-    "cosette": {"gender": "Female", "accent": "American"},
-    "eponine": {"gender": "Female", "accent": "British"},
-    "azelma":  {"gender": "Female", "accent": "American"},
+_BUILTIN_VOICE_DATA: dict[str, dict[str, str | None]] = {
+    # Voice-donations / single-source voices
+    "alba":           {"gender": "Male",   "accent": "American", "dataset": "Alba-Mackenna", "speaker_id": "casual"},
+    "marius":         {"gender": "Male",   "accent": "American", "dataset": "Voice Donation", "speaker_id": None},
+    "javert":         {"gender": "Male",   "accent": "American", "dataset": "Voice Donation", "speaker_id": None},
+    "cosette":        {"gender": "Female", "accent": "American", "dataset": "Expresso",      "speaker_id": "ex04-ex02_confused_001_channel1_499s"},
+    # EARS
+    "jean":           {"gender": "Male",   "accent": "Southern", "dataset": "EARS", "speaker_id": "P010"},
+    # VCTK (original three, now with full metadata)
+    "fantine":        {"gender": "Female", "accent": "British",  "dataset": "VCTK", "speaker_id": "P244"},
+    "eponine":        {"gender": "Female", "accent": "British",  "dataset": "VCTK", "speaker_id": "P262"},
+    "azelma":         {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P303"},
+    # VCTK (new defaults)
+    "anna":           {"gender": "Female", "accent": "Scottish", "dataset": "VCTK", "speaker_id": "P228"},
+    "vera":           {"gender": "Female", "accent": "English",  "dataset": "VCTK", "speaker_id": "P229"},
+    "charles":        {"gender": "Male",   "accent": "English",  "dataset": "VCTK", "speaker_id": "P254"},
+    "paul":           {"gender": "Male",   "accent": "British",  "dataset": "VCTK", "speaker_id": "P259"},
+    "george":         {"gender": "Male",   "accent": "American", "dataset": "VCTK", "speaker_id": "P315"},
+    "mary":           {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P333"},
+    "jane":           {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P339"},
+    "michael":        {"gender": "Male",   "accent": "American", "dataset": "VCTK", "speaker_id": "P360"},
+    "eve":            {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P361"},
+    # Voice-zero (gender inferred from given names — NOT verified from audio)
+    "bill_boerst":    {"gender": "Male",   "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
+    "caro_davy":      {"gender": "Female", "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
+    "peter_yearsley": {"gender": "Male",   "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
+    "stuart_bell":    {"gender": "Male",   "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
 }
 
 BUILTIN_VOICE_NAMES: list[str] = list(_BUILTIN_VOICE_DATA.keys())
@@ -77,6 +95,9 @@ class VoiceMetadata:
     accent: str | None
     """Accent / region descriptor (e.g. ``"Scottish"``, ``"English-Yorkshire"``), or ``None``."""
 
+    is_default: bool = False
+    """True for voices shipped as pocket-tts built-ins (no file path required)."""
+
     # ------------------------------------------------------------------
     # Display helpers
     # ------------------------------------------------------------------
@@ -90,7 +111,10 @@ class VoiceMetadata:
                 parts.append(self.gender)
             if self.accent:
                 parts.append(self.accent)
-            return " · ".join(parts) if parts else "Built-in"
+            if self.dataset:
+                parts.append(self.dataset)
+            parts.append("Default")
+            return " · ".join(parts)
         if self.source == "compiled":
             parts = []
             if self.gender:
@@ -247,9 +271,10 @@ class VoiceRegistry:
                 file_path=None,
                 source="builtin",
                 gender=data["gender"],
-                dataset=None,
-                speaker_id=None,
-                accent=data["accent"],
+                dataset=data.get("dataset"),
+                speaker_id=data.get("speaker_id"),
+                accent=data.get("accent"),
+                is_default=True,
             )
             for name, data in _BUILTIN_VOICE_DATA.items()
         ]
@@ -287,6 +312,7 @@ class VoiceRegistry:
         accent: str | None = None,
         dataset: str | None = None,
         source: str | None = None,
+        is_default: bool | None = None,
     ) -> list[VoiceMetadata]:
         """Return voices matching all specified criteria.
 
@@ -300,6 +326,8 @@ class VoiceRegistry:
             if dataset and (v.dataset or "").lower() != dataset.lower():
                 return False
             if accent and (v.accent or "").lower() != accent.lower():
+                return False
+            if is_default is not None and v.is_default != is_default:
                 return False
             return True
 

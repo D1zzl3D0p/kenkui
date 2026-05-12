@@ -83,6 +83,19 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
     if job_attribution_execution_mode is not None:
         from kenkui.models import AttributionExecutionMode
         kwargs["job_attribution_execution_mode"] = AttributionExecutionMode(job_attribution_execution_mode)
+    job_character_discovery_method = state.get("job_character_discovery_method")
+    if job_character_discovery_method is not None:
+        kwargs["job_character_discovery_method"] = job_character_discovery_method
+    job_attribution_provider = state.get("job_attribution_provider")
+    if job_attribution_provider is not None:
+        kwargs["job_attribution_provider"] = job_attribution_provider
+    job_attribution_model = state.get("job_attribution_model")
+    if job_attribution_model is not None:
+        kwargs["job_attribution_model"] = job_attribution_model
+    tts_execution_mode = state.get("tts_execution_mode")
+    if tts_execution_mode is not None:
+        from kenkui.models import TTSExecutionMode
+        kwargs["tts_execution_mode"] = TTSExecutionMode(tts_execution_mode)
     return kwargs
 
 

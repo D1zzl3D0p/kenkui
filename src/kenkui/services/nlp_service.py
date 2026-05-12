@@ -32,7 +32,7 @@ from kenkui.nlp import (
     get_cached_result,
     get_cached_roster,
 )
-from kenkui.nlp.providers import get_provider
+from kenkui.nlp.providers import get_attribution_provider, get_provider
 from kenkui.readers import get_reader
 
 # Adapter constants for progress-callback translation (provider string-only → int+str).
@@ -71,6 +71,7 @@ def fast_scan(
     series_slug: str | None = None,
     book_slug: str | None = None,
     nlp_provider: str | None = None,
+    discovery_method: str | None = None,
 ) -> FastScanResult:
     """Run Stage 1-2 NLP (quote extraction + entity clustering + mention counting).
 
@@ -99,12 +100,16 @@ def fast_scan(
 
     cfg = load_app_config(config_path)
     if nlp_model is not None:
-        cfg = _replace(cfg, nlp_model=nlp_model)
+        cfg = cfg.model_copy(update={"nlp_model": nlp_model})
     if nlp_provider is not None:
-        cfg = _replace(cfg, nlp_provider=nlp_provider)
+        cfg = cfg.model_copy(update={"nlp_provider": nlp_provider})
+    if discovery_method is not None:
+        cfg = cfg.model_copy(update={"nlp_discovery_method": discovery_method})
+
+    _discovery_method = getattr(cfg, "nlp_discovery_method", "auto") or "auto"
 
     # Return cached result before the expensive parse + NLP pass.
-    cached = get_cached_roster(Path(ebook_path))
+    cached = get_cached_roster(Path(ebook_path), method=_discovery_method if _discovery_method != "auto" else None, provider=nlp_provider)
     if cached is not None:
         if progress_callback:
             progress_callback(100, "Scan complete (cached)")
@@ -148,7 +153,13 @@ def fast_scan(
         characters=characters,
         book_hash=book_hash(Path(ebook_path)),
     )
-    cache_roster(result, Path(ebook_path))
+    cache_roster(
+        result,
+        Path(ebook_path),
+        method=_discovery_method,
+        provider=cfg.nlp_provider,
+        model=cfg.nlp_model,
+    )
 
     if progress_callback:
         progress_callback(100, "Scan complete")
@@ -163,6 +174,9 @@ def full_analysis(
     progress_callback: Callable[[int, str], None] | None = None,
     series_slug: str | None = None,
     book_slug: str | None = None,
+    discovery_method: str | None = None,
+    attribution_provider: str | None = None,
+    attribution_model: str | None = None,
 ) -> NLPResult:
     """Run the full NLP speaker-attribution pipeline.
 
@@ -190,10 +204,18 @@ def full_analysis(
 
     cfg = load_app_config(config_path)
     if nlp_model is not None:
-        cfg = _replace(cfg, nlp_model=nlp_model)
+        cfg = cfg.model_copy(update={"nlp_model": nlp_model})
+    if discovery_method is not None:
+        cfg = cfg.model_copy(update={"nlp_discovery_method": discovery_method})
+    if attribution_provider is not None:
+        cfg = cfg.model_copy(update={"nlp_attribution_provider": attribution_provider})
+    if attribution_model is not None:
+        cfg = cfg.model_copy(update={"nlp_attribution_model": attribution_model})
+
+    _attr_provider_name = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
 
     # Return cached result before the expensive parse + NLP pass.
-    cached = get_cached_result(Path(ebook_path), provider=cfg.nlp_provider)
+    cached = get_cached_result(Path(ebook_path), provider=_attr_provider_name)
     if cached is not None:
         if progress_callback:
             progress_callback(100, "Analysis complete (cached)")
@@ -206,6 +228,7 @@ def full_analysis(
         progress_callback(_FULL_ROSTER_START_PCT, "Starting NLP analysis")
 
     provider = get_provider(cfg)
+    attr_provider = get_attribution_provider(cfg)
 
     # Fetch existing series roster before build_roster so providers can inject it.
     series_roster = None
@@ -241,7 +264,7 @@ def full_analysis(
     attributed_chapters = []
 
     for chapter in chapters:
-        attr_result = provider.attribute_chapter(chapter, roster, progress_callback=attrib_adapt)
+        attr_result = attr_provider.attribute_chapter(chapter, roster, progress_callback=attrib_adapt)
         segments = _attribution_to_segments(chapter, attr_result, roster)
         attributed_chapters.append(_replace(chapter, segments=segments))
         for item in attr_result.attributions:
@@ -261,7 +284,7 @@ def full_analysis(
         chapters=attributed_chapters,
         book_hash=book_hash(Path(ebook_path)),
     )
-    cache_result(result, Path(ebook_path), provider=cfg.nlp_provider)
+    cache_result(result, Path(ebook_path), provider=_attr_provider_name)
 
     if progress_callback:
         progress_callback(100, "Analysis complete")
@@ -277,6 +300,8 @@ def attribute_only(
     nlp_provider: str | None = None,
     config_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    attribution_provider: str | None = None,
+    attribution_model: str | None = None,
 ) -> "NLPResult":
     """Run Stage 3-4 speaker attribution against a pre-built roster.
 
@@ -300,15 +325,20 @@ def attribute_only(
 
     from kenkui.nlp import _attribution_to_segments, book_hash, cache_result
     from kenkui.nlp.models import CharacterRoster
-    from kenkui.nlp.providers import get_provider
+    from kenkui.nlp.providers import get_attribution_provider, get_provider
 
     cfg = load_app_config(config_path)
     if nlp_model is not None:
-        cfg = _replace(cfg, nlp_model=nlp_model)
+        cfg = cfg.model_copy(update={"nlp_model": nlp_model})
     if nlp_provider is not None:
-        cfg = _replace(cfg, nlp_provider=nlp_provider)
+        cfg = cfg.model_copy(update={"nlp_provider": nlp_provider})
+    if attribution_provider is not None:
+        cfg = cfg.model_copy(update={"nlp_attribution_provider": attribution_provider})
+    if attribution_model is not None:
+        cfg = cfg.model_copy(update={"nlp_attribution_model": attribution_model})
 
-    provider = get_provider(cfg)
+    provider = get_attribution_provider(cfg)
+    _effective_provider = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
 
     if progress_callback:
         progress_callback(5, "Starting attribution")
@@ -339,7 +369,7 @@ def attribute_only(
         chapters=attributed_chapters,
         book_hash=book_hash(Path(ebook_path)),
     )
-    cache_result(result, Path(ebook_path), provider=cfg.nlp_provider)
+    cache_result(result, Path(ebook_path), provider=_effective_provider)
 
     if progress_callback:
         progress_callback(100, "Attribution complete")

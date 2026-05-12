@@ -30,7 +30,7 @@ from pydub import AudioSegment
 
 from .models import AudioResult, Chapter, Segment
 from .text_rules import SCENE_BREAK_RE, is_scene_break, split_at_scene_breaks
-from .utils import ApostropheMode, batch_text, normalize_for_tts
+from .utils import ApostropheMode, batch_text, ensure_terminal_punct, normalize_for_tts
 from .voice_loader import load_voice
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,7 @@ def _get_or_load_model(
             eos_threshold,
         )
         _model_cache[key] = TTSModel.load_model(
+            language="english_2026-04",
             temp=temp,
             lsd_decode_steps=lsd_decode_steps,
             noise_clamp=noise_clamp,
@@ -175,6 +176,14 @@ def worker_process_chapter(
 
     Executed inside a subprocess worker via ``ProcessPoolExecutor``.
     """
+    # Convert SIGTERM to KeyboardInterrupt so the existing cleanup path runs.
+    import signal as _signal
+
+    def _sigterm(signum, frame):
+        raise KeyboardInterrupt("SIGTERM")
+
+    _signal.signal(_signal.SIGTERM, _sigterm)
+
     # Configure logging for this worker process on first chapter call.
     # setup_logging() is idempotent — subsequent calls for the same
     # process_name are no-ops, so this pays no cost after the first chapter.
@@ -533,9 +542,15 @@ def _render_text(
             # Strip any italic STX/ETX markers that may have survived into this
             # segment (e.g. in single-voice mode that bypasses the NLP pipeline).
             text = text.replace("\x02", "").replace("\x03", "")
+            # Collapse paragraph breaks to a single space so the TTS model
+            # doesn't treat \n\n as a hard restart mid-segment.  Multi-voice
+            # narrator segments are joined with \n\n; single-voice batches
+            # never contain \n\n because batch_text uses " ".join().
+            text = " ".join(text.split("\n\n"))
             # Expand n't contractions so TTS pronounces them correctly.
             effective_mode = apostrophe_mode if apostrophe_mode is not None else ApostropheMode.EXPAND_CONTRACTIONS
             text = normalize_for_tts(text, mode=effective_mode)
+            text = ensure_terminal_punct(text)
             log_message(f"  Batch {batch_idx + 1}/{total_batches}: {text[:80]}…")
             tensor = model.generate_audio(
                 voice_state,

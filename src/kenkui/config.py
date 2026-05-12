@@ -12,12 +12,12 @@ module searches for  $XDG_CONFIG_HOME/kenkui/<name>.toml  automatically.
 from __future__ import annotations
 
 import os
-import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 import tomli_w
+from pydantic_settings import TomlConfigSettingsSource
 
 from .models import AppConfig
 
@@ -109,12 +109,27 @@ def save_provider_credentials(
     return target
 
 
+_KENKUI_PROVIDER_ENV_VARS = {
+    "anthropic": "KENKUI_ANTHROPIC_API_KEY",
+    "openai": "KENKUI_OPENAI_API_KEY",
+    "google": "KENKUI_GOOGLE_API_KEY",
+}
+
+
 def inject_provider_env_vars(credentials: dict[str, ProviderCredentials]) -> None:
-    """Set provider API keys as environment variables for LiteLLM."""
-    for provider_name, creds in credentials.items():
-        env_var = _PROVIDER_ENV_VARS.get(provider_name)
-        if env_var and creds.api_key:
-            os.environ[env_var] = creds.api_key
+    """Set provider API keys as environment variables for LiteLLM.
+
+    KENKUI_*_API_KEY env vars take precedence over credentials.toml so the
+    app is fully 12-factor: secrets can live entirely in the environment.
+    """
+    for provider_name, standard_var in _PROVIDER_ENV_VARS.items():
+        kenkui_var = _KENKUI_PROVIDER_ENV_VARS.get(provider_name, "")
+        # Prefer KENKUI_* env var, fall back to credentials.toml
+        key = os.environ.get(kenkui_var, "")
+        if not key and provider_name in credentials:
+            key = credentials[provider_name].api_key
+        if key:
+            os.environ[standard_var] = key
 
 
 # ---------------------------------------------------------------------------
@@ -160,24 +175,44 @@ def resolve_config_path(path_or_name: str | None) -> Path:
 
 
 def load_app_config(path_or_name: str | None = None) -> AppConfig:
-    """Load an AppConfig from a TOML file.
+    """Load an AppConfig using the 12-factor priority stack.
 
-    Creates and persists a default config if the resolved path does not exist.
+    Priority (highest to lowest):
+      1. CLI flags  — applied by callers via AppConfig.model_copy(update={...})
+      2. KENKUI_*   — pydantic-settings env layer
+      3. TOML file  — resolved from path_or_name / KENKUI_CONFIG / XDG default
+      4. Defaults   — Field default= / default_factory= values
+
+    Creates and persists the default config file on first run.
     """
+    # KENKUI_CONFIG env var overrides when no explicit path is given
+    if path_or_name is None:
+        path_or_name = os.environ.get("KENKUI_CONFIG")
+
     path = resolve_config_path(path_or_name)
+    toml_path: Path | None = path if path.exists() else None
 
-    if path.exists():
-        try:
-            data = tomllib.loads(path.read_text(encoding="utf-8"))
-            return AppConfig.from_dict(data)
-        except Exception:
-            pass  # Fall through to defaults
+    class _AppConfigForPath(AppConfig):
+        @classmethod
+        def settings_customise_sources(
+            cls,
+            settings_cls,
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        ):
+            sources: list = [init_settings, env_settings]
+            if toml_path is not None:
+                sources.append(TomlConfigSettingsSource(settings_cls, toml_file=toml_path))
+            return tuple(sources)
 
-    # No file (or unparseable) — return and immediately persist defaults so the
-    # file exists on the next invocation.
-    config = AppConfig()
-    if path == DEFAULT_CONFIG_PATH:
+    config = _AppConfigForPath()
+
+    # Auto-persist defaults on first run
+    if toml_path is None and path == DEFAULT_CONFIG_PATH:
         _write_toml(config, path)
+
     return config
 
 
@@ -188,19 +223,9 @@ def save_app_config(config: AppConfig, path: Path | str) -> Path:
     return dest
 
 
-def _strip_none(obj: object) -> object:
-    """Recursively remove None values from dicts/lists — TOML has no null type."""
-    if isinstance(obj, dict):
-        return {k: _strip_none(v) for k, v in obj.items() if v is not None}
-    if isinstance(obj, list):
-        return [_strip_none(v) for v in obj if v is not None]
-    return obj
-
-
 def _write_toml(config: AppConfig, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = _strip_none(config.to_dict())
-    assert isinstance(data, dict)
+    data = config.model_dump(mode="json", exclude_none=True)
     path.write_bytes(tomli_w.dumps(data).encode("utf-8"))
 
 

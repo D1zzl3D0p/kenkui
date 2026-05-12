@@ -93,11 +93,13 @@ class OllamaProvider:
         if book_path is None:
             raise ValueError("OllamaProvider.build_roster() requires book_path")
 
+        discovery_method = getattr(self.config, "nlp_discovery_method", "auto") or "auto"
         fast_scan_result = run_fast_scan(
             chapters,
             book_path,
             self.config.nlp_model,
             progress_callback=progress_callback,
+            method=discovery_method,
         )
 
         # Build lookup: canonical name → CharacterInfo (has mention/quote counts)
@@ -130,24 +132,38 @@ class OllamaProvider:
         roster: CharacterRoster,
         progress_callback: Callable[[str], None] | None = None,
     ) -> AttributionResult:
-        """Run attribution for one chapter, converting speakers to slugs."""
-        if progress_callback:
-            progress_callback(f"Attributing chapter via Ollama")
+        """Attribute quotes in *chapter* using the annotation-based pipeline.
 
-        result = _run_attribution_for_chapter(
-            chapter,
-            roster,
-            self.config.nlp_model,
-            self.config.nlp_confidence_threshold,
+        Uses the same annotated-chapter format as CloudProvider so both providers
+        produce identical prompts (12-factor Factor IV / X parity). Ollama receives
+        the static and dynamic blocks concatenated as a single prompt string.
+        """
+        from kenkui.nlp.quotes import extract_quotes, strip_scare_quotes
+        from kenkui.nlp.annotator import (
+            annotate_chapter,
+            _build_alias_to_slug,
+            _build_attribution_static_block,
+            _build_attribution_dynamic_block,
         )
+        from kenkui.nlp.models import AttributionResultWire, attribution_wire_to_full
+        from kenkui.nlp.llm import LLMClient
 
-        converted = [
-            AttributionItem(
-                quote_id=item.quote_id,
-                speaker=_speaker_to_slug(item.speaker, roster),
-                emotion=item.emotion,
-                confidence=item.confidence,
-            )
-            for item in result.attributions
-        ]
-        return AttributionResult(attributions=converted)
+        if progress_callback:
+            progress_callback("Attributing chapter via Ollama")
+
+        clean_paragraphs = strip_scare_quotes(chapter.paragraphs)
+        quotes = extract_quotes(clean_paragraphs)
+        if not quotes:
+            return AttributionResult(attributions=[])
+
+        alias_to_slug = _build_alias_to_slug(roster)
+        slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
+        annotated_text = annotate_chapter(clean_paragraphs, quotes, alias_to_slug, slug_to_pronoun)
+
+        static_block = _build_attribution_static_block(roster)
+        dynamic_block = _build_attribution_dynamic_block(annotated_text)
+        prompt = f"{static_block}\n\n{dynamic_block}"
+
+        llm = LLMClient(self.config.nlp_model)
+        result = llm.generate(prompt, AttributionResultWire)
+        return attribution_wire_to_full(result)

@@ -349,14 +349,10 @@ class TestJobConfigRosterCachePath:
 
         job = JobConfig(
             ebook_path=Path("/tmp/book.epub"),
-            tts_execution_mode=TTSExecutionMode.MODAL,
-            modal_endpoint="book_render",
-            modal_environment="prod",
+            tts_execution_mode=TTSExecutionMode.LOCAL,
         )
         restored = JobConfig.from_dict(job.to_dict())
-        assert restored.tts_execution_mode == TTSExecutionMode.MODAL
-        assert restored.modal_endpoint == "book_render"
-        assert restored.modal_environment == "prod"
+        assert restored.tts_execution_mode == TTSExecutionMode.LOCAL
 
 
 class TestQueueItemExecutionMetadata:

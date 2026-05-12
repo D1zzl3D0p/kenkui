@@ -577,40 +577,45 @@ def build_roster_with_llm(
     nlp,
     llm: "LLMClient",
     sample_words: int = 4000,
+    method: str = "auto",
 ) -> CharacterRoster:
-    """Build a character roster using a three-tier fallback strategy.
+    """Build a character roster using a configurable strategy.
 
-    Tier 1 — BookNLP (best quality):
-        Literary-fiction-specific NER + neural coreference resolution.
-        Returns immediately if ``booknlp`` is installed.
+    ``method`` controls which discovery path is taken:
 
-    Tier 2 — LLM sample extraction (medium quality):
-        The LLM reads a representative text sample and returns a structured
-        roster. Useful when BookNLP is unavailable. Quality is model-dependent;
-        small models (≤7B) may miss secondary characters.
+    ``"auto"`` (default) — Three-tier fallback:
+        Tier 1 — BookNLP (best quality, if installed)
+        Tier 2 — LLM sample extraction (medium quality)
+        Tier 3 — spaCy + heuristic (always available)
 
-    Tier 3 — spaCy + heuristic (always available):
-        Fast, deterministic fallback. Misses name forms that spaCy's general
-        NER model doesn't detect on literary prose.
+    ``"booknlp"`` — Force BookNLP.  Raises ``RuntimeError`` if not installed.
+
+    ``"llm"`` — Skip BookNLP, go straight to LLM (Tier 2 then Tier 3).
 
     Args:
         text:         Full book text (used for sampling and hallucination guard).
         nlp:          Loaded spaCy model.
         llm:          ``LLMClient`` instance pointing at the configured model.
         sample_words: Approximate word budget for the text sample sent to the LLM.
+        method:       Discovery strategy: ``"auto"``, ``"booknlp"``, or ``"llm"``.
 
     Returns:
         ``CharacterRoster`` with alias-grouped characters.
     """
-    # ── Tier 1: BookNLP ──────────────────────────────────────────────────────
     from .booknlp_roster import build_roster_from_booknlp
 
-    bnlp_data = build_roster_from_booknlp(text)
-    if bnlp_data is not None:
+    # ── Explicit BookNLP mode ─────────────────────────────────────────────────
+    if method == "booknlp":
+        bnlp_data = build_roster_from_booknlp(text)
+        if bnlp_data is None:
+            raise RuntimeError(
+                "BookNLP is not installed or failed to process the text. "
+                "Install it with: pip install booknlp"
+            )
         roster = bnlp_data.roster
         common_phrases = bnlp_data.common_phrases
         logger.info(
-            "build_roster: BookNLP path — %d canonical characters",
+            "build_roster: BookNLP (explicit) — %d canonical characters",
             len(roster.characters),
         )
         roster = deduplicate_roster_with_llm(roster, llm)
@@ -618,9 +623,23 @@ def build_roster_with_llm(
         roster = normalize_canonical_names_with_llm(roster, llm)
         return roster
 
-    logger.info("build_roster: BookNLP unavailable, trying LLM")
+    # ── Auto mode: try BookNLP first ─────────────────────────────────────────
+    if method == "auto":
+        bnlp_data = build_roster_from_booknlp(text)
+        if bnlp_data is not None:
+            roster = bnlp_data.roster
+            common_phrases = bnlp_data.common_phrases
+            logger.info(
+                "build_roster: BookNLP path — %d canonical characters",
+                len(roster.characters),
+            )
+            roster = deduplicate_roster_with_llm(roster, llm)
+            roster = resolve_epithets_with_llm(roster, common_phrases, llm)
+            roster = normalize_canonical_names_with_llm(roster, llm)
+            return roster
+        logger.info("build_roster: BookNLP unavailable, trying LLM")
 
-    # ── Tier 2: LLM ──────────────────────────────────────────────────────────
+    # ── LLM path (method == "llm" or auto fallback) ───────────────────────────
     try:
         seed_names = extract_person_names(text, nlp)
         logger.debug("build_roster: %d spaCy seed names", len(seed_names))

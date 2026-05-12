@@ -12,10 +12,13 @@ annotate_chapter(paragraphs, quotes, alias_to_slug, slug_to_pronoun) → str
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 
-from .models import Quote
+from .models import CharacterRoster, Quote
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Attribution-verb patterns
@@ -88,7 +91,8 @@ def _extract_hints(
 
     # Local position of the quote within *para*.
     local_start = quote.char_offset - para_start_offset
-    local_end = local_start + len(quote.text)
+    # Italic quote.text is plain content (markers stripped); raw span is +2 bytes.
+    local_end = local_start + len(quote.text) + (2 if quote.kind == "italic" else 0)
 
     # Guard against bad offsets (e.g. italic spans with stripped markers).
     local_start = max(0, local_start)
@@ -130,7 +134,7 @@ def _extract_hints(
         after_text = para[after_start:after_end]
 
         guess_pat = re.compile(
-            r'^["\u201d][,.]?\s+(' + alias_inner + r")\b",
+            r'^["\u201d\u2019][,.]?\s+(' + alias_inner + r")\b",
             re.IGNORECASE,
         )
         gm = guess_pat.search(after_text)
@@ -217,7 +221,9 @@ def annotate_chapter(
         cursor = 0
         for quote in pq:
             local_start = quote.char_offset - para_start
-            local_end = local_start + len(quote.text)
+            # Italic quote.text is plain content (markers stripped), but the span
+            # in the raw paragraph includes \x02 + content + \x03 (+2 bytes).
+            local_end = local_start + len(quote.text) + (2 if quote.kind == "italic" else 0)
 
             # Guard against bad offsets.
             local_start = max(cursor, min(local_start, len(para)))
@@ -242,3 +248,65 @@ def annotate_chapter(
             segments.append(f"[NARRATOR] {trailing}")
 
     return "\n\n".join(segments)
+
+
+# ---------------------------------------------------------------------------
+# Shared attribution prompt builders (used by both OllamaProvider and CloudProvider)
+# ---------------------------------------------------------------------------
+
+
+def _build_alias_to_slug(roster: CharacterRoster) -> dict[str, str]:
+    """Build a case-folded alias → slug mapping from *roster*.
+
+    First-writer-wins on collision: if two characters share an alias key, the
+    first character in the roster claims it and subsequent duplicates are ignored.
+    """
+    alias_to_slug: dict[str, str] = {}
+    for c in roster.characters:
+        for alias in [c.canonical_name] + c.aliases:
+            key = alias.lower()
+            if key not in alias_to_slug:
+                alias_to_slug[key] = c.slug
+            elif alias_to_slug[key] != c.slug:
+                logger.debug(
+                    "alias_to_slug collision: %r claimed by %r, ignoring %r",
+                    key, alias_to_slug[key], c.slug,
+                )
+    return alias_to_slug
+
+
+def _build_attribution_static_block(roster: CharacterRoster) -> str:
+    """Build the cacheable part of the attribution prompt: instructions + slug roster.
+
+    Identical for every chapter in a book, making it safe to cache via Anthropic's
+    ephemeral prompt caching on the cloud path.
+    """
+    roster_lines = ["SLUG | CANONICAL NAME | ALIASES | PRONOUNS"]
+    for c in roster.characters:
+        aliases = ", ".join(c.aliases) if c.aliases else ""
+        roster_lines.append(f"{c.slug} | {c.canonical_name} | {aliases} | {c.gender}")
+    roster_block = "\n".join(roster_lines)
+
+    return f"""You are a literary analyst performing speaker attribution.
+
+CHARACTER ROSTER (use the slug field as the speaker value):
+{roster_block}
+
+For each [QUOTE:N] tag in the annotated chapter, return:
+- quote_id: the N from [QUOTE:N]
+- speaker: character slug, "NARRATOR", or "Unknown"
+- confidence: 1–5
+
+Rules:
+- Every [QUOTE:N] present MUST appear in your response — no exceptions, no skipping
+- hint= is strong guidance (~90% accurate) — override only if context clearly contradicts it
+- guess= is a weaker signal (~50% accurate) — use as a tiebreaker, not a determination
+- pronoun= filters the roster to characters with matching pronouns
+- "NARRATOR" for scare quotes, titles, labels, non-spoken text
+- "Unknown" only when you have genuinely no basis for any guess
+- Read [NARRATOR] passages for context — they are pre-labeled, do not return them"""
+
+
+def _build_attribution_dynamic_block(annotated_text: str) -> str:
+    """Build the per-chapter part of the attribution prompt: annotated chapter text."""
+    return f"ANNOTATED CHAPTER:\n{annotated_text}"

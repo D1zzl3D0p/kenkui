@@ -82,19 +82,14 @@ class JobStatus(Enum):
 
 class TTSExecutionMode(Enum):
     LOCAL = "local"
-    MODAL = "modal"
 
 
 class NlpExecutionMode(Enum):
     LOCAL = "local"
-    MODAL = "modal"
-    LITELLM = "litellm"
 
 
 class AttributionExecutionMode(Enum):
     LOCAL = "local"
-    MODAL = "modal"
-    LITELLM = "litellm"
 
 
 class CostStatus(Enum):
@@ -289,6 +284,10 @@ class JobConfig:
     job_post_processing_enabled: bool | None = None
     job_nlp_execution_mode: NlpExecutionMode | None = None
     job_attribution_execution_mode: AttributionExecutionMode | None = None
+    # Per-job character discovery / attribution overrides
+    job_character_discovery_method: str | None = None  # "booknlp" | "llm" | None (auto)
+    job_attribution_provider: str | None = None
+    job_attribution_model: str | None = None
 
     def __post_init__(self):
         if not self.name:
@@ -334,6 +333,9 @@ class JobConfig:
             "job_post_processing_enabled",
             "job_nlp_execution_mode",
             "job_attribution_execution_mode",
+            "job_character_discovery_method",
+            "job_attribution_provider",
+            "job_attribution_model",
         ):
             val = getattr(self, key)
             if val is not None:
@@ -384,6 +386,9 @@ class JobConfig:
             job_attribution_execution_mode=AttributionExecutionMode(data["job_attribution_execution_mode"])
             if data.get("job_attribution_execution_mode")
             else None,
+            job_character_discovery_method=data.get("job_character_discovery_method"),
+            job_attribution_provider=data.get("job_attribution_provider"),
+            job_attribution_model=data.get("job_attribution_model"),
         )
 
 
@@ -469,6 +474,9 @@ class AppConfig(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     nlp_execution_mode: NlpExecutionMode = NlpExecutionMode.LOCAL
     attribution_execution_mode: AttributionExecutionMode = AttributionExecutionMode.LOCAL
+    nlp_discovery_method: str = "auto"   # "booknlp" | "llm" | "auto"
+    nlp_attribution_provider: str = ""   # falls back to nlp_provider when empty
+    nlp_attribution_model: str = ""      # falls back to nlp_model when empty
     cors_origins: list[str] = Field(
         default_factory=lambda: ["tauri://localhost", "http://tauri.localhost"]
     )

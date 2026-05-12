@@ -1,16 +1,12 @@
 """Centralised logging configuration for kenkui.
 
-Each process (TUI, server, worker) calls ``setup_logging()`` once at startup
-to configure the root logger with a per-process rotating file handler.
+Each process (TUI, server, worker) calls ``setup_logging()`` once at startup.
 
-Log files are written to ``~/.config/kenkui/``:
-    kenkui-tui.log     — the main Textual TUI process
-    kenkui-server.log  — the uvicorn/FastAPI worker server subprocess
-    kenkui-workers.log — ProcessPoolExecutor TTS worker subprocesses
+Default behaviour (12-factor XI): logs go to stdout.
+Opt-in file logging: set the ``KENKUI_LOG_FILE`` environment variable to any
+non-empty value to write rotating files to ``~/.config/kenkui/`` instead::
 
-All three files use the same format so they can be concatenated or tailed
-together for debugging.  Each message includes the PID so log lines from
-different workers in the same pool are distinguishable.
+    KENKUI_LOG_FILE=1 kenkui run          # writes kenkui-tui.log etc.
 
 Usage::
 
@@ -24,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
+import sys
 from pathlib import Path
 
 from .config import CONFIG_DIR
@@ -82,37 +80,29 @@ _THIRD_PARTY_WARNING_LOGGERS: tuple[str, ...] = (
 _configured_processes: set[str] = set()
 
 
-def setup_logging(process_name: str, level: int = logging.DEBUG) -> Path:
+def setup_logging(process_name: str, level: int = logging.DEBUG) -> Path | None:
     """Configure the root logger for one kenkui process.
 
-    Removes any pre-existing handlers on the root logger (eliminating bleed
-    from StreamHandlers added by ``logging.basicConfig`` or third-party
-    libraries such as uvicorn), then attaches a single
-    ``RotatingFileHandler`` writing to::
-
-        ~/.config/kenkui/kenkui-<process_name>.log
+    By default logs go to stdout (12-factor XI). Set the ``KENKUI_LOG_FILE``
+    environment variable to any non-empty value to write rotating files to
+    ``~/.config/kenkui/kenkui-<process_name>.log`` instead.
 
     Args:
         process_name: One of ``"tui"``, ``"server"``, or ``"workers"``.
-                      Used as the filename suffix and echoed in log records
-                      via the PID field.
-        level:        Logging level for the file handler and root logger.
-                      Defaults to ``logging.DEBUG``.
+        level:        Logging level. Defaults to ``logging.DEBUG``.
 
     Returns:
-        The ``Path`` of the log file that was configured.
+        The log ``Path`` when file logging is active, otherwise ``None``.
 
     Safe to call multiple times for the same process_name; subsequent calls
-    are no-ops so worker processes that call this function on every chapter
-    only pay the setup cost once.
+    are no-ops.
     """
     global _configured_processes
 
-    if process_name in _configured_processes:
-        return LOG_DIR / f"kenkui-{process_name}.log"
+    use_file = bool(os.environ.get("KENKUI_LOG_FILE"))
 
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"kenkui-{process_name}.log"
+    if process_name in _configured_processes:
+        return LOG_DIR / f"kenkui-{process_name}.log" if use_file else None
 
     root = logging.getLogger()
 
@@ -124,25 +114,33 @@ def setup_logging(process_name: str, level: int = logging.DEBUG) -> Path:
             pass
         root.removeHandler(handler)
 
-    # Attach the rotating file handler
-    try:
-        fh = logging.handlers.RotatingFileHandler(
-            log_path,
-            mode="a",
-            maxBytes=LOG_MAX_BYTES,
-            backupCount=LOG_BACKUP_COUNT,
-            encoding="utf-8",
-        )
-        fh.setLevel(level)
-        fh.setFormatter(logging.Formatter(LOG_FORMAT))
-        root.addHandler(fh)
-        root.setLevel(level)
-    except Exception:
-        # If we cannot open the log file, fall back to NullHandler
-        root.addHandler(logging.NullHandler())
+    log_path: Path | None = None
+    if use_file:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = LOG_DIR / f"kenkui-{process_name}.log"
+        try:
+            fh = logging.handlers.RotatingFileHandler(
+                log_path,
+                mode="a",
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            fh.setLevel(level)
+            fh.setFormatter(logging.Formatter(LOG_FORMAT))
+            root.addHandler(fh)
+        except Exception:
+            root.addHandler(logging.NullHandler())
+    else:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(level)
+        sh.setFormatter(logging.Formatter(LOG_FORMAT))
+        root.addHandler(sh)
+
+    root.setLevel(level)
 
     # Silence third-party loggers that would otherwise inherit DEBUG from root
-    # and flood the log with irrelevant trace output.
+    # and flood output with irrelevant trace output.
     for _name in _THIRD_PARTY_WARNING_LOGGERS:
         logging.getLogger(_name).setLevel(logging.WARNING)
 

@@ -206,6 +206,33 @@ def _expand_all_contraction(m: re.Match) -> str:
     return expansion
 
 
+_TERMINAL_PUNCT = frozenset(".!?…\u2026")
+_CLOSING_QUOTES = frozenset("\"'\u201c\u201d\u2018\u2019")
+_CLOSING_QUOTES_STR = "\"'\u201c\u201d\u2018\u2019"
+
+
+def ensure_terminal_punct(text: str) -> str:
+    """Append a period if *text* doesn't end with terminal punctuation.
+
+    Handles closing quotes transparently: ``"Hello"`` → unchanged if the char
+    before the quote is already punctuation; otherwise a period is inserted
+    before the closing quote cluster.
+    """
+    stripped = text.rstrip()
+    if not stripped:
+        return text
+    last = stripped[-1]
+    if last in _TERMINAL_PUNCT:
+        return text
+    if last in _CLOSING_QUOTES:
+        inner = stripped.rstrip(_CLOSING_QUOTES_STR)
+        if inner and inner[-1] in _TERMINAL_PUNCT:
+            return text
+        quotes = stripped[len(inner):]
+        return inner + "." + quotes
+    return stripped + "."
+
+
 def normalize_for_tts(text: str, mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS) -> str:
     """Normalize apostrophes/contractions for TTS according to *mode*.
 
@@ -335,6 +362,7 @@ __all__ = [
     "DEFAULT_VOICES",
     "VOICE_DESCRIPTIONS",
     "batch_text",
+    "ensure_terminal_punct",
     "extract_epub_cover",
     "normalize_for_tts",
     "sanitize_filename",

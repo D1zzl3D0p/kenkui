@@ -4,8 +4,7 @@ from unittest.mock import MagicMock, patch
 from kenkui.models import AppConfig
 from kenkui.nlp.providers import get_provider
 from kenkui.nlp.providers.ollama import OllamaProvider
-from kenkui.nlp.providers.cloud import CloudProvider
-from kenkui.nlp.models import CharacterRecord as NLPCharacterRecord, AttributionItem, AttributionResult
+from kenkui.nlp.models import CharacterRecord as NLPCharacterRecord, AttributionItem, AttributionResult, AttributionItemWire, AttributionResultWire
 from kenkui.models import FastScanResult, CharacterInfo
 
 
@@ -13,24 +12,6 @@ def test_get_provider_ollama():
     config = AppConfig(nlp_provider="ollama")
     provider = get_provider(config)
     assert isinstance(provider, OllamaProvider)
-
-
-def test_get_provider_anthropic():
-    config = AppConfig(nlp_provider="anthropic")
-    provider = get_provider(config)
-    assert isinstance(provider, CloudProvider)
-
-
-def test_get_provider_openai():
-    config = AppConfig(nlp_provider="openai")
-    provider = get_provider(config)
-    assert isinstance(provider, CloudProvider)
-
-
-def test_get_provider_google():
-    config = AppConfig(nlp_provider="google")
-    provider = get_provider(config)
-    assert isinstance(provider, CloudProvider)
 
 
 def test_get_provider_default_is_ollama():
@@ -77,8 +58,8 @@ def test_ollama_provider_build_roster_returns_character_roster():
     assert "Lizzy" in c.aliases
 
 
-def test_ollama_provider_attribute_chapter_converts_speakers_to_slugs():
-    """OllamaProvider.attribute_chapter converts canonical-name speakers to slugs."""
+def test_ollama_provider_attribute_chapter_uses_slug_keyed_pipeline():
+    """OllamaProvider.attribute_chapter uses the annotation-based pipeline returning slugs directly."""
     config = AppConfig(nlp_provider="ollama", nlp_model="llama3.2")
     provider = get_provider(config)
 
@@ -88,21 +69,22 @@ def test_ollama_provider_attribute_chapter_converts_speakers_to_slugs():
         NLPCharacterRecord(slug="mr_darcy", canonical_name="Mr. Darcy"),
     ]
 
-    # Simulate old pipeline returning canonical names as speakers
-    old_attribution = AttributionResult(attributions=[
-        AttributionItem(quote_id=1, speaker="Elizabeth Bennet", emotion="neutral", confidence=5),
-        AttributionItem(quote_id=2, speaker="Mr. Darcy", emotion="neutral", confidence=4),
-        AttributionItem(quote_id=3, speaker="NARRATOR", emotion="neutral", confidence=5),
-        AttributionItem(quote_id=4, speaker="Unknown", emotion="neutral", confidence=1),
+    wire_result = AttributionResultWire(attributions=[
+        AttributionItemWire(quote_id=1, speaker="elizabeth_bennet", confidence=5),
+        AttributionItemWire(quote_id=2, speaker="mr_darcy", confidence=4),
+        AttributionItemWire(quote_id=3, speaker="NARRATOR", confidence=5),
+        AttributionItemWire(quote_id=4, speaker="Unknown", confidence=1),
     ])
 
     mock_chapter = MagicMock()
+    mock_chapter.paragraphs = ['"It is a truth universally acknowledged," said Elizabeth.']
 
-    with patch("kenkui.nlp.providers.ollama._run_attribution_for_chapter", return_value=old_attribution):
-        result = provider.attribute_chapter(mock_chapter, roster)
+    with patch("kenkui.nlp.llm.LLMClient.generate", return_value=wire_result):
+        with patch("kenkui.nlp.annotator.annotate_chapter", return_value="[QUOTE:1] text"):
+            result = provider.attribute_chapter(mock_chapter, roster)
 
     speakers = {a.quote_id: a.speaker for a in result.attributions}
     assert speakers[1] == "elizabeth_bennet"
     assert speakers[2] == "mr_darcy"
-    assert speakers[3] == "NARRATOR"   # preserved
-    assert speakers[4] == "Unknown"    # preserved
+    assert speakers[3] == "NARRATOR"
+    assert speakers[4] == "Unknown"

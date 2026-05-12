@@ -25,9 +25,18 @@ import re
 
 from .models import Quote
 
-# Match content wrapped in straight or curly double quotes.
-# Non-greedy so nested/adjacent quotes don't collapse into one span.
-_QUOTE_RE = re.compile(r'["\u201c](.+?)["\u201d]', re.DOTALL)
+# Match dialogue wrapped in straight/curly double quotes or curly single quotes.
+# Two alternates joined by |:
+#   1. Double-quote path: " or " ... " or "
+#   2. Curly-single-quote path: ' ... ' with apostrophe-awareness
+#      (?<!\w) / (?!\w) prevent word-internal apostrophes (it's, they'd) from matching.
+#      \u2019(?=\w) inside the group allows an apostrophe mid-word.
+_QUOTE_RE = re.compile(
+    r'["\u201c](.+?)["\u201d]'
+    r'|'
+    r'(?<!\w)\u2018((?:[^\u2019]|\u2019(?=\w))+)\u2019(?!\w)',
+    re.DOTALL,
+)
 
 # Match italic spans inserted by the EPUB/MOBI readers using STX/ETX markers.
 _ITALIC_RE = re.compile(r'\x02(.+?)\x03', re.DOTALL)

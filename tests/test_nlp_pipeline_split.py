@@ -30,7 +30,7 @@ class TestRosterCache:
             with patch("kenkui.config.CONFIG_DIR", tmp_path):
                 cache_path = cache_roster(result, ebook)
                 assert cache_path.exists()
-                assert cache_path.name.endswith("-roster.json")
+                assert "-roster-" in cache_path.name and cache_path.name.endswith(".json")
 
                 restored = get_cached_roster(ebook)
                 assert restored is not None

@@ -108,6 +108,69 @@ def describe_voice_mode(state: dict[str, Any]) -> str:
     return "single narrator"
 
 
+def set_characters_config(
+    state: dict[str, Any],
+    method: "str | None",
+    provider: "str | None",
+    model: "str | None",
+    execution_mode: "str | None",
+) -> dict[str, Any]:
+    """Apply character-discovery step settings to wizard state."""
+    update = dict(state)
+    if method is not None:
+        update["job_character_discovery_method"] = method
+    if provider is not None:
+        update["job_nlp_provider"] = provider
+    if model is not None:
+        update["job_nlp_model"] = model
+    if execution_mode is not None:
+        update["job_nlp_execution_mode"] = execution_mode
+    return update
+
+
+def set_attribution_config(
+    state: dict[str, Any],
+    provider: "str | None",
+    model: "str | None",
+    execution_mode: "str | None",
+) -> dict[str, Any]:
+    """Apply attribution step settings to wizard state."""
+    update = dict(state)
+    if provider is not None:
+        update["job_attribution_provider"] = provider
+    if model is not None:
+        update["job_attribution_model"] = model
+    if execution_mode is not None:
+        update["job_attribution_execution_mode"] = execution_mode
+    return update
+
+
+def set_tts_execution_mode(state: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Set the per-job TTS execution mode."""
+    return {**state, "tts_execution_mode": mode}
+
+
+def reset_characters_config(state: dict[str, Any], app_config) -> dict[str, Any]:
+    """Reset character-discovery config to app defaults."""
+    return {
+        **state,
+        "job_character_discovery_method": getattr(app_config, "nlp_discovery_method", "auto") or "auto",
+        "job_nlp_provider": getattr(app_config, "nlp_provider", "ollama"),
+        "job_nlp_model": getattr(app_config, "nlp_model", "llama3.2"),
+        "job_nlp_execution_mode": None,
+    }
+
+
+def reset_attribution_config(state: dict[str, Any], app_config) -> dict[str, Any]:
+    """Reset attribution config to app defaults."""
+    return {
+        **state,
+        "job_attribution_provider": None,
+        "job_attribution_model": None,
+        "job_attribution_execution_mode": None,
+    }
+
+
 __all__ = [
     "reset_chapter_selection",
     "reset_voice_mode",
@@ -118,4 +181,9 @@ __all__ = [
     "reset_post_processing_overrides",
     "reset_output_location",
     "describe_voice_mode",
+    "set_characters_config",
+    "set_attribution_config",
+    "set_tts_execution_mode",
+    "reset_characters_config",
+    "reset_attribution_config",
 ]

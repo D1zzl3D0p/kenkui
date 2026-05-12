@@ -20,6 +20,11 @@ def init_confirmation_state(book_path: Path, app_config, profile: dict[str, Any]
         "narration_mode": profile.get("narration_mode", "single"),
         "job_nlp_provider": profile.get("job_nlp_provider") or getattr(app_config, "nlp_provider", "ollama"),
         "job_nlp_model": profile.get("job_nlp_model") or getattr(app_config, "nlp_model", "llama3.2"),
+        "job_character_discovery_method": profile.get("job_character_discovery_method") or getattr(app_config, "nlp_discovery_method", "auto") or "auto",
+        "job_attribution_provider": profile.get("job_attribution_provider"),
+        "job_attribution_model": profile.get("job_attribution_model"),
+        "job_attribution_execution_mode": profile.get("job_attribution_execution_mode"),
+        "tts_execution_mode": profile.get("tts_execution_mode", "local"),
         "chapter_selection": {
             "preset": profile.get("chapter_preset", app_config.default_chapter_preset),
             "included": [],
@@ -56,6 +61,16 @@ def confirmation_state_to_profile(state: dict[str, Any]) -> dict[str, Any]:
         profile["job_nlp_provider"] = state["job_nlp_provider"]
     if state.get("job_nlp_model"):
         profile["job_nlp_model"] = state["job_nlp_model"]
+    if state.get("job_character_discovery_method"):
+        profile["job_character_discovery_method"] = state["job_character_discovery_method"]
+    if state.get("job_attribution_provider"):
+        profile["job_attribution_provider"] = state["job_attribution_provider"]
+    if state.get("job_attribution_model"):
+        profile["job_attribution_model"] = state["job_attribution_model"]
+    if state.get("job_attribution_execution_mode"):
+        profile["job_attribution_execution_mode"] = state["job_attribution_execution_mode"]
+    if state.get("tts_execution_mode"):
+        profile["tts_execution_mode"] = state["tts_execution_mode"]
     return profile
 
 
