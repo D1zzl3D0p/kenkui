@@ -82,14 +82,17 @@ class JobStatus(Enum):
 
 class TTSExecutionMode(Enum):
     LOCAL = "local"
+    MODAL = "modal"
 
 
 class NlpExecutionMode(Enum):
     LOCAL = "local"
+    MODAL = "modal"
 
 
 class AttributionExecutionMode(Enum):
     LOCAL = "local"
+    MODAL = "modal"
 
 
 class CostStatus(Enum):
