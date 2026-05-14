@@ -95,6 +95,18 @@ class AttributionExecutionMode(Enum):
     MODAL = "modal"
 
 
+class ExtractionTool(Enum):
+    BOOKNLP = "booknlp"
+    OLLAMA = "ollama"
+    LITELLM = "litellm"
+
+
+class AttributionTool(Enum):
+    BOOKNLP = "booknlp"
+    OLLAMA = "ollama"
+    LITELLM = "litellm"
+
+
 class CostStatus(Enum):
     NONE = "none"
     ESTIMATED = "estimated"

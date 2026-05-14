@@ -26,14 +26,17 @@ from .huggingface_auth import (
 )
 from .models import (
     AppConfig,
+    AttributionTool,
     AudioResult,
     Chapter,
     CharacterInfo,
+    ExtractionTool,
     NarrationMode,
     NLPResult,
     ProcessingConfig,
     Segment,
 )
+from .nlp_config import NLPConfig
 from .parsing import AudioBuilder
 from .readers.epub import EpubReader
 from .voice_loader import load_voice
@@ -140,6 +143,50 @@ def filter_chapters(book_hash: str, selection) -> "ChapterFilterResult":  # noqa
     return _filter_chapters(book_hash, selection, _get_book_cache())
 
 
+def full_analysis(
+    ebook_path: str | Path,
+    nlp_model: str | None = None,
+    config_path: str | None = None,
+    progress_callback: Callable[[int, str], None] | None = None,
+    series_slug: str | None = None,
+    book_slug: str | None = None,
+    discovery_method: str | None = None,
+    attribution_provider: str | None = None,
+    attribution_model: str | None = None,
+    use_cache: bool = True,
+) -> "NLPResult":  # noqa: F821
+    """Run the full NLP speaker-attribution pipeline (Stages 1-4).
+
+    Args:
+        ebook_path:            Path to the ebook file.
+        nlp_model:             Override NLP model name.
+        config_path:           Optional config file name or path.
+        progress_callback:     Optional (percent, message) callback.
+        series_slug:           Series slug for cross-book roster merging.
+        book_slug:             Slug for this book (series first-appearance tracking).
+        discovery_method:      Override discovery method.
+        attribution_provider:  Override attribution provider.
+        attribution_model:     Override attribution model.
+        use_cache:             Return cached result if available (default True).
+
+    Returns:
+        NLPResult with characters and annotated chapters.
+    """
+    from .services.nlp_service import full_analysis as _full_analysis
+    return _full_analysis(
+        str(ebook_path),
+        nlp_model=nlp_model,
+        config_path=config_path,
+        progress_callback=progress_callback,
+        series_slug=series_slug,
+        book_slug=book_slug,
+        discovery_method=discovery_method,
+        attribution_provider=attribution_provider,
+        attribution_model=attribution_model,
+        use_cache=use_cache,
+    )
+
+
 def fast_scan(
     ebook_path: str | Path,
     nlp_model: str | None = None,
@@ -149,6 +196,7 @@ def fast_scan(
     book_slug: str | None = None,
     nlp_provider: str | None = None,
     discovery_method: str | None = None,
+    use_cache: bool = True,
 ) -> "FastScanResult":  # noqa: F821
     """Run Stage 1-2 NLP (entity detection + character clustering).
 
@@ -161,6 +209,7 @@ def fast_scan(
         book_slug:         Slug for this book (for series first-appearance tracking).
         nlp_provider:      Override NLP provider ("ollama", "spacy", "booknlp").
         discovery_method:  Override discovery method ("auto", "spacy", "booknlp", "ollama").
+        use_cache:         Return cached result if available (default True).
 
     Returns:
         FastScanResult with characters sorted by mention_count descending.
@@ -175,6 +224,7 @@ def fast_scan(
         book_slug=book_slug,
         nlp_provider=nlp_provider,
         discovery_method=discovery_method,
+        use_cache=use_cache,
     )
 
 
@@ -449,6 +499,10 @@ __all__ = [
     "NLPResult",
     "CharacterInfo",
     "NarrationMode",
+    # NLP pipeline config and tool enums
+    "NLPConfig",
+    "ExtractionTool",
+    "AttributionTool",
     # Ebook reading
     "EpubReader",
     "AudioBuilder",
@@ -475,6 +529,7 @@ __all__ = [
     "parse_book",
     "filter_chapters",
     "fast_scan",
+    "full_analysis",
     # Voice API
     "list_voices",
     "get_voice",
