@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -9,7 +10,7 @@ from typing import TypeVar
 
 _logger = logging.getLogger(__name__)
 
-_RETRYABLE = (OSError, TimeoutError, ConnectionError, UnicodeDecodeError)
+_RETRYABLE = (OSError, TimeoutError, ConnectionError, UnicodeDecodeError, json.JSONDecodeError)
 _NOT_RETRYABLE = (KeyboardInterrupt, SystemExit, ValueError, TypeError, AttributeError)
 
 T = TypeVar("T")

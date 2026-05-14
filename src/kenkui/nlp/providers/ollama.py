@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from kenkui.models import Chapter
 from kenkui.nlp import run_fast_scan
-from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster
+from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster, slugify
 
 if TYPE_CHECKING:
     from kenkui.models import AppConfig
