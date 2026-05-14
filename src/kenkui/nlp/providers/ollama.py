@@ -1,83 +1,50 @@
-"""OllamaProvider — wraps the existing 4-stage Ollama NLP pipeline.
+"""Ollama-backed NLP adapters.
 
-Converts legacy roster output to the new ``CharacterRecord`` schema
-so both providers share a common output contract.
+OllamaExtractionAdapter   — character roster extraction via Ollama LLM.
+OllamaAttributionAdapter  — quote speaker attribution via Ollama LLM.
+OllamaProvider            — legacy wrapper kept for backwards compatibility.
 """
-
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from kenkui.models import AppConfig, Chapter
+from kenkui.models import Chapter
 from kenkui.nlp import run_fast_scan
-from kenkui.nlp.models import (
-    AttributionItem,
-    AttributionResult,
-    CharacterRecord,
-    CharacterRoster,
-    slugify,
-)
+from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster, slugify
 
-_PRESERVED_SPEAKERS = {"NARRATOR", "Unknown"}
+if TYPE_CHECKING:
+    from kenkui.models import AppConfig
+    from kenkui.nlp_config import NLPConfig
 
-
-def _run_attribution_for_chapter(
-    chapter: Chapter,
-    roster: CharacterRoster,
-    nlp_model: str,
-    confidence_threshold: int = 0,
-) -> AttributionResult:
-    """Run the low-level attribution pipeline for a single chapter."""
-    from kenkui.nlp.attribution import attribute_all_chunks
-    from kenkui.nlp.chunker import chunk_paragraphs
-    from kenkui.nlp.llm import LLMClient
-    from kenkui.nlp.quotes import extract_quotes
-
-    llm = LLMClient(nlp_model)
-    quotes = extract_quotes(chapter.paragraphs)
-    chunks = chunk_paragraphs(chapter.paragraphs, quotes)
-    roster_names = [c.canonical_name for c in roster.characters]
-    roster_aliases = {c.canonical_name: list(c.aliases) for c in roster.characters}
-
-    raw = attribute_all_chunks(
-        chunks,
-        quotes,
-        roster_names,
-        llm,
-        roster_aliases,
-        confidence_threshold=confidence_threshold,
-    )
-
-    items = [
-        AttributionItem(
-            quote_id=qid,
-            speaker=item.speaker,
-            emotion=item.emotion,
-            confidence=item.confidence,
-        )
-        for qid, item in raw.items()
-    ]
-    return AttributionResult(attributions=items)
+_logger = logging.getLogger(__name__)
+_PRESERVED_SPEAKERS = frozenset({"NARRATOR", "Unknown"})
 
 
 def _speaker_to_slug(speaker: str, roster: CharacterRoster) -> str:
     """Convert a canonical-name speaker to its roster slug, or preserve special values."""
     if speaker in _PRESERVED_SPEAKERS:
         return speaker
-    # Check roster by canonical_name first (exact match)
     for c in roster.characters:
         if c.canonical_name == speaker:
             return c.slug
-    # Fall back to slugify — handles slight variations
     return slugify(speaker)
 
 
-class OllamaProvider:
-    """Wraps the existing Ollama NLP pipeline behind the NLPProvider protocol."""
+class OllamaExtractionAdapter:
+    """Extracts character roster + coreference using the Ollama pipeline.
 
-    def __init__(self, config: AppConfig) -> None:
-        self.config = config
+    Wraps run_fast_scan() from kenkui.nlp and converts the FastScanResult
+    into a CharacterRoster with CharacterRecord entries.
+    Takes NLPConfig — uses extraction_model.
+
+    Note: book_path is required because run_fast_scan uses it as a cache key.
+    """
+
+    def __init__(self, config: "NLPConfig") -> None:
+        self._config = config
 
     def build_roster(
         self,
@@ -86,18 +53,14 @@ class OllamaProvider:
         progress_callback: Callable[[str], None] | None = None,
         book_path: Path | None = None,
     ) -> CharacterRoster:
-        """Run run_fast_scan and convert output to CharacterRecord roster."""
-        if progress_callback:
-            progress_callback("Building character roster via Ollama")
-
         if book_path is None:
-            raise ValueError("OllamaProvider.build_roster() requires book_path")
+            raise ValueError("OllamaExtractionAdapter.build_roster() requires book_path")
 
-        discovery_method = getattr(self.config, "nlp_discovery_method", "auto") or "auto"
+        discovery_method = "auto"
         fast_scan_result = run_fast_scan(
             chapters,
             book_path,
-            self.config.nlp_model,
+            self._config.extraction_model,
             progress_callback=progress_callback,
             method=discovery_method,
         )
@@ -107,7 +70,6 @@ class OllamaProvider:
         records: list[CharacterRecord] = []
 
         for ag in fast_scan_result.roster.characters:
-            # Handle both CharacterRecord (.canonical_name) and legacy AliasGroup (.canonical)
             _cn = getattr(ag, "canonical_name", None)
             canonical = _cn if isinstance(_cn, str) else getattr(ag, "canonical", "")
             _slug = getattr(ag, "slug", None)
@@ -126,18 +88,23 @@ class OllamaProvider:
 
         return CharacterRoster(characters=records)
 
+
+class OllamaAttributionAdapter:
+    """Attributes quote speakers using the Ollama annotator pipeline.
+
+    Uses the same annotated-chapter format as CloudProvider so both providers
+    produce identical prompts. Takes NLPConfig — uses attribution_model.
+    """
+
+    def __init__(self, config: "NLPConfig") -> None:
+        self._config = config
+
     def attribute_chapter(
         self,
         chapter: Chapter,
         roster: CharacterRoster,
         progress_callback: Callable[[str], None] | None = None,
     ) -> AttributionResult:
-        """Attribute quotes in *chapter* using the annotation-based pipeline.
-
-        Uses the same annotated-chapter format as CloudProvider so both providers
-        produce identical prompts (12-factor Factor IV / X parity). Ollama receives
-        the static and dynamic blocks concatenated as a single prompt string.
-        """
         from kenkui.nlp.quotes import extract_quotes, strip_scare_quotes
         from kenkui.nlp.annotator import (
             annotate_chapter,
@@ -164,6 +131,46 @@ class OllamaProvider:
         dynamic_block = _build_attribution_dynamic_block(annotated_text)
         prompt = f"{static_block}\n\n{dynamic_block}"
 
-        llm = LLMClient(self.config.nlp_model)
+        llm = LLMClient(self._config.attribution_model)
         result = llm.generate(prompt, AttributionResultWire)
         return attribution_wire_to_full(result)
+
+
+# ---------------------------------------------------------------------------
+# Legacy wrapper — keeps nlp_service.py and existing tests working
+# ---------------------------------------------------------------------------
+
+class OllamaProvider:
+    """Legacy provider: wraps OllamaExtractionAdapter + OllamaAttributionAdapter.
+
+    Kept for backwards compatibility. New code should use the adapters directly
+    via NLPPipeline (Phase 9).
+    """
+
+    def __init__(self, config: "AppConfig") -> None:
+        from kenkui.nlp_config import NLPConfig
+        self._nlp_config = NLPConfig.from_app_config(config)
+        self._extraction = OllamaExtractionAdapter(self._nlp_config)
+        self._attribution = OllamaAttributionAdapter(self._nlp_config)
+
+    def build_roster(
+        self,
+        chapters: list[Chapter],
+        series_roster: CharacterRoster | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+        book_path: Path | None = None,
+    ) -> CharacterRoster:
+        return self._extraction.build_roster(
+            chapters,
+            series_roster=series_roster,
+            progress_callback=progress_callback,
+            book_path=book_path,
+        )
+
+    def attribute_chapter(
+        self,
+        chapter: Chapter,
+        roster: CharacterRoster,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> AttributionResult:
+        return self._attribution.attribute_chapter(chapter, roster, progress_callback=progress_callback)

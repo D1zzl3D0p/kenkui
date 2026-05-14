@@ -70,12 +70,36 @@ class NLPConfig(BaseSettings):
         if attribution_tool is None:
             _logger.warning("Unknown nlp_attribution_provider %r; defaulting to OLLAMA", attr_provider)
             attribution_tool = AttributionTool.OLLAMA
+
+        # Coerce enum fields — fall back to defaults when the AppConfig carries
+        # a non-string value (e.g. a MagicMock in tests or an already-enum value).
+        raw_extraction_mode = config.nlp_execution_mode
+        try:
+            extraction_mode = NlpExecutionMode(raw_extraction_mode)
+        except (ValueError, TypeError):
+            extraction_mode = NlpExecutionMode.LOCAL
+
+        raw_attribution_mode = config.attribution_execution_mode
+        try:
+            attribution_mode = AttributionExecutionMode(raw_attribution_mode)
+        except (ValueError, TypeError):
+            attribution_mode = AttributionExecutionMode.LOCAL
+
+        raw_ollama_url = config.ollama_url
+        ollama_url = raw_ollama_url if isinstance(raw_ollama_url, str) else "http://localhost:11434"
+
+        raw_extraction_model = config.nlp_roster_model or config.nlp_model
+        extraction_model = raw_extraction_model if isinstance(raw_extraction_model, str) else "llama3.2"
+
+        raw_attribution_model = config.nlp_attribution_model or config.nlp_model
+        attribution_model = raw_attribution_model if isinstance(raw_attribution_model, str) else "llama3.2"
+
         return cls(
             extraction_tool=extraction_tool,
-            extraction_mode=config.nlp_execution_mode,
-            extraction_model=config.nlp_roster_model or config.nlp_model,
+            extraction_mode=extraction_mode,
+            extraction_model=extraction_model,
             attribution_tool=attribution_tool,
-            attribution_mode=config.attribution_execution_mode,
-            attribution_model=config.nlp_attribution_model or config.nlp_model,
-            ollama_url=config.ollama_url,
+            attribution_mode=attribution_mode,
+            attribution_model=attribution_model,
+            ollama_url=ollama_url,
         )
