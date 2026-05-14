@@ -175,7 +175,7 @@ def test_update_roster_merges_across_calls(tmp_path):
 
 
 def test_fast_scan_passes_series_roster_to_provider(tmp_path):
-    """fast_scan should fetch the series roster and pass it to build_roster."""
+    """fast_scan should fetch the series roster and pass it to pipeline.extract()."""
     from pathlib import Path
     from unittest.mock import MagicMock
     from kenkui.models import Chapter
@@ -190,20 +190,20 @@ def test_fast_scan_passes_series_roster_to_provider(tmp_path):
     existing_series_roster = CharacterRoster(characters=[_rec("jane_eyre", "Jane Eyre")])
     mock_roster_result = CharacterRoster(characters=[_rec("jane_eyre", "Jane Eyre")])
 
-    mock_provider = MagicMock()
-    mock_provider.build_roster.return_value = mock_roster_result
-
     captured_series_roster = []
 
-    def _capture_build_roster(chapters, series_roster=None, progress_callback=None, book_path=None):
+    mock_pipeline = MagicMock()
+
+    def _capture_extract(book_path, chapters, series_roster=None, progress_callback=None, use_cache=True):
         captured_series_roster.append(series_roster)
         return mock_roster_result
 
-    mock_provider.build_roster.side_effect = _capture_build_roster
+    mock_pipeline.extract.side_effect = _capture_extract
 
     with (
         patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
-        patch("kenkui.services.nlp_service.get_provider", return_value=mock_provider),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
         patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
         patch("kenkui.services.nlp_service.cache_roster"),
         patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
@@ -217,6 +217,6 @@ def test_fast_scan_passes_series_roster_to_provider(tmp_path):
             book_slug="jane_eyre_v1",
         )
 
-    # Series roster was fetched and passed to build_roster
+    # Series roster was fetched and passed to pipeline.extract()
     assert len(captured_series_roster) == 1
     assert captured_series_roster[0] is existing_series_roster

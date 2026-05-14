@@ -32,7 +32,8 @@ from kenkui.nlp import (
     get_cached_result,
     get_cached_roster,
 )
-from kenkui.nlp.providers import get_attribution_provider, get_provider
+from kenkui.nlp_config import NLPConfig
+from kenkui.nlp.pipeline import NLPPipeline
 from kenkui.readers import get_reader
 
 # Adapter constants for progress-callback translation (provider string-only → int+str).
@@ -123,20 +124,20 @@ def fast_scan(
     if progress_callback:
         progress_callback(_FAST_SCAN_START_PCT, "Starting NLP scan")
 
-    # Fetch existing series roster before build_roster so providers can inject it.
+    # Fetch existing series roster before extraction so providers can inject it.
     series_roster = None
     if series_slug:
         from kenkui.services.series_service import get_roster as _get_roster
         series_roster = _get_roster(series_slug)
 
-    provider = get_provider(cfg)
-    roster = provider.build_roster(
-        chapters,
-        series_roster=series_roster,
-        progress_callback=_make_adapter(
-            progress_callback, _FAST_SCAN_START_PCT, _FAST_SCAN_BUMP, _FAST_SCAN_CAP
-        ),
+    nlp_config = NLPConfig.from_app_config(cfg)
+    pipeline = NLPPipeline(nlp_config)
+    roster = pipeline.extract(
         book_path=Path(ebook_path),
+        chapters=chapters,
+        series_roster=series_roster,
+        progress_callback=progress_callback,
+        use_cache=False,  # nlp_service handles its own roster cache above
     )
 
     # Update series roster with newly discovered characters.
@@ -231,23 +232,22 @@ def full_analysis(
     if progress_callback:
         progress_callback(_FULL_ROSTER_START_PCT, "Starting NLP analysis")
 
-    provider = get_provider(cfg)
-    attr_provider = get_attribution_provider(cfg)
-
-    # Fetch existing series roster before build_roster so providers can inject it.
+    # Fetch existing series roster before extraction so providers can inject it.
     series_roster = None
     if series_slug:
         from kenkui.services.series_service import get_roster as _get_roster
         series_roster = _get_roster(series_slug)
 
+    nlp_config = NLPConfig.from_app_config(cfg)
+    pipeline = NLPPipeline(nlp_config)
+
     # Phase 1: Build character roster (5–45 %)
-    roster = provider.build_roster(
-        chapters,
-        series_roster=series_roster,
-        progress_callback=_make_adapter(
-            progress_callback, _FULL_ROSTER_START_PCT, _FULL_ROSTER_BUMP, _FULL_ROSTER_CAP
-        ),
+    roster = pipeline.extract(
         book_path=Path(ebook_path),
+        chapters=chapters,
+        series_roster=series_roster,
+        progress_callback=progress_callback,
+        use_cache=False,  # nlp_service handles its own cache
     )
 
     # Update series roster with newly discovered characters.
@@ -268,7 +268,7 @@ def full_analysis(
     attributed_chapters = []
 
     for chapter in chapters:
-        attr_result = attr_provider.attribute_chapter(chapter, roster, progress_callback=attrib_adapt)
+        attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=attrib_adapt)
         segments = _attribution_to_segments(chapter, attr_result, roster)
         attributed_chapters.append(_replace(chapter, segments=segments))
         for item in attr_result.attributions:
@@ -325,12 +325,6 @@ def attribute_only(
     Returns:
         ``NLPResult`` with attributed chapters and quote counts.
     """
-    from collections import defaultdict
-
-    from kenkui.nlp import _attribution_to_segments, book_hash, cache_result
-    from kenkui.nlp.models import CharacterRoster
-    from kenkui.nlp.providers import get_attribution_provider, get_provider
-
     cfg = load_app_config(config_path)
     if nlp_model is not None:
         cfg = cfg.model_copy(update={"nlp_model": nlp_model})
@@ -341,38 +335,22 @@ def attribute_only(
     if attribution_model is not None:
         cfg = cfg.model_copy(update={"nlp_attribution_model": attribution_model})
 
-    provider = get_attribution_provider(cfg)
     _effective_provider = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
 
     if progress_callback:
         progress_callback(5, "Starting attribution")
 
-    attrib_bump = max(1, 90 // max(1, len(chapters)))
-    attrib_adapt = _make_adapter(progress_callback, 5, attrib_bump, 95)
-
-    attribution_counts: dict[str, int] = defaultdict(int)
-    attributed_chapters = []
-
-    for chapter in chapters:
-        attr_result = provider.attribute_chapter(chapter, roster, progress_callback=attrib_adapt)
-        segments = _attribution_to_segments(chapter, attr_result, roster)
-        attributed_chapters.append(_replace(chapter, segments=segments))
-        for item in attr_result.attributions:
-            if item.speaker not in ("NARRATOR", "Unknown"):
-                attribution_counts[item.speaker] += 1
-
-    characters: list[CharacterInfo] = []
-    for rec in roster.characters:
-        ci = AppCharacterRecord.from_nlp(rec).to_character_info()
-        ci.quote_count = attribution_counts.get(rec.slug, 0)
-        characters.append(ci)
-    characters.sort(key=lambda c: c.prominence, reverse=True)
-
-    result = NLPResult(
-        characters=characters,
-        chapters=attributed_chapters,
-        book_hash=book_hash(Path(ebook_path)),
+    nlp_config = NLPConfig.from_app_config(cfg)
+    pipeline = NLPPipeline(nlp_config)
+    result = pipeline.attribute(
+        book_path=Path(ebook_path),
+        chapters=chapters,
+        roster=roster,
+        progress_callback=progress_callback,
+        use_cache=False,
     )
+
+    # Override cache with the effective provider name used by nlp_service
     cache_result(result, Path(ebook_path), provider=_effective_provider)
 
     if progress_callback:
