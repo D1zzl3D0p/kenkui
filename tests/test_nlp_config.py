@@ -1,7 +1,7 @@
 """Tests for NLPConfig."""
 import os
 import pytest
-from kenkui.models import AttributionTool, ExtractionTool, NlpExecutionMode
+from kenkui.models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
 from kenkui.nlp_config import NLPConfig
 
 
@@ -17,6 +17,10 @@ class TestNLPConfigDefaults:
     def test_default_extraction_mode_is_local(self):
         cfg = NLPConfig()
         assert cfg.extraction_mode == NlpExecutionMode.LOCAL
+
+    def test_default_attribution_mode_is_local(self):
+        cfg = NLPConfig()
+        assert cfg.attribution_mode == AttributionExecutionMode.LOCAL
 
     def test_default_models_are_llama(self):
         cfg = NLPConfig()
@@ -58,6 +62,11 @@ class TestNLPConfigFromEnv:
         monkeypatch.setenv("KENKUI_NLP_RETRY_MAX_ATTEMPTS", "5")
         cfg = NLPConfig()
         assert cfg.retry_max_attempts == 5
+
+    def test_attribution_mode_from_env(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_MODE", "modal")
+        cfg = NLPConfig()
+        assert cfg.attribution_mode == AttributionExecutionMode.MODAL
 
 
 class TestExtractionToolEnum:
@@ -103,3 +112,15 @@ class TestNLPConfigFromAppConfig:
         nlp_cfg = NLPConfig.from_app_config(app_cfg)
         assert nlp_cfg.extraction_tool == ExtractionTool.OLLAMA
         assert nlp_cfg.attribution_tool == AttributionTool.BOOKNLP
+
+    def test_litellm_provider_maps_correctly(self):
+        from kenkui.models import AppConfig
+        app_cfg = AppConfig.from_dict({"nlp_provider": "litellm", "nlp_model": "gpt-4"})
+        nlp_cfg = NLPConfig.from_app_config(app_cfg)
+        assert nlp_cfg.extraction_tool == ExtractionTool.LITELLM
+
+    def test_unknown_provider_falls_back_to_ollama(self):
+        from kenkui.models import AppConfig
+        app_cfg = AppConfig.from_dict({"nlp_provider": "unknown_tool"})
+        nlp_cfg = NLPConfig.from_app_config(app_cfg)
+        assert nlp_cfg.extraction_tool == ExtractionTool.OLLAMA

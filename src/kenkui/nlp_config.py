@@ -5,10 +5,14 @@ KENKUI_NLP_EXTRACTION_TOOL=booknlp  → NLPConfig().extraction_tool == Extractio
 """
 from __future__ import annotations
 
+import logging
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
+
+_logger = logging.getLogger(__name__)
 
 
 class NLPConfig(BaseSettings):
@@ -32,7 +36,11 @@ class NLPConfig(BaseSettings):
     # Tool endpoints
     ollama_url: str = "http://localhost:11434"
     litellm_api_base: str | None = None
-    litellm_api_key: str | None = Field(None, alias="LITELLM_API_KEY")
+    litellm_api_key: str | None = Field(
+        None,
+        alias="LITELLM_API_KEY",
+        description="Read from LITELLM_API_KEY (no prefix) for cross-project compat.",
+    )
 
     # Retry policy
     retry_max_attempts: int = 3
@@ -46,17 +54,27 @@ class NLPConfig(BaseSettings):
         _tool_map: dict[str, ExtractionTool] = {
             "ollama": ExtractionTool.OLLAMA,
             "booknlp": ExtractionTool.BOOKNLP,
+            "litellm": ExtractionTool.LITELLM,
         }
         _attr_map: dict[str, AttributionTool] = {
             "ollama": AttributionTool.OLLAMA,
             "booknlp": AttributionTool.BOOKNLP,
+            "litellm": AttributionTool.LITELLM,
         }
         attr_provider = config.nlp_attribution_provider or config.nlp_provider
+        extraction_tool = _tool_map.get(config.nlp_provider)
+        if extraction_tool is None:
+            _logger.warning("Unknown nlp_provider %r; defaulting to OLLAMA", config.nlp_provider)
+            extraction_tool = ExtractionTool.OLLAMA
+        attribution_tool = _attr_map.get(attr_provider)
+        if attribution_tool is None:
+            _logger.warning("Unknown nlp_attribution_provider %r; defaulting to OLLAMA", attr_provider)
+            attribution_tool = AttributionTool.OLLAMA
         return cls(
-            extraction_tool=_tool_map.get(config.nlp_provider, ExtractionTool.OLLAMA),
+            extraction_tool=extraction_tool,
             extraction_mode=config.nlp_execution_mode,
             extraction_model=config.nlp_roster_model or config.nlp_model,
-            attribution_tool=_attr_map.get(attr_provider, AttributionTool.OLLAMA),
+            attribution_tool=attribution_tool,
             attribution_mode=config.attribution_execution_mode,
             attribution_model=config.nlp_attribution_model or config.nlp_model,
             ollama_url=config.ollama_url,
