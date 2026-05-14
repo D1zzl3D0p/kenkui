@@ -62,6 +62,7 @@ _THIRD_PARTY_WARNING_LOGGERS: tuple[str, ...] = (
     "transformers",
     "huggingface_hub",
     "tokenizers",
+    "pocket_tts",
     # Async / concurrency
     "asyncio",
     "concurrent.futures",

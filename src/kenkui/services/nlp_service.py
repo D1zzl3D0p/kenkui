@@ -72,6 +72,7 @@ def fast_scan(
     book_slug: str | None = None,
     nlp_provider: str | None = None,
     discovery_method: str | None = None,
+    use_cache: bool = True,
 ) -> FastScanResult:
     """Run Stage 1-2 NLP (quote extraction + entity clustering + mention counting).
 
@@ -109,11 +110,12 @@ def fast_scan(
     _discovery_method = getattr(cfg, "nlp_discovery_method", "auto") or "auto"
 
     # Return cached result before the expensive parse + NLP pass.
-    cached = get_cached_roster(Path(ebook_path), method=_discovery_method if _discovery_method != "auto" else None, provider=nlp_provider)
-    if cached is not None:
-        if progress_callback:
-            progress_callback(100, "Scan complete (cached)")
-        return cached
+    if use_cache:
+        cached = get_cached_roster(Path(ebook_path), method=_discovery_method if _discovery_method != "auto" else None, provider=nlp_provider)
+        if cached is not None:
+            if progress_callback:
+                progress_callback(100, "Scan complete (cached)")
+            return cached
 
     reader = get_reader(Path(ebook_path))
     chapters = reader.get_chapters()
@@ -177,6 +179,7 @@ def full_analysis(
     discovery_method: str | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
+    use_cache: bool = True,
 ) -> NLPResult:
     """Run the full NLP speaker-attribution pipeline.
 
@@ -215,11 +218,12 @@ def full_analysis(
     _attr_provider_name = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
 
     # Return cached result before the expensive parse + NLP pass.
-    cached = get_cached_result(Path(ebook_path), provider=_attr_provider_name)
-    if cached is not None:
-        if progress_callback:
-            progress_callback(100, "Analysis complete (cached)")
-        return cached
+    if use_cache:
+        cached = get_cached_result(Path(ebook_path), provider=_attr_provider_name)
+        if cached is not None:
+            if progress_callback:
+                progress_callback(100, "Analysis complete (cached)")
+            return cached
 
     reader = get_reader(Path(ebook_path))
     chapters = reader.get_chapters()

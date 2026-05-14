@@ -204,6 +204,7 @@ def test_full_analysis_calls_provider_build_roster_and_attribute_chapter(tmp_pat
     with (
         patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
         patch("kenkui.services.nlp_service.get_provider", return_value=mock_provider),
+        patch("kenkui.services.nlp_service.get_attribution_provider", return_value=mock_provider),
         patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
         patch("kenkui.services.nlp_service.cache_result"),
         patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),

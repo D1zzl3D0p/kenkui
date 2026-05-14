@@ -368,86 +368,95 @@ class AudioBuilder:
 
         pool: ProcessPoolExecutor | None = None
         try:
-            with ProcessPoolExecutor(max_workers=self.cfg.workers) as pool:
-                futures = {}
-                for idx, ch in enumerate(chapters):
-                    if self.pause_check is not None and self.pause_check():
-                        self.was_paused = True
-                        break
-                    info = chapter_batch_info.get(ch.title, (0, 0, idx == 0))
-                    is_first = bool(info[2]) if len(info) > 2 else (idx == 0)
-                    fut = pool.submit(
-                        worker_process_chapter,
-                        ch,
-                        cfg_dict,
-                        self.temp_dir,
-                        queue,  # type: ignore
-                        is_first,
-                    )
-                    futures[fut] = ch
+            # Do NOT use `with ProcessPoolExecutor(...) as pool:` — Python's context
+            # manager calls shutdown(wait=True) before re-raising KeyboardInterrupt,
+            # blocking until every worker finishes (which can take minutes per chapter).
+            # Managing the pool manually lets us terminate running processes immediately.
+            pool = ProcessPoolExecutor(max_workers=self.cfg.workers)
+            futures = {}
+            for idx, ch in enumerate(chapters):
+                if self.pause_check is not None and self.pause_check():
+                    self.was_paused = True
+                    break
+                info = chapter_batch_info.get(ch.title, (0, 0, idx == 0))
+                is_first = bool(info[2]) if len(info) > 2 else (idx == 0)
+                fut = pool.submit(
+                    worker_process_chapter,
+                    ch,
+                    cfg_dict,
+                    self.temp_dir,
+                    queue,  # type: ignore
+                    is_first,
+                )
+                futures[fut] = ch
 
-                while True:
-                    while not queue.empty():
-                        try:
-                            msg = queue.get_nowait()
-                            event, pid = msg[0], msg[1]
-                            if event == "START":
-                                worker_state[pid] = {
-                                    "title": msg[2],
-                                    "total": msg[3],
-                                    "current": 0,
-                                    "total_chars": msg[4] if len(msg) > 4 else 0,
-                                    "is_first": msg[5] if len(msg) > 5 else False,
+            while True:
+                while not queue.empty():
+                    try:
+                        msg = queue.get_nowait()
+                        event, pid = msg[0], msg[1]
+                        if event == "START":
+                            worker_state[pid] = {
+                                "title": msg[2],
+                                "total": msg[3],
+                                "current": 0,
+                                "total_chars": msg[4] if len(msg) > 4 else 0,
+                                "is_first": msg[5] if len(msg) > 5 else False,
+                            }
+                            chapter_start_times[pid] = time.monotonic()
+                        elif event == "UPDATE":
+                            chars = msg[5] if len(msg) > 5 else 1000
+                            self._completed_batches += msg[2]
+                            eta_tracker.update(chars)
+                            if pid in worker_state:
+                                worker_state[pid]["current"] += msg[2]
+                                self._current_chapter = worker_state[pid].get("title", "")
+                            eta_seconds = self._calculate_eta(eta_tracker)
+                            self._report_progress(self._current_chapter, eta_seconds)
+                        elif event == "DONE":
+                            if pid in worker_state:
+                                if pid in chapter_start_times:
+                                    elapsed = time.monotonic() - chapter_start_times[pid]
+                                    chars = worker_state[pid].get("total_chars", 0)
+                                    eta_tracker.on_chapter_complete(chars, elapsed)
+                                    del chapter_start_times[pid]
+                                del worker_state[pid]
+                                completed_chapters += 1
+                        elif event == "ERROR":
+                            worker_errors.append(
+                                {
+                                    "pid": pid,
+                                    "chapter": msg[2],
+                                    "message": msg[3],
+                                    "traceback": msg[4],
                                 }
-                                chapter_start_times[pid] = time.monotonic()
-                            elif event == "UPDATE":
-                                chars = msg[5] if len(msg) > 5 else 1000
-                                self._completed_batches += msg[2]
-                                eta_tracker.update(chars)
-                                if pid in worker_state:
-                                    worker_state[pid]["current"] += msg[2]
-                                    self._current_chapter = worker_state[pid].get("title", "")
-                                eta_seconds = self._calculate_eta(eta_tracker)
-                                self._report_progress(self._current_chapter, eta_seconds)
-                            elif event == "DONE":
-                                if pid in worker_state:
-                                    if pid in chapter_start_times:
-                                        elapsed = time.monotonic() - chapter_start_times[pid]
-                                        chars = worker_state[pid].get("total_chars", 0)
-                                        eta_tracker.on_chapter_complete(chars, elapsed)
-                                        del chapter_start_times[pid]
-                                    del worker_state[pid]
-                                    completed_chapters += 1
-                            elif event == "ERROR":
-                                worker_errors.append(
-                                    {
-                                        "pid": pid,
-                                        "chapter": msg[2],
-                                        "message": msg[3],
-                                        "traceback": msg[4],
-                                    }
-                                )
-                            elif event == "LOG":
-                                worker_logs.append(f"[{pid}] {msg[2]}")
-                                if len(worker_logs) > 20:
-                                    worker_logs.pop(0)
-                        except Exception:
-                            break
-
-                    if all(f.done() for f in futures) and not worker_state and queue.empty():
+                            )
+                        elif event == "LOG":
+                            worker_logs.append(f"[{pid}] {msg[2]}")
+                            if len(worker_logs) > 20:
+                                worker_logs.pop(0)
+                    except Exception:
                         break
 
-                for future in as_completed(futures):
-                    res = future.result()
-                    if res:
-                        results.append(res)
+                if all(f.done() for f in futures) and not worker_state and queue.empty():
+                    break
+
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    results.append(res)
 
         except KeyboardInterrupt:
             print("Interrupted by user. Shutting down workers...")
             if pool is not None:
+                # Terminate running worker processes immediately (SIGTERM).
+                for proc in pool._processes.values():
+                    proc.terminate()
                 pool.shutdown(wait=False, cancel_futures=True)
             return []
         finally:
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
             if worker_errors:
                 print("Worker errors encountered:")
                 for err in worker_errors:

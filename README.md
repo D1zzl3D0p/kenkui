@@ -5,289 +5,170 @@
 ![License](https://img.shields.io/github/license/D1zzl3D0p/kenkui)
 ![PyPI](https://img.shields.io/pypi/v/kenkui)
 
-> **Freaky fast audiobook generation from ebooks. No GPU. No nonsense.**
+> **Ebook-to-audiobook conversion engine. No GPU. No nonsense.**
 
-kenkui turns ebooks into high-quality M4B audiobooks using state-of-the-art text-to-speech — **entirely on CPU**, and faster than anything else I've used.
+kenkui is a Python library that converts ebooks into high-quality M4B audiobooks using [Kyutai's pocket-tts](https://github.com/kyutai-labs/pocket-tts), running entirely on CPU.
 
-It's built on top of [Kyutai's pocket-tts](https://github.com/kyutai-labs/pocket-tts), with all the annoying parts handled for you: chapter parsing, batching, metadata, covers, voices, and sane defaults.
-
-If you have ebooks and want audiobooks, kenkui is for you.
+**Looking for the interactive CLI?** Install [kentui](https://github.com/D1zzl3D0p/kentui) — it's the interactive front-end built on top of this library.
 
 ---
 
-## ✨ Features
-
-- Freaky fast audiobook generation
-- No GPU needed, 100% CPU
-- Super high-quality text-to-speech
-- Multithreaded
-- Supports EPUB, MOBI/AZW, and FB2
-- Interactive hub with live status panel and Escape to go back
-- Job queue with live progress dashboard
-- **Multi-voice narration** — different voices for different characters, powered by an LLM; NLP scan runs unattended during processing so you can queue and walk away
-- **Voice pool template** — persistent global defaults that map role + gender + rank to specific voices, applied automatically across every book
-- **Chapter-voice mode** — assign a distinct voice to each chapter
-- **Credits chapter** — synthesized audio appended to every m4b with title, author, and cast (configurable)
-- Three tiers of voices: compiled, built-in, and custom
-- Flexible chapter selection with presets and manual override
-- Broadcast-quality audio post-processing chain
-- Requirement validation at submission — warns about missing API keys or low VRAM before the job starts
-- Automatic cover embedding
-- Sensible defaults, minimal configuration
-
----
-
-## 🚀 Quick Start
-
-kenkui is intentionally easy to install and easy to use.
-
-### One-line installer (macOS / Linux)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/D1zzl3D0p/kenkui/main/install.sh | bash
-```
-
-### One-line installer (Windows)
-
-```powershell
-powershell -Command "irm https://raw.githubusercontent.com/D1zzl3D0p/kenkui/main/install.ps1 | iex"
-```
-
-### Requirements
-
-- Python **3.12+**
-- One Python installer: `uv` (recommended), `pip`, or `pipx`
-
-### Manual install
-
-```bash
-uv tool install kenkui
-```
-
-Or with pip/pipx:
+## Install
 
 ```bash
 pip install kenkui
-# or
-pipx install kenkui
 ```
 
-Compiled voices (~440 MB) are downloaded automatically on first run. To download them ahead of time:
+Or with uv:
 
 ```bash
-kenkui voices download
-```
-
-### Run
-
-```bash
-kenkui book.epub
-```
-
-That's it. An interactive wizard walks you through the setup, then kenkui queues the job, starts the worker, and shows a live progress dashboard. You'll get a `book.m4b` alongside your ebook when it's done.
-
----
-
-## 📚 Usage
-
-### Interactive wizard (default)
-
-```bash
-kenkui book.epub
-```
-
-Opens a configuration hub showing a live status panel of your current settings, then a menu:
-
-```
-┌─ Current Settings ───────────────────────────────────────────┐
-│  Mode:          Multi-voice                                   │
-│  NLP:           Anthropic · claude-haiku-4-5                 │
-│  TTS Provider:  Kokoro · local                               │
-│  Narrator:      sarah                                         │
-│  Chapters:      content-only (42 selected)                   │
-│  Quality:       temp 0.8 · 30 LSD steps · 96k               │
-└───────────────────────────────────────────────────────────────┘
-
-  > Submit Job
-    Narration Mode ↠
-    Audio Quality ↠
-    Post-Processing ↠
-    Advanced ↠
-    Cancel
-```
-
-**Narration Mode** submenu: choose Single / Multi-voice / Chapter-voice, then (for multi-voice) NLP provider and model, then narrator voice. No character scan happens here — that runs unattended when the worker picks up the job.
-
-**Advanced** submenu: chapter selection (preset + checkbox list) and voice management.
-
-Press **Escape** at any step to go back. All settings persist to `~/.config/kenkui/last_job_profile.toml` and pre-load on the next run.
-
-After submitting, kenkui prints a confirmation with the job's requirements and any warnings (missing API key, low VRAM), then auto-starts the queue with a live Rich dashboard.
-
-### Headless mode
-
-Pass a config file with `-c` to skip the wizard entirely:
-
-```bash
-kenkui book.epub -c my-config.toml
-```
-
-Loads config, queues the job, starts the worker, and streams progress to the terminal. Exits 0 on success, 1 on failure.
-
-### Add to queue without starting
-
-```bash
-kenkui add book.epub
-```
-
-Queues the job interactively but doesn't auto-start processing. Useful when you want to queue several books first.
-
-```bash
-# Headless queue-only (no auto-start)
-kenkui add book.epub -c my-config.toml
-```
-
-### Queue management
-
-```bash
-# Snapshot: show all jobs in a Rich table and exit
-kenkui queue
-
-# Live-refreshing dashboard (Ctrl+C to exit)
-kenkui queue --live
-
-# Start processing the next pending job
-kenkui queue start
-
-# Start processing + enter live dashboard
-kenkui queue start --live
-
-# Stop the current job
-kenkui queue stop
+uv add kenkui
 ```
 
 ---
 
-## 🎙️ Narration Modes
+## Quick Start
 
-### Single voice
+```python
+import kenkui
 
-The default. One voice narrates everything.
+# Load config (creates default at ~/.config/kenkui/config.toml on first run)
+config = kenkui.load_config()
 
-### Multi-voice (character narration)
+# Build a ProcessingConfig
+proc = kenkui.ProcessingConfig(
+    ebook_path="book.epub",
+    output_path=".",
+    voice="alba",
+)
 
-kenkui uses an NLP pipeline to identify characters in the book and assigns each a distinct voice. The narrator gets its own voice too.
-
-**The NLP scan is deferred** — it runs unattended during job processing, not during setup. You pick your NLP provider, model, and narrator voice in the hub, then queue and walk away. Voice assignment happens automatically when the worker starts.
-
-Two NLP backends are available: **Ollama** (local, default) and **cloud providers** (Anthropic, OpenAI, Google). Cloud providers use large-context models that process the whole book in fewer passes and generally produce higher-quality results.
-
-#### Ollama (default)
-
-**Requirements:**
-- [Ollama](https://ollama.com) running locally (`ollama serve`)
-- NLP model pulled (default: `llama3.2`) — `ollama pull llama3.2`
-- spaCy model — kenkui downloads this automatically if missing
-
-#### Cloud providers (Anthropic, OpenAI, Google)
-
-**One-time setup:**
-
-```bash
-kenkui configure-provider
+# Run the conversion
+ok = kenkui.run_job(proc)
 ```
-
-Prompts for your provider choice, API key, and preferred model. Saves credentials to `~/.config/kenkui/credentials.toml` with restricted permissions (`0600`).
-
-Then set `nlp_provider` in your config to activate:
-
-```toml
-nlp_provider = "anthropic"   # or "openai" or "google"
-```
-
-No Ollama or spaCy required when using a cloud provider.
-
-**Default models:**
-
-| Provider | Default model |
-|----------|--------------|
-| `anthropic` | `claude-sonnet-4-6` |
-| `openai` | `gpt-4o` |
-| `google` | `gemini/gemini-2.0-flash` |
-
-Override with `nlp_model` in your config. Any [LiteLLM-supported model string](https://docs.litellm.ai/docs/providers) works.
-
-**How voice assignment works:**
-
-After the deferred scan completes, voices are assigned using a three-tier priority system:
-
-1. **Series record** — named character → pinned voice (highest priority)
-2. **Voice pool template** — role + gender + rank → voice (see below)
-3. **Round-robin pool** — any remaining characters
-
-When a multi-voice job finishes, kenkui prints a notification:
-
-> *Cast saved — `kenkui voices cast <title>` to review · edit `~/.config/kenkui/series/<slug>.toml` to adjust*
-
-The NLP provider and model are configurable via `nlp_provider` and `nlp_model` in your config.
-
-### Chapter-voice mode
-
-Assign a distinct voice to each chapter. The wizard presents each chapter title and lets you pick a voice for it.
 
 ---
 
-## 🗂️ Voice Pool Template
+## Features
 
-The voice pool template is a persistent file (`~/.config/kenkui/voice_pool.toml`) that pre-assigns voices by character role, gender, and rank. It applies automatically to every multi-voice job without any per-book setup.
+- Freaky fast M4B audiobook generation — 100% CPU, no GPU
+- Multithreaded chapter processing
+- Supports EPUB, MOBI/AZW/AZW3/AZW4, and FB2
+- Multi-voice narration via NLP speaker attribution (Ollama, Anthropic, OpenAI, Google)
+- Voice pool template for automatic voice assignment by role + gender + rank
+- Chapter-voice mode: distinct voice per chapter
+- Broadcast-quality audio post-processing chain
+- Credits chapter: synthesized audio appended to every m4b
+- Flexible chapter selection (presets + manual override)
+- Series support: cross-book character roster with pinned voice assignments
 
-```toml
-[protagonist.male]
-1 = "david"
-2 = "james"
-pool = ["oliver", "ethan"]   # round-robin for rank 3+
+---
 
-[protagonist.female]
-1 = "sarah"
-pool = ["emma", "claire"]
+## API Reference
 
-[protagonist.other]
-pool = ["alex"]
+### Config
 
-[supporting.male]
-pool = ["oliver", "ethan", "marcus"]
+```python
+config = kenkui.load_config()                  # default config
+config = kenkui.load_config("fast-mode")       # named config
+config = kenkui.load_config("/path/to/cfg.toml")
 
-[supporting.female]
-pool = ["emma", "claire", "nina"]
+kenkui.save_config(config)
+kenkui.save_config(config, "fast-mode")
 
-[supporting.other]
-pool = ["alex"]
-
-[minor]
-pool = []  # fallback: any non-excluded voice
+names: list[str] = kenkui.list_configs()
 ```
 
-Characters are ranked by dialogue count within their gender group. Rank 1 is the character with the most dialogue. Series record assignments override template assignments for any character already pinned in a series file.
+### Book parsing
 
-If no template exists (or it's empty), kenkui falls back entirely to round-robin pool assignment (the previous behaviour).
+```python
+result = kenkui.parse_book("book.epub")
+# result.chapters, result.metadata, result.book_hash
 
-**Edit it directly,** or use `kenkui voices` → Manage voice pool to populate it from your active voice list.
+filtered = kenkui.filter_chapters(result.book_hash, selection)
+```
+
+### NLP
+
+```python
+# Stage 1-2: entity scan + character clustering
+scan = kenkui.fast_scan("book.epub", nlp_model="llama3.2")
+# scan.characters: list[CharacterInfo]
+
+# Stages 1-4: full pipeline with speaker attribution
+result = kenkui.full_analysis(
+    "book.epub",
+    nlp_model="llama3.2",
+    progress_callback=lambda pct, msg: print(f"{pct}% {msg}"),
+)
+# result.characters, result.chapters (annotated)
+```
+
+### Voices
+
+```python
+voices = kenkui.list_voices()
+voices = kenkui.list_voices(gender="Female", accent="British", source="compiled")
+
+voice = kenkui.get_voice("alba")   # VoiceInfo | None
+
+cast = kenkui.suggest_cast(
+    roster=scan.characters,
+    excluded_voices=["alba"],
+    default_voice="sarah",
+)
+# cast.speaker_voices: dict[str, str]
+
+narrator = kenkui.recommend_narrator(scan.characters, default_voice="alba")
+
+result = kenkui.exclude_voice("marius")   # ExcludeResult
+result = kenkui.include_voice("marius")   # IncludeResult
+
+preview = kenkui.audition_voice("alba", text="Hello world.")
+# preview.audio_path, preview.duration_ms
+
+dl = kenkui.download_voice(force=False)   # DownloadResult
+dl = kenkui.fetch_voice(repo_id="user/repo")
+```
+
+### Series
+
+```python
+series_list = kenkui.list_series()
+entry = kenkui.get_series("my-series")
+entry = kenkui.create_series("My Series")
+kenkui.update_series(entry)
+```
+
+### HuggingFace auth
+
+```python
+result = kenkui.authenticate_huggingface("hf_token_here")
+# result.authenticated, result.username
+```
+
+### Job runner
+
+```python
+from kenkui import ProcessingConfig, NarrationMode
+
+config = ProcessingConfig(
+    ebook_path="book.epub",
+    output_path=".",
+    voice="alba",
+    narration_mode=NarrationMode.SINGLE,
+    chapter_filters=[FilterOperation(type="preset", value="content-only")],
+)
+
+ok: bool = kenkui.run_job(config)
+ok: bool = kenkui.run_job(
+    config,
+    progress_callback=lambda pct, chapter, eta: print(f"{pct:.0f}% {chapter}"),
+)
+```
 
 ---
 
-## 🎬 Credits Chapter
-
-Every generated m4b ends with a synthesized credits segment narrated by the narrator voice. No chapter marker is added, so chapter navigation in players is unaffected.
-
-Default script:
-
-> *"This audiobook was generated with kenkui. [Title] by [Author]. [If multi-voice: Cast: Character Name, voiced by voice-name. ...] [Acknowledgements.] [License.]"*
-
-Single-voice jobs omit the cast list. Configure or disable in `kenkui configure` (Credits section) or via the config keys `credits_enabled`, `credits_acknowledgements`, and `credits_license`.
-
----
-
-## 🎭 Voice System
+## Voice System
 
 Voices come in three tiers:
 
@@ -297,239 +178,30 @@ Voices come in three tiers:
 | **Built-in** | 8 pocket-tts defaults | No |
 | **Custom** | `.wav` files (user-provided or fetched) | Yes (HuggingFace) |
 
-**Built-in voices:**
-```
-alba, marius, javert, jean, fantine, cosette, eponine, azelma
-```
-
-### Voice manager (interactive TUI)
-
-```bash
-kenkui voices
-```
-
-Launches an interactive voice manager: browse and audition voices, manage the auto-assignment exclusion pool, and look up the character cast for a completed multi-voice book.
-
-### Listing voices
-
-```bash
-kenkui voices list
-
-# Filter by metadata
-kenkui voices list --gender Female
-kenkui voices list --accent Scottish
-kenkui voices list --dataset VCTK
-kenkui voices list --source compiled
-```
-
-### Auditioning voices
-
-```bash
-kenkui voices audition <voice>
-
-# Custom preview text
-kenkui voices audition <voice> --text "Your preview text here."
-```
-
-Synthesizes a short clip and opens it in your system audio player.
-
-### Downloading compiled voices
-
-Compiled voices are downloaded automatically on first run. To download them manually or re-download:
-
-```bash
-kenkui voices download
-
-# Force a fresh re-download
-kenkui voices download --force
-```
-
-Voices are stored at `~/.local/share/kenkui/voices/`.
-
-### Fetching custom voices
-
-```bash
-kenkui voices fetch --repo user/repo-name
-
-# Or set an env var
-KENKUI_VOICES_REPO=user/repo-name kenkui voices fetch
-```
-
-Downloads `.wav` files from a HuggingFace repo to `~/.local/share/kenkui/voices/uncompiled/`. Requires a free HuggingFace account (see FAQ).
-
-### Managing the auto-assignment pool
-
-```bash
-# Exclude a voice from multi-voice auto-assignment
-kenkui voices exclude <voice>
-
-# Restore an excluded voice
-kenkui voices include <voice>
-```
-
-Excluded voices are still available for manual assignment in the wizard; they're just skipped during automatic gender-based matching.
-
-### Looking up a book's cast
-
-```bash
-kenkui voices cast <title>
-```
-
-Displays the character→voice cast for a completed multi-voice book (fuzzy-matched by title).
-
-### Using your own voice
-
-Record a **5–10 second** clip of clean speech with minimal background noise or crosstalk. Cleaning the audio makes a noticeable difference — tools like Adobe's Enhance Speech work well:
-<https://podcast.adobe.com/en/enhance>
-
-You can pass a local `.wav` file directly in the wizard, or use a Hugging Face URL:
-
-```
-hf://user/repo/voice.wav
-```
+**Built-in voices:** `alba, marius, javert, jean, fantine, cosette, eponine, azelma`
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 kenkui uses TOML config files stored at `~/.config/kenkui/` (XDG).
-
-```bash
-# Create or edit the default config
-kenkui config default
-
-# Create a named config
-kenkui config fast-mode
-
-# Use a named config
-kenkui book.epub -c fast-mode
-```
-
-Named configs without a path separator are automatically looked up in `~/.config/kenkui/`.
-
-### Key settings
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `workers` | `cpu_count - 2` | Parallel TTS worker processes |
 | `m4b_bitrate` | `96k` | Output audio bitrate |
-| `temp` | `0.7` | Sampling temperature (lower = stable, higher = expressive) |
-| `lsd_decode_steps` | `1` | LSD decode steps (higher = better quality, slower) |
-| `noise_clamp` | off | Noise clamp (~3.0 reduces audio glitches) |
-| `eos_threshold` | `-4.0` | End-of-speech detection threshold |
-| `frames_after_eos` | auto | Frames after EOS cutoff (0 = suppress trailing noise) |
-| `default_voice` | `alba` | Fallback voice when no per-job override |
-| `default_chapter_preset` | `content-only` | Default chapter filter preset |
-| `default_output_dir` | next to source | Where to write output files |
-| `pause_line_ms` | `800` | Pause between lines (ms) |
-| `pause_chapter_ms` | `2000` | Pause between chapters (ms) |
-| `pause_scene_break_ms` | `4000` | Pause at scene breaks (ms) |
-| `nlp_provider` | `ollama` | NLP backend: `"ollama"`, `"anthropic"`, `"openai"`, `"google"`, or any LiteLLM model prefix |
-| `nlp_model` | `llama3.2` | Model for multi-voice speaker attribution; `""` = use provider default from credentials |
-| `nlp_confidence_threshold` | `0` | Min attribution confidence score; 0 = second-pass disabled |
-| `nlp_review_model` | `""` | Ollama model for second-pass retry; `""` = same as `nlp_model` |
-| `excluded_voices` | `[]` | Voices excluded from auto-assignment (still available manually) |
-| `credits_enabled` | `true` | Append synthesized credits audio to every m4b |
-| `credits_acknowledgements` | `""` | Text appended to the credits after the cast list |
-| `credits_license` | `""` | License text appended at the end of the credits |
-
-### Per-job quality overrides
-
-The interactive wizard lets you override quality settings for a single job without changing your config. These are the same settings as above, prefixed with `job_`:
-
-`job_temp`, `job_lsd_decode_steps`, `job_noise_clamp`, `job_eos_threshold`, `job_m4b_bitrate`, `job_pause_line_ms`, `job_pause_chapter_ms`, `job_frames_after_eos`
-
----
-
-## 📖 Chapter Selection
-
-The wizard lets you choose which chapters to include. Available presets:
-
-| Preset | Description |
-|--------|-------------|
-| `content-only` | Body chapters only, skips front/back matter *(default)* |
-| `chapters-only` | Titled chapters only |
-| `with-parts` | Chapters and part headings |
-| `all` | Every item in the ebook |
-| `none` | Skip everything |
-
-After selecting a preset, the wizard shows a checkbox list of all chapters with the preset's defaults pre-selected. You can toggle individual chapters from there.
-
----
-
-## 🔊 Audio Post-Processing
-
-kenkui applies a broadcast-quality effects chain to every chapter WAV before stitching:
-
-1. Noise reduction
-2. High-pass filter (removes low-end rumble)
-3. Low shelf EQ (reduces boominess)
-4. Presence boost (clarity)
-5. De-esser
-6. Compressor
-7. Limiter
-8. Autogain (EBU R128 normalization)
-
-Final loudness normalization is available as an optional step. All parameters are configurable via the `[post_processing]` section of your config.
-
----
-
-## FAQ
-
-**Do I need a GPU?**
-No. kenkui is 100% CPU-based.
-
-**Is it actually fast?**
-Yes. That's the entire point of the project.
-
-**What output format does it use?**
-M4B, with chapters, metadata, and embedded covers.
-
-**What ebook formats does it support?**
-EPUB, MOBI/AZW/AZW3/AZW4, and FB2.
-
-**Can it generate MP3s?**
-No. This is intentional — M4B is a significantly better format for audiobooks.
-
-**How does multi-voice narration work?**
-kenkui runs a two-stage NLP pipeline: first a character scan builds a roster of characters and their aliases; then an LLM pass attributes each dialogue segment to its speaker. Both stages run **unattended during job processing** — not during the setup wizard. After the scan, voices are assigned using a three-tier priority system: series record (pinned) → voice pool template (role + gender + rank) → round-robin pool. The result is a speaker map where each character speaks in their assigned voice and the narrator fills everything else. With the default Ollama backend this runs entirely locally (BookNLP + spaCy + Ollama). With a cloud provider (Anthropic, OpenAI, Google) the whole-book pass runs in a single large-context call, which is faster and generally more accurate.
-
-**Do I need Ollama for multi-voice?**
-No. You can use Ollama (local, default) or a cloud provider (Anthropic, OpenAI, Google). With Ollama, nothing leaves your machine. With a cloud provider, your book text is sent to the provider's API — the same text that's in the ebook file. Run `kenkui configure-provider` to set up a cloud provider.
-
-**What is the voice pool template?**
-A TOML file (`~/.config/kenkui/voice_pool.toml`) that maps role + gender + rank to specific voices. It applies automatically to every multi-voice job, so your preferred voices are used without any per-book setup. See the Voice Pool Template section above.
-
-**Why do I need a HuggingFace account for custom voices?**
-The pocket-tts model is gated on HuggingFace, meaning the authors require users to accept their terms before downloading. This only applies to custom uncompiled `.wav` voices — compiled voices and built-ins require no authentication at all.
-
-When you first use a custom voice, kenkui guides you through creating a free HuggingFace account, generating a read-only token, and accepting the model's terms. You only need to do this once.
-
-**Where are voices stored?**
-Compiled voices are downloaded to `~/.local/share/kenkui/voices/compiled/` on first run. Custom voices go to `~/.local/share/kenkui/voices/uncompiled/`. Run `kenkui voices download --force` to re-download from scratch.
-
-**Does it upload my books anywhere?**
-With the default Ollama backend: no. Everything runs locally and no book text leaves your machine. If you configure a cloud NLP provider (Anthropic, OpenAI, Google), the book text is sent to that provider's API for the character scan and attribution pass. Nothing else is uploaded.
-
-**Why isn't kenkui finding my ebook in a hidden directory?**
-kenkui doesn't search hidden directories by default. Pass the file directly:
-
-```bash
-kenkui /path/to/hidden/directory/book.epub
-```
+| `temp` | `0.7` | Sampling temperature |
+| `lsd_decode_steps` | `1` | LSD decode steps |
+| `default_voice` | `alba` | Fallback voice |
+| `nlp_provider` | `ollama` | NLP backend |
+| `nlp_model` | `llama3.2` | Model for speaker attribution |
+| `credits_enabled` | `true` | Append synthesized credits audio |
 
 ---
 
 ## Non-Goals
 
-kenkui is not meant to be:
-
-- A general-purpose text-to-speech framework
-- A GUI application
-- An MP3 audiobook generator
-- A pluggable frontend for every TTS backend available
-
-The focus is narrow by design: fast, high-quality audiobook generation from ebooks, with minimal friction.
+kenkui is not a general-purpose TTS framework, a GUI app, or an MP3 generator. The focus is narrow: fast, high-quality audiobook generation from ebooks.
 
 ---
 
@@ -554,4 +226,4 @@ Commercial use is permitted with attribution.
 
 Licensed under [Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/).
 
-> **Note:** Compiled voices sourced from EARS (identifiable by `EARS` in the voice name via `kenkui voices list`) **may not be used for commercial purposes**. If you are building a commercial product with kenkui, use only VCTK-sourced or built-in voices.
+> **Note:** Compiled voices sourced from EARS (identifiable by `EARS` in the voice name via `kenkui.list_voices()`) **may not be used for commercial purposes**. If you are building a commercial product with kenkui, use only VCTK-sourced or built-in voices.

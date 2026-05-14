@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-12
+
+### Changed
+
+- **Library-only package**: kenkui is now a pure Python library with no CLI entry point. The interactive CLI has been extracted into the separate [kentui](https://github.com/D1zzl3D0p/kentui) package (`pip install kentui`).
+- `full_analysis()` added to the public API (`kenkui.full_analysis()`) — runs the complete 4-stage NLP pipeline (previously only accessible via internal imports).
+
 ## [1.2.0] - 2026-04-07
 
 ### Added

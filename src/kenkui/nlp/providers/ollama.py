@@ -13,24 +13,13 @@ from typing import TYPE_CHECKING
 
 from kenkui.models import Chapter
 from kenkui.nlp import run_fast_scan
-from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster, slugify
+from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster
 
 if TYPE_CHECKING:
     from kenkui.models import AppConfig
     from kenkui.nlp_config import NLPConfig
 
 _logger = logging.getLogger(__name__)
-_PRESERVED_SPEAKERS = frozenset({"NARRATOR", "Unknown"})
-
-
-def _speaker_to_slug(speaker: str, roster: CharacterRoster) -> str:
-    """Convert a canonical-name speaker to its roster slug, or preserve special values."""
-    if speaker in _PRESERVED_SPEAKERS:
-        return speaker
-    for c in roster.characters:
-        if c.canonical_name == speaker:
-            return c.slug
-    return slugify(speaker)
 
 
 class OllamaExtractionAdapter:

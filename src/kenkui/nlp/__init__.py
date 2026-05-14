@@ -62,14 +62,56 @@ _SCENE_BREAK_RE = SCENE_BREAK_RE
 
 
 def _load_spacy_model():
-    """Load en_core_web_sm, downloading it automatically if not installed."""
+    """Load en_core_web_sm, auto-installing if absent."""
     import spacy
     try:
         return spacy.load("en_core_web_sm")
     except OSError:
-        from spacy.cli import download as _spacy_download
-        _spacy_download("en_core_web_sm")
+        pass
+
+    import subprocess
+    import sys
+
+    def _try(*cmd) -> bool:
+        try:
+            return subprocess.run(list(cmd), capture_output=True).returncode == 0
+        except FileNotFoundError:
+            return False
+
+    def _loadable() -> bool:
+        try:
+            spacy.load("en_core_web_sm")
+            return True
+        except OSError:
+            return False
+
+    # Attempt 1: spaCy's own version-aware download (canonical path).
+    # In uv tool envs, uv may install to a different env than sys.executable's
+    # site-packages, so we verify the load works afterward.
+    _try(sys.executable, "-m", "spacy", "download", "en_core_web_sm")
+    if _loadable():
         return spacy.load("en_core_web_sm")
+
+    # Attempt 2: force the wheel into *this* interpreter's site-packages.
+    # Derive the compatible model version from the installed spaCy version
+    # (e.g. spaCy 3.8.14 → en_core_web_sm 3.8.0).
+    major_minor = ".".join(spacy.__version__.split(".")[:2])
+    wheel_url = (
+        f"https://github.com/explosion/spacy-models/releases/download/"
+        f"en_core_web_sm-{major_minor}.0/"
+        f"en_core_web_sm-{major_minor}.0-py3-none-any.whl"
+    )
+    if (
+        _try("uv", "pip", "install", "--python", sys.executable, f"en-core-web-sm @ {wheel_url}")
+        or _try(sys.executable, "-m", "pip", "install", f"en-core-web-sm @ {wheel_url}")
+    ) and _loadable():
+        return spacy.load("en_core_web_sm")
+
+    raise RuntimeError(
+        "Could not auto-install 'en_core_web_sm'.\n"
+        f"Run manually: uv pip install --python {sys.executable} "
+        f"'en-core-web-sm @ {wheel_url}'"
+    )
 
 
 def _normalize_gender_pronoun(value: str) -> str:
@@ -164,6 +206,23 @@ def get_cached_result(book_path: Path, provider: "str | None" = None) -> "NLPRes
         return None
 
 
+def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Write *content* to *path* atomically: write a .tmp sibling then rename.
+
+    Prevents a Ctrl-C mid-write from leaving a corrupt cache file on disk.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(content, encoding=encoding)
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def cache_result(result: "NLPResult", book_path: Path, provider: "str | None" = None) -> Path:
     """Serialise *result* to disk and return the cache file path.
 
@@ -173,12 +232,17 @@ def cache_result(result: "NLPResult", book_path: Path, provider: "str | None" = 
     cache_dir = _get_config_dir() / "nlp_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / _attribution_cache_name(book_path, provider)
-    cache_file.write_text(
-        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _atomic_write(cache_file, json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     logger.debug("NLP cache written: %s", cache_file)
     return cache_file
+
+
+def attribution_cache_path(book_path: Path, provider: "str | None" = None) -> Path:
+    """Return the expected attribution cache file path for *book_path* + *provider*.
+
+    The file may or may not exist — callers should check ``.exists()`` before reading.
+    """
+    return _get_config_dir() / "nlp_cache" / _attribution_cache_name(book_path, provider)
 
 
 # CONFIG_DIR is exposed at module level so that patch("kenkui.nlp.CONFIG_DIR", ...) works in
@@ -432,10 +496,7 @@ def cache_roster(
         "model": _model,
         "roster_data": result.to_dict(),
     }
-    cache_file.write_text(
-        json.dumps(envelope, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _atomic_write(cache_file, json.dumps(envelope, ensure_ascii=False, indent=2))
     logger.debug("Roster cache written: %s", cache_file)
     return cache_file
 
@@ -476,10 +537,7 @@ def cache_chunk_roster(roster: "CharacterRoster", book_path: Path, chapter_indic
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = _chunk_cache_key(bh, chapter_indices)
     cache_file = cache_dir / f"{bh}-chunk-{key}.json"
-    cache_file.write_text(
-        json.dumps(roster.model_dump(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _atomic_write(cache_file, json.dumps(roster.model_dump(), ensure_ascii=False, indent=2))
     logger.debug("Chunk roster cache written: %s", cache_file)
     return cache_file
 
@@ -1104,6 +1162,7 @@ __all__ = [
     "run_attribution",
     "get_cached_result",
     "cache_result",
+    "attribution_cache_path",
     "get_cached_roster",
     "get_cached_roster_or_prompt",
     "list_cached_rosters",

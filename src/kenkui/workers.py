@@ -208,8 +208,13 @@ def worker_process_chapter(
     result: AudioResult | None = None
 
     with open(os.devnull, "w") as _devnull:
-        _suppress = contextlib.nullcontext() if verbose else contextlib.redirect_stdout(_devnull)
-        with _suppress:
+        if verbose:
+            _stdout_suppress = contextlib.nullcontext()
+            _stderr_suppress = contextlib.nullcontext()
+        else:
+            _stdout_suppress = contextlib.redirect_stdout(_devnull)
+            _stderr_suppress = contextlib.redirect_stderr(_devnull)
+        with _stdout_suppress, _stderr_suppress:
             for retry_attempt in range(max_retries + 1):
                 try:
                     result = _process_chapter_inner(
