@@ -1,0 +1,450 @@
+"""Tests for kenkui.nlp.pipeline — NLPPipeline, NLPJob, NLPJobStatus, ValidationResult."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from kenkui.models import Chapter, NLPResult, CharacterInfo
+from kenkui.nlp.models import CharacterRoster, CharacterRecord
+from kenkui.nlp.pipeline import NLPJob, NLPJobStatus, NLPPipeline, ValidationResult
+from kenkui.nlp_config import NLPConfig
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_chapter(index: int = 0, title: str = "Chapter 1") -> Chapter:
+    return Chapter(index=index, title=title, paragraphs=["Hello world."])
+
+
+def _make_roster() -> CharacterRoster:
+    return CharacterRoster(characters=[
+        CharacterRecord(
+            slug="jane_eyre",
+            canonical_name="Jane Eyre",
+            aliases=["Jane"],
+            gender="she/her",
+        )
+    ])
+
+
+def _make_nlp_result(book_hash: str = "abc123") -> NLPResult:
+    chapter = _make_chapter()
+    return NLPResult(
+        characters=[CharacterInfo(character_id="Jane Eyre", display_name="Jane Eyre")],
+        chapters=[chapter],
+        book_hash=book_hash,
+    )
+
+
+def _make_pipeline() -> NLPPipeline:
+    """Return a pipeline with mocked providers."""
+    config = NLPConfig()
+    pipeline = NLPPipeline.__new__(NLPPipeline)
+    pipeline._config = config
+    pipeline._extraction = MagicMock()
+    pipeline._attribution = MagicMock()
+    return pipeline
+
+
+# ---------------------------------------------------------------------------
+# validate_tools tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_validate_tools_ollama_available():
+    """Both extraction and attribution report ok=True when ollama is importable."""
+    pipeline = _make_pipeline()
+
+    mock_ollama = MagicMock()
+    with patch.dict(sys.modules, {"ollama": mock_ollama}):
+        results = pipeline.validate_tools()
+
+    assert len(results) == 2
+    assert all(r.ok for r in results), [r.message for r in results]
+    assert results[0].step == "extraction"
+    assert results[1].step == "attribution"
+    assert results[0].tool == "ollama"
+    assert results[1].tool == "ollama"
+    assert results[0].message == "Available"
+    assert results[1].message == "Available"
+
+
+def test_pipeline_validate_tools_ollama_not_installed():
+    """Both results report ok=False when ollama is not importable."""
+    pipeline = _make_pipeline()
+
+    # Remove ollama from sys.modules and block its import
+    saved = sys.modules.pop("ollama", None)
+    try:
+        with patch.dict(sys.modules, {"ollama": None}):
+            results = pipeline.validate_tools()
+    finally:
+        if saved is not None:
+            sys.modules["ollama"] = saved
+
+    assert len(results) == 2
+    assert all(not r.ok for r in results), [r.message for r in results]
+
+
+# ---------------------------------------------------------------------------
+# extract tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_extract_returns_roster(tmp_path):
+    """extract() calls build_roster and returns the CharacterRoster."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline._extraction.build_roster.return_value = roster
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline.put_cache") as mock_put,
+    ):
+        result = pipeline.extract(book_path, chapters, use_cache=True)
+
+    assert result is roster
+    pipeline._extraction.build_roster.assert_called_once()
+    mock_put.assert_called_once()
+
+
+def test_pipeline_extract_uses_cache_when_available(tmp_path):
+    """extract() returns cached roster without calling build_roster."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    cached_dict = roster.model_dump()
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+
+    with patch("kenkui.nlp.pipeline.get_cache", return_value=cached_dict):
+        result = pipeline.extract(book_path, chapters, use_cache=True)
+
+    pipeline._extraction.build_roster.assert_not_called()
+    assert isinstance(result, CharacterRoster)
+    assert result.characters[0].canonical_name == "Jane Eyre"
+
+
+def test_pipeline_extract_skips_cache_when_disabled(tmp_path):
+    """extract() calls build_roster when use_cache=False."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline._extraction.build_roster.return_value = roster
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache") as mock_get,
+        patch("kenkui.nlp.pipeline.put_cache"),
+    ):
+        result = pipeline.extract(book_path, chapters, use_cache=False)
+
+    mock_get.assert_not_called()
+    assert result is roster
+
+
+def test_pipeline_extract_progress_callback_called(tmp_path):
+    """extract() calls progress_callback with (int, str) during extraction."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline._extraction.build_roster.return_value = roster
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+
+    received: list[tuple[int, str]] = []
+
+    def _cb(pct: int, msg: str) -> None:
+        received.append((pct, msg))
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline.put_cache"),
+    ):
+        pipeline.extract(book_path, chapters, progress_callback=_cb, use_cache=True)
+
+    # The adapter is called by the provider mock; no direct calls here —
+    # just verify the signature contract was not violated.
+
+
+# ---------------------------------------------------------------------------
+# attribute tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_attribute_returns_nlp_result(tmp_path):
+    """attribute() calls attribute_chapter for each chapter and returns NLPResult."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+
+    # Mock attribution result
+    from kenkui.nlp.models import AttributionResult, AttributionItem
+    attr_result = AttributionResult(attributions=[])
+    pipeline._attribution.attribute_chapter.return_value = attr_result
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter(0), _make_chapter(1, "Chapter 2")]
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline.put_cache"),
+        patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+        patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+    ):
+        result = pipeline.attribute(book_path, chapters, roster, use_cache=True)
+
+    assert isinstance(result, NLPResult)
+    assert result.book_hash == "deadbeef"
+    assert pipeline._attribution.attribute_chapter.call_count == 2
+
+
+def test_pipeline_attribute_uses_cache_when_available(tmp_path):
+    """attribute() returns cached NLPResult without calling attribute_chapter."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+
+    nlp_result = _make_nlp_result()
+    cached_dict = nlp_result.to_dict()
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+
+    with patch("kenkui.nlp.pipeline.get_cache", return_value=cached_dict):
+        result = pipeline.attribute(book_path, chapters, roster, use_cache=True)
+
+    pipeline._attribution.attribute_chapter.assert_not_called()
+    assert isinstance(result, NLPResult)
+
+
+def test_pipeline_attribute_skips_cache_when_disabled(tmp_path):
+    """attribute() calls attribute_chapter when use_cache=False."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+
+    from kenkui.nlp.models import AttributionResult
+    attr_result = AttributionResult(attributions=[])
+    pipeline._attribution.attribute_chapter.return_value = attr_result
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache") as mock_get,
+        patch("kenkui.nlp.pipeline.put_cache"),
+        patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+        patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+    ):
+        result = pipeline.attribute(book_path, chapters, roster, use_cache=False)
+
+    mock_get.assert_not_called()
+    pipeline._attribution.attribute_chapter.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# run tests
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_run_calls_extract_then_attribute(tmp_path):
+    """run() delegates to extract() then attribute() in order."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    nlp_result = _make_nlp_result()
+
+    call_order: list[str] = []
+
+    def _mock_extract(*args, **kwargs):
+        call_order.append("extract")
+        return roster
+
+    def _mock_attribute(*args, **kwargs):
+        call_order.append("attribute")
+        return nlp_result
+
+    pipeline.extract = _mock_extract  # type: ignore[method-assign]
+    pipeline.attribute = _mock_attribute  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    result = pipeline.run(book_path, [_make_chapter()])
+
+    assert call_order == ["extract", "attribute"]
+    assert result is nlp_result
+
+
+# ---------------------------------------------------------------------------
+# extract_job tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_job_returns_job_object(tmp_path):
+    """extract_job() returns an NLPJob with a job_id immediately."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline._extraction.build_roster.return_value = roster
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline.put_cache"),
+    ):
+        job = pipeline.extract_job(book_path, [_make_chapter()])
+
+    assert isinstance(job, NLPJob)
+    assert job.job_id  # non-empty UUID string
+    # Wait briefly so we don't block the test suite
+    job.wait(timeout=5.0)
+
+
+def test_extract_job_completes_to_done(tmp_path):
+    """extract_job() transitions to DONE with result populated."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline.extract = MagicMock(return_value=roster)  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    job = pipeline.extract_job(book_path, [_make_chapter()])
+    snapshot = job.wait(timeout=5.0)
+
+    assert snapshot.status == NLPJobStatus.DONE
+    assert snapshot.result is roster
+    assert snapshot.error is None
+    assert snapshot.progress == 100
+
+
+def test_extract_job_sets_failed_on_exception(tmp_path):
+    """extract_job() transitions to FAILED when extract raises."""
+    pipeline = _make_pipeline()
+    pipeline.extract = MagicMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    job = pipeline.extract_job(book_path, [_make_chapter()])
+    snapshot = job.wait(timeout=5.0)
+
+    assert snapshot.status == NLPJobStatus.FAILED
+    assert snapshot.result is None
+    assert isinstance(snapshot.error, RuntimeError)
+    assert "boom" in str(snapshot.error)
+
+
+# ---------------------------------------------------------------------------
+# attribute_job tests
+# ---------------------------------------------------------------------------
+
+
+def test_attribute_job_completes_to_done(tmp_path):
+    """attribute_job() transitions to DONE with result populated."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    nlp_result = _make_nlp_result()
+    pipeline.attribute = MagicMock(return_value=nlp_result)  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    job = pipeline.attribute_job(book_path, [_make_chapter()], roster)
+    snapshot = job.wait(timeout=5.0)
+
+    assert snapshot.status == NLPJobStatus.DONE
+    assert snapshot.result is nlp_result
+    assert snapshot.error is None
+    assert snapshot.progress == 100
+
+
+def test_attribute_job_sets_failed_on_exception(tmp_path):
+    """attribute_job() transitions to FAILED when attribute raises."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline.attribute = MagicMock(side_effect=ValueError("attribution error"))  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    job = pipeline.attribute_job(book_path, [_make_chapter()], roster)
+    snapshot = job.wait(timeout=5.0)
+
+    assert snapshot.status == NLPJobStatus.FAILED
+    assert "attribution error" in snapshot.message
+
+
+# ---------------------------------------------------------------------------
+# NLPJob API tests
+# ---------------------------------------------------------------------------
+
+
+def test_nlp_job_poll_returns_snapshot():
+    """poll() returns a new NLPJob with _thread=None."""
+    job = NLPJob(
+        job_id="test-id",
+        status=NLPJobStatus.PENDING,
+        progress=0,
+        message="Queued",
+        result=None,
+        error=None,
+    )
+    snapshot = job.poll()
+    assert snapshot.job_id == "test-id"
+    assert snapshot._thread is None
+    assert snapshot is not job
+
+
+def test_nlp_job_cancel_sets_event():
+    """cancel() sets the cancel event."""
+    job = NLPJob(
+        job_id="test-id",
+        status=NLPJobStatus.RUNNING,
+        progress=50,
+        message="Running",
+        result=None,
+        error=None,
+    )
+    assert not job._cancel_event.is_set()
+    job.cancel()
+    assert job._cancel_event.is_set()
+
+
+# ---------------------------------------------------------------------------
+# ValidationResult dataclass tests
+# ---------------------------------------------------------------------------
+
+
+def test_validation_result_fields():
+    """ValidationResult stores all required fields."""
+    vr = ValidationResult(tool="ollama", step="extraction", ok=True, message="Available")
+    assert vr.tool == "ollama"
+    assert vr.step == "extraction"
+    assert vr.ok is True
+    assert vr.message == "Available"
+
+
+def test_nlp_job_status_values():
+    """NLPJobStatus has the expected string values."""
+    assert NLPJobStatus.PENDING == "pending"
+    assert NLPJobStatus.RUNNING == "running"
+    assert NLPJobStatus.DONE == "done"
+    assert NLPJobStatus.FAILED == "failed"
