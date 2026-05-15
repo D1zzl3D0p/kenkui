@@ -27,6 +27,7 @@ class NLPConfig(BaseSettings):
     extraction_tool: ExtractionTool = ExtractionTool.OLLAMA
     extraction_mode: NlpExecutionMode = NlpExecutionMode.LOCAL
     extraction_model: str = "llama3.2"
+    discovery_method: str = "auto"
 
     # Step 2: quote attribution
     attribution_tool: AttributionTool = AttributionTool.OLLAMA
@@ -35,6 +36,7 @@ class NLPConfig(BaseSettings):
 
     # Tool endpoints
     ollama_url: str = "http://localhost:11434"
+    ollama_num_ctx: int = 16384
     litellm_api_base: str | None = None
     litellm_api_key: str | None = Field(
         None,
@@ -94,10 +96,13 @@ class NLPConfig(BaseSettings):
         raw_attribution_model = config.nlp_attribution_model or config.nlp_model
         attribution_model = raw_attribution_model if isinstance(raw_attribution_model, str) else "llama3.2"
 
+        discovery_method = getattr(config, "nlp_discovery_method", "auto") or "auto"
+
         return cls(
             extraction_tool=extraction_tool,
             extraction_mode=extraction_mode,
             extraction_model=extraction_model,
+            discovery_method=discovery_method,
             attribution_tool=attribution_tool,
             attribution_mode=attribution_mode,
             attribution_model=attribution_model,
