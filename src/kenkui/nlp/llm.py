@@ -9,6 +9,9 @@ Key options
 num_predict : 8192
     Prevents Ollama from truncating long JSON responses mid-stream, which
     was the root cause of "EOF while parsing" Pydantic validation errors.
+num_ctx : 16384 (env: KENKUI_NLP_OLLAMA_NUM_CTX)
+    Total context window (prompt + output). Must exceed the prompt size.
+    The roster prompt is ~5 500 tokens; 16 384 leaves headroom for output.
 temperature : 0
     Deterministic sampling improves JSON schema compliance — the model
     spends less probability mass on syntactic variants and more on content.
@@ -16,6 +19,7 @@ temperature : 0
 
 from __future__ import annotations
 
+import os
 import logging
 from typing import TypeVar
 
@@ -25,7 +29,12 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-_LLM_OPTIONS = {"num_predict": 8192, "temperature": 0}
+_num_ctx = int(os.environ.get("KENKUI_NLP_OLLAMA_NUM_CTX", "16384"))
+_LLM_OPTIONS = {
+    "num_predict": 8192,
+    "num_ctx": _num_ctx,
+    "temperature": 0,
+}
 _MAX_RETRIES = 2
 
 
@@ -56,6 +65,11 @@ class LLMClient:
                     options=_LLM_OPTIONS,
                 )
                 raw = response.message.content
+                if not raw:
+                    raise ConnectionError(
+                        f"Ollama model '{self.model}' returned empty content "
+                        "(possible context overflow or grammar constraint failure)"
+                    )
                 logger.debug(
                     "LLM attempt %d: %d chars received", attempt + 1, len(raw)
                 )
