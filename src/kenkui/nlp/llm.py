@@ -25,7 +25,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -70,14 +70,14 @@ class LLMClient:
                         f"Ollama model '{self.model}' returned empty content "
                         "(possible context overflow or grammar constraint failure)"
                     )
-                logger.debug(
+                _logger.debug(
                     "LLM attempt %d: %d chars received", attempt + 1, len(raw)
                 )
                 return schema.model_validate_json(raw)
             except Exception as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
-                    logger.debug(
+                    _logger.debug(
                         "LLM attempt %d failed (%s), retrying…", attempt + 1, exc
                     )
 
