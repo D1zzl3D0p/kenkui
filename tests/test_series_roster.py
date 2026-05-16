@@ -194,7 +194,7 @@ def test_fast_scan_passes_series_roster_to_provider(tmp_path):
 
     mock_pipeline = MagicMock()
 
-    def _capture_extract(book_path, chapters, series_roster=None, progress_callback=None, use_cache=True):
+    def _capture_extract(book_path, chapters, series_roster=None, progress_callback=None, step_callback=None, use_cache=True):
         captured_series_roster.append(series_roster)
         return mock_roster_result
 
