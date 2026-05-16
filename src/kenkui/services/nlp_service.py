@@ -12,11 +12,13 @@ The uniform service-layer progress callback is ``Callable[[int, str], None]``
 
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import replace as _replace
+from dataclasses import dataclass, field, replace as _replace
 from pathlib import Path
 
+from kenkui.analytics import StageRecord, append_record, now_utc
 from kenkui.config import load_app_config
 from kenkui.models import (
     CharacterInfo,
@@ -36,32 +38,25 @@ from kenkui.nlp_config import NLPConfig
 from kenkui.nlp.pipeline import NLPPipeline
 from kenkui.readers import get_reader
 
-# Adapter constants for progress-callback translation (provider string-only → int+str).
-_FAST_SCAN_START_PCT = 10
-_FAST_SCAN_BUMP = 15
-_FAST_SCAN_CAP = 90
-_FULL_ROSTER_START_PCT = 5
-_FULL_ROSTER_BUMP = 8
-_FULL_ROSTER_CAP = 45
-_FULL_ATTRIB_START_PCT = 50
-_FULL_ATTRIB_CAP = 95
+@dataclass
+class ProgressTracker:
+    total: int
+    callback: Callable[[int, str], None] | None
+    _done: int = field(default=0, init=False)
+
+    def advance(self, msg: str) -> None:
+        self._done = min(self._done + 1, self.total)
+        if self.callback:
+            pct = int(self._done / self.total * 100) if self.total else 100
+            self.callback(pct, msg)
 
 
-def _make_adapter(
-    progress_callback: Callable[[int, str], None] | None,
-    start_pct: int,
-    bump: int,
-    cap: int,
-) -> Callable[[str], None]:
-    """Return a string-only callback that maps progress to the int+str service callback."""
-    _pct = [start_pct]
-
-    def _adapt(msg: str) -> None:
-        _pct[0] = min(cap, _pct[0] + bump)
-        if progress_callback:
-            progress_callback(_pct[0], msg)
-
-    return _adapt
+def _extraction_step_count(method: str) -> int:
+    if method == "spacy":
+        return 1   # one synthetic step at completion
+    if method == "booknlp":
+        return 3   # deduplicate + resolve_epithets + normalize
+    return 4       # worst-case upper bound for auto/llm paths
 
 
 def fast_scan(
@@ -116,13 +111,36 @@ def fast_scan(
         if cached is not None:
             if progress_callback:
                 progress_callback(100, "Scan complete (cached)")
+            try:
+                _cached_title = get_reader(Path(ebook_path)).get_metadata().title or ""
+            except Exception:
+                _cached_title = ""
+            append_record(StageRecord(
+                stage="nlp_extraction",
+                started_at=now_utc(),
+                duration_seconds=0.0,
+                success=True,
+                book_hash=book_hash(Path(ebook_path)),
+                book_title=_cached_title,
+                provider=cfg.nlp_provider or "",
+                model=cfg.nlp_model or "",
+                cache_hit=True,
+            ))
             return cached
 
     reader = get_reader(Path(ebook_path))
     chapters = reader.get_chapters()
+    _book_char_count = sum(len(p) for ch in chapters for p in ch.paragraphs)
+    try:
+        _book_title = reader.get_metadata().title or ""
+    except Exception:
+        _book_title = ""
 
+    _method = _discovery_method
+    total = _extraction_step_count(_method)
+    tracker = ProgressTracker(total, progress_callback)
     if progress_callback:
-        progress_callback(_FAST_SCAN_START_PCT, "Starting NLP scan")
+        progress_callback(0, "Starting extraction")
 
     # Fetch existing series roster before extraction so providers can inject it.
     series_roster = None
@@ -132,13 +150,32 @@ def fast_scan(
 
     nlp_config = NLPConfig.from_app_config(cfg)
     pipeline = NLPPipeline(nlp_config)
+
+    _extract_start = now_utc()
+    _t0 = time.monotonic()
     roster = pipeline.extract(
         book_path=Path(ebook_path),
         chapters=chapters,
         series_roster=series_roster,
         progress_callback=progress_callback,
+        step_callback=tracker.advance,
         use_cache=False,  # nlp_service handles its own roster cache above
     )
+    _extract_dur = time.monotonic() - _t0
+
+    append_record(StageRecord(
+        stage="nlp_extraction",
+        started_at=_extract_start,
+        duration_seconds=_extract_dur,
+        success=True,
+        book_hash=book_hash(Path(ebook_path)),
+        book_title=_book_title,
+        book_char_count=_book_char_count,
+        chapter_count=len(chapters),
+        provider=cfg.nlp_provider or "",
+        model=cfg.nlp_model or "",
+        cache_hit=False,
+    ))
 
     # Update series roster with newly discovered characters.
     if series_slug and book_slug:
@@ -165,7 +202,7 @@ def fast_scan(
     )
 
     if progress_callback:
-        progress_callback(100, "Scan complete")
+        progress_callback(100, "Extraction complete")
 
     return result
 
@@ -174,7 +211,8 @@ def full_analysis(
     ebook_path: str,
     nlp_model: str | None = None,
     config_path: str | None = None,
-    progress_callback: Callable[[int, str], None] | None = None,
+    extraction_progress_callback: Callable[[int, str], None] | None = None,
+    attribution_progress_callback: Callable[[int, str], None] | None = None,
     series_slug: str | None = None,
     book_slug: str | None = None,
     discovery_method: str | None = None,
@@ -185,14 +223,17 @@ def full_analysis(
     """Run the full NLP speaker-attribution pipeline.
 
     Args:
-        ebook_path:        Path to the source ebook file.
-        nlp_model:         Override model name.  Falls back to AppConfig.nlp_model.
-        config_path:       Optional path/name for the kenkui config file.
-        progress_callback: Optional ``(percent: int, message: str) -> None``.
-        series_slug:       If provided, load the series CharacterRoster before the
-                           analysis and merge new characters back into it afterward.
-        book_slug:         Slug for the current book (used for first_appearance
-                           tracking when *series_slug* is set).
+        ebook_path:                    Path to the source ebook file.
+        nlp_model:                     Override model name.  Falls back to AppConfig.nlp_model.
+        config_path:                   Optional path/name for the kenkui config file.
+        extraction_progress_callback:  Optional ``(percent: int, message: str) -> None``
+                                       called during the extraction (roster-building) phase.
+        attribution_progress_callback: Optional ``(percent: int, message: str) -> None``
+                                       called during the attribution (dialogue-tagging) phase.
+        series_slug:                   If provided, load the series CharacterRoster before the
+                                       analysis and merge new characters back into it afterward.
+        book_slug:                     Slug for the current book (used for first_appearance
+                                       tracking when *series_slug* is set).
 
     Returns:
         ``NLPResult`` with both ``mention_count`` and ``quote_count`` populated.
@@ -203,8 +244,8 @@ def full_analysis(
     if not Path(ebook_path).exists():
         raise FileNotFoundError(f"Ebook not found: {ebook_path}")
 
-    if progress_callback:
-        progress_callback(0, "Parsing ebook")
+    if extraction_progress_callback:
+        extraction_progress_callback(0, "Parsing ebook")
 
     cfg = load_app_config(config_path)
     if nlp_model is not None:
@@ -222,15 +263,32 @@ def full_analysis(
     if use_cache:
         cached = get_cached_result(Path(ebook_path), provider=_attr_provider_name)
         if cached is not None:
-            if progress_callback:
-                progress_callback(100, "Analysis complete (cached)")
+            if attribution_progress_callback:
+                attribution_progress_callback(100, "Analysis complete (cached)")
+            try:
+                _cached_title = get_reader(Path(ebook_path)).get_metadata().title or ""
+            except Exception:
+                _cached_title = ""
+            append_record(StageRecord(
+                stage="nlp_attribution",
+                started_at=now_utc(),
+                duration_seconds=0.0,
+                success=True,
+                book_hash=book_hash(Path(ebook_path)),
+                book_title=_cached_title,
+                provider=_attr_provider_name or "",
+                model=cfg.nlp_model or "",
+                cache_hit=True,
+            ))
             return cached
 
     reader = get_reader(Path(ebook_path))
     chapters = reader.get_chapters()
-
-    if progress_callback:
-        progress_callback(_FULL_ROSTER_START_PCT, "Starting NLP analysis")
+    _book_char_count = sum(len(p) for ch in chapters for p in ch.paragraphs)
+    try:
+        _book_title = reader.get_metadata().title or ""
+    except Exception:
+        _book_title = ""
 
     # Fetch existing series roster before extraction so providers can inject it.
     series_roster = None
@@ -241,39 +299,64 @@ def full_analysis(
     nlp_config = NLPConfig.from_app_config(cfg)
     pipeline = NLPPipeline(nlp_config)
 
-    # Phase 1: Build character roster (5–45 %)
+    # Phase 1: Build character roster
+    _method = getattr(cfg, "nlp_discovery_method", "auto") or "auto"
+    extract_total = _extraction_step_count(_method)
+    extract_tracker = ProgressTracker(extract_total, extraction_progress_callback)
+    if extraction_progress_callback:
+        extraction_progress_callback(0, "Starting extraction")
+
+    _extract_start = now_utc()
+    _t0 = time.monotonic()
     roster = pipeline.extract(
         book_path=Path(ebook_path),
         chapters=chapters,
         series_roster=series_roster,
-        progress_callback=progress_callback,
+        progress_callback=extraction_progress_callback,
+        step_callback=extract_tracker.advance,
         use_cache=False,  # nlp_service handles its own cache
     )
+    _extract_dur = time.monotonic() - _t0
+    if extraction_progress_callback:
+        extraction_progress_callback(100, "Extraction complete")
+    append_record(StageRecord(
+        stage="nlp_extraction",
+        started_at=_extract_start,
+        duration_seconds=_extract_dur,
+        success=True,
+        book_hash=book_hash(Path(ebook_path)),
+        book_title=_book_title,
+        book_char_count=_book_char_count,
+        chapter_count=len(chapters),
+        provider=cfg.nlp_provider or "",
+        model=cfg.nlp_model or "",
+        cache_hit=False,
+    ))
 
     # Update series roster with newly discovered characters.
     if series_slug and book_slug:
         from kenkui.services.series_service import update_roster as _update_roster
         _update_roster(series_slug, roster, book_slug)
 
-    if progress_callback:
-        progress_callback(_FULL_ATTRIB_START_PCT, "Attributing dialogue")
-
-    # Phase 2: Attribute each chapter (50–95 %)
-    attrib_bump = max(1, (_FULL_ATTRIB_CAP - _FULL_ATTRIB_START_PCT) // max(1, len(chapters)))
-    attrib_adapt = _make_adapter(
-        progress_callback, _FULL_ATTRIB_START_PCT, attrib_bump, _FULL_ATTRIB_CAP
-    )
+    # Phase 2: Attribute each chapter
+    attrib_tracker = ProgressTracker(total=len(chapters), callback=attribution_progress_callback)
+    if attribution_progress_callback:
+        attribution_progress_callback(0, "Starting attribution")
 
     attribution_counts: dict[str, int] = defaultdict(int)
     attributed_chapters = []
 
+    _attrib_start = now_utc()
+    _t1 = time.monotonic()
     for chapter in chapters:
-        attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=attrib_adapt)
+        attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
         segments = _attribution_to_segments(chapter, attr_result, roster)
         attributed_chapters.append(_replace(chapter, segments=segments))
         for item in attr_result.attributions:
             if item.speaker not in ("NARRATOR", "Unknown"):
                 attribution_counts[item.speaker] += 1
+        attrib_tracker.advance(chapter.title or f"Chapter {chapter.index}")
+    _attrib_dur = time.monotonic() - _t1
 
     # Build CharacterInfo list with both mention_count and quote_count.
     characters: list[CharacterInfo] = []
@@ -290,8 +373,22 @@ def full_analysis(
     )
     cache_result(result, Path(ebook_path), provider=_attr_provider_name)
 
-    if progress_callback:
-        progress_callback(100, "Analysis complete")
+    append_record(StageRecord(
+        stage="nlp_attribution",
+        started_at=_attrib_start,
+        duration_seconds=_attrib_dur,
+        success=True,
+        book_hash=book_hash(Path(ebook_path)),
+        book_title=_book_title,
+        book_char_count=_book_char_count,
+        chapter_count=len(chapters),
+        provider=_attr_provider_name or "",
+        model=getattr(cfg, "nlp_attribution_model", None) or cfg.nlp_model or "",
+        cache_hit=False,
+    ))
+
+    if attribution_progress_callback:
+        attribution_progress_callback(100, "Attribution complete")
 
     return result
 
@@ -337,8 +434,13 @@ def attribute_only(
 
     _effective_provider = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
 
+    n_chapters = len(chapters)
+    tracker = ProgressTracker(n_chapters, progress_callback)
     if progress_callback:
-        progress_callback(5, "Starting attribution")
+        progress_callback(0, "Starting attribution")
+
+    def _chapter_done(pct: int, msg: str) -> None:
+        tracker.advance(msg)
 
     nlp_config = NLPConfig.from_app_config(cfg)
     pipeline = NLPPipeline(nlp_config)
@@ -346,7 +448,7 @@ def attribute_only(
         book_path=Path(ebook_path),
         chapters=chapters,
         roster=roster,
-        progress_callback=progress_callback,
+        progress_callback=_chapter_done,
         use_cache=False,
     )
 
