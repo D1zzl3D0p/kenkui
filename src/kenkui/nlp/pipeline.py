@@ -175,6 +175,7 @@ class NLPPipeline:
         chapters: list["Chapter"],
         series_roster: "CharacterRoster | None" = None,
         progress_callback: Callable[[int, str], None] | None = None,
+        step_callback: Callable[[str], None] | None = None,
         use_cache: bool = True,
     ) -> "CharacterRoster":
         """Run Stage 1-2: character extraction + coreference resolution.
@@ -223,6 +224,7 @@ class NLPPipeline:
                 chapters,
                 series_roster=series_roster,
                 progress_callback=_adapt,
+                step_callback=step_callback,
                 book_path=book_path,
             )
         finally:
