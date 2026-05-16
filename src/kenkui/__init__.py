@@ -148,6 +148,8 @@ def full_analysis(
     nlp_model: str | None = None,
     config_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    extraction_progress_callback: Callable[[int, str], None] | None = None,
+    attribution_progress_callback: Callable[[int, str], None] | None = None,
     series_slug: str | None = None,
     book_slug: str | None = None,
     discovery_method: str | None = None,
@@ -158,16 +160,20 @@ def full_analysis(
     """Run the full NLP speaker-attribution pipeline (Stages 1-4).
 
     Args:
-        ebook_path:            Path to the ebook file.
-        nlp_model:             Override NLP model name.
-        config_path:           Optional config file name or path.
-        progress_callback:     Optional (percent, message) callback.
-        series_slug:           Series slug for cross-book roster merging.
-        book_slug:             Slug for this book (series first-appearance tracking).
-        discovery_method:      Override discovery method.
-        attribution_provider:  Override attribution provider.
-        attribution_model:     Override attribution model.
-        use_cache:             Return cached result if available (default True).
+        ebook_path:                    Path to the ebook file.
+        nlp_model:                     Override NLP model name.
+        config_path:                   Optional config file name or path.
+        progress_callback:             Optional (percent, message) callback (for backward compat).
+                                       If provided and the extraction/attribution callbacks are
+                                       not set, this is forwarded to both new callback params.
+        extraction_progress_callback:  Optional (percent, message) callback for extraction phase.
+        attribution_progress_callback: Optional (percent, message) callback for attribution phase.
+        series_slug:                   Series slug for cross-book roster merging.
+        book_slug:                     Slug for this book (series first-appearance tracking).
+        discovery_method:              Override discovery method.
+        attribution_provider:          Override attribution provider.
+        attribution_model:             Override attribution model.
+        use_cache:                     Return cached result if available (default True).
 
     Returns:
         NLPResult with characters and annotated chapters.
@@ -177,7 +183,8 @@ def full_analysis(
         str(ebook_path),
         nlp_model=nlp_model,
         config_path=config_path,
-        progress_callback=progress_callback,
+        extraction_progress_callback=extraction_progress_callback or progress_callback,
+        attribution_progress_callback=attribution_progress_callback or progress_callback,
         series_slug=series_slug,
         book_slug=book_slug,
         discovery_method=discovery_method,
