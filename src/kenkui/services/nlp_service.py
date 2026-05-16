@@ -2,7 +2,7 @@
 
 Public API:
   fast_scan(ebook_path, nlp_model, config_path, progress_callback) -> FastScanResult
-  full_analysis(ebook_path, nlp_model, config_path, progress_callback) -> NLPResult
+  full_analysis(ebook_path, nlp_model, config_path, extraction_progress_callback, attribution_progress_callback) -> NLPResult
   attribute_only(roster, chapters, ebook_path, nlp_model, nlp_provider, ...) -> NLPResult
 
 The uniform service-layer progress callback is ``Callable[[int, str], None]``
@@ -91,9 +91,6 @@ def fast_scan(
     """
     if not Path(ebook_path).exists():
         raise FileNotFoundError(f"Ebook not found: {ebook_path}")
-
-    if progress_callback:
-        progress_callback(0, "Parsing ebook")
 
     cfg = load_app_config(config_path)
     if nlp_model is not None:
@@ -243,9 +240,6 @@ def full_analysis(
     """
     if not Path(ebook_path).exists():
         raise FileNotFoundError(f"Ebook not found: {ebook_path}")
-
-    if extraction_progress_callback:
-        extraction_progress_callback(0, "Parsing ebook")
 
     cfg = load_app_config(config_path)
     if nlp_model is not None:

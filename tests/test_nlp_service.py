@@ -157,13 +157,11 @@ def test_fast_scan_progress_callback_receives_int_and_str(tmp_path):
     percents = [p for p, _ in received]
     messages = [m for _, m in received]
 
-    # Must receive: 0 (Parsing ebook), 10 (Starting NLP scan), 100 (Scan complete)
+    # Must receive: 0 (Starting extraction), ..., 100 (Extraction complete)
     assert percents[0] == 0
-    assert messages[0] == "Parsing ebook"
-    assert percents[1] == 10
-    assert messages[1] == "Starting NLP scan"
+    assert messages[0] == "Starting extraction"
     assert percents[-1] == 100
-    assert messages[-1] == "Scan complete"
+    assert messages[-1] == "Extraction complete"
 
     for p, _ in received:
         assert isinstance(p, int)
@@ -269,16 +267,14 @@ def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
         patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
         patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
     ):
-        full_analysis(str(fake_epub), nlp_model="llama3.2", progress_callback=_cb)
+        full_analysis(str(fake_epub), nlp_model="llama3.2", extraction_progress_callback=_cb)
 
     percents = [p for p, _ in received]
     messages = [m for _, m in received]
 
     assert percents[0] == 0
-    assert messages[0] == "Parsing ebook"
-    assert percents[1] == 5
-    assert messages[1] == "Starting NLP analysis"
-    assert messages[-1] == "Analysis complete"
+    assert messages[0] == "Starting extraction"
+    assert messages[-1] == "Extraction complete"
     assert percents[-1] == 100
 
     for p, _ in received:
