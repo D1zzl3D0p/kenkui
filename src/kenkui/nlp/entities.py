@@ -38,10 +38,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ._filters import _is_proper_name
-from .models import CharacterRecord, CharacterRoster, slugify
+from .models import CharacterRecord, CharacterRoster, CharacterRosterWire, roster_wire_to_full, slugify
 
 if TYPE_CHECKING:
     from .llm import LLMClient
@@ -511,9 +511,25 @@ def _sample_text_for_roster(full_text: str, target_words: int = 4000) -> str:
         return full_text
 
     budget_per_bucket = max(1, target_words // _SAMPLE_BUCKETS)
+
+    # When the entire text is one unbroken block (no \n\n separators — common
+    # when full_text was built by joining paragraph strings with spaces), the
+    # paragraph-level loop would append the whole block before the budget check
+    # fires, returning the entire book.  Fall back to word-level slicing instead.
+    if len(paragraphs) == 1:
+        words = paragraphs[0].split()
+        word_chunk = max(1, len(words) // _SAMPLE_BUCKETS)
+        samples: list[str] = []
+        for i in range(_SAMPLE_BUCKETS):
+            start = i * word_chunk
+            chunk = " ".join(words[start:start + budget_per_bucket])
+            if chunk:
+                samples.append(chunk)
+        return "\n\n[...]\n\n".join(samples)
+
     bucket_size = max(1, len(paragraphs) // _SAMPLE_BUCKETS)
 
-    samples: list[str] = []
+    samples = []
     for i in range(_SAMPLE_BUCKETS):
         start = i * bucket_size
         bucket_words = 0
@@ -572,12 +588,48 @@ def _filter_roster_hallucinations(
     return CharacterRoster(characters=groups)
 
 
+def _build_roster_spacy_chunked(text: str, nlp) -> CharacterRoster:
+    """Run spaCy NER on *text* in max_length-safe chunks and merge results.
+
+    Used when the full text exceeds ``nlp.max_length``.  Each chunk is
+    processed independently; PERSON entities are deduplicated then clustered
+    together via the word-overlap heuristic.
+    """
+    try:
+        max_len = int(nlp.max_length)
+    except (TypeError, ValueError, AttributeError):
+        return build_roster(text, nlp)
+    if len(text) <= max_len:
+        return build_roster(text, nlp)
+
+    all_names: list[str] = []
+    seen: set[str] = set()
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if end < len(text):
+            boundary = text.rfind(" ", start, end)
+            if boundary > start:
+                end = boundary
+        for name in extract_person_names(text[start:end], nlp):
+            if name not in seen:
+                seen.add(name)
+                all_names.append(name)
+        start = end
+
+    if not all_names:
+        return CharacterRoster(characters=[])
+
+    return CharacterRoster(characters=_cluster_by_heuristic(all_names))
+
+
 def build_roster_with_llm(
     text: str,
-    nlp,
-    llm: "LLMClient",
+    nlp=None,
+    llm: "LLMClient | None" = None,
     sample_words: int = 4000,
     method: str = "auto",
+    step_callback: Callable[[str], None] | None = None,
 ) -> CharacterRoster:
     """Build a character roster using a configurable strategy.
 
@@ -585,24 +637,39 @@ def build_roster_with_llm(
 
     ``"auto"`` (default) — Three-tier fallback:
         Tier 1 — BookNLP (best quality, if installed)
-        Tier 2 — LLM sample extraction (medium quality)
-        Tier 3 — spaCy + heuristic (always available)
+        Tier 2 — LLM sample extraction with optional spaCy seeds
+        Tier 3 — spaCy + heuristic (chunked for large texts)
 
     ``"booknlp"`` — Force BookNLP.  Raises ``RuntimeError`` if not installed.
 
-    ``"llm"`` — Skip BookNLP, go straight to LLM (Tier 2 then Tier 3).
+    ``"spacy"`` — spaCy NER + heuristic only, no LLM calls.
+
+    Any other value (``"llm"``, ``"ollama"``, ``"litellm"``, …) — Skip
+    BookNLP, use LLM directly with no spaCy seed pass.  Raises on LLM
+    failure instead of silently degrading.
 
     Args:
         text:         Full book text (used for sampling and hallucination guard).
-        nlp:          Loaded spaCy model.
-        llm:          ``LLMClient`` instance pointing at the configured model.
+        nlp:          Loaded spaCy model.  Required for ``"auto"`` and ``"spacy"``
+                      methods; unused (and may be ``None``) for explicit LLM methods.
+        llm:          ``LLMClient`` instance.  Required for all non-spaCy paths.
         sample_words: Approximate word budget for the text sample sent to the LLM.
-        method:       Discovery strategy: ``"auto"``, ``"booknlp"``, or ``"llm"``.
+        method:       Discovery strategy (see above).
 
     Returns:
         ``CharacterRoster`` with alias-grouped characters.
     """
     from .booknlp_roster import build_roster_from_booknlp
+
+    # ── spaCy-only mode (no LLM) ──────────────────────────────────────────────
+    if method == "spacy":
+        if nlp is None:
+            raise ValueError("nlp model is required for method='spacy'")
+        logger.info("build_roster: spaCy-only path")
+        roster = _build_roster_spacy_chunked(text, nlp)
+        if step_callback:
+            step_callback("Extracted characters")
+        return roster
 
     # ── Explicit BookNLP mode ─────────────────────────────────────────────────
     if method == "booknlp":
@@ -618,9 +685,17 @@ def build_roster_with_llm(
             "build_roster: BookNLP (explicit) — %d canonical characters",
             len(roster.characters),
         )
+        if step_callback:
+            step_callback("Extracted characters")
         roster = deduplicate_roster_with_llm(roster, llm)
+        if step_callback:
+            step_callback("Deduplicated roster")
         roster = resolve_epithets_with_llm(roster, common_phrases, llm)
+        if step_callback:
+            step_callback("Resolved epithets")
         roster = normalize_canonical_names_with_llm(roster, llm)
+        if step_callback:
+            step_callback("Normalized names")
         return roster
 
     # ── Auto mode: try BookNLP first ─────────────────────────────────────────
@@ -633,32 +708,57 @@ def build_roster_with_llm(
                 "build_roster: BookNLP path — %d canonical characters",
                 len(roster.characters),
             )
+            if step_callback:
+                step_callback("Extracted characters")
             roster = deduplicate_roster_with_llm(roster, llm)
+            if step_callback:
+                step_callback("Deduplicated roster")
             roster = resolve_epithets_with_llm(roster, common_phrases, llm)
+            if step_callback:
+                step_callback("Resolved epithets")
             roster = normalize_canonical_names_with_llm(roster, llm)
+            if step_callback:
+                step_callback("Normalized names")
             return roster
         logger.info("build_roster: BookNLP unavailable, trying LLM")
 
-    # ── LLM path (method == "llm" or auto fallback) ───────────────────────────
-    try:
-        seed_names = extract_person_names(text, nlp)
-        logger.debug("build_roster: %d spaCy seed names", len(seed_names))
+    # ── LLM path ──────────────────────────────────────────────────────────────
+    # Explicit LLM methods (anything other than "auto"/"booknlp"/"spacy"):
+    #   - no spaCy seed pass (nlp may be None; avoids max_length failures)
+    #   - raises on failure instead of silently degrading to spaCy
+    # Auto fallback path:
+    #   - seeds from the same sample sent to the LLM (well under max_length)
+    #   - falls through to Tier 3 on failure
+    _explicit_llm = method not in ("auto", "booknlp", "spacy")
 
+    try:
         sample = _sample_text_for_roster(text, sample_words)
+
+        if not _explicit_llm and nlp is not None:
+            seed_names = extract_person_names(sample, nlp)
+            logger.debug("build_roster: %d spaCy seed names (from sample)", len(seed_names))
+        else:
+            seed_names = []
+
         prompt = _ROSTER_PROMPT.format(
             seed_names=", ".join(_escape_format_braces(s) for s in seed_names) if seed_names else "(none)",
             sample_text=sample,
         )
 
-        raw: CharacterRoster = llm.generate(prompt, CharacterRoster)
+        raw_wire: CharacterRosterWire = llm.generate(prompt, CharacterRosterWire)
+        raw: CharacterRoster = roster_wire_to_full(raw_wire)
         logger.info("build_roster: LLM returned %d entries", len(raw.characters))
+        if step_callback:
+            step_callback("Extracted characters")
 
         filtered = _filter_roster_hallucinations(raw, text)
         all_names = [name for g in filtered.characters for name in g.aliases]
 
         if not all_names:
             logger.info("build_roster: no names survived hallucination filter; using heuristic")
-            return build_roster(text, nlp)
+            if _explicit_llm:
+                return CharacterRoster(characters=[])
+            return _build_roster_spacy_chunked(text, nlp)
 
         groups = _cluster_by_heuristic(all_names)
         logger.info(
@@ -667,20 +767,32 @@ def build_roster_with_llm(
         )
         roster_obj = CharacterRoster(characters=groups)
         roster_obj = deduplicate_roster_with_llm(roster_obj, llm)
+        if step_callback:
+            step_callback("Deduplicated roster")
         roster_obj = normalize_canonical_names_with_llm(roster_obj, llm)
+        if step_callback:
+            step_callback("Normalized names")
         return roster_obj
 
     except Exception as exc:
+        if _explicit_llm:
+            raise
         logger.warning(
-            "build_roster: LLM call failed (%s); falling back to heuristic", exc,
+            "build_roster: roster extraction failed (%s); falling back to heuristic", exc,
         )
 
-    # ── Tier 3: spaCy + heuristic ────────────────────────────────────────────
-    roster = build_roster(text, nlp)
+    # ── Tier 3: spaCy + heuristic (auto mode only) ───────────────────────────
+    roster = _build_roster_spacy_chunked(text, nlp)
     logger.info(
         "build_roster: heuristic path — %d canonical characters",
         len(roster.characters),
     )
+    if step_callback:
+        step_callback("Extracted characters")
     roster = deduplicate_roster_with_llm(roster, llm)
+    if step_callback:
+        step_callback("Deduplicated roster")
     roster = normalize_canonical_names_with_llm(roster, llm)
+    if step_callback:
+        step_callback("Normalized names")
     return roster
