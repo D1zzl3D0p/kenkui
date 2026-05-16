@@ -160,8 +160,8 @@ def __getattr__(name: str):
     entities, attribution) does NOT trigger the config / tomli_w import chain.
     """
     if name == "CACHE_DIR":
-        from ..config import CONFIG_DIR
-        return CONFIG_DIR / "nlp_cache"
+        from ..config import CACHE_DIR
+        return CACHE_DIR / "nlp_cache"
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -252,12 +252,17 @@ CONFIG_DIR: "Path | None" = None
 
 
 def _get_config_dir() -> Path:
-    """Return CONFIG_DIR, respecting any test patches applied to this module."""
+    """Return the cache directory, respecting any test patches applied to this module.
+
+    The sentinel is named CONFIG_DIR for backward compat with existing test patches
+    (``patch("kenkui.nlp.CONFIG_DIR", tmp_path)``); in production it falls back to
+    kenkui.config.CACHE_DIR so NLP files land in the XDG cache directory.
+    """
     val = sys.modules[__name__].CONFIG_DIR
     if val is not None:
         return val  # type: ignore[return-value]
-    from ..config import CONFIG_DIR as _cfg
-    return _cfg
+    from ..config import CACHE_DIR as _cache
+    return _cache
 
 
 def _roster_cache_name(
@@ -573,6 +578,7 @@ def run_fast_scan(
     nlp_model: str,
     use_cache: bool = True,
     progress_callback: Callable[[str], None] | None = None,
+    step_callback: Callable[[str], None] | None = None,
     method: str = "auto",
 ) -> "FastScanResult":
     """Run Stage 1-2 only: quote extraction + entity clustering + mention counting.
@@ -614,14 +620,20 @@ def run_fast_scan(
 
     llm = LLMClient(nlp_model)
 
-    # Load spaCy
-    _cb("Loading spaCy language model…")
-    nlp = _load_spacy_model()
+    # Load spaCy only for methods that require it; LLM-only paths skip it entirely.
+    _SPACY_METHODS = frozenset({"auto", "spacy"})
+    if method in _SPACY_METHODS:
+        _cb("Loading spaCy language model…")
+        nlp = _load_spacy_model()
+    else:
+        nlp = None
 
     # Stage 2: Build character roster
     _cb("Building character roster…")
-    full_text = " ".join(" ".join(ch.paragraphs) for ch in chapters)
-    roster = build_roster_with_llm(full_text, nlp, llm, method=method)
+    # Join with \n\n so _sample_text_for_roster can split on paragraph boundaries.
+    # Joining with spaces produces a single unbroken block that defeats sampling.
+    full_text = "\n\n".join("\n\n".join(ch.paragraphs) for ch in chapters)
+    roster = build_roster_with_llm(full_text, nlp, llm, method=method, step_callback=step_callback)
 
     char_names = ", ".join(g.canonical_name for g in roster.characters[:8])
     overflow = len(roster.characters) - 8
