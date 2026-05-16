@@ -434,25 +434,39 @@ def attribute_only(
 
     _effective_provider = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
 
-    n_chapters = len(chapters)
-    tracker = ProgressTracker(n_chapters, progress_callback)
+    nlp_config = NLPConfig.from_app_config(cfg)
+    pipeline = NLPPipeline(nlp_config)
+
+    tracker = ProgressTracker(len(chapters), progress_callback)
     if progress_callback:
         progress_callback(0, "Starting attribution")
 
-    def _chapter_done(pct: int, msg: str) -> None:
-        tracker.advance(msg)
+    attribution_counts: dict[str, int] = defaultdict(int)
+    attributed_chapters = []
 
-    nlp_config = NLPConfig.from_app_config(cfg)
-    pipeline = NLPPipeline(nlp_config)
-    result = pipeline.attribute(
-        book_path=Path(ebook_path),
-        chapters=chapters,
-        roster=roster,
-        progress_callback=_chapter_done,
-        use_cache=False,
+    for chapter in chapters:
+        attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
+        segments = _attribution_to_segments(chapter, attr_result, roster)
+        attributed_chapters.append(_replace(chapter, segments=segments))
+        for item in attr_result.attributions:
+            if item.speaker not in ("NARRATOR", "Unknown"):
+                attribution_counts[item.speaker] += 1
+        tracker.advance(chapter.title or f"Chapter {chapter.index}")
+
+    # Build CharacterInfo list with quote counts from the just-run attribution.
+    characters: list[CharacterInfo] = []
+    for rec in roster.characters:
+        ci = AppCharacterRecord.from_nlp(rec).to_character_info()
+        ci.quote_count = attribution_counts.get(rec.slug, 0)
+        characters.append(ci)
+    characters.sort(key=lambda c: c.prominence, reverse=True)
+
+    result = NLPResult(
+        characters=characters,
+        chapters=attributed_chapters,
+        book_hash=book_hash(Path(ebook_path)),
     )
 
-    # Override cache with the effective provider name used by nlp_service
     cache_result(result, Path(ebook_path), provider=_effective_provider)
 
     if progress_callback:
