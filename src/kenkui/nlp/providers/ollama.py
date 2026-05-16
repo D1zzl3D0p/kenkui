@@ -40,18 +40,20 @@ class OllamaExtractionAdapter:
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        step_callback: Callable[[str], None] | None = None,
         book_path: Path | None = None,
     ) -> CharacterRoster:
         if book_path is None:
             raise ValueError("OllamaExtractionAdapter.build_roster() requires book_path")
 
-        discovery_method = "auto"
         fast_scan_result = run_fast_scan(
             chapters,
             book_path,
             self._config.extraction_model,
             progress_callback=progress_callback,
-            method=discovery_method,
+            step_callback=step_callback,
+            method=self._config.discovery_method,
+            use_cache=False,  # NLPPipeline.extract() owns the cache layer
         )
 
         # Build lookup: canonical name → CharacterInfo (has mention/quote counts)
@@ -147,12 +149,14 @@ class OllamaProvider:
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        step_callback: Callable[[str], None] | None = None,
         book_path: Path | None = None,
     ) -> CharacterRoster:
         return self._extraction.build_roster(
             chapters,
             series_roster=series_roster,
             progress_callback=progress_callback,
+            step_callback=step_callback,
             book_path=book_path,
         )
 

@@ -42,6 +42,7 @@ class LiteLLMExtractionAdapter:
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        step_callback: Callable[[str], None] | None = None,
         book_path: Path | None = None,
     ) -> CharacterRoster:
         if book_path is None:
@@ -52,7 +53,9 @@ class LiteLLMExtractionAdapter:
             book_path,
             self._config.extraction_model,
             progress_callback=progress_callback,
-            method="auto",
+            step_callback=step_callback,
+            method=self._config.discovery_method,
+            use_cache=False,  # NLPPipeline.extract() owns the cache layer
         )
 
         # Build lookup: canonical name → CharacterInfo (has mention/quote counts)
