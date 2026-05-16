@@ -69,6 +69,7 @@ def test_modal_extraction_delegates_to_adapter_when_modal_available(mock_modal):
         [chapter],
         series_roster=series_roster,
         progress_callback=callback,
+        step_callback=None,
         book_path=book_path,
     )
     assert result is roster_sentinel

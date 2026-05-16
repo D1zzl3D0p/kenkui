@@ -58,6 +58,7 @@ class TestLocalExtractionProvider:
             chapters,
             series_roster=series_roster,
             progress_callback=progress_cb,
+            step_callback=None,
             book_path=None,
         )
 
@@ -66,7 +67,7 @@ class TestLocalExtractionProvider:
         provider = LocalExtractionProvider(adapter)
         path = Path("/tmp/book.epub")
         provider.build_roster([], book_path=path)
-        adapter.build_roster.assert_called_once_with([], series_roster=None, progress_callback=None, book_path=path)
+        adapter.build_roster.assert_called_once_with([], series_roster=None, progress_callback=None, step_callback=None, book_path=path)
 
     def test_returns_adapter_result(self):
         adapter = _make_extraction_mock()

@@ -35,6 +35,7 @@ class ModalExtractionProvider:
         chapters: list[Chapter],
         series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        step_callback: Callable[[str], None] | None = None,
         book_path: Path | None = None,
     ) -> CharacterRoster:
         try:
@@ -53,6 +54,7 @@ class ModalExtractionProvider:
             chapters,
             series_roster=series_roster,
             progress_callback=progress_callback,
+            step_callback=step_callback,
             book_path=book_path,
         )
 
