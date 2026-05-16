@@ -223,7 +223,7 @@ class NLPPipeline:
             )(
                 chapters,
                 series_roster=series_roster,
-                progress_callback=_adapt,
+                progress_callback=None if step_callback is not None else _adapt,
                 step_callback=step_callback,
                 book_path=book_path,
             )

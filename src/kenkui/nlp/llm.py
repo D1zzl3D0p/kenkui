@@ -56,6 +56,11 @@ class LLMClient:
 
         last_exc: Exception | None = None
 
+        _logger.debug(
+            "LLM send: model=%s schema=%s prompt=%d words / %d chars (num_ctx=%d)",
+            self.model, schema.__name__, len(prompt.split()), len(prompt), _num_ctx,
+        )
+
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 response = ollama.chat(
@@ -70,8 +75,16 @@ class LLMClient:
                         f"Ollama model '{self.model}' returned empty content "
                         "(possible context overflow or grammar constraint failure)"
                     )
+                prompt_tokens = getattr(response, "prompt_eval_count", None)
+                if prompt_tokens is not None and prompt_tokens >= _num_ctx * 0.9:
+                    _logger.warning(
+                        "LLM prompt used %d / %d context tokens (%.0f%%) for model '%s' "
+                        "— responses may be truncated",
+                        prompt_tokens, _num_ctx, prompt_tokens / _num_ctx * 100, self.model,
+                    )
                 _logger.debug(
-                    "LLM attempt %d: %d chars received", attempt + 1, len(raw)
+                    "LLM attempt %d: %d chars received (prompt_tokens=%s)",
+                    attempt + 1, len(raw), prompt_tokens,
                 )
                 return schema.model_validate_json(raw)
             except Exception as exc:
