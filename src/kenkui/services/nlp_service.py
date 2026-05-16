@@ -55,7 +55,7 @@ def _extraction_step_count(method: str) -> int:
     if method == "spacy":
         return 1   # one synthetic step at completion
     if method == "booknlp":
-        return 3   # deduplicate + resolve_epithets + normalize
+        return 4   # extract + deduplicate + resolve_epithets + normalize
     return 4       # worst-case upper bound for auto/llm paths
 
 
