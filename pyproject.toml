@@ -36,6 +36,7 @@ dependencies = [
   "noisereduce>=3.0",
   "ffmpeg-normalize>=1.26",
   "huggingface_hub>=1.3.0",
+  "pymupdf>=1.24.0",
 ]
 
 [project.scripts]
@@ -51,7 +52,7 @@ dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"kenkui.samples" = ["*.epub"]
+"kenkui.samples" = ["*.epub", "*.pdf"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["*.wav", "*.safetensors", "*.pt", "*.bin"]

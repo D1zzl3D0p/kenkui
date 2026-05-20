@@ -220,6 +220,7 @@ from . import (
     epub,  # noqa: E402
     fb2,  # noqa: E402
     mobi,  # noqa: E402
+    pdf,  # noqa: E402
 )
 
 __all__ = [
@@ -232,4 +233,5 @@ __all__ = [
     "epub",
     "mobi",
     "fb2",
+    "pdf",
 ]
