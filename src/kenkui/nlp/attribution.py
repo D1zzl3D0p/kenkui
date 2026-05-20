@@ -33,9 +33,8 @@ You are analysing dialogue in a novel chapter.
 Your only job is to identify who says each pre-extracted quote.
 
 CANONICAL CHARACTER ROSTER
-Use ONLY the exact canonical name shown below (the part before the dash).
-The aliases in parentheses help you recognise who is speaking — but always
-respond with the canonical name, never an alias.
+Each character has a unique ID (lowercase, underscores) followed by their display name in
+parentheses. You MUST return the ID exactly as written — never the display name.
 
 {roster}
 
@@ -51,9 +50,14 @@ Quotes to attribute (do NOT add, skip, or reorder any):
 {quotes_json}
 
 INSTRUCTIONS:
-- "speaker": copy the EXACT canonical name from the roster, or "NARRATOR", or "Unknown".
-  Never abbreviate, nickname, or rephrase. If the text says 'said Tiffany' and the
-  canonical is 'Tiffany Aching', respond with 'Tiffany Aching'.
+- "speaker": return the exact character ID from the roster (lowercase-underscore format), or
+  "NARRATOR", or "Unknown". IDs use underscores, not spaces. Do NOT return display names,
+  nicknames, Title Case names, or aliases — return the ID only.
+  Example: if the text says 'said Tiffany' and the roster shows 'tiffany_aching  (name in text:
+  "Tiffany Aching")', return "tiffany_aching".
+- NEVER use a pronoun (he, she, him, her, his, hers, they, them, I, me, we, us, you, etc.)
+  as the "speaker" value. If the speaker can only be identified by pronoun and context
+  does not make it unambiguous, set speaker to "Unknown".
 - "emotion": one of neutral, happy, sad, angry, fearful, surprised, disgusted.
 - A quoted span that is a title, label, scare quote, acronym, or a single word used
   as a term is NOT dialogue — assign it to "NARRATOR".
@@ -77,28 +81,31 @@ def _format_roster(
     """Render the roster section of the prompt.
 
     Each character is shown as:
-        - "Canonical Name" (also: alias1, alias2, …)
+        - slug_id  (name in text: "Canonical Name"; also known as: alias1, alias2, …)
 
     NARRATOR and Unknown are appended with brief descriptions so the model
     understands their meaning.
     """
+    from .models import slugify as _slugify
     lines: list[str] = []
     for name in roster_names:
         if name in ("NARRATOR", "Unknown"):
             continue
-        if roster_aliases and name in roster_aliases:
-            aliases = [a for a in roster_aliases[name] if a != name]
-            if aliases:
-                lines.append(f'- "{name}"  (also known as: {", ".join(aliases)})')
-                continue
-        lines.append(f'- "{name}"')
-
+        slug = _slugify(name)
+        aliases = [a for a in (roster_aliases or {}).get(name, []) if a != name]
+        if aliases:
+            lines.append(
+                f'- {slug}  (name in text: "{name}"; also known as: {", ".join(aliases)})'
+            )
+        else:
+            lines.append(f'- {slug}  (name in text: "{name}")')
     lines.append(
-        '- "NARRATOR"  (narration, description, internal thought, AND any quoted text '
+        '- NARRATOR  (narration, description, internal thought, AND any quoted text '
         'that is NOT actual spoken dialogue — e.g. titles like "War and Peace", '
-        'words used as labels like the "lazy" one, acronyms like "UNESCO", scare quotes)'
+        'words used as labels like the "lazy" one, acronyms like "UNESCO", scare quotes, '
+        'italicised proper nouns like ship or planet names)'
     )
-    lines.append('- "Unknown"  (speaker cannot be determined from context)')
+    lines.append('- Unknown  (speaker cannot be determined from context)')
     return "\n".join(lines)
 
 

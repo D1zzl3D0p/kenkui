@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
-from kenkui.nlp.attribution import _attribute_chunk, attribute_all_chunks
+from kenkui.nlp.attribution import _attribute_chunk, attribute_all_chunks, _format_roster, _ATTRIBUTION_PROMPT
 from kenkui.nlp.chunker import Chunk
 from kenkui.nlp.models import AttributionItem, AttributionResult, Quote
 from kenkui.nlp import _normalize_speaker
@@ -234,3 +234,60 @@ class TestNormalizeSpeaker:
     def test_no_match_returns_original(self):
         result = _normalize_speaker("Zzyx", {}, ["Tiffany Aching"])
         assert result == "Zzyx"
+
+
+# ---------------------------------------------------------------------------
+# Fix 7: _format_roster slug-based IDs
+# ---------------------------------------------------------------------------
+
+
+class TestFormatRosterSlugs:
+    def test_slug_used_as_id_not_canonical_name(self):
+        """_format_roster should output slug IDs (e.g. 'darrow'), not canonical names."""
+        result = _format_roster(["Darrow", "Rhonna", "NARRATOR", "Unknown"], None)
+        assert "darrow" in result
+        assert "rhonna" in result
+        # Canonical names should still appear — but as display names in parentheses
+        assert '"Darrow"' in result
+        assert '"Rhonna"' in result
+        # The lines should NOT start with the bare canonical name as the ID
+        lines = result.splitlines()
+        char_lines = [l for l in lines if l.startswith("- darrow") or l.startswith("- rhonna")]
+        assert len(char_lines) == 2
+
+    def test_slug_id_with_aliases(self):
+        """Slug is primary ID; canonical name and aliases both appear in the parenthetical."""
+        roster_aliases = {"Tiffany Aching": ["Tiffany Aching", "Tiffany", "Miss Aching"]}
+        result = _format_roster(["Tiffany Aching", "NARRATOR", "Unknown"], roster_aliases)
+        # Slug ID must be present
+        assert "tiffany_aching" in result
+        # Canonical display name in parenthetical
+        assert '"Tiffany Aching"' in result
+        # Aliases in parenthetical
+        assert "Tiffany" in result
+        assert "Miss Aching" in result
+        # The character line starts with the slug, not the canonical name
+        char_line = next(l for l in result.splitlines() if "tiffany_aching" in l)
+        assert char_line.startswith("- tiffany_aching")
+
+    def test_narrator_and_unknown_sentinels_preserved_unquoted(self):
+        """NARRATOR and Unknown lines appear without quotes and without slugification."""
+        result = _format_roster(["Darrow", "NARRATOR", "Unknown"], None)
+        lines = result.splitlines()
+        narrator_line = next(l for l in lines if "NARRATOR" in l and l.startswith("- "))
+        unknown_line = next(l for l in lines if "Unknown" in l and l.startswith("- "))
+        # Must start with "- NARRATOR" and "- Unknown" (not quoted, not slugified)
+        assert narrator_line.startswith("- NARRATOR")
+        assert unknown_line.startswith("- Unknown")
+
+
+class TestAttributionPromptText:
+    def test_prompt_contains_pronoun_prohibition(self):
+        """_ATTRIBUTION_PROMPT must forbid pronoun values in the speaker field."""
+        assert "pronoun" in _ATTRIBUTION_PROMPT.lower() or (
+            "he, she" in _ATTRIBUTION_PROMPT or "he," in _ATTRIBUTION_PROMPT
+        )
+
+    def test_prompt_contains_lowercase_underscore_id_instruction(self):
+        """_ATTRIBUTION_PROMPT must instruct the model to return lowercase-underscore IDs."""
+        assert "lowercase" in _ATTRIBUTION_PROMPT or "ID" in _ATTRIBUTION_PROMPT
