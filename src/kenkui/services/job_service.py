@@ -96,6 +96,15 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
     if tts_execution_mode is not None:
         from kenkui.models import TTSExecutionMode
         kwargs["tts_execution_mode"] = TTSExecutionMode(tts_execution_mode)
+    voice_assignment_mode = state.get("voice_assignment_mode")
+    if voice_assignment_mode is not None:
+        kwargs["voice_assignment_mode"] = voice_assignment_mode
+    simple_male_voice = state.get("simple_male_voice")
+    if simple_male_voice is not None:
+        kwargs["simple_male_voice"] = simple_male_voice
+    simple_female_voice = state.get("simple_female_voice")
+    if simple_female_voice is not None:
+        kwargs["simple_female_voice"] = simple_female_voice
     return kwargs
 
 

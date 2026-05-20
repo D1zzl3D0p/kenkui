@@ -136,10 +136,21 @@ class LiteLLMAttributionAdapter:
             extra_kwargs["api_key"] = self._config.litellm_api_key
 
         client = instructor.from_litellm(_litellm.completion)
-        result = client.chat.completions.create(
-            model=self._config.attribution_model,
-            messages=[{"role": "user", "content": prompt}],
-            response_model=AttributionResultWire,
-            **extra_kwargs,
-        )
-        return attribution_wire_to_full(result)
+        try:
+            result = client.chat.completions.create(
+                model=self._config.attribution_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=AttributionResultWire,
+                **extra_kwargs,
+            )
+            return attribution_wire_to_full(result)
+        except Exception as exc:
+            _logger.warning(
+                "LiteLLMAttributionAdapter: attribution failed (%s); defaulting all quotes to Unknown",
+                exc,
+            )
+            from kenkui.nlp.models import AttributionItem
+            return AttributionResult(attributions=[
+                AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1)
+                for q in quotes
+            ])

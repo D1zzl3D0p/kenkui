@@ -120,8 +120,8 @@ class BookCache:
 
     def __init__(self, cache_path: Path | None = None) -> None:
         if cache_path is None:
-            from ..config import _xdg_config_home
-            cache_path = _xdg_config_home() / "kenkui" / "book_cache.json"
+            from ..config import CACHE_DIR
+            cache_path = CACHE_DIR / "book_cache.json"
         self._cache_path = cache_path
         self._entries: dict[str, BookEntry] = {}
         self._load()

@@ -483,18 +483,34 @@ class EpubReader(EbookReader):
                         ]
                         paragraphs.extend(lines)
 
-        # Strategy 2: Standard <p> and <div> elements
+        # Strategy 2: Standard <p> and <div> elements.
+        # Prioritise <p> elements regardless of nesting depth — books like
+        # Light Bringer wrap all paragraphs in a single <div>, so the old
+        # "skip if parent is div" guard collapsed entire chapters into one
+        # blob.  Fall back to top-level <div> extraction only when no <p>
+        # elements exist (e.g. some older EPUBs that use only <div>).
         if not paragraphs:
-            for elem in soup.find_all(["p", "div"]):
-                if elem.find_parent(["p", "div"]):
-                    continue
-                css_classes = elem.get("class") or []
-                if any("linespace" in c.lower() for c in css_classes):
-                    paragraphs.append("")
-                    continue
-                text = self._clean_text(self._extract_text_with_italic_markers(elem))
-                if text and len(text) >= 2:
-                    paragraphs.append(text)
+            p_elements = [e for e in soup.find_all("p") if not e.find_parent("p")]
+            if p_elements:
+                for elem in p_elements:
+                    css_classes = elem.get("class") or []
+                    if any("linespace" in c.lower() for c in css_classes):
+                        paragraphs.append("")
+                        continue
+                    text = self._clean_text(self._extract_text_with_italic_markers(elem))
+                    if text and len(text) >= 2:
+                        paragraphs.append(text)
+            else:
+                for elem in soup.find_all("div"):
+                    if elem.find_parent(["p", "div"]):
+                        continue
+                    css_classes = elem.get("class") or []
+                    if any("linespace" in c.lower() for c in css_classes):
+                        paragraphs.append("")
+                        continue
+                    text = self._clean_text(self._extract_text_with_italic_markers(elem))
+                    if text and len(text) >= 2:
+                        paragraphs.append(text)
 
         # Strategy 3: Handle script/dialogue format (<b> tags for speakers)
         # This is crucial for books like "Anxious People" where dialogue is in <b> tags
@@ -698,7 +714,13 @@ class EpubReader(EbookReader):
                     inner = self._extract_text_with_italic_markers(child)
                     if inner:
                         parts.append(inner)
-        return " ".join(parts)
+        # Join without inserting extra spaces — NavigableStrings already carry
+        # the correct surrounding whitespace from the source HTML.  Using
+        # " ".join() was inserting a spurious space between a dropcap
+        # NavigableString (e.g. "O") and the <span class="char-first"> that
+        # holds the rest of the first word ("ur sun floats in …"), producing
+        # "O ur sun floats in" instead of "Our sun floats in".
+        return "".join(parts)
 
     @staticmethod
     def _clean_text(text: str) -> str:

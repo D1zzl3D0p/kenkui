@@ -7,8 +7,11 @@ Pydantic schema, validates the response, and retries on transient failures.
 Key options
 -----------
 num_predict : 8192
-    Prevents Ollama from truncating long JSON responses mid-stream, which
-    was the root cause of "EOF while parsing" Pydantic validation errors.
+    Large chapters with many quotes can exceed this limit, producing a
+    truncated JSON response.  ``generate()`` detects EOF truncation and
+    attempts partial recovery before falling back to the caller's own
+    error handling.  Retries are skipped for truncation errors since the
+    same prompt always produces the same cut-off point.
 num_ctx : 16384 (env: KENKUI_NLP_OLLAMA_NUM_CTX)
     Total context window (prompt + output). Must exceed the prompt size.
     The roster prompt is ~5 500 tokens; 16 384 leaves headroom for output.
@@ -23,7 +26,7 @@ import os
 import logging
 from typing import TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -36,6 +39,41 @@ _LLM_OPTIONS = {
     "temperature": 0,
 }
 _MAX_RETRIES = 2
+
+
+def _is_eof_truncation(exc: ValidationError) -> bool:
+    """Return True if the ValidationError is caused by a truncated (EOF) JSON response."""
+    return any(
+        e.get("type") == "json_invalid" and "EOF" in str(e.get("msg", ""))
+        for e in exc.errors()
+    )
+
+
+def _try_recover_truncated_json(raw: str, schema: type[T]) -> T | None:
+    """Attempt to parse a schema instance from truncated JSON.
+
+    When the LLM hits its token limit mid-array the JSON is cut off somewhere
+    inside an incomplete object.  This function finds the last complete JSON
+    object (closing ``}``) before the cut-off, discards the partial entry, and
+    closes the array/document so Pydantic can validate what arrived intact.
+
+    Returns the recovered instance, or None if recovery fails.
+    """
+    if not raw or not raw.strip().startswith("{"):
+        return None
+
+    last_brace = raw.rfind("}")
+    if last_brace <= 0:
+        return None
+
+    truncated = raw[:last_brace + 1]
+    for closing in ("\n  ]\n}", "\n]\n}", "]}"):
+        try:
+            return schema.model_validate_json(truncated + closing)
+        except Exception:
+            continue
+
+    return None
 
 
 class LLMClient:
@@ -51,6 +89,10 @@ class LLMClient:
         *schema*, which instructs the model to produce conforming output.
         The response is validated by Pydantic.  Up to ``_MAX_RETRIES`` retries
         are attempted on validation failures before the exception propagates.
+
+        EOF truncation (token-limit cut-off) is handled specially: retrying
+        the same prompt will always produce the same cut-off, so instead we
+        attempt partial JSON recovery and skip further retries.
         """
         import ollama  # lazy — avoids import error when ollama not installed
 
@@ -68,6 +110,7 @@ class LLMClient:
                     messages=[{"role": "user", "content": prompt}],
                     format=schema.model_json_schema(),
                     options=_LLM_OPTIONS,
+                    think=False,
                 )
                 raw = response.message.content
                 if not raw:
@@ -86,7 +129,26 @@ class LLMClient:
                     "LLM attempt %d: %d chars received (prompt_tokens=%s)",
                     attempt + 1, len(raw), prompt_tokens,
                 )
-                return schema.model_validate_json(raw)
+                try:
+                    return schema.model_validate_json(raw)
+                except ValidationError as val_exc:
+                    if _is_eof_truncation(val_exc):
+                        recovered = _try_recover_truncated_json(raw, schema)
+                        if recovered is not None:
+                            _logger.warning(
+                                "LLM response truncated at %d chars; partially recovered "
+                                "(skipping retries — same prompt produces same cut-off)",
+                                len(raw),
+                            )
+                            return recovered
+                        # Truncation but unrecoverable — retrying won't help
+                        _logger.warning(
+                            "LLM response truncated at %d chars and could not be recovered",
+                            len(raw),
+                        )
+                        last_exc = val_exc
+                        break
+                    raise
             except Exception as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:

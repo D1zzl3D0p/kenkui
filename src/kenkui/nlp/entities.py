@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, Callable
 
 from ._filters import _is_proper_name
@@ -473,7 +474,8 @@ EXCERPT:
 ---
 
 INSTRUCTIONS:
-1. List every human character who speaks, acts, or is directly addressed.
+1. List EVERY named human character who appears in the excerpt in any capacity —
+   speaking, acting, being addressed, or merely mentioned by name.
    Use name strings EXACTLY as they appear in the excerpt — do not invent
    variants not present in the text.
 2. Choose the most complete name form as "canonical" (e.g. "Harry Potter"
@@ -483,12 +485,14 @@ INSTRUCTIONS:
 4. Exclude place names, organisations, and non-human entities.
 5. Seed names are hints only — include additional characters you find,
    and discard seeds that are not characters.
+6. Do NOT include personal pronouns (I, me, my, we, us, you, he, she, they,
+   etc.) as character names or aliases, even in first-person narratives.
 
 Return ONLY the JSON — no explanation.
 """
 
 # Number of equally-spaced buckets to sample from the book.
-_SAMPLE_BUCKETS = 5
+_SAMPLE_BUCKETS = 8
 
 
 def _sample_text_for_roster(full_text: str, target_words: int = 4000) -> str:
@@ -566,7 +570,8 @@ def _filter_roster_hallucinations(
     for group in roster.characters:
         kept = [
             a for a in group.aliases
-            if len(a.strip()) >= 2 and a.lower() in text_lower
+            if len(a.strip()) >= 2
+            and bool(re.search(r'(?<!\w)' + re.escape(a.lower()) + r'(?!\w)', text_lower))
         ]
         if not kept:
             logger.debug("filter_hallucinations: dropped entire entry %r", group.canonical_name)
@@ -588,7 +593,11 @@ def _filter_roster_hallucinations(
     return CharacterRoster(characters=groups)
 
 
-def _build_roster_spacy_chunked(text: str, nlp) -> CharacterRoster:
+def _build_roster_spacy_chunked(
+    text: str,
+    nlp,
+    step_callback: Callable[[str], None] | None = None,
+) -> CharacterRoster:
     """Run spaCy NER on *text* in max_length-safe chunks and merge results.
 
     Used when the full text exceeds ``nlp.max_length``.  Each chunk is
@@ -602,9 +611,23 @@ def _build_roster_spacy_chunked(text: str, nlp) -> CharacterRoster:
     if len(text) <= max_len:
         return build_roster(text, nlp)
 
+    # Pre-count chunks so we can report accurate block progress.
+    total_chunks = 0
+    _pos = 0
+    while _pos < len(text):
+        _end = min(_pos + max_len, len(text))
+        if _end < len(text):
+            _b = text.rfind(" ", _pos, _end)
+            if _b > _pos:
+                _end = _b
+        total_chunks += 1
+        _pos = _end
+
     all_names: list[str] = []
     seen: set[str] = set()
     start = 0
+    chunk_idx = 0
+    t0 = time.monotonic()
     while start < len(text):
         end = min(start + max_len, len(text))
         if end < len(text):
@@ -615,6 +638,10 @@ def _build_roster_spacy_chunked(text: str, nlp) -> CharacterRoster:
             if name not in seen:
                 seen.add(name)
                 all_names.append(name)
+        chunk_idx += 1
+        if step_callback:
+            elapsed = time.monotonic() - t0
+            step_callback(f"Block {chunk_idx}/{total_chunks} — {elapsed:.0f}s")
         start = end
 
     if not all_names:
@@ -627,7 +654,7 @@ def build_roster_with_llm(
     text: str,
     nlp=None,
     llm: "LLMClient | None" = None,
-    sample_words: int = 4000,
+    sample_words: int = 8000,
     method: str = "auto",
     step_callback: Callable[[str], None] | None = None,
 ) -> CharacterRoster:
@@ -666,7 +693,7 @@ def build_roster_with_llm(
         if nlp is None:
             raise ValueError("nlp model is required for method='spacy'")
         logger.info("build_roster: spaCy-only path")
-        roster = _build_roster_spacy_chunked(text, nlp)
+        roster = _build_roster_spacy_chunked(text, nlp, step_callback=step_callback)
         if step_callback:
             step_callback("Extracted characters")
         return roster
@@ -758,7 +785,7 @@ def build_roster_with_llm(
             logger.info("build_roster: no names survived hallucination filter; using heuristic")
             if _explicit_llm:
                 return CharacterRoster(characters=[])
-            return _build_roster_spacy_chunked(text, nlp)
+            return _build_roster_spacy_chunked(text, nlp, step_callback=step_callback)
 
         groups = _cluster_by_heuristic(all_names)
         logger.info(
@@ -782,7 +809,7 @@ def build_roster_with_llm(
         )
 
     # ── Tier 3: spaCy + heuristic (auto mode only) ───────────────────────────
-    roster = _build_roster_spacy_chunked(text, nlp)
+    roster = _build_roster_spacy_chunked(text, nlp, step_callback=step_callback)
     logger.info(
         "build_roster: heuristic path — %d canonical characters",
         len(roster.characters),

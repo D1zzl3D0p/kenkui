@@ -41,6 +41,25 @@ _QUOTE_RE = re.compile(
 # Match italic spans inserted by the EPUB/MOBI readers using STX/ETX markers.
 _ITALIC_RE = re.compile(r'\x02(.+?)\x03', re.DOTALL)
 
+# Matches proper-noun emphasis: every word starts with a capital letter,
+# optional leading article (The/A/An). Covers single-word ("Archimedes")
+# and multi-word ("The Pax", "Morning Star") ship/place/title names.
+# Spans with lowercase function words, sentence punctuation, or numbers
+# are intentionally NOT matched — those pass through as potential inner monologue.
+_DECORATIVE_ITALIC_RE = re.compile(
+    r'^(?:(?:The|A|An)\s+)?[A-Z][a-zA-Z\'\-]+(?:\s+[A-Z][a-zA-Z\'\-]+)*$'
+)
+
+
+def _is_decorative_italic(span: str) -> bool:
+    """Return True if *span* is a proper-noun emphasis rather than inner monologue.
+
+    Matches spans where every word starts with a capital letter (optional leading
+    article). Does NOT match spans with lowercase words, sentence punctuation, or
+    numbers — those pass through as potential inner monologue.
+    """
+    return bool(_DECORATIVE_ITALIC_RE.match(span.strip()))
+
 # Explicit labeling verbs that immediately precede a scare-quoted term.
 # Includes both bare ("call") and inflected ("called") forms so patterns like
 # "what you'd call a X" are handled alongside "what they called X".
@@ -165,6 +184,8 @@ def extract_quotes(paragraphs: list[str]) -> list[Quote]:
                 continue
             last_end = m.end()
             text = m.group(0) if kind == "dialogue" else m.group(1)
+            if kind == "italic" and _is_decorative_italic(text):
+                continue
             quotes.append(
                 Quote(
                     id=qid,

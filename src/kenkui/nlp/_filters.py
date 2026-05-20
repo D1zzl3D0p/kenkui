@@ -23,6 +23,16 @@ _COMMON_NOUNS = frozenset({
     "guard", "servant", "merchant", "captain",
 })
 
+_PRONOUNS = frozenset({
+    "i", "me", "my", "myself",
+    "we", "us", "our", "ourselves",
+    "you", "your", "yourself", "yourselves",
+    "he", "him", "his", "himself",
+    "she", "her", "hers", "herself",
+    "they", "them", "their", "theirs", "themselves",
+    "it", "its", "itself",
+})
+
 
 def _is_proper_name(text: str) -> bool:
     """Return True if *text* looks like a character name rather than a noun phrase.
@@ -42,6 +52,8 @@ def _is_proper_name(text: str) -> bool:
     if first in _PHRASE_STARTERS:
         return False
     if len(words) == 1 and first in _COMMON_NOUNS:
+        return False
+    if len(words) == 1 and first in _PRONOUNS:
         return False
     if any(w.lower() in _RELATIVE_WORDS for w in words):
         return False

@@ -123,8 +123,18 @@ class OllamaAttributionAdapter:
         prompt = f"{static_block}\n\n{dynamic_block}"
 
         llm = LLMClient(self._config.attribution_model)
-        result = llm.generate(prompt, AttributionResultWire)
-        return attribution_wire_to_full(result)
+        try:
+            result = llm.generate(prompt, AttributionResultWire)
+            return attribution_wire_to_full(result)
+        except Exception as exc:
+            _logger.warning(
+                "OllamaAttributionAdapter: attribution failed (%s); defaulting all quotes to Unknown",
+                exc,
+            )
+            return AttributionResult(attributions=[
+                AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1)
+                for q in quotes
+            ])
 
 
 # ---------------------------------------------------------------------------
