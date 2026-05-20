@@ -344,6 +344,24 @@ class TestAttributionToSegmentsPronounRemap:
         assert "NARRATOR" in speakers
         assert "they" not in speakers
 
+    def test_pronoun_capitalized_becomes_narrator(self):
+        """Capitalized pronoun from LLM (e.g. 'She') is slugified to 'she' then remapped.
+
+        This locks in the slug-before-remap ordering dependency: if slugification
+        ran *after* remap, 'She' would not be caught by the pronoun check.
+        """
+        para = '"I am here," She said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "She", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "NARRATOR" in speakers, (
+            f"Capitalized pronoun 'She' should be slugified to 'she' then remapped to NARRATOR: {speakers}"
+        )
+        assert "She" not in speakers, f"Raw capitalized pronoun 'She' should be gone: {speakers}"
+        assert "she" not in speakers, f"Slug 'she' should also be gone (remapped): {speakers}"
+
     def test_non_pronoun_character_not_remapped(self):
         """A real character name is not affected by pronoun remap."""
         para = '"Fight," Darrow said.'

@@ -816,7 +816,7 @@ def run_attribution(
             segments = _build_segments(clean_paras, quotes, all_attributions)
 
             for item in all_attributions.values():
-                if item.speaker not in ("NARRATOR", "Unknown"):
+                if item.speaker not in _SPEAKER_SENTINELS:
                     attribution_counts[item.speaker] += 1
 
         attributed_chapters.append(_replace(chapter, segments=segments))
@@ -1119,7 +1119,7 @@ def _attribution_to_segments(
         if q.id not in attributions:
             # Walk backwards for last non-NARRATOR/Unknown speaker
             last_speaker = next(
-                (s for s in reversed(resolved_in_order) if s not in ("NARRATOR", "Unknown")),
+                (s for s in reversed(resolved_in_order) if s not in _SPEAKER_SENTINELS),
                 None,
             )
             speaker = last_speaker if last_speaker else "NARRATOR"
@@ -1135,14 +1135,12 @@ def _attribution_to_segments(
             _spk = _slugify(_spk)
         resolved_in_order.append(_spk)
 
-    # Normalize all speaker strings to slugs before building segments
+    # Normalize all speaker strings to slugs, then remap pronoun slugs to NARRATOR.
+    # Both steps are run in a single pass; slug-before-remap ordering is preserved.
     for item in attributions.values():
         if item.speaker and item.speaker not in _SPEAKER_SENTINELS:
             item.speaker = _slugify(item.speaker)
-
-    # Remap pronoun slugs to NARRATOR — pronouns are never valid character IDs
-    for item in attributions.values():
-        if item.speaker in _PRONOUNS:
+        if item.speaker and item.speaker in _PRONOUNS:
             item.speaker = "NARRATOR"
 
     return _build_segments(clean_paragraphs, quotes, attributions)
