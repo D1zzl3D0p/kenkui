@@ -476,9 +476,14 @@ def _render_multi_voice(
                 f"[Worker {pid}] WARNING: failed to load voice '{voice_name}' for '{speaker}'"
                 f" ({primary_exc!r}) — trying fallbacks"
             )
-            _fallback_voices = [config_dict.get("voice") or "alba", "alba"]
+            fallback_voices: list[str] = []
+            seen: set[str] = {voice_name}
+            for v in [config_dict.get("voice") or "alba", "alba"]:
+                if v not in seen:
+                    fallback_voices.append(v)
+                    seen.add(v)
             loaded = False
-            for fallback_name in _fallback_voices:
+            for fallback_name in fallback_voices:
                 fallback_path = load_voice(fallback_name)
                 try:
                     speaker_states[speaker] = model.get_state_for_audio_prompt(fallback_path)
@@ -490,7 +495,7 @@ def _render_multi_voice(
             if not loaded:
                 raise RuntimeError(
                     f"All voice fallbacks failed for speaker '{speaker}' "
-                    f"(tried: {[voice_name] + _fallback_voices})"
+                    f"(tried: {[voice_name] + fallback_voices})"
                 ) from primary_exc
 
     total_segments = len(segments)

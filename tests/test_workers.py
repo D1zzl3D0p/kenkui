@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 from pydub import AudioSegment
 
@@ -547,6 +548,8 @@ class TestRenderMultiVoiceFallback:
         chapter = self._single_speaker_chapter()
         model = self._make_model()
         queue = self._make_queue()
+        # Use a non-default voice so 'alba' is a distinct fallback candidate.
+        config = {"voice": "custom_voice"}
 
         call_count = 0
 
@@ -559,16 +562,23 @@ class TestRenderMultiVoiceFallback:
 
         model.get_state_for_audio_prompt.side_effect = _state_side_effect
 
+        log_messages: list[str] = []
+
+        def _capture_log(msg: str) -> None:
+            log_messages.append(msg)
+
         with (
             patch("kenkui.workers.load_voice", return_value="alba"),
             tempfile.TemporaryDirectory() as td,
         ):
             result = _render_multi_voice(
-                chapter, model, {}, Path(td), queue, 1, _noop_log
+                chapter, model, config, Path(td), queue, 1, _capture_log
             )
 
         assert result is not None
         assert isinstance(result, AudioResult)
+        assert any("WARNING" in m for m in log_messages)
+        assert model.get_state_for_audio_prompt.call_count == 2
 
     def test_all_fallbacks_fail_raises_runtime_error(self):
         """When every voice path raises, RuntimeError with 'All voice fallbacks failed'."""
@@ -582,8 +592,6 @@ class TestRenderMultiVoiceFallback:
             patch("kenkui.workers.load_voice", return_value="alba"),
             tempfile.TemporaryDirectory() as td,
         ):
-            import pytest
-
             with pytest.raises(RuntimeError, match="All voice fallbacks failed"):
                 _render_multi_voice(
                     chapter, model, {}, Path(td), queue, 1, _noop_log
