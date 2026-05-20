@@ -4,7 +4,7 @@ Each process (TUI, server, worker) calls ``setup_logging()`` once at startup.
 
 Default behaviour (12-factor XI): logs go to stdout.
 Opt-in file logging: set the ``KENKUI_LOG_FILE`` environment variable to any
-non-empty value to write rotating files to ``~/.config/kenkui/`` instead::
+non-empty value to write rotating files to ``~/.local/state/kenkui/`` instead::
 
     KENKUI_LOG_FILE=1 kenkui run          # writes kenkui-tui.log etc.
 
@@ -24,9 +24,9 @@ import os
 import sys
 from pathlib import Path
 
-from .config import CONFIG_DIR
+from .config import STATE_DIR
 
-LOG_DIR: Path = CONFIG_DIR
+LOG_DIR: Path = STATE_DIR
 LOG_FORMAT = "%(asctime)s [%(process)d] %(name)s %(levelname)s %(message)s"
 LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB per file
 LOG_BACKUP_COUNT = 2  # keep 2 rotated backups
@@ -86,7 +86,7 @@ def setup_logging(process_name: str, level: int = logging.DEBUG) -> Path | None:
 
     By default logs go to stdout (12-factor XI). Set the ``KENKUI_LOG_FILE``
     environment variable to any non-empty value to write rotating files to
-    ``~/.config/kenkui/kenkui-<process_name>.log`` instead.
+    ``~/.local/state/kenkui/kenkui-<process_name>.log`` instead.
 
     Args:
         process_name: One of ``"tui"``, ``"server"``, or ``"workers"``.

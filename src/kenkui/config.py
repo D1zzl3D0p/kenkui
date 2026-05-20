@@ -12,6 +12,7 @@ module searches for  $XDG_CONFIG_HOME/kenkui/<name>.toml  automatically.
 from __future__ import annotations
 
 import os
+import shutil
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,18 @@ def _xdg_config_home() -> Path:
     return Path.home() / ".config"
 
 
+def _xdg_cache_home() -> Path:
+    """Return the XDG cache home directory, defaulting to ~/.cache."""
+    xdg = os.environ.get("XDG_CACHE_HOME", "")
+    return Path(xdg) if xdg else Path.home() / ".cache"
+
+
+def _xdg_state_home() -> Path:
+    """Return the XDG state home directory, defaulting to ~/.local/state."""
+    xdg = os.environ.get("XDG_STATE_HOME", "")
+    return Path(xdg) if xdg else Path.home() / ".local" / "state"
+
+
 def _kenkui_config_dir() -> Path:
     """Return (and create if needed) the kenkui config directory."""
     d = _xdg_config_home() / "kenkui"
@@ -41,11 +54,48 @@ def _kenkui_config_dir() -> Path:
     return d
 
 
-# Public constant so server/worker.py can locate the queue file without
-# importing the full ConfigManager.
+def _kenkui_cache_dir() -> Path:
+    """Return (and create if needed) the kenkui XDG cache directory."""
+    d = _xdg_cache_home() / "kenkui"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _kenkui_state_dir() -> Path:
+    """Return (and create if needed) the kenkui XDG state directory."""
+    d = _xdg_state_home() / "kenkui"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# Public constants — callers import these directly.
+# CONFIG_DIR: user configuration files (config.toml, credentials.toml, series/)
+# CACHE_DIR:  regeneratable cache data (nlp_cache/, book_cache.json, booknlp_cache/)
+# STATE_DIR:  persistent runtime state (logs, analytics.jsonl)
 CONFIG_DIR = _kenkui_config_dir()
+CACHE_DIR = _kenkui_cache_dir()
+STATE_DIR = _kenkui_state_dir()
 
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "default-config.toml"
+
+
+def _migrate_caches_if_needed() -> None:
+    """One-time silent migration: move cache items from CONFIG_DIR → CACHE_DIR.
+
+    Runs at import time so existing installs transparently pick up the new
+    XDG-compliant layout without requiring a manual migration step.
+    """
+    for name in ("nlp_cache", "book_cache.json", "booknlp_cache"):
+        src = CONFIG_DIR / name
+        dst = CACHE_DIR / name
+        if src.exists() and not dst.exists():
+            try:
+                shutil.move(str(src), str(dst))
+            except Exception:
+                pass  # never block startup
+
+
+_migrate_caches_if_needed()
 
 # ---------------------------------------------------------------------------
 # Provider credentials
