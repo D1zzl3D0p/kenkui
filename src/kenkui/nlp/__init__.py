@@ -49,8 +49,13 @@ from dataclasses import replace as _replace
 from pathlib import Path
 
 from ..text_rules import SCENE_BREAK_RE, is_scene_break
+from .models import slugify as _slugify
+from ._filters import _PRONOUNS
 
 logger = logging.getLogger(__name__)
+
+# Sentinel speaker values that must never be slugified or remapped.
+_SPEAKER_SENTINELS: frozenset[str] = frozenset({"NARRATOR", "Unknown"})
 
 
 def _is_scene_break(text: str) -> bool:
@@ -1125,7 +1130,20 @@ def _attribution_to_segments(
             attributions[q.id] = _AttributionItem(
                 quote_id=q.id, speaker=speaker, emotion="neutral", confidence=1
             )
-        resolved_in_order.append(attributions[q.id].speaker)
+        _spk = attributions[q.id].speaker
+        if _spk and _spk not in _SPEAKER_SENTINELS:
+            _spk = _slugify(_spk)
+        resolved_in_order.append(_spk)
+
+    # Normalize all speaker strings to slugs before building segments
+    for item in attributions.values():
+        if item.speaker and item.speaker not in _SPEAKER_SENTINELS:
+            item.speaker = _slugify(item.speaker)
+
+    # Remap pronoun slugs to NARRATOR — pronouns are never valid character IDs
+    for item in attributions.values():
+        if item.speaker in _PRONOUNS:
+            item.speaker = "NARRATOR"
 
     return _build_segments(clean_paragraphs, quotes, attributions)
 

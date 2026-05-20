@@ -202,3 +202,157 @@ class TestMergeConsecutiveSegments:
         ]
         result = self._merge(segs)
         assert " " in result[0].text
+
+
+# ---------------------------------------------------------------------------
+# _attribution_to_segments — slug normalisation and pronoun remap (Fix 1 + 4b)
+# ---------------------------------------------------------------------------
+
+
+def _make_chapter(paragraphs: list[str]):
+    """Return a minimal Chapter-like object."""
+    from kenkui.models import Chapter
+    return Chapter(index=0, title="Ch 1", paragraphs=paragraphs)
+
+
+def _make_attr_result(items: list[dict]):
+    """Build an AttributionResult from a list of dicts."""
+    from kenkui.nlp.models import AttributionItem, AttributionResult
+    return AttributionResult(
+        attributions=[AttributionItem(**item) for item in items]
+    )
+
+
+def _make_roster():
+    """Return a minimal CharacterRoster stub (not inspected by _attribution_to_segments)."""
+    from unittest.mock import MagicMock
+    return MagicMock()
+
+
+class TestAttributionToSegmentsSlugs:
+    """Fix 1: all attribution speakers are slugified before segments are built."""
+
+    def _run(self, paragraphs, items):
+        from kenkui.nlp import _attribution_to_segments
+        chapter = _make_chapter(paragraphs)
+        attr_result = _make_attr_result(items)
+        roster = _make_roster()
+        return _attribution_to_segments(chapter, attr_result, roster)
+
+    def test_canonical_speaker_becomes_slug(self):
+        """Speaker 'Darrow' (canonical case) → segment speaker 'darrow' (slug)."""
+        para = '"I will win," Darrow said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "Darrow", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "darrow" in speakers, f"Expected 'darrow' in {speakers}"
+        assert "Darrow" not in speakers, f"Canonical 'Darrow' should be slugified"
+
+    def test_multiword_canonical_becomes_slug(self):
+        """Speaker 'Elizabeth Bennet' → slug 'elizabeth_bennet'."""
+        para = '"Indeed," said Elizabeth Bennet.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "Elizabeth Bennet", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "elizabeth_bennet" in speakers, f"Expected 'elizabeth_bennet' in {speakers}"
+
+    def test_narrator_sentinel_unchanged(self):
+        """'NARRATOR' is a sentinel and must not be slugified."""
+        para = '"Hello," she said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "NARRATOR", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "NARRATOR" in speakers, f"NARRATOR sentinel should be preserved: {speakers}"
+
+    def test_unknown_sentinel_unchanged(self):
+        """'Unknown' is a sentinel and must not be slugified."""
+        para = '"Hello," she said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "Unknown", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "Unknown" in speakers, f"Unknown sentinel should be preserved: {speakers}"
+
+    def test_missing_quote_fallback_uses_slug(self):
+        """First quote attributed to 'Darrow'; second quote missing from attribution.
+        The fallback should carry 'darrow' (the already-slugified form), not 'Darrow'.
+        """
+        para1 = '"I will win," Darrow said.'
+        para2 = '"Forward," she called.'
+        segments = self._run(
+            [para1, para2],
+            # Only quote 0 attributed — quote 1 is missing, must fall back to 'darrow'
+            [{"quote_id": 0, "speaker": "Darrow", "emotion": "neutral", "confidence": 1}],
+        )
+        # Find the segment covering the second paragraph's quote
+        char_speakers = {s.speaker for s in segments if s.speaker not in ("NARRATOR",)}
+        assert "darrow" in char_speakers, (
+            f"Fallback speaker should be slug 'darrow', got: {char_speakers}"
+        )
+        assert "Darrow" not in char_speakers, (
+            f"Canonical 'Darrow' should not appear after slugification: {char_speakers}"
+        )
+
+
+class TestAttributionToSegmentsPronounRemap:
+    """Fix 4b: pronoun speaker slugs are remapped to NARRATOR."""
+
+    def _run(self, paragraphs, items):
+        from kenkui.nlp import _attribution_to_segments
+        chapter = _make_chapter(paragraphs)
+        attr_result = _make_attr_result(items)
+        roster = _make_roster()
+        return _attribution_to_segments(chapter, attr_result, roster)
+
+    def test_pronoun_she_becomes_narrator(self):
+        """Speaker 'she' is a pronoun → remapped to NARRATOR."""
+        para = '"I am here," she said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "she", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "NARRATOR" in speakers, f"Pronoun 'she' should remap to NARRATOR: {speakers}"
+        assert "she" not in speakers, f"Raw pronoun 'she' should be gone: {speakers}"
+
+    def test_pronoun_he_becomes_narrator(self):
+        """Speaker 'he' is a pronoun → remapped to NARRATOR."""
+        para = '"Come here," he said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "he", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "NARRATOR" in speakers, f"Pronoun 'he' should remap to NARRATOR: {speakers}"
+        assert "he" not in speakers
+
+    def test_pronoun_they_becomes_narrator(self):
+        """Speaker 'they' is a pronoun → remapped to NARRATOR."""
+        para = '"We are ready," they said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "they", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        assert "NARRATOR" in speakers
+        assert "they" not in speakers
+
+    def test_non_pronoun_character_not_remapped(self):
+        """A real character name is not affected by pronoun remap."""
+        para = '"Fight," Darrow said.'
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "Darrow", "emotion": "neutral", "confidence": 1}],
+        )
+        speakers = {s.speaker for s in segments}
+        # After slugification 'Darrow' → 'darrow'; it is not a pronoun, must not be NARRATOR
+        assert "darrow" in speakers
+        non_narrator = speakers - {"NARRATOR"}
+        assert non_narrator, "Character 'darrow' should not be remapped to NARRATOR"
