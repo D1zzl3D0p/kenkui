@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import multiprocessing
 import re
@@ -20,9 +21,13 @@ import imageio_ffmpeg
 from .analytics import StageRecord, append_record, now_utc
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
 from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
+from .nlp.models import slugify as _slugify
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .workers import worker_process_chapter
+
+# Sentinel speaker values that must never be slug-normalised.
+_SPEAKER_SENTINELS: frozenset[str] = frozenset({"NARRATOR", "Unknown"})
 
 
 # ---------------------------------------------------------------------------
@@ -61,8 +66,6 @@ def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> l
     Raises:
         AnnotatedChaptersCacheMissError: If ``cache_path`` does not exist.
     """
-    import json
-
     if not cache_path.exists():
         raise AnnotatedChaptersCacheMissError(
             f"NLP cache file not found: {cache_path}\n"
@@ -73,12 +76,10 @@ def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> l
     data = json.loads(cache_path.read_text(encoding="utf-8"))
     chapters = [Chapter.from_dict(ch) for ch in data.get("chapters", [])]
 
-    from kenkui.nlp.models import slugify as _slugify
-    _SPEAKER_SENTINELS = frozenset({"NARRATOR", "Unknown"})
     for chapter in chapters:
         if chapter.segments:
             for seg in chapter.segments:
-                if seg.speaker not in _SPEAKER_SENTINELS:
+                if not seg.is_scene_break and seg.speaker and seg.speaker not in _SPEAKER_SENTINELS:
                     seg.speaker = _slugify(seg.speaker)
 
     if included_indices:

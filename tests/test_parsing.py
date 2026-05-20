@@ -1,5 +1,6 @@
 """Tests for kenkui parsing functionality."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -73,9 +74,14 @@ class TestChapterDataclass:
 class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
     """Test that _load_annotated_chapters normalizes speaker strings to slugs at read time."""
 
-    def _make_cache(self, tmp_path: Path) -> Path:
-        import json
-
+    def _make_cache(self, tmp_path: Path, extra_segments: list | None = None) -> Path:
+        base_segments = [
+            {"text": "He said something.", "speaker": "Darrow", "index": 0, "is_scene_break": False},
+            {"text": "She replied.", "speaker": "Rhonna", "index": 1, "is_scene_break": False},
+            {"text": "Narration.", "speaker": "NARRATOR", "index": 2, "is_scene_break": False},
+            {"text": "Unknown speaker.", "speaker": "Unknown", "index": 3, "is_scene_break": False},
+            {"text": "Mixed Case Name.", "speaker": "Sevro Au Barca", "index": 4, "is_scene_break": False},
+        ]
         cache_data = {
             "chapters": [
                 {
@@ -83,13 +89,7 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
                     "title": "Chapter 1",
                     "paragraphs": [],
                     "toc_index": 0,
-                    "segments": [
-                        {"text": "He said something.", "speaker": "Darrow", "index": 0, "is_scene_break": False},
-                        {"text": "She replied.", "speaker": "Rhonna", "index": 1, "is_scene_break": False},
-                        {"text": "Narration.", "speaker": "NARRATOR", "index": 2, "is_scene_break": False},
-                        {"text": "Unknown speaker.", "speaker": "Unknown", "index": 3, "is_scene_break": False},
-                        {"text": "Mixed Case Name.", "speaker": "Sevro Au Barca", "index": 4, "is_scene_break": False},
-                    ],
+                    "segments": base_segments + (extra_segments or []),
                 }
             ]
         }
@@ -97,8 +97,8 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
         cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
         return cache_file
 
-    def test_slug_normalization_lowercases_non_sentinel_speakers(self, tmp_path):
-        """Non-sentinel speakers are converted to lowercase slugs at cache read time."""
+    def test_slug_normalization_speakers(self, tmp_path):
+        """Non-sentinel speakers are slugified; NARRATOR and Unknown are preserved."""
         from kenkui.parsing import _load_annotated_chapters
 
         cache_path = self._make_cache(tmp_path)
@@ -112,14 +112,29 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
         assert segs[1].speaker == "rhonna"
         assert segs[4].speaker == "sevro_au_barca"
 
-    def test_slug_normalization_preserves_sentinel_speakers(self, tmp_path):
-        """NARRATOR and Unknown sentinels are left unchanged."""
+        # Sentinel values must be left unchanged
+        assert segs[2].speaker == "NARRATOR"
+        assert segs[3].speaker == "Unknown"
+
+    def test_slug_normalization_null_speaker_does_not_crash(self, tmp_path):
+        """A segment with speaker=null in the cache must not raise AttributeError."""
         from kenkui.parsing import _load_annotated_chapters
 
-        cache_path = self._make_cache(tmp_path)
+        extra = [{"text": "* * *", "speaker": None, "index": 5, "is_scene_break": False}]
+        cache_path = self._make_cache(tmp_path, extra_segments=extra)
         chapters = _load_annotated_chapters(cache_path, [])
 
         segs = {s.index: s for s in chapters[0].segments}
+        # Segment.from_dict yields None for an explicit null; the guard must leave it as-is.
+        assert segs[5].speaker is None
 
-        assert segs[2].speaker == "NARRATOR"
-        assert segs[3].speaker == "Unknown"
+    def test_slug_normalization_skips_scene_break_segments(self, tmp_path):
+        """Scene-break segments are never slug-normalised, regardless of their speaker field."""
+        from kenkui.parsing import _load_annotated_chapters
+
+        extra = [{"text": "* * *", "speaker": "Some Name", "index": 6, "is_scene_break": True}]
+        cache_path = self._make_cache(tmp_path, extra_segments=extra)
+        chapters = _load_annotated_chapters(cache_path, [])
+
+        segs = {s.index: s for s in chapters[0].segments}
+        assert segs[6].speaker == "Some Name"
