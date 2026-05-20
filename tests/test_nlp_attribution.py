@@ -263,8 +263,8 @@ class TestFormatRosterSlugs:
         assert "tiffany_aching" in result
         # Canonical display name in parenthetical
         assert '"Tiffany Aching"' in result
-        # Aliases in parenthetical
-        assert "Tiffany" in result
+        # Aliases in parenthetical — must appear after "also known as:"
+        assert "also known as: Tiffany" in result
         assert "Miss Aching" in result
         # The character line starts with the slug, not the canonical name
         char_line = next(l for l in result.splitlines() if "tiffany_aching" in l)
@@ -290,4 +290,4 @@ class TestAttributionPromptText:
 
     def test_prompt_contains_lowercase_underscore_id_instruction(self):
         """_ATTRIBUTION_PROMPT must instruct the model to return lowercase-underscore IDs."""
-        assert "lowercase" in _ATTRIBUTION_PROMPT or "ID" in _ATTRIBUTION_PROMPT
+        assert "lowercase-underscore" in _ATTRIBUTION_PROMPT

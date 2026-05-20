@@ -19,7 +19,8 @@ from pydantic import ValidationError
 
 from .chunker import Chunk
 from .llm import LLMClient
-from .models import AttributionItem, AttributionResult, Quote
+from ._filters import _PRONOUNS
+from .models import AttributionItem, AttributionResult, Quote, slugify as _slugify
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +87,17 @@ def _format_roster(
     NARRATOR and Unknown are appended with brief descriptions so the model
     understands their meaning.
     """
-    from .models import slugify as _slugify
     lines: list[str] = []
     for name in roster_names:
         if name in ("NARRATOR", "Unknown"):
             continue
         slug = _slugify(name)
+        if slug in _PRONOUNS:
+            logger.warning(
+                "_format_roster: canonical name '%s' slugifies to pronoun '%s' — "
+                "the pronoun prohibition may cause it to be misattributed",
+                name, slug,
+            )
         aliases = [a for a in (roster_aliases or {}).get(name, []) if a != name]
         if aliases:
             lines.append(

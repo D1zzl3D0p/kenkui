@@ -1162,7 +1162,14 @@ def _normalize_speaker(
     if speaker in ("NARRATOR", "Unknown"):
         return speaker
 
+    # Try direct lowercase lookup first
     canonical = alias_to_canonical.get(speaker.lower())
+    if canonical:
+        return canonical
+
+    # After Fix 7, LLM may return slug form (underscores) — try converting back to spaces
+    slug_as_spaces = speaker.replace("_", " ")
+    canonical = alias_to_canonical.get(slug_as_spaces.lower())
     if canonical:
         return canonical
 
