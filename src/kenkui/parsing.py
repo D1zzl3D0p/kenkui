@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 import imageio_ffmpeg
 
+from .analytics import StageRecord, append_record, now_utc
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
 from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
 from .readers import EbookReader, get_reader
@@ -71,6 +72,14 @@ def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> l
 
     data = json.loads(cache_path.read_text(encoding="utf-8"))
     chapters = [Chapter.from_dict(ch) for ch in data.get("chapters", [])]
+
+    from kenkui.nlp.models import slugify as _slugify
+    _SPEAKER_SENTINELS = frozenset({"NARRATOR", "Unknown"})
+    for chapter in chapters:
+        if chapter.segments:
+            for seg in chapter.segments:
+                if seg.speaker not in _SPEAKER_SENTINELS:
+                    seg.speaker = _slugify(seg.speaker)
 
     if included_indices:
         idx_set = set(included_indices)
@@ -281,14 +290,49 @@ class AudioBuilder:
             else self.cfg.voice
         )
 
+        _book_char_count = sum(
+            len(p) for ch in chapters for p in ch.paragraphs
+        )
+        _narration_mode = (
+            "multi_voice" if self.cfg.speaker_voices else
+            "chapter_voice" if self.cfg.chapter_voices else
+            "single"
+        )
+        _chapter_count = len(chapters)
+        from .nlp import book_hash as _nlp_book_hash
+        try:
+            _book_hash = _nlp_book_hash(self.cfg.ebook_path)
+        except Exception:
+            _book_hash = ""
+        try:
+            _book_title = self._reader.get_metadata().title or "" if self._reader is not None else ""
+        except Exception:
+            _book_title = ""
+
         with self._managed_temp_dir():
             print(f"Building audiobook: {output_file.name}")
 
+            _tts_start = now_utc()
             t0 = time.monotonic()
             results = self._process_chapters(
                 chapters, chapter_batch_info, total_batches, total_chars
             )
-            logger.info("Phase 'processing' completed in %.1fs", time.monotonic() - t0)
+            _tts_dur = time.monotonic() - t0
+            logger.info("Phase 'processing' completed in %.1fs", _tts_dur)
+            append_record(StageRecord(
+                stage="tts_synthesis",
+                started_at=_tts_start,
+                duration_seconds=_tts_dur,
+                success=bool(results),
+                book_hash=_book_hash,
+                book_title=_book_title,
+                book_char_count=_book_char_count,
+                chapter_count=_chapter_count,
+                provider=self.cfg.tts_provider or "kokoro",
+                model=self.cfg.tts_model or "",
+                narration_mode=_narration_mode,
+                chars_per_second=_book_char_count / _tts_dur if _tts_dur > 0 else 0.0,
+            ))
 
             if not results:
                 print("No results generated. Aborting.")
@@ -298,24 +342,60 @@ class AudioBuilder:
             # Signal explicitly so the UI doesn't look frozen at 100%.
             self._signal_phase("Stitching audio files…")
             print("Stitching audio files...")
+            _stitch_start = now_utc()
             t0 = time.monotonic()
             self._stitch_files(results, output_file, narrator_label=narrator_label)
-            logger.info("Phase 'stitching' completed in %.1fs", time.monotonic() - t0)
+            _stitch_dur = time.monotonic() - t0
+            logger.info("Phase 'stitching' completed in %.1fs", _stitch_dur)
+            append_record(StageRecord(
+                stage="stitching",
+                started_at=_stitch_start,
+                duration_seconds=_stitch_dur,
+                success=True,
+                book_hash=_book_hash,
+                book_title=_book_title,
+                book_char_count=_book_char_count,
+                chapter_count=_chapter_count,
+            ))
 
             # ── Loudness normalization (optional) ────────────────────────
             if self.cfg.post_processing.enabled and self.cfg.post_processing.normalize:
                 from .post_processing import normalize_output
 
                 self._signal_phase("Normalizing loudness…")
+                _norm_start = now_utc()
                 t0 = time.monotonic()
                 normalize_output(output_file, self.cfg.post_processing)
-                logger.info("Phase 'normalization' completed in %.1fs", time.monotonic() - t0)
+                _norm_dur = time.monotonic() - t0
+                logger.info("Phase 'normalization' completed in %.1fs", _norm_dur)
+                append_record(StageRecord(
+                    stage="normalization",
+                    started_at=_norm_start,
+                    duration_seconds=_norm_dur,
+                    success=True,
+                    book_hash=_book_hash,
+                    book_title=_book_title,
+                    book_char_count=_book_char_count,
+                    chapter_count=_chapter_count,
+                ))
 
             # ── Cover embedding ──────────────────────────────────────────
             self._signal_phase("Embedding cover art…")
+            _cover_start = now_utc()
             t0 = time.monotonic()
             self._embed_cover(output_file)
-            logger.info("Phase 'cover_embedding' completed in %.1fs", time.monotonic() - t0)
+            _cover_dur = time.monotonic() - t0
+            logger.info("Phase 'cover_embedding' completed in %.1fs", _cover_dur)
+            append_record(StageRecord(
+                stage="cover_embedding",
+                started_at=_cover_start,
+                duration_seconds=_cover_dur,
+                success=True,
+                book_hash=_book_hash,
+                book_title=_book_title,
+                book_char_count=_book_char_count,
+                chapter_count=_chapter_count,
+            ))
 
             print(f"Audiobook created: {output_file}")
             return True
@@ -461,8 +541,9 @@ class AudioBuilder:
                 print("Worker errors encountered:")
                 for err in worker_errors:
                     print(f"- PID {err['pid']} {err['chapter']}: {err['message']}")
-                    if self.cfg.debug_html:
-                        print(err["traceback"])
+                    tb = err.get("traceback", "")
+                    if tb:
+                        print(tb)
 
         # Suppress unused variable warning — total_chapters used in loop above
         _ = total_chapters

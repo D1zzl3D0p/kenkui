@@ -68,3 +68,58 @@ class TestChapterDataclass:
         chapter = Chapter(index=2, title="Empty Chapter", paragraphs=[])
         assert chapter.index == 2
         assert chapter.paragraphs == []
+
+
+class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
+    """Test that _load_annotated_chapters normalizes speaker strings to slugs at read time."""
+
+    def _make_cache(self, tmp_path: Path) -> Path:
+        import json
+
+        cache_data = {
+            "chapters": [
+                {
+                    "index": 0,
+                    "title": "Chapter 1",
+                    "paragraphs": [],
+                    "toc_index": 0,
+                    "segments": [
+                        {"text": "He said something.", "speaker": "Darrow", "index": 0, "is_scene_break": False},
+                        {"text": "She replied.", "speaker": "Rhonna", "index": 1, "is_scene_break": False},
+                        {"text": "Narration.", "speaker": "NARRATOR", "index": 2, "is_scene_break": False},
+                        {"text": "Unknown speaker.", "speaker": "Unknown", "index": 3, "is_scene_break": False},
+                        {"text": "Mixed Case Name.", "speaker": "Sevro Au Barca", "index": 4, "is_scene_break": False},
+                    ],
+                }
+            ]
+        }
+        cache_file = tmp_path / "nlp_cache.json"
+        cache_file.write_text(json.dumps(cache_data), encoding="utf-8")
+        return cache_file
+
+    def test_slug_normalization_lowercases_non_sentinel_speakers(self, tmp_path):
+        """Non-sentinel speakers are converted to lowercase slugs at cache read time."""
+        from kenkui.parsing import _load_annotated_chapters
+
+        cache_path = self._make_cache(tmp_path)
+        chapters = _load_annotated_chapters(cache_path, [])
+
+        assert len(chapters) == 1
+        segs = {s.index: s for s in chapters[0].segments}
+
+        # Non-sentinels must be slugified
+        assert segs[0].speaker == "darrow"
+        assert segs[1].speaker == "rhonna"
+        assert segs[4].speaker == "sevro_au_barca"
+
+    def test_slug_normalization_preserves_sentinel_speakers(self, tmp_path):
+        """NARRATOR and Unknown sentinels are left unchanged."""
+        from kenkui.parsing import _load_annotated_chapters
+
+        cache_path = self._make_cache(tmp_path)
+        chapters = _load_annotated_chapters(cache_path, [])
+
+        segs = {s.index: s for s in chapters[0].segments}
+
+        assert segs[2].speaker == "NARRATOR"
+        assert segs[3].speaker == "Unknown"
