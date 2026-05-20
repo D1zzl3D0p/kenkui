@@ -24,7 +24,40 @@ from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
 from .nlp.models import slugify as _slugify, _SPEAKER_SENTINELS
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
+from .voice_loader import load_voice
 from .workers import worker_process_chapter
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight speaker/voice validation
+# ---------------------------------------------------------------------------
+
+
+def _warn_unresolvable_speakers(
+    chapters: list["Chapter"],
+    speaker_voices: dict[str, str],
+    log: "Callable[[str], None]",
+) -> None:
+    """Emit warnings for speakers that have no voice mapping or a missing safetensors path."""
+    seen: set[str] = set()
+    for ch in chapters:
+        for seg in ch.segments or []:
+            if seg.is_scene_break or seg.speaker in seen or seg.speaker in _SPEAKER_SENTINELS:
+                continue
+            seen.add(seg.speaker)
+            voice_name = speaker_voices.get(seg.speaker)
+            if voice_name is None:
+                log(
+                    f"WARNING: speaker '{seg.speaker}' has no voice mapping"
+                    " — will use narrator fallback"
+                )
+            else:
+                path = load_voice(voice_name)
+                if str(path).endswith(".safetensors") and not Path(path).exists():
+                    log(
+                        f"WARNING: voice '{voice_name}' for '{seg.speaker}'"
+                        f" → '{path}' not found on disk"
+                    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +342,10 @@ class AudioBuilder:
 
         with self._managed_temp_dir():
             print(f"Building audiobook: {output_file.name}")
+
+            # Pre-flight: warn about speaker/voice mismatches before spending hours on TTS
+            if self.cfg.speaker_voices and any(ch.segments for ch in chapters):
+                _warn_unresolvable_speakers(chapters, self.cfg.speaker_voices, print)
 
             _tts_start = now_utc()
             t0 = time.monotonic()

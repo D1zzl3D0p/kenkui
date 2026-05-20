@@ -138,3 +138,88 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
 
         segs = {s.index: s for s in chapters[0].segments}
         assert segs[6].speaker == "Some Name"
+
+
+class TestWarnUnresolvableSpeakers:
+    """Tests for _warn_unresolvable_speakers pre-flight helper."""
+
+    def _make_chapter(self, segments):
+        """Build a minimal Chapter with the given segments list."""
+        from kenkui.models import Chapter, Segment
+
+        segs = [
+            Segment(text=s["text"], speaker=s["speaker"], index=i,
+                    is_scene_break=s.get("is_scene_break", False))
+            for i, s in enumerate(segments)
+        ]
+        ch = Chapter(index=0, title="Ch 1", paragraphs=[])
+        ch.segments = segs
+        return ch
+
+    def test_no_mapping_emits_warning(self):
+        """Speaker with no entry in speaker_voices → warning logged."""
+        from kenkui.parsing import _warn_unresolvable_speakers
+
+        warnings = []
+        ch = self._make_chapter([{"text": "Hello.", "speaker": "darrow"}])
+        _warn_unresolvable_speakers([ch], {}, warnings.append)
+
+        assert len(warnings) == 1
+        assert "darrow" in warnings[0]
+        assert "no voice mapping" in warnings[0]
+
+    def test_missing_safetensors_emits_warning(self):
+        """Speaker mapped to a nonexistent .safetensors path → warning logged."""
+        from unittest.mock import patch
+        from kenkui.parsing import _warn_unresolvable_speakers
+
+        warnings = []
+        ch = self._make_chapter([{"text": "Hello.", "speaker": "darrow"}])
+        fake_path = "/nonexistent/darrow.safetensors"
+        speaker_voices = {"darrow": fake_path}
+
+        with patch("kenkui.parsing.load_voice", return_value=fake_path):
+            _warn_unresolvable_speakers([ch], speaker_voices, warnings.append)
+
+        assert len(warnings) == 1
+        assert "darrow" in warnings[0]
+        assert "not found on disk" in warnings[0]
+
+    def test_valid_non_safetensors_voice_no_warning(self):
+        """Speaker mapped to a non-safetensors voice (built-in) → no warning."""
+        from unittest.mock import patch
+        from kenkui.parsing import _warn_unresolvable_speakers
+
+        warnings = []
+        ch = self._make_chapter([{"text": "Hello.", "speaker": "darrow"}])
+        speaker_voices = {"darrow": "alba"}
+
+        with patch("kenkui.parsing.load_voice", return_value="alba.pt"):
+            _warn_unresolvable_speakers([ch], speaker_voices, warnings.append)
+
+        assert warnings == []
+
+    def test_sentinel_speakers_skipped(self):
+        """NARRATOR and Unknown sentinels do not trigger warnings."""
+        from kenkui.parsing import _warn_unresolvable_speakers
+
+        warnings = []
+        ch = self._make_chapter([
+            {"text": "Narration.", "speaker": "NARRATOR"},
+            {"text": "?", "speaker": "Unknown"},
+        ])
+        _warn_unresolvable_speakers([ch], {}, warnings.append)
+
+        assert warnings == []
+
+    def test_scene_break_segments_skipped(self):
+        """Segments with is_scene_break=True are not checked."""
+        from kenkui.parsing import _warn_unresolvable_speakers
+
+        warnings = []
+        ch = self._make_chapter([
+            {"text": "* * *", "speaker": "darrow", "is_scene_break": True},
+        ])
+        _warn_unresolvable_speakers([ch], {}, warnings.append)
+
+        assert warnings == []
