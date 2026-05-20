@@ -36,6 +36,11 @@ def slugify(name: str) -> str:
     return s.strip("_")
 
 
+# Speaker sentinel values that must never be slugified, remapped, or included
+# in attribution counts.  A single canonical definition shared by all modules.
+_SPEAKER_SENTINELS: frozenset[str] = frozenset({"NARRATOR", "Unknown"})
+
+
 # ---------------------------------------------------------------------------
 # Stage 1 — Quote extraction (pure Python, no LLM)
 # ---------------------------------------------------------------------------

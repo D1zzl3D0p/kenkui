@@ -593,11 +593,23 @@ class TestAttributionCountSlugNormalization:
         )
 
     def test_narrator_and_unknown_excluded_from_counts(self, tmp_path):
-        """NARRATOR and Unknown speakers must not appear in attribution_counts."""
+        """NARRATOR and Unknown speakers must not appear in attribution_counts.
+
+        The roster deliberately includes characters whose slugs match the
+        slugified forms of the sentinel values ("narrator", "unknown").  If the
+        sentinel guard in pipeline.attribute() were removed, those characters
+        would receive a non-zero quote_count.  The test therefore catches a real
+        regression rather than passing trivially.
+        """
         from kenkui.nlp.models import AttributionResult, AttributionItem
 
         pipeline = _make_pipeline()
-        roster = self._make_roster_darrow_rhonna()
+        # Include roster entries whose slugs equal the slugified sentinels so
+        # that removing the guard would cause a non-zero quote_count.
+        roster = CharacterRoster(characters=[
+            CharacterRecord(slug="narrator", canonical_name="Narrator", aliases=[], gender=""),
+            CharacterRecord(slug="unknown", canonical_name="Unknown", aliases=[], gender=""),
+        ])
 
         attr_result = AttributionResult(attributions=[
             AttributionItem(quote_id=1, speaker="NARRATOR", confidence=5),
@@ -619,7 +631,8 @@ class TestAttributionCountSlugNormalization:
 
         for ci in result.characters:
             assert ci.quote_count == 0, (
-                f"{ci.character_id} got quote_count={ci.quote_count}; sentinels should be excluded"
+                f"{ci.character_id} got quote_count={ci.quote_count}; "
+                "sentinel speakers must be excluded from attribution_counts"
             )
 
     def test_quote_count_correct_via_slug_lookup(self, tmp_path):
@@ -629,7 +642,7 @@ class TestAttributionCountSlugNormalization:
         pipeline = _make_pipeline()
         roster = self._make_roster_darrow_rhonna()
 
-        # Simulate slug-form speakers (post-Fix-7 LLM output)
+        # The LLM already returns slug-form speakers.
         attr_result = AttributionResult(attributions=[
             AttributionItem(quote_id=1, speaker="darrow", confidence=5),
             AttributionItem(quote_id=2, speaker="darrow", confidence=5),

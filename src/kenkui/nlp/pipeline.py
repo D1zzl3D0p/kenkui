@@ -25,19 +25,12 @@ from kenkui.nlp._cache import get_cache, put_cache
 from kenkui.nlp._filters import _PRONOUNS
 from kenkui.nlp._retry import with_retry
 from kenkui.nlp import _attribution_to_segments, book_hash
-from kenkui.nlp.models import slugify as _slugify
+from kenkui.nlp.models import slugify as _slugify, _SPEAKER_SENTINELS
 
 if TYPE_CHECKING:
     from kenkui.models import NLPResult, Chapter
     from kenkui.nlp.models import CharacterRoster
     from kenkui.nlp_config import NLPConfig
-
-
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
-
-_SPEAKER_SENTINELS: frozenset[str] = frozenset({"NARRATOR", "Unknown"})
 
 
 # ---------------------------------------------------------------------------

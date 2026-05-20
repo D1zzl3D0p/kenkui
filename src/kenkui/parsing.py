@@ -21,13 +21,10 @@ import imageio_ffmpeg
 from .analytics import StageRecord, append_record, now_utc
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
 from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
-from .nlp.models import slugify as _slugify
+from .nlp.models import slugify as _slugify, _SPEAKER_SENTINELS
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .workers import worker_process_chapter
-
-# Sentinel speaker values that must never be slug-normalised.
-_SPEAKER_SENTINELS: frozenset[str] = frozenset({"NARRATOR", "Unknown"})
 
 
 # ---------------------------------------------------------------------------

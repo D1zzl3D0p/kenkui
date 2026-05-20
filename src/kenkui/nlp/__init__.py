@@ -49,13 +49,10 @@ from dataclasses import replace as _replace
 from pathlib import Path
 
 from ..text_rules import SCENE_BREAK_RE, is_scene_break
-from .models import slugify as _slugify
+from .models import slugify as _slugify, _SPEAKER_SENTINELS
 from ._filters import _PRONOUNS
 
 logger = logging.getLogger(__name__)
-
-# Sentinel speaker values that must never be slugified or remapped.
-_SPEAKER_SENTINELS: frozenset[str] = frozenset({"NARRATOR", "Unknown"})
 
 
 def _is_scene_break(text: str) -> bool:
