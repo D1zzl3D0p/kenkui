@@ -521,6 +521,95 @@ class TestRenderMultiVoice:
 
 
 # ---------------------------------------------------------------------------
+# _render_multi_voice — voice fallback chain
+# ---------------------------------------------------------------------------
+
+
+class TestRenderMultiVoiceFallback:
+    """Tests for the per-speaker fallback chain when the primary voice fails."""
+
+    def _make_model(self):
+        model = MagicMock()
+        model.sample_rate = 24000
+        model.generate_audio.return_value = _make_tensor(24000)
+        model.get_state_for_audio_prompt.return_value = MagicMock()
+        return model
+
+    def _make_queue(self):
+        return multiprocessing.Queue()
+
+    def _single_speaker_chapter(self):
+        segs = [Segment(text="Hello.", speaker="narrator", index=0)]
+        return Chapter(index=0, title="Ch 0", paragraphs=[], segments=segs)
+
+    def test_fallback_succeeds_when_primary_voice_raises(self):
+        """get_state_for_audio_prompt raises on primary but succeeds on alba fallback."""
+        chapter = self._single_speaker_chapter()
+        model = self._make_model()
+        queue = self._make_queue()
+
+        call_count = 0
+
+        def _state_side_effect(path):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("stale safetensors")
+            return MagicMock()
+
+        model.get_state_for_audio_prompt.side_effect = _state_side_effect
+
+        with (
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = _render_multi_voice(
+                chapter, model, {}, Path(td), queue, 1, _noop_log
+            )
+
+        assert result is not None
+        assert isinstance(result, AudioResult)
+
+    def test_all_fallbacks_fail_raises_runtime_error(self):
+        """When every voice path raises, RuntimeError with 'All voice fallbacks failed'."""
+        chapter = self._single_speaker_chapter()
+        model = self._make_model()
+        queue = self._make_queue()
+
+        model.get_state_for_audio_prompt.side_effect = RuntimeError("broken voice")
+
+        with (
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            import pytest
+
+            with pytest.raises(RuntimeError, match="All voice fallbacks failed"):
+                _render_multi_voice(
+                    chapter, model, {}, Path(td), queue, 1, _noop_log
+                )
+
+    def test_happy_path_no_regression(self):
+        """Primary voice loads fine — normal result, no exception."""
+        chapter = self._single_speaker_chapter()
+        model = self._make_model()
+        queue = self._make_queue()
+
+        with (
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = _render_multi_voice(
+                chapter, model, {}, Path(td), queue, 1, _noop_log
+            )
+
+        assert result is not None
+        assert isinstance(result, AudioResult)
+        # get_state_for_audio_prompt called exactly once (primary voice, no fallback)
+        assert model.get_state_for_audio_prompt.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # worker_process_chapter — integration / retry
 # ---------------------------------------------------------------------------
 

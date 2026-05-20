@@ -150,7 +150,7 @@ def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[in
     Returns:
         ``(batch_count, total_characters)``
     """
-    if chapter.segments is not None:
+    if chapter.segments:
         renderable = [s for s in chapter.segments if not s.is_scene_break]
         total_chars = sum(len(s.text) for s in renderable)
         return len(renderable), total_chars
@@ -158,6 +158,52 @@ def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[in
     batches = batch_text(chapter.paragraphs, max_chars=batch_size)
     total_chars = sum(len(b) for b in batches)
     return len(batches), total_chars
+
+
+# ---------------------------------------------------------------------------
+# Chapter-title audio helper
+# ---------------------------------------------------------------------------
+
+
+def _render_chapter_title_audio(
+    title: str,
+    model,
+    voice_state,
+    log_message,
+    pid: int,
+    total_batches: int,
+    pause_before_ms: int,
+    pause_after_ms: int,
+    intra_segment_ms: int,
+    apostrophe_mode: str,
+) -> "AudioSegment":
+    """Render a chapter title as audio with configurable silence.
+
+    Titles with colon-delimited segments (e.g. "Chapter 1: Darrow: Castaway")
+    are split on ": " and each segment is rendered separately with
+    *intra_segment_ms* silence between them, so the listener hears a brief
+    pause between the chapter number, POV name, and subtitle.
+    """
+    audio = AudioSegment.silent(duration=pause_before_ms)
+    segments = title.split(": ")
+    for i, seg in enumerate(segments):
+        seg_audio = _render_text(
+            model,
+            voice_state,
+            seg,
+            log_message,
+            pid,
+            0,
+            total_batches,
+            frames_after_eos=0,
+            apostrophe_mode=apostrophe_mode,
+        )
+        if seg_audio is not None:
+            audio += seg_audio
+        if i < len(segments) - 1:
+            audio += AudioSegment.silent(duration=intra_segment_ms)
+    audio += AudioSegment.silent(duration=pause_after_ms)
+    return audio
 
 
 # ---------------------------------------------------------------------------
@@ -184,16 +230,6 @@ def worker_process_chapter(
 
     _signal.signal(_signal.SIGTERM, _sigterm)
 
-    # Configure logging for this worker process on first chapter call.
-    # setup_logging() is idempotent — subsequent calls for the same
-    # process_name are no-ops, so this pays no cost after the first chapter.
-    try:
-        from .log import setup_logging
-
-        setup_logging("workers")
-    except Exception:
-        pass
-
     pid = os.getpid()
     max_retries = 2
 
@@ -204,6 +240,20 @@ def worker_process_chapter(
     # Suppress all Python-level stdout/stderr in non-verbose mode so that
     # library chatter doesn't bleed through.
     verbose = config_dict.get("verbose", False)
+
+    # Configure logging before any redirect so file handlers write to the actual
+    # log file rather than the /dev/null descriptor captured at StreamHandler
+    # construction time.  When neither verbose nor KENKUI_LOG_FILE is set we
+    # deliberately set up logging INSIDE the redirect so the StreamHandler binds
+    # to /dev/null — this suppresses worker DEBUG noise in silent mode.
+    _use_file_log = bool(os.environ.get("KENKUI_LOG_FILE"))
+    if verbose or _use_file_log:
+        try:
+            from .log import setup_logging
+            setup_logging("workers")
+        except Exception:
+            pass
+
     last_error: Exception | None = None
     result: AudioResult | None = None
 
@@ -215,6 +265,12 @@ def worker_process_chapter(
             _stdout_suppress = contextlib.redirect_stdout(_devnull)
             _stderr_suppress = contextlib.redirect_stderr(_devnull)
         with _stdout_suppress, _stderr_suppress:
+            if not verbose and not _use_file_log:
+                try:
+                    from .log import setup_logging
+                    setup_logging("workers")
+                except Exception:
+                    pass
             for retry_attempt in range(max_retries + 1):
                 try:
                     result = _process_chapter_inner(
@@ -275,8 +331,8 @@ def _process_chapter_inner(
 
         apostrophe_mode = ApostropheMode(config_dict.get("apostrophe_mode", "expand_contractions"))
 
-        # ── Multi-voice path (NLP segments present) ──────────────────────
-        if chapter.segments is not None:
+        # ── Multi-voice path (NLP segments present and non-empty) ────────
+        if chapter.segments:
             return _render_multi_voice(
                 chapter, model, config_dict, temp_dir, queue, pid, log_message,
                 apostrophe_mode=apostrophe_mode,
@@ -318,21 +374,18 @@ def _process_chapter_inner(
         full_audio = AudioSegment.empty()
 
         if speak_chapter_titles and chapter.title:
-            full_audio += AudioSegment.silent(duration=pause_before_title_ms)
-            title_audio = _render_text(
+            full_audio += _render_chapter_title_audio(
+                chapter.title,
                 model,
                 voice_state,
-                chapter.title,
                 log_message,
                 pid,
-                0,
                 total_batches,
-                frames_after_eos=0,
+                pause_before_ms=pause_before_title_ms,
+                pause_after_ms=pause_after_title_ms,
+                intra_segment_ms=config_dict.get("pause_chapter_title_segment_ms", 600),
                 apostrophe_mode=apostrophe_mode,
             )
-            if title_audio is not None:
-                full_audio += title_audio
-            full_audio += AudioSegment.silent(duration=pause_after_title_ms)
 
         fae = config_dict.get("frames_after_eos")
         global_batch_idx = 0
@@ -415,8 +468,30 @@ def _render_multi_voice(
     for speaker in unique_speakers:
         voice_name: str = str(speaker_voices.get(speaker) or config_dict.get("voice") or "alba")
         voice_path = load_voice(voice_name)
-        speaker_states[speaker] = model.get_state_for_audio_prompt(voice_path)
-        log_message(f"[Worker {pid}]   {speaker} → {voice_path}")
+        try:
+            speaker_states[speaker] = model.get_state_for_audio_prompt(voice_path)
+            log_message(f"[Worker {pid}]   {speaker} → {voice_path}")
+        except Exception as primary_exc:
+            log_message(
+                f"[Worker {pid}] WARNING: failed to load voice '{voice_name}' for '{speaker}'"
+                f" ({primary_exc!r}) — trying fallbacks"
+            )
+            _fallback_voices = [config_dict.get("voice") or "alba", "alba"]
+            loaded = False
+            for fallback_name in _fallback_voices:
+                fallback_path = load_voice(fallback_name)
+                try:
+                    speaker_states[speaker] = model.get_state_for_audio_prompt(fallback_path)
+                    log_message(f"[Worker {pid}]   {speaker} → {fallback_path} (fallback)")
+                    loaded = True
+                    break
+                except Exception:
+                    continue
+            if not loaded:
+                raise RuntimeError(
+                    f"All voice fallbacks failed for speaker '{speaker}' "
+                    f"(tried: {[voice_name] + _fallback_voices})"
+                ) from primary_exc
 
     total_segments = len(segments)
     queue.put(
@@ -442,22 +517,20 @@ def _render_multi_voice(
 
     # Build initial audio with chapter title if enabled
     initial_audio = AudioSegment.empty()
-    if speak_chapter_titles and chapter.title:
-        initial_audio += AudioSegment.silent(duration=pause_before_title_ms)
-        title_audio = _render_text(
-            model,
-            speaker_states.get("NARRATOR", list(speaker_states.values())[0]),
+    if speak_chapter_titles and chapter.title and speaker_states:
+        narrator_state = speaker_states.get("NARRATOR") or next(iter(speaker_states.values()))
+        initial_audio += _render_chapter_title_audio(
             chapter.title,
+            model,
+            narrator_state,
             log_message,
             pid,
-            0,
             total_segments,
-            frames_after_eos=0,
+            pause_before_ms=pause_before_title_ms,
+            pause_after_ms=pause_after_title_ms,
+            intra_segment_ms=config_dict.get("pause_chapter_title_segment_ms", 600),
             apostrophe_mode=apostrophe_mode,
         )
-        if title_audio is not None:
-            initial_audio += title_audio
-        initial_audio += AudioSegment.silent(duration=pause_after_title_ms)
 
     # Render each segment with its speaker's voice state
     rendered: dict[int, tuple[AudioSegment, str]] = {}
