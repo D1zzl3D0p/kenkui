@@ -11,6 +11,7 @@ Wraps ExtractionProvider + AttributionProvider with:
 from __future__ import annotations
 
 import dataclasses
+import re
 import signal
 import threading
 from collections import defaultdict
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kenkui.nlp._cache import get_cache, put_cache
+from kenkui.nlp._filters import _PRONOUNS
 from kenkui.nlp._retry import with_retry
 from kenkui.nlp import _attribution_to_segments, book_hash
 
@@ -200,11 +202,19 @@ class NLPPipeline:
                 except Exception:
                     pass  # Corrupt/stale cache — fall through to fresh run
 
-        # Build progress adapter: (int, str) → str
+        # Build progress adapter: str → (int, str).
+        # Parses "Block N/M" messages for accurate block-level percentage;
+        # falls back to fixed +5% increments for named milestones.
+        _BLOCK_RE = re.compile(r"Block (\d+)/(\d+)")
         _pct = [0]
 
         def _adapt(msg: str) -> None:
-            _pct[0] = min(90, _pct[0] + 5)
+            m = _BLOCK_RE.search(msg)
+            if m:
+                current, total = int(m.group(1)), int(m.group(2))
+                _pct[0] = int(current / total * 90) if total > 0 else _pct[0]
+            else:
+                _pct[0] = min(90, _pct[0] + 5)
             if progress_callback:
                 progress_callback(_pct[0], msg)
 
@@ -223,12 +233,17 @@ class NLPPipeline:
             )(
                 chapters,
                 series_roster=series_roster,
-                progress_callback=None if step_callback is not None else _adapt,
+                progress_callback=_adapt,
                 step_callback=step_callback,
                 book_path=book_path,
             )
         finally:
             signal.signal(signal.SIGTERM, _orig_sigterm)
+
+        # Strip pronoun-slug characters produced by hallucinating LLMs
+        roster = CharacterRoster(
+            characters=[ch for ch in roster.characters if ch.slug not in _PRONOUNS]
+        )
 
         # Cache write
         try:

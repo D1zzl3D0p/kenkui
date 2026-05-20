@@ -114,7 +114,9 @@ def test_pipeline_extract_returns_roster(tmp_path):
     ):
         result = pipeline.extract(book_path, chapters, use_cache=True)
 
-    assert result is roster
+    # The filter always wraps a new CharacterRoster, so check by value not identity.
+    assert isinstance(result, CharacterRoster)
+    assert result.characters == roster.characters
     pipeline._extraction.build_roster.assert_called_once()
     mock_put.assert_called_once()
 
@@ -154,7 +156,9 @@ def test_pipeline_extract_skips_cache_when_disabled(tmp_path):
         result = pipeline.extract(book_path, chapters, use_cache=False)
 
     mock_get.assert_not_called()
-    assert result is roster
+    # The filter wraps a new object; check by value not identity.
+    assert isinstance(result, CharacterRoster)
+    assert result.characters == roster.characters
 
 
 def test_pipeline_extract_progress_callback_called(tmp_path):
@@ -448,3 +452,86 @@ def test_nlp_job_status_values():
     assert NLPJobStatus.RUNNING == "running"
     assert NLPJobStatus.DONE == "done"
     assert NLPJobStatus.FAILED == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Pronoun-slug filtering tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPronounFiltering:
+    """extract() must strip CharacterRecords whose slug is a pronoun."""
+
+    def test_pronoun_slugs_are_removed(self, tmp_path):
+        """Pronoun-slug characters (he, she) are filtered out of the returned roster."""
+        pipeline = _make_pipeline()
+
+        dirty_roster = CharacterRoster(characters=[
+            CharacterRecord(slug="she", canonical_name="She", aliases=[], gender="she/her"),
+            CharacterRecord(slug="he", canonical_name="He", aliases=[], gender="he/him"),
+            CharacterRecord(slug="darrow", canonical_name="Darrow", aliases=[], gender="he/him"),
+        ])
+        pipeline._extraction.build_roster.return_value = dirty_roster
+
+        book_path = tmp_path / "book.epub"
+        book_path.write_bytes(b"fake")
+        chapters = [_make_chapter()]
+
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+        ):
+            result = pipeline.extract(book_path, chapters, use_cache=False)
+
+        slugs = {ch.slug for ch in result.characters}
+        assert "she" not in slugs, "pronoun 'she' should be filtered out"
+        assert "he" not in slugs, "pronoun 'he' should be filtered out"
+        assert "darrow" in slugs, "real character 'darrow' must be kept"
+
+    def test_real_character_is_kept(self, tmp_path):
+        """A roster with only a real character slug is returned unchanged."""
+        pipeline = _make_pipeline()
+
+        clean_roster = CharacterRoster(characters=[
+            CharacterRecord(slug="darrow", canonical_name="Darrow", aliases=[], gender="he/him"),
+        ])
+        pipeline._extraction.build_roster.return_value = clean_roster
+
+        book_path = tmp_path / "book.epub"
+        book_path.write_bytes(b"fake")
+        chapters = [_make_chapter()]
+
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+        ):
+            result = pipeline.extract(book_path, chapters, use_cache=False)
+
+        assert len(result.characters) == 1
+        assert result.characters[0].slug == "darrow"
+
+    def test_filtered_roster_is_what_gets_cached(self, tmp_path):
+        """put_cache receives the filtered roster (without pronoun slugs)."""
+        pipeline = _make_pipeline()
+
+        dirty_roster = CharacterRoster(characters=[
+            CharacterRecord(slug="they", canonical_name="They", aliases=[], gender="they/them"),
+            CharacterRecord(slug="lyria", canonical_name="Lyria", aliases=[], gender="she/her"),
+        ])
+        pipeline._extraction.build_roster.return_value = dirty_roster
+
+        book_path = tmp_path / "book.epub"
+        book_path.write_bytes(b"fake")
+        chapters = [_make_chapter()]
+
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache") as mock_put,
+        ):
+            pipeline.extract(book_path, chapters, use_cache=False)
+
+        # Inspect the dict passed to put_cache
+        cached_dict = mock_put.call_args[0][0]
+        cached_slugs = {ch["slug"] for ch in cached_dict["characters"]}
+        assert "they" not in cached_slugs, "pronoun 'they' must not be in cache"
+        assert "lyria" in cached_slugs, "'lyria' must be in cache"
