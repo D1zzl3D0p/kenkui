@@ -535,3 +535,121 @@ class TestExtractPronounFiltering:
         cached_slugs = {ch["slug"] for ch in cached_dict["characters"]}
         assert "they" not in cached_slugs, "pronoun 'they' must not be in cache"
         assert "lyria" in cached_slugs, "'lyria' must be in cache"
+
+
+# ---------------------------------------------------------------------------
+# Attribution count slug normalization tests (Fix 5)
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionCountSlugNormalization:
+    """attribute() must accumulate quote counts by slug, not by canonical name."""
+
+    def _make_roster_darrow_rhonna(self) -> CharacterRoster:
+        return CharacterRoster(characters=[
+            CharacterRecord(slug="darrow", canonical_name="Darrow", aliases=[], gender="he/him"),
+            CharacterRecord(slug="rhonna", canonical_name="Rhonna", aliases=[], gender="she/her"),
+        ])
+
+    def test_attribution_counts_uses_slugs(self, tmp_path):
+        """attribution_counts keys are slugified; sentinel speakers are excluded."""
+        from kenkui.nlp.models import AttributionResult, AttributionItem
+
+        pipeline = _make_pipeline()
+        roster = self._make_roster_darrow_rhonna()
+
+        # LLM returns canonical-case speakers (the pre-Fix-7 scenario)
+        attr_result = AttributionResult(attributions=[
+            AttributionItem(quote_id=1, speaker="Darrow", confidence=5),
+            AttributionItem(quote_id=2, speaker="Darrow", confidence=4),
+            AttributionItem(quote_id=3, speaker="Rhonna", confidence=4),
+            AttributionItem(quote_id=4, speaker="NARRATOR", confidence=5),
+            AttributionItem(quote_id=5, speaker="Unknown", confidence=2),
+        ])
+        pipeline._attribution.attribute_chapter.return_value = attr_result
+
+        book_path = tmp_path / "book.epub"
+        book_path.write_bytes(b"fake")
+        chapters = [_make_chapter(0)]
+
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+            patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+            patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+        ):
+            result = pipeline.attribute(book_path, chapters, roster, use_cache=False)
+
+        # Find CharacterInfo by character_id
+        darrow_ci = next(c for c in result.characters if c.character_id == "darrow")
+        rhonna_ci = next(c for c in result.characters if c.character_id == "rhonna")
+
+        # Slugs must be used as keys: "Darrow" -> "darrow", "Rhonna" -> "rhonna"
+        assert darrow_ci.quote_count == 2, (
+            f"Expected darrow quote_count=2, got {darrow_ci.quote_count}"
+        )
+        assert rhonna_ci.quote_count == 1, (
+            f"Expected rhonna quote_count=1, got {rhonna_ci.quote_count}"
+        )
+
+    def test_narrator_and_unknown_excluded_from_counts(self, tmp_path):
+        """NARRATOR and Unknown speakers must not appear in attribution_counts."""
+        from kenkui.nlp.models import AttributionResult, AttributionItem
+
+        pipeline = _make_pipeline()
+        roster = self._make_roster_darrow_rhonna()
+
+        attr_result = AttributionResult(attributions=[
+            AttributionItem(quote_id=1, speaker="NARRATOR", confidence=5),
+            AttributionItem(quote_id=2, speaker="Unknown", confidence=2),
+        ])
+        pipeline._attribution.attribute_chapter.return_value = attr_result
+
+        book_path = tmp_path / "book.epub"
+        book_path.write_bytes(b"fake")
+        chapters = [_make_chapter(0)]
+
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+            patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+            patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+        ):
+            result = pipeline.attribute(book_path, chapters, roster, use_cache=False)
+
+        for ci in result.characters:
+            assert ci.quote_count == 0, (
+                f"{ci.character_id} got quote_count={ci.quote_count}; sentinels should be excluded"
+            )
+
+    def test_quote_count_correct_via_slug_lookup(self, tmp_path):
+        """ci.quote_count is correct when attribution keys are slugs matching rec.slug."""
+        from kenkui.nlp.models import AttributionResult, AttributionItem
+
+        pipeline = _make_pipeline()
+        roster = self._make_roster_darrow_rhonna()
+
+        # Simulate slug-form speakers (post-Fix-7 LLM output)
+        attr_result = AttributionResult(attributions=[
+            AttributionItem(quote_id=1, speaker="darrow", confidence=5),
+            AttributionItem(quote_id=2, speaker="darrow", confidence=5),
+            AttributionItem(quote_id=3, speaker="darrow", confidence=5),
+        ])
+        pipeline._attribution.attribute_chapter.return_value = attr_result
+
+        book_path = tmp_path / "book.epub"
+        book_path.write_bytes(b"fake")
+        chapters = [_make_chapter(0)]
+
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+            patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+            patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+        ):
+            result = pipeline.attribute(book_path, chapters, roster, use_cache=False)
+
+        darrow_ci = next(c for c in result.characters if c.character_id == "darrow")
+        assert darrow_ci.quote_count == 3, (
+            f"Expected darrow quote_count=3, got {darrow_ci.quote_count}"
+        )
