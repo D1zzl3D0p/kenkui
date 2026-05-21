@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
@@ -37,12 +36,6 @@ class NLPConfig(BaseSettings):
     # Tool endpoints
     ollama_url: str = "http://localhost:11434"
     ollama_num_ctx: int = 16384
-    litellm_api_base: str | None = None
-    litellm_api_key: str | None = Field(
-        None,
-        alias="LITELLM_API_KEY",
-        description="Read from LITELLM_API_KEY (no prefix) for cross-project compat.",
-    )
 
     # Retry policy
     retry_max_attempts: int = 3
@@ -56,12 +49,10 @@ class NLPConfig(BaseSettings):
         _tool_map: dict[str, ExtractionTool] = {
             "ollama": ExtractionTool.OLLAMA,
             "booknlp": ExtractionTool.BOOKNLP,
-            "litellm": ExtractionTool.LITELLM,
         }
         _attr_map: dict[str, AttributionTool] = {
             "ollama": AttributionTool.OLLAMA,
             "booknlp": AttributionTool.BOOKNLP,
-            "litellm": AttributionTool.LITELLM,
         }
         attr_provider = config.nlp_attribution_provider or config.nlp_provider
         extraction_tool = _tool_map.get(config.nlp_provider)

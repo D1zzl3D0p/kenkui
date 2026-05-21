@@ -43,11 +43,6 @@ class TestNLPConfigFromEnv:
         cfg = NLPConfig()
         assert cfg.extraction_tool == ExtractionTool.BOOKNLP
 
-    def test_attribution_tool_from_env(self, monkeypatch):
-        monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_TOOL", "litellm")
-        cfg = NLPConfig()
-        assert cfg.attribution_tool == AttributionTool.LITELLM
-
     def test_extraction_model_from_env(self, monkeypatch):
         monkeypatch.setenv("KENKUI_NLP_EXTRACTION_MODEL", "mistral")
         cfg = NLPConfig()
@@ -76,16 +71,13 @@ class TestExtractionToolEnum:
     def test_ollama_value(self):
         assert ExtractionTool.OLLAMA.value == "ollama"
 
-    def test_litellm_value(self):
-        assert ExtractionTool.LITELLM.value == "litellm"
-
     def test_from_string(self):
         assert ExtractionTool("booknlp") == ExtractionTool.BOOKNLP
 
 
 class TestAttributionToolEnum:
     def test_all_values(self):
-        assert {t.value for t in AttributionTool} == {"booknlp", "ollama", "litellm"}
+        assert {t.value for t in AttributionTool} == {"booknlp", "ollama"}
 
 
 class TestNLPConfigFromAppConfig:
@@ -112,12 +104,6 @@ class TestNLPConfigFromAppConfig:
         nlp_cfg = NLPConfig.from_app_config(app_cfg)
         assert nlp_cfg.extraction_tool == ExtractionTool.OLLAMA
         assert nlp_cfg.attribution_tool == AttributionTool.BOOKNLP
-
-    def test_litellm_provider_maps_correctly(self):
-        from kenkui.models import AppConfig
-        app_cfg = AppConfig.from_dict({"nlp_provider": "litellm", "nlp_model": "gpt-4"})
-        nlp_cfg = NLPConfig.from_app_config(app_cfg)
-        assert nlp_cfg.extraction_tool == ExtractionTool.LITELLM
 
     def test_unknown_provider_falls_back_to_ollama(self):
         from kenkui.models import AppConfig
