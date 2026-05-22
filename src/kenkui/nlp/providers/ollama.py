@@ -125,7 +125,23 @@ class OllamaAttributionAdapter:
         llm = LLMClient(self._config.attribution_model)
         try:
             result = llm.generate(prompt, AttributionResultWire)
-            return attribution_wire_to_full(result)
+            full = attribution_wire_to_full(result)
+            quotes_returned = len(full.attributions)
+            chapter_label = getattr(chapter, 'title', None) or getattr(chapter, 'index', '?')
+            if quotes_returned < len(quotes):
+                _logger.warning(
+                    "OllamaAttributionAdapter: chapter %r — LLM returned %d/%d quotes "
+                    "(missing %d; gaps filled by fallback in _attribution_to_segments)",
+                    chapter_label,
+                    quotes_returned, len(quotes),
+                    len(quotes) - quotes_returned,
+                )
+            else:
+                _logger.debug(
+                    "OllamaAttributionAdapter: chapter %r — %d/%d quotes attributed",
+                    chapter_label, quotes_returned, len(quotes),
+                )
+            return full
         except Exception as exc:
             _logger.warning(
                 "OllamaAttributionAdapter: attribution failed (%s); defaulting all quotes to Unknown",

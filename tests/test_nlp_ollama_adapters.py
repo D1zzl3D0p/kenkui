@@ -272,3 +272,96 @@ class TestOllamaProviderLegacyWrapper:
 
         assert isinstance(result, AttributionResult)
         assert result.attributions == []
+
+
+# ---------------------------------------------------------------------------
+# OllamaAttributionAdapter — quote-count gap diagnostic logging
+#
+# Regression test for:
+#   WARNING: Chapter N: quote id=X missing from LLM attribution
+#
+# The adapter must warn immediately (before segment building) when the LLM
+# returns fewer attributions than quotes sent, so operators can trace the
+# gap to the attribution step rather than hunting through segment warnings.
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaAttributionAdapterGapLogging:
+    """When LLM returns fewer quotes than requested, a WARNING must fire at the adapter."""
+
+    def _wire_result(self, items):
+        return AttributionResultWire(attributions=items)
+
+    def test_warns_when_llm_returns_fewer_quotes_than_requested(self, caplog):
+        """Regression: gap between quotes sent and quotes returned was previously silent.
+
+        If 3 quotes are sent and only 2 come back, the missing one is filled by
+        _attribution_to_segments — but operators couldn't see where the loss happened.
+        """
+        import logging
+        config = _make_config()
+        adapter = OllamaAttributionAdapter(config)
+
+        chapter = _make_chapter(['"First," she said. "Second," he said. "Third," it said.'])
+        roster = _make_roster("Alice", "Bob")
+
+        # LLM only returns attribution for 2 of 3 quotes
+        wire = self._wire_result([
+            AttributionItemWire(quote_id=0, speaker="alice", confidence=5),
+            AttributionItemWire(quote_id=1, speaker="bob", confidence=4),
+            # quote_id=2 intentionally missing
+        ])
+
+        with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=['"First," she said. "Second," he said. "Third," it said.']), \
+             patch("kenkui.nlp.quotes.extract_quotes", return_value=[
+                 MagicMock(id=0), MagicMock(id=1), MagicMock(id=2)
+             ]), \
+             patch("kenkui.nlp.annotator._build_alias_to_slug", return_value={}), \
+             patch("kenkui.nlp.annotator.annotate_chapter", return_value="annotated"), \
+             patch("kenkui.nlp.annotator._build_attribution_static_block", return_value=""), \
+             patch("kenkui.nlp.annotator._build_attribution_dynamic_block", return_value=""), \
+             patch("kenkui.nlp.llm.LLMClient.generate", return_value=wire), \
+             caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.ollama"):
+            adapter.attribute_chapter(chapter, roster)
+
+        warning_messages = [
+            r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert warning_messages, (
+            "A WARNING must fire when the LLM returns fewer quotes than were sent. "
+            f"Sent 3, got 2. No warning recorded. Records: {[r.message for r in caplog.records]}"
+        )
+        assert any("quot" in m.lower() or "2" in m or "3" in m for m in warning_messages), (
+            f"WARNING must reference quote counts. Got: {warning_messages}"
+        )
+
+    def test_no_warning_when_all_quotes_returned(self, caplog):
+        """When LLM returns attribution for every quote, no WARNING fires."""
+        import logging
+        config = _make_config()
+        adapter = OllamaAttributionAdapter(config)
+
+        chapter = _make_chapter(['"Hello," Alice said.'])
+        roster = _make_roster("Alice")
+
+        wire = self._wire_result([
+            AttributionItemWire(quote_id=0, speaker="alice", confidence=5),
+        ])
+
+        with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=['"Hello," Alice said.']), \
+             patch("kenkui.nlp.quotes.extract_quotes", return_value=[MagicMock(id=0)]), \
+             patch("kenkui.nlp.annotator._build_alias_to_slug", return_value={}), \
+             patch("kenkui.nlp.annotator.annotate_chapter", return_value="annotated"), \
+             patch("kenkui.nlp.annotator._build_attribution_static_block", return_value=""), \
+             patch("kenkui.nlp.annotator._build_attribution_dynamic_block", return_value=""), \
+             patch("kenkui.nlp.llm.LLMClient.generate", return_value=wire), \
+             caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.ollama"):
+            adapter.attribute_chapter(chapter, roster)
+
+        gap_warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING and "quot" in r.message.lower()
+        ]
+        assert not gap_warnings, (
+            f"No quote-gap WARNING expected when all quotes returned: {[r.message for r in gap_warnings]}"
+        )

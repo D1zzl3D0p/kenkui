@@ -1140,6 +1140,24 @@ def _attribution_to_segments(
         if item.speaker and item.speaker in _PRONOUNS:
             item.speaker = "NARRATOR"
 
+    # Validate: remap any speaker slug not in the roster to "Unknown".
+    # Catches LLM hallucinations ('computer'), short-form aliases not in the
+    # alias list ('screw' for 'screwface'), and slugs dropped when the roster
+    # response was truncated. "Unknown" is handled by narrator-voice fallback.
+    roster_slugs = {c.slug for c in roster.characters}
+    for item in attributions.values():
+        if (
+            item.speaker
+            and item.speaker not in _SPEAKER_SENTINELS
+            and item.speaker not in roster_slugs
+        ):
+            logger.warning(
+                "Chapter %d: speaker %r not in roster (roster size=%d) — "
+                "remapping to 'Unknown'",
+                chapter.index, item.speaker, len(roster_slugs),
+            )
+            item.speaker = "Unknown"
+
     return _build_segments(clean_paragraphs, quotes, attributions)
 
 

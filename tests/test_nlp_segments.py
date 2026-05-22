@@ -224,9 +224,17 @@ def _make_attr_result(items: list[dict]):
 
 
 def _make_roster():
-    """Return a minimal CharacterRoster stub (not inspected by _attribution_to_segments)."""
-    from unittest.mock import MagicMock
-    return MagicMock()
+    """Return a permissive CharacterRoster for tests that don't exercise roster validation.
+
+    Contains the slugs used by TestAttributionToSegmentsSlugs and
+    TestAttributionToSegmentsPronounRemap so those tests survive the roster
+    validation pass added in _attribution_to_segments.
+    """
+    from kenkui.nlp.models import CharacterRecord, CharacterRoster
+    return CharacterRoster(characters=[
+        CharacterRecord(slug="darrow", canonical_name="Darrow"),
+        CharacterRecord(slug="elizabeth_bennet", canonical_name="Elizabeth Bennet"),
+    ])
 
 
 class TestAttributionToSegmentsSlugs:
@@ -374,3 +382,232 @@ class TestAttributionToSegmentsPronounRemap:
         assert "darrow" in speakers
         non_narrator = speakers - {"NARRATOR"}
         assert non_narrator, "Character 'darrow' should not be remapped to NARRATOR"
+
+
+# ---------------------------------------------------------------------------
+# _attribution_to_segments — ghost speaker roster validation
+#
+# Regression tests for:
+#   WARNING: speaker 'screwface' has no voice mapping — will use narrator fallback
+#   WARNING: speaker 'computer' has no voice mapping — will use narrator fallback
+#   WARNING: speaker 'screw' has no voice mapping — will use narrator fallback
+#
+# Root cause: _attribution_to_segments slugified speakers but never validated
+# them against the roster.  LLM hallucinations ('computer') and short-form
+# aliases not in the alias list ('screw' for 'Screwface') propagated to the
+# audio worker with no voice mapping.
+# ---------------------------------------------------------------------------
+
+
+def _make_real_roster(*slugs: str):
+    """Return a CharacterRoster with one CharacterRecord per slug."""
+    from kenkui.nlp.models import CharacterRecord, CharacterRoster
+    return CharacterRoster(characters=[
+        CharacterRecord(slug=s, canonical_name=s.replace("_", " ").title())
+        for s in slugs
+    ])
+
+
+class TestAttributionToSegmentsRosterValidation:
+    """Ghost speakers (slugs not in the roster) must be remapped to 'Unknown'.
+
+    After the fix, the 'no voice mapping' WARNING in parsing.py:_warn_unresolvable_speakers
+    must never fire for hallucinated or alias-truncated speakers because they will
+    have been rewritten to 'Unknown' (a sentinel that the audio worker handles via
+    narrator-voice fallback) before the segments are returned.
+    """
+
+    def _run(self, paragraphs, items, roster):
+        from kenkui.nlp import _attribution_to_segments
+        chapter = _make_chapter(paragraphs)
+        attr_result = _make_attr_result(items)
+        return _attribution_to_segments(chapter, attr_result, roster)
+
+    # --- Valid slugs must pass through ---
+
+    def test_valid_roster_slug_passes_through(self):
+        """A slug present in the roster is NOT remapped — voice lookup will succeed."""
+        para = '"Forward," Darrow said.'
+        roster = _make_real_roster("darrow", "sevro")
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "darrow", "emotion": "neutral", "confidence": 5}],
+            roster,
+        )
+        speakers = {s.speaker for s in segments}
+        assert "darrow" in speakers, (
+            f"Valid roster slug 'darrow' must not be remapped: {speakers}"
+        )
+
+    # --- Regression: LLM hallucination ('computer') ---
+
+    def test_hallucinated_slug_computer_remapped_to_unknown(self):
+        """'computer' is not a character; LLM hallucination must become 'Unknown'.
+
+        Regression: speaker 'computer' has no voice mapping — will use narrator fallback
+        """
+        para = '"Access granted," the computer said.'
+        roster = _make_real_roster("darrow", "sevro", "screwface")
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "computer", "emotion": "neutral", "confidence": 3}],
+            roster,
+        )
+        speakers = {s.speaker for s in segments}
+        assert "computer" not in speakers, (
+            f"Hallucinated slug 'computer' must be remapped, not kept: {speakers}"
+        )
+        assert "Unknown" in speakers, (
+            f"Hallucinated slug must become 'Unknown': {speakers}"
+        )
+
+    # --- Regression: short-form alias ('screw' for 'screwface') ---
+
+    def test_unregistered_alias_screw_remapped_to_unknown(self):
+        """'screw' is a short form of 'screwface' not in the alias list → 'Unknown'.
+
+        Regression: speaker 'screw' has no voice mapping — will use narrator fallback
+        """
+        para = '"Move," Screw said.'
+        roster = _make_real_roster("screwface")  # 'screw' is not a registered slug
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "screw", "emotion": "neutral", "confidence": 2}],
+            roster,
+        )
+        speakers = {s.speaker for s in segments}
+        assert "screw" not in speakers, (
+            f"Unregistered alias 'screw' must be remapped, not kept: {speakers}"
+        )
+        assert "Unknown" in speakers, (
+            f"Unregistered alias must become 'Unknown': {speakers}"
+        )
+
+    # --- Regression: roster truncation ('screwface' dropped by LLM truncation) ---
+
+    def test_slug_from_truncated_roster_remapped_to_unknown(self):
+        """If 'screwface' was dropped from the roster by LLM truncation, attribution
+        may return it anyway (hallucination).  It must be caught and remapped.
+
+        Regression: speaker 'screwface' has no voice mapping — will use narrator fallback
+        """
+        para = '"Die," Screwface said.'
+        # Roster does NOT contain 'screwface' — simulates truncated roster
+        roster = _make_real_roster("darrow", "sevro")
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "screwface", "emotion": "neutral", "confidence": 4}],
+            roster,
+        )
+        speakers = {s.speaker for s in segments}
+        assert "screwface" not in speakers, (
+            f"Slug from truncated roster must be caught: {speakers}"
+        )
+        assert "Unknown" in speakers, (
+            f"Slug from truncated roster must become 'Unknown': {speakers}"
+        )
+
+    # --- Sentinels must not be touched ---
+
+    def test_narrator_sentinel_not_remapped(self):
+        """NARRATOR is a sentinel value; roster validation must skip it."""
+        para = '"Hello," she said.'
+        roster = _make_real_roster("darrow")
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "NARRATOR", "emotion": "neutral", "confidence": 1}],
+            roster,
+        )
+        speakers = {s.speaker for s in segments}
+        assert "NARRATOR" in speakers, f"NARRATOR sentinel must survive: {speakers}"
+
+    def test_unknown_sentinel_not_remapped(self):
+        """'Unknown' is already the fallback sentinel; roster validation must skip it."""
+        para = '"Something," someone said.'
+        roster = _make_real_roster("darrow")
+        segments = self._run(
+            [para],
+            [{"quote_id": 0, "speaker": "Unknown", "emotion": "neutral", "confidence": 1}],
+            roster,
+        )
+        speakers = {s.speaker for s in segments}
+        assert "Unknown" in speakers, f"Unknown sentinel must survive: {speakers}"
+
+    # --- Warning emission ---
+
+    def test_ghost_speaker_emits_warning_with_slug_name(self, caplog):
+        """When a ghost slug is found, a WARNING must name it so it's diagnosable."""
+        import logging
+        para = '"Beep," the computer said.'
+        roster = _make_real_roster("darrow")
+        chapter = _make_chapter([para])
+        attr_result = _make_attr_result(
+            [{"quote_id": 0, "speaker": "computer", "emotion": "neutral", "confidence": 3}]
+        )
+        from kenkui.nlp import _attribution_to_segments
+        with caplog.at_level(logging.WARNING, logger="kenkui.nlp"):
+            _attribution_to_segments(chapter, attr_result, roster)
+        warning_messages = [
+            r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert any("computer" in m for m in warning_messages), (
+            f"WARNING must name the ghost slug 'computer': {warning_messages}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _attribution_to_segments — attribution gap (missing quote IDs) logging
+#
+# Regression test for:
+#   WARNING: Chapter N: quote id=X missing from LLM attribution
+#
+# Root cause: truncated attribution responses leave trailing quote IDs
+# unattributed.  The fallback (last-seen-speaker) fills them in but this
+# should be loudly logged so operators know attribution quality degraded.
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionGapWarning:
+    """When the LLM skips quote IDs, a WARNING must fire for each missing one."""
+
+    def test_missing_quote_emits_warning(self, caplog):
+        """Two quotes extracted, only one attributed → WARNING for the missing one."""
+        import logging
+        para1 = '"First," Darrow said.'
+        para2 = '"Second," Darrow said.'
+        roster = _make_real_roster("darrow")
+        chapter = _make_chapter([para1, para2])
+        attr_result = _make_attr_result(
+            # Only quote 0 attributed; quote 1 is absent → must trigger WARNING
+            [{"quote_id": 0, "speaker": "darrow", "emotion": "neutral", "confidence": 5}]
+        )
+        from kenkui.nlp import _attribution_to_segments
+        with caplog.at_level(logging.WARNING, logger="kenkui.nlp"):
+            _attribution_to_segments(chapter, attr_result, roster)
+        warning_messages = [
+            r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert any("missing" in m.lower() for m in warning_messages), (
+            f"WARNING about missing quote must fire: {warning_messages}"
+        )
+
+    def test_no_gap_warning_when_all_attributed(self, caplog):
+        """All quotes attributed → no 'missing' WARNING fires."""
+        import logging
+        para = '"Hello," Darrow said.'
+        roster = _make_real_roster("darrow")
+        chapter = _make_chapter([para])
+        attr_result = _make_attr_result(
+            [{"quote_id": 0, "speaker": "darrow", "emotion": "neutral", "confidence": 5}]
+        )
+        from kenkui.nlp import _attribution_to_segments
+        with caplog.at_level(logging.WARNING, logger="kenkui.nlp"):
+            _attribution_to_segments(chapter, attr_result, roster)
+        missing_warnings = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING and "missing" in r.message.lower()
+        ]
+        assert not missing_warnings, (
+            f"No missing-quote WARNING expected when fully attributed: "
+            f"{[r.message for r in missing_warnings]}"
+        )
