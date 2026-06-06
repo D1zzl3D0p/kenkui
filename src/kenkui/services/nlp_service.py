@@ -238,7 +238,7 @@ def fast_scan(
             book_hash_value=ebook_hash,
         )
 
-    def _extraction_message(msg: str) -> None:
+    def _extraction_message(_pct: int, msg: str) -> None:
         _emit_nlp_progress(
             progress_event_callback,
             stage="nlp_extraction",
@@ -503,7 +503,7 @@ def full_analysis(
                 book_hash_value=ebook_hash,
             )
 
-        def _extraction_message(msg: str) -> None:
+        def _extraction_message(_pct: int, msg: str) -> None:
             _emit_nlp_progress(
                 extraction_progress_event_callback,
                 stage="nlp_extraction",

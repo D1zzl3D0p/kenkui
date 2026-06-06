@@ -206,6 +206,35 @@ def test_fast_scan_progress_event_callback_uses_chapter_units(tmp_path):
     assert all(event.total_units == 2 for event in events)
 
 
+def test_fast_scan_accepts_pipeline_percent_message_progress(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = [Chapter(index=0, title="Ch", paragraphs=["t"])]
+
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    def _extract_side_effect(*_args, **kwargs):
+        kwargs["progress_callback"](33, "Building character roster")
+        return _make_mock_roster()
+
+    mock_pipeline.extract.side_effect = _extract_side_effect
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
+        patch("kenkui.services.nlp_service.cache_roster"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+    ):
+        fast_scan(str(fake_epub), nlp_model="llama3.2", progress_event_callback=events.append)
+
+    assert "Building character roster" in [event.message for event in events]
+
+
 # ---------------------------------------------------------------------------
 # full_analysis tests
 # ---------------------------------------------------------------------------
@@ -347,6 +376,41 @@ def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
         assert isinstance(m, str)
     for i in range(1, len(percents)):
         assert percents[i] >= percents[i - 1]
+
+
+def test_full_analysis_accepts_pipeline_percent_message_progress(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = [Chapter(index=0, title="Ch", paragraphs=["t"])]
+
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    def _extract_side_effect(*_args, **kwargs):
+        kwargs["progress_callback"](33, "Building character roster")
+        return _make_mock_roster()
+
+    mock_pipeline.extract.side_effect = _extract_side_effect
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
+    ):
+        full_analysis(
+            str(fake_epub),
+            nlp_model="llama3.2",
+            extraction_progress_event_callback=events.append,
+        )
+
+    assert "Building character roster" in [event.message for event in events]
 
 
 def test_full_analysis_attribution_progress_event_callback_uses_chapter_units(tmp_path):
