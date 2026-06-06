@@ -9,6 +9,7 @@ skipped automatically when the model is not installed.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,12 +22,15 @@ from kenkui.nlp.entities import (
     _significant_words,
     build_roster,
     build_roster_with_llm,
-    extract_person_names,
     infer_gender_pronouns,
 )
-from kenkui.nlp.models import CharacterRecord, CharacterRoster
+from kenkui.nlp.models import (
+    CharacterRecord,
+    CharacterRecordWire,
+    CharacterRoster,
+    CharacterRosterWire,
+)
 from kenkui.nlp.models import slugify as nlp_slugify
-
 
 # ---------------------------------------------------------------------------
 # _significant_words
@@ -365,6 +369,18 @@ class TestFilterRosterHallucinations:
         # Single-char alias stripped (len < 2)
         assert result.characters == []
 
+    def test_logs_hallucinated_alias_drops(self, caplog):
+        text = "Harry walked in."
+        roster = self._roster(
+            ("Harry", ["Harry", "Hermione Granger"]),
+            ("Gandalf", ["Gandalf"]),
+        )
+        with caplog.at_level(logging.INFO, logger="kenkui.nlp.entities"):
+            _filter_roster_hallucinations(roster, text)
+
+        assert any("dropped hallucinated entry" in r.message for r in caplog.records)
+        assert any("dropped 2 alias" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # build_roster_with_llm
@@ -476,11 +492,88 @@ class TestBuildRosterWithLLM:
         canonicals = {g.canonical_name for g in result.characters}
         assert "Harry Potter" in canonicals
 
+    def test_llm_roster_extraction_covers_later_chunks(self):
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult
+
+        early = "Alice Ardent opened the first door."
+        filler = "ordinary corridor words " * 40
+        late = "Zelda Zenith closed the final gate."
+        text = f"{early}\n\n{filler}\n\n{late}"
+
+        llm = MagicMock()
+
+        def fake_generate(prompt, schema):
+            if schema.__name__ == "CharacterRosterWire":
+                characters = []
+                if "Alice Ardent" in prompt:
+                    characters.append(
+                        CharacterRecordWire(
+                            slug="alice_ardent",
+                            canonical_name="Alice Ardent",
+                            aliases=["Alice Ardent"],
+                        )
+                    )
+                if "Zelda Zenith" in prompt:
+                    characters.append(
+                        CharacterRecordWire(
+                            slug="zelda_zenith",
+                            canonical_name="Zelda Zenith",
+                            aliases=["Zelda Zenith"],
+                        )
+                    )
+                return CharacterRosterWire(characters=characters)
+            if schema.__name__ == "CanonicalMergeResult":
+                return CanonicalMergeResult(merges=[])
+            if schema.__name__ == "NameNormalizationResult":
+                return NameNormalizationResult(names=[])
+            raise AssertionError(schema.__name__)
+
+        llm.generate.side_effect = fake_generate
+
+        result = build_roster_with_llm(
+            text,
+            nlp=None,
+            llm=llm,
+            method="llm",
+            sample_words=10,
+        )
+
+        canonicals = {g.canonical_name for g in result.characters}
+        assert {"Alice Ardent", "Zelda Zenith"} <= canonicals
+        character_calls = [
+            call for call in llm.generate.call_args_list
+            if call.args[1].__name__ == "CharacterRosterWire"
+        ]
+        assert len(character_calls) > 1
+
+    def test_logs_chunk_failures_and_auto_fallback(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            "kenkui.nlp.booknlp_roster.build_roster_from_booknlp",
+            lambda text: None,
+        )
+        text = "Harry Potter walked in.\n\n" + ("filler words " * 30)
+        nlp = MagicMock()
+        doc = MagicMock()
+        ent = MagicMock()
+        ent.label_ = "PERSON"
+        ent.text = "Harry Potter"
+        doc.ents = [ent]
+        nlp.return_value = doc
+        llm = MagicMock()
+        llm.generate.side_effect = RuntimeError("provider down")
+
+        with caplog.at_level(logging.WARNING, logger="kenkui.nlp.entities"):
+            result = build_roster_with_llm(text, nlp=nlp, llm=llm, sample_words=5)
+
+        assert any("LLM roster chunk" in r.message for r in caplog.records)
+        assert any("falling back to heuristic" in r.message for r in caplog.records)
+        assert {g.canonical_name for g in result.characters} == {"Harry Potter"}
+
 
 class TestDeduplicateRosterWithLLM:
     def test_merges_nickname_into_full_name(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+        from kenkui.nlp.models import CanonicalMergeEntry, CanonicalMergeResult, CharacterRoster
 
         roster = CharacterRoster(characters=[
             CharacterRecord(slug="matrim_cauthon", canonical_name="Matrim Cauthon", aliases=["Matrim Cauthon", "Matrim"]),
@@ -503,7 +596,7 @@ class TestDeduplicateRosterWithLLM:
 
     def test_preserves_gender_from_absorbed_entry(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+        from kenkui.nlp.models import CanonicalMergeEntry, CanonicalMergeResult, CharacterRoster
 
         roster = CharacterRoster(characters=[
             CharacterRecord(slug="matrim_cauthon", canonical_name="Matrim Cauthon", aliases=["Matrim Cauthon"], gender=""),
@@ -533,7 +626,7 @@ class TestDeduplicateRosterWithLLM:
 
     def test_unknown_duplicate_canonical_ignored(self):
         from kenkui.nlp.entities import deduplicate_roster_with_llm
-        from kenkui.nlp.models import CanonicalMergeResult, CanonicalMergeEntry, CharacterRoster
+        from kenkui.nlp.models import CanonicalMergeEntry, CanonicalMergeResult, CharacterRoster
 
         roster = CharacterRoster(characters=[
             CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"]),
@@ -551,7 +644,7 @@ class TestDeduplicateRosterWithLLM:
 class TestResolveEpithetsWithLLM:
     def test_adds_epithet_as_alias(self):
         from kenkui.nlp.entities import resolve_epithets_with_llm
-        from kenkui.nlp.models import CharacterRoster, EpithetResolutionResult, EpithetMapping
+        from kenkui.nlp.models import CharacterRoster, EpithetMapping, EpithetResolutionResult
 
         roster = CharacterRoster(characters=[
             CharacterRecord(slug="rand_althor", canonical_name="Rand al'Thor", aliases=["Rand al'Thor", "Rand"]),
@@ -578,7 +671,7 @@ class TestResolveEpithetsWithLLM:
 
     def test_unknown_canonical_in_mapping_ignored(self):
         from kenkui.nlp.entities import resolve_epithets_with_llm
-        from kenkui.nlp.models import CharacterRoster, EpithetResolutionResult, EpithetMapping
+        from kenkui.nlp.models import CharacterRoster, EpithetMapping, EpithetResolutionResult
 
         roster = CharacterRoster(characters=[CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"])])
         llm = MagicMock()
@@ -593,7 +686,11 @@ class TestResolveEpithetsWithLLM:
 class TestNormalizeCanonicalNamesWithLLM:
     def test_strips_appositive_suffix(self):
         from kenkui.nlp.entities import normalize_canonical_names_with_llm
-        from kenkui.nlp.models import CharacterRoster, NameNormalizationResult, NameNormalizationEntry
+        from kenkui.nlp.models import (
+            CharacterRoster,
+            NameNormalizationEntry,
+            NameNormalizationResult,
+        )
 
         roster = CharacterRoster(characters=[
             CharacterRecord(slug="rand_althor_dragon_reborn", canonical_name="Rand al'Thor, Dragon Reborn", aliases=["Rand al'Thor, Dragon Reborn"]),
@@ -609,7 +706,11 @@ class TestNormalizeCanonicalNamesWithLLM:
 
     def test_unchanged_name_not_modified(self):
         from kenkui.nlp.entities import normalize_canonical_names_with_llm
-        from kenkui.nlp.models import CharacterRoster, NameNormalizationResult, NameNormalizationEntry
+        from kenkui.nlp.models import (
+            CharacterRoster,
+            NameNormalizationEntry,
+            NameNormalizationResult,
+        )
 
         roster = CharacterRoster(characters=[
             CharacterRecord(slug="harry_potter", canonical_name="Harry Potter", aliases=["Harry Potter"]),

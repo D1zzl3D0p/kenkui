@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, Field, field_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Slug utility
@@ -149,25 +148,36 @@ class AttributionResult(BaseModel):
     attributions: list[AttributionItem]
 
 
-class CanonicalMergeEntry(BaseModel):
+class StrictLLMWireModel(BaseModel):
+    """Base for strict structured-output schemas sent to LLM providers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CanonicalMergeEntry(StrictLLMWireModel):
     canonical: str
     duplicates: list[str]
 
-class CanonicalMergeResult(BaseModel):
+
+class CanonicalMergeResult(StrictLLMWireModel):
     merges: list[CanonicalMergeEntry]
 
-class EpithetMapping(BaseModel):
+
+class EpithetMapping(StrictLLMWireModel):
     epithet: str
     canonical_name: str
 
-class EpithetResolutionResult(BaseModel):
+
+class EpithetResolutionResult(StrictLLMWireModel):
     mappings: list[EpithetMapping]
 
-class NameNormalizationEntry(BaseModel):
+
+class NameNormalizationEntry(StrictLLMWireModel):
     original: str
     simplified: str
 
-class NameNormalizationResult(BaseModel):
+
+class NameNormalizationResult(StrictLLMWireModel):
     names: list[NameNormalizationEntry]
 
 
@@ -176,7 +186,7 @@ class NameNormalizationResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class TitleWire(BaseModel):
+class TitleWire(StrictLLMWireModel):
     """Slim title type for LLM extraction.
 
     The full TitleRecord stores chapters/book_slug for series tracking; the LLM
@@ -186,7 +196,7 @@ class TitleWire(BaseModel):
     title: str = Field(description="Title or honorific, e.g. 'Queen of Andor', 'Mr.', 'The Dark One'")
 
 
-class CharacterRecordWire(BaseModel):
+class CharacterRecordWire(StrictLLMWireModel):
     """Wire schema for LLM roster extraction (compact mode — default).
 
     Omits: chapters, first/last_appearance (server-derived), mention_count,
@@ -215,7 +225,7 @@ class CharacterRecordWire(BaseModel):
         return v
 
 
-class CharacterRosterWire(BaseModel):
+class CharacterRosterWire(StrictLLMWireModel):
     """Wire container for compact roster extraction."""
     characters: list[CharacterRecordWire] = Field(default_factory=list)
 
@@ -240,7 +250,7 @@ class CharacterRosterWire(BaseModel):
         return v
 
 
-class CharacterRecordFullWire(BaseModel):
+class CharacterRecordFullWire(StrictLLMWireModel):
     """Wire schema for LLM roster extraction (full mode — non-default).
 
     Includes chapter position fields but uses plain lists (not tuples) to avoid
@@ -265,7 +275,7 @@ class CharacterRecordFullWire(BaseModel):
         return v
 
 
-class CharacterRosterFullWire(BaseModel):
+class CharacterRosterFullWire(StrictLLMWireModel):
     """Wire container for full (non-compact) roster extraction."""
     characters: list[CharacterRecordFullWire] = Field(default_factory=list)
 
@@ -286,21 +296,19 @@ class CharacterRosterFullWire(BaseModel):
         return v
 
 
-class AttributionItemWire(BaseModel):
-    """Slim attribution wire — quote_id, speaker, confidence only.
+class AttributionItemWire(StrictLLMWireModel):
+    """Minimal attribution wire — short field names minimise LLM output token count.
 
-    Used when both omit_emotion and omit_echo are enabled (the default).
-    Omits: emotion (not used for TTS), char_start/char_end (not needed when
-    omit_echo is on).
+    Fields intentionally abbreviated: 'q' = quote_id, 's' = speaker slug.
+    Confidence and emotion are omitted — not used downstream and cost tokens.
     """
-    quote_id: int
-    speaker: str = Field(description="Character slug from roster, 'NARRATOR', or 'Unknown'")
-    confidence: int = Field(default=3, description="1 (very uncertain) to 5 (very confident)")
+    q: int = Field(description="The N from [QUOTE:N]")
+    s: str = Field(description="Character slug, 'NARRATOR', or 'Unknown'")
 
 
-class AttributionResultWire(BaseModel):
-    """Wire container for slim attribution results."""
-    attributions: list[AttributionItemWire]
+class AttributionResultWire(StrictLLMWireModel):
+    """Wire container for slim attribution results. Field 'a' is abbreviated to save tokens."""
+    a: list[AttributionItemWire]
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +363,6 @@ def roster_wire_to_full(wire: CharacterRosterWire | CharacterRosterFullWire) -> 
 def attribution_wire_to_full(wire: AttributionResultWire) -> AttributionResult:
     """Convert a slim wire attribution to a full AttributionResult."""
     return AttributionResult(attributions=[
-        AttributionItem(quote_id=w.quote_id, speaker=w.speaker, confidence=w.confidence)
-        for w in wire.attributions
+        AttributionItem(quote_id=w.q, speaker=w.s)
+        for w in wire.a
     ])

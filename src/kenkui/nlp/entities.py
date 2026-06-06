@@ -39,10 +39,18 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from ._filters import _is_proper_name
-from .models import CharacterRecord, CharacterRoster, CharacterRosterWire, roster_wire_to_full, slugify
+from .models import (
+    CharacterRecord,
+    CharacterRoster,
+    CharacterRosterFullWire,
+    CharacterRosterWire,
+    roster_wire_to_full,
+    slugify,
+)
 
 if TYPE_CHECKING:
     from .llm import LLMClient
@@ -262,9 +270,9 @@ Return ONLY the JSON.
 
 
 def deduplicate_roster_with_llm(
-    roster: "CharacterRoster",
-    llm: "LLMClient",
-) -> "CharacterRoster":
+    roster: CharacterRoster,
+    llm: LLMClient,
+) -> CharacterRoster:
     """Merge canonical entries that refer to the same character via a single LLM call.
 
     Catches nickname contractions and other alias forms that word-overlap
@@ -349,10 +357,10 @@ Return ONLY the JSON.
 
 
 def resolve_epithets_with_llm(
-    roster: "CharacterRoster",
+    roster: CharacterRoster,
     common_phrases: list[str],
-    llm: "LLMClient",
-) -> "CharacterRoster":
+    llm: LLMClient,
+) -> CharacterRoster:
     """Add epithet aliases to *roster* characters via a single LLM call.
 
     Passes canonical names and high-frequency common-noun phrases extracted
@@ -413,9 +421,9 @@ Return ONLY the JSON.
 
 
 def normalize_canonical_names_with_llm(
-    roster: "CharacterRoster",
-    llm: "LLMClient",
-) -> "CharacterRoster":
+    roster: CharacterRoster,
+    llm: LLMClient,
+) -> CharacterRoster:
     """Strip trailing descriptors from canonical names via a single LLM call.
 
     e.g. "Rand al'Thor, Dragon Reborn" → "Rand al'Thor"
@@ -549,6 +557,42 @@ def _sample_text_for_roster(full_text: str, target_words: int = 4000) -> str:
     return "\n\n[...]\n\n".join(samples)
 
 
+def _chunk_text_for_roster(full_text: str, target_words: int = 8000) -> list[str]:
+    """Split *full_text* into paragraph-preserving word-budget chunks."""
+    paragraphs = [p for p in full_text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return [full_text] if full_text.strip() else []
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_words = 0
+    budget = max(1, target_words)
+
+    for para in paragraphs:
+        words = para.split()
+        if not words:
+            continue
+        if len(words) > budget:
+            if current:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_words = 0
+            for start in range(0, len(words), budget):
+                chunks.append(" ".join(words[start:start + budget]))
+            continue
+        if current and current_words + len(words) > budget:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_words = 0
+        current.append(para)
+        current_words += len(words)
+
+    if current:
+        chunks.append("\n\n".join(current))
+
+    return chunks
+
+
 def _filter_roster_hallucinations(
     roster: CharacterRoster,
     full_text: str,
@@ -566,6 +610,9 @@ def _filter_roster_hallucinations(
     """
     text_lower = full_text.lower()
     surviving_names: list[str] = []
+    kept_count = 0
+    dropped_count = 0
+    dropped_entries = 0
 
     for group in roster.characters:
         kept = [
@@ -573,23 +620,44 @@ def _filter_roster_hallucinations(
             if len(a.strip()) >= 2
             and bool(re.search(r'(?<!\w)' + re.escape(a.lower()) + r'(?!\w)', text_lower))
         ]
+        dropped_aliases = max(0, len(group.aliases) - len(kept))
+        dropped_count += dropped_aliases
+        kept_count += len(kept)
         if not kept:
-            logger.debug("filter_hallucinations: dropped entire entry %r", group.canonical_name)
+            dropped_entries += 1
+            logger.info(
+                "filter_hallucinations: dropped hallucinated entry %r aliases=%d",
+                group.canonical_name,
+                len(group.aliases),
+            )
             continue
 
         # Ensure canonical is among kept aliases; if not, promote longest.
         if group.canonical_name not in kept:
             promoted = max(kept, key=len)
-            logger.debug(
+            logger.info(
                 "filter_hallucinations: canonical %r hallucinated; promoting %r",
                 group.canonical_name, promoted,
             )
         surviving_names.extend(kept)
 
     if not surviving_names:
+        logger.warning(
+            "filter_hallucinations: no aliases survived (kept=%d dropped=%d entries_dropped=%d)",
+            kept_count,
+            dropped_count,
+            dropped_entries,
+        )
         return CharacterRoster(characters=[])
 
     groups = _cluster_by_heuristic(surviving_names)
+    logger.info(
+        "filter_hallucinations: kept %d alias(es), dropped %d alias(es), dropped %d entry(s), clustered to %d character(s)",
+        kept_count,
+        dropped_count,
+        dropped_entries,
+        len(groups),
+    )
     return CharacterRoster(characters=groups)
 
 
@@ -650,10 +718,19 @@ def _build_roster_spacy_chunked(
     return CharacterRoster(characters=_cluster_by_heuristic(all_names))
 
 
+def _coerce_llm_roster_response(response: object) -> CharacterRoster:
+    """Accept real wire responses and older test doubles returning full rosters."""
+    if isinstance(response, CharacterRoster):
+        return response
+    if isinstance(response, CharacterRosterWire | CharacterRosterFullWire):
+        return roster_wire_to_full(response)
+    raise TypeError(f"unexpected roster response type: {type(response).__name__}")
+
+
 def build_roster_with_llm(
     text: str,
     nlp=None,
-    llm: "LLMClient | None" = None,
+    llm: LLMClient | None = None,
     sample_words: int = 8000,
     method: str = "auto",
     step_callback: Callable[[str], None] | None = None,
@@ -759,22 +836,68 @@ def build_roster_with_llm(
     _explicit_llm = method not in ("auto", "booknlp", "spacy")
 
     try:
-        sample = _sample_text_for_roster(text, sample_words)
-
-        if not _explicit_llm and nlp is not None:
-            seed_names = extract_person_names(sample, nlp)
-            logger.debug("build_roster: %d spaCy seed names (from sample)", len(seed_names))
-        else:
-            seed_names = []
-
-        prompt = _ROSTER_PROMPT.format(
-            seed_names=", ".join(_escape_format_braces(s) for s in seed_names) if seed_names else "(none)",
-            sample_text=sample,
+        chunks = _chunk_text_for_roster(text, sample_words)
+        if not chunks:
+            return CharacterRoster(characters=[])
+        logger.info(
+            "build_roster: LLM chunk extraction starting chunks=%d target_words=%d explicit=%s",
+            len(chunks),
+            sample_words,
+            _explicit_llm,
         )
 
-        raw_wire: CharacterRosterWire = llm.generate(prompt, CharacterRosterWire)
-        raw: CharacterRoster = roster_wire_to_full(raw_wire)
-        logger.info("build_roster: LLM returned %d entries", len(raw.characters))
+        raw_characters: list[CharacterRecord] = []
+        failed_chunks = 0
+        for chunk_idx, chunk_text in enumerate(chunks, start=1):
+            if not _explicit_llm and nlp is not None:
+                seed_names = extract_person_names(chunk_text, nlp)
+                logger.debug(
+                    "build_roster: chunk %d/%d spaCy seed names=%d words=%d chars=%d",
+                    chunk_idx,
+                    len(chunks),
+                    len(seed_names),
+                    len(chunk_text.split()),
+                    len(chunk_text),
+                )
+            else:
+                seed_names = []
+
+            prompt = _ROSTER_PROMPT.format(
+                seed_names=", ".join(_escape_format_braces(s) for s in seed_names) if seed_names else "(none)",
+                sample_text=chunk_text,
+            )
+
+            try:
+                raw_response = llm.generate(prompt, CharacterRosterWire)
+                chunk_roster = _coerce_llm_roster_response(raw_response)
+            except Exception as chunk_exc:
+                failed_chunks += 1
+                logger.warning(
+                    "build_roster: LLM roster chunk %d/%d failed (%s)",
+                    chunk_idx,
+                    len(chunks),
+                    chunk_exc,
+                )
+                continue
+
+            logger.info(
+                "build_roster: LLM roster chunk %d/%d returned %d character(s)",
+                chunk_idx,
+                len(chunks),
+                len(chunk_roster.characters),
+            )
+            raw_characters.extend(chunk_roster.characters)
+
+        if failed_chunks == len(chunks):
+            raise RuntimeError(f"all {len(chunks)} roster extraction chunk(s) failed")
+
+        raw = CharacterRoster(characters=raw_characters)
+        logger.info(
+            "build_roster: LLM returned %d total entries across %d chunk(s), failures=%d",
+            len(raw.characters),
+            len(chunks),
+            failed_chunks,
+        )
         if step_callback:
             step_callback("Extracted characters")
 
