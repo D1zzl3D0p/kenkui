@@ -210,6 +210,8 @@ def full_analysis(
     progress_callback: Callable[[int, str], None] | None = None,
     extraction_progress_callback: Callable[[int, str], None] | None = None,
     attribution_progress_callback: Callable[[int, str], None] | None = None,
+    extraction_progress_event_callback: Callable[[ProgressEvent], None] | None = None,
+    attribution_progress_event_callback: Callable[[ProgressEvent], None] | None = None,
     series_slug: str | None = None,
     book_slug: str | None = None,
     discovery_method: str | None = None,
@@ -229,6 +231,8 @@ def full_analysis(
                                        not set, this is forwarded to both new callback params.
         extraction_progress_callback:  Optional (percent, message) callback for extraction phase.
         attribution_progress_callback: Optional (percent, message) callback for attribution phase.
+        extraction_progress_event_callback:  Optional structured callback for extraction phase.
+        attribution_progress_event_callback: Optional structured callback for attribution phase.
         series_slug:                   Series slug for cross-book roster merging.
         book_slug:                     Slug for this book (series first-appearance tracking).
         discovery_method:              Override discovery method.
@@ -247,6 +251,8 @@ def full_analysis(
         config_path=config_path,
         extraction_progress_callback=extraction_progress_callback or progress_callback,
         attribution_progress_callback=attribution_progress_callback or progress_callback,
+        extraction_progress_event_callback=extraction_progress_event_callback,
+        attribution_progress_event_callback=attribution_progress_event_callback,
         series_slug=series_slug,
         book_slug=book_slug,
         discovery_method=discovery_method,
@@ -261,6 +267,7 @@ def fast_scan(
     nlp_model: str | None = None,
     config_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    progress_event_callback: Callable[[ProgressEvent], None] | None = None,
     series_slug: str | None = None,
     book_slug: str | None = None,
     nlp_provider: str | None = None,
@@ -274,6 +281,7 @@ def fast_scan(
         nlp_model:         Override NLP model name.
         config_path:       Optional config file name or path.
         progress_callback: Optional (percent, message) callback.
+        progress_event_callback: Optional structured progress callback.
         series_slug:       Existing series slug to load and merge roster into.
         book_slug:         Slug for this book (for series first-appearance tracking).
         nlp_provider:      Override NLP provider ("ollama", "spacy", "booknlp").
@@ -289,6 +297,7 @@ def fast_scan(
         nlp_model=nlp_model,
         config_path=config_path,
         progress_callback=progress_callback,
+        progress_event_callback=progress_event_callback,
         series_slug=series_slug,
         book_slug=book_slug,
         nlp_provider=nlp_provider,
@@ -306,6 +315,7 @@ def attribute_only(
     nlp_provider: str | None = None,
     config_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
+    progress_event_callback: Callable[[ProgressEvent], None] | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
 ) -> NLPResult:
@@ -319,6 +329,7 @@ def attribute_only(
         nlp_provider=nlp_provider,
         config_path=config_path,
         progress_callback=progress_callback,
+        progress_event_callback=progress_event_callback,
         attribution_provider=attribution_provider,
         attribution_model=attribution_model,
     )

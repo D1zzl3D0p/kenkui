@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from kenkui.models import Chapter
-from kenkui.services.nlp_service import fast_scan, full_analysis
+from kenkui.services.nlp_service import attribute_only, fast_scan, full_analysis
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -170,6 +170,42 @@ def test_fast_scan_progress_callback_receives_int_and_str(tmp_path):
         assert percents[i] >= percents[i - 1]
 
 
+def test_fast_scan_progress_event_callback_uses_chapter_units(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [
+        Chapter(index=0, title="Ch 1", paragraphs=["text1"]),
+        Chapter(index=1, title="Ch 2", paragraphs=["text2"]),
+    ]
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = fake_chapters
+
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
+        patch("kenkui.services.nlp_service.cache_roster"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+    ):
+        fast_scan(str(fake_epub), nlp_model="llama3.2", progress_event_callback=events.append)
+
+    assert [event.stage for event in events] == [
+        "nlp_extraction",
+        "nlp_extraction",
+        "nlp_extraction",
+        "nlp_extraction",
+    ]
+    assert all(event.unit == "chapters" for event in events)
+    assert [event.status for event in events] == ["started", "advanced", "advanced", "completed"]
+    assert [event.completed_units for event in events] == [0, 1, 1, 2]
+    assert all(event.total_units == 2 for event in events)
+
+
 # ---------------------------------------------------------------------------
 # full_analysis tests
 # ---------------------------------------------------------------------------
@@ -311,6 +347,74 @@ def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
         assert isinstance(m, str)
     for i in range(1, len(percents)):
         assert percents[i] >= percents[i - 1]
+
+
+def test_full_analysis_attribution_progress_event_callback_uses_chapter_units(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [
+        Chapter(index=0, title="Ch 1", paragraphs=["text1"]),
+        Chapter(index=1, title="Ch 2", paragraphs=["text2"]),
+    ]
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = fake_chapters
+
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
+    ):
+        full_analysis(
+            str(fake_epub),
+            nlp_model="llama3.2",
+            attribution_progress_event_callback=events.append,
+        )
+
+    assert [event.status for event in events] == ["started", "advanced", "advanced", "completed"]
+    assert [event.completed_units for event in events] == [0, 1, 2, 2]
+    assert all(event.stage == "nlp_attribution" for event in events)
+    assert all(event.total_units == 2 for event in events)
+
+
+def test_attribute_only_progress_event_callback_uses_chapter_units(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [
+        Chapter(index=0, title="Ch 1", paragraphs=["text1"]),
+        Chapter(index=1, title="Ch 2", paragraphs=["text2"]),
+    ]
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    with (
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
+    ):
+        attribute_only(
+            roster=_make_mock_roster(),
+            chapters=fake_chapters,
+            ebook_path=str(fake_epub),
+            nlp_model="llama3.2",
+            progress_event_callback=events.append,
+        )
+
+    assert [event.status for event in events] == ["started", "advanced", "advanced", "completed"]
+    assert [event.completed_units for event in events] == [0, 1, 2, 2]
+    assert all(event.stage == "nlp_attribution" for event in events)
+    assert all(event.unit == "chapters" for event in events)
 
 
 @pytest.mark.skip(reason="Requires real spaCy / Ollama — integration-only")

@@ -6,9 +6,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Literal
 
-ProgressStage = Literal["tts_synthesis", "stitching", "normalization", "cover_embedding"]
+ProgressStage = Literal[
+    "tts_synthesis",
+    "stitching",
+    "normalization",
+    "cover_embedding",
+    "nlp_extraction",
+    "nlp_attribution",
+]
 ProgressStatus = Literal["started", "advanced", "completed", "failed", "message"]
-ProgressUnit = Literal["chars", "milliseconds", "items", ""]
+ProgressUnit = Literal["chars", "milliseconds", "items", "chapters", ""]
 
 
 @dataclass(frozen=True)
