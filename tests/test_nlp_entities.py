@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from kenkui.models import Chapter
 from kenkui.nlp.entities import (
     _cluster_by_heuristic,
     _filter_roster_hallucinations,
@@ -21,6 +22,7 @@ from kenkui.nlp.entities import (
     _sample_text_for_roster,
     _significant_words,
     build_roster,
+    build_roster_from_chapters_with_llm,
     build_roster_with_llm,
     infer_gender_pronouns,
 )
@@ -568,6 +570,234 @@ class TestBuildRosterWithLLM:
         assert any("LLM roster chunk" in r.message for r in caplog.records)
         assert any("falling back to heuristic" in r.message for r in caplog.records)
         assert {g.canonical_name for g in result.characters} == {"Harry Potter"}
+
+
+class TestBuildRosterFromChaptersWithLLM:
+    def _fake_llm(self):
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult
+
+        llm = MagicMock()
+
+        def fake_generate(prompt, schema):
+            if schema.__name__ == "CharacterRosterWire":
+                characters = []
+                if "Alice Ardent" in prompt:
+                    characters.append(
+                        CharacterRecordWire(
+                            slug="alice_ardent",
+                            canonical_name="Alice Ardent",
+                            aliases=["Alice Ardent"],
+                        )
+                    )
+                if "Bob Bright" in prompt:
+                    characters.append(
+                        CharacterRecordWire(
+                            slug="bob_bright",
+                            canonical_name="Bob Bright",
+                            aliases=["Bob Bright"],
+                        )
+                    )
+                return CharacterRosterWire(characters=characters)
+            if schema.__name__ == "CanonicalMergeResult":
+                return CanonicalMergeResult(merges=[])
+            if schema.__name__ == "NameNormalizationResult":
+                return NameNormalizationResult(names=[])
+            raise AssertionError(schema.__name__)
+
+        llm.generate.side_effect = fake_generate
+        return llm
+
+    def test_default_llm_extraction_calls_one_chapter_at_a_time(self):
+        chapters = [
+            Chapter(index=1, title="One", paragraphs=["Alice Ardent opened the door."]),
+            Chapter(index=2, title="Two", paragraphs=["Bob Bright closed the gate."]),
+        ]
+        llm = self._fake_llm()
+
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=None,
+            llm=llm,
+            method="llm",
+            provider="ollama",
+            model="test-model",
+        )
+
+        canonicals = {g.canonical_name for g in result.characters}
+        assert canonicals == {"Alice Ardent", "Bob Bright"}
+        roster_calls = [
+            call for call in llm.generate.call_args_list
+            if call.args[1].__name__ == "CharacterRosterWire"
+        ]
+        assert len(roster_calls) == 2
+        assert "Bob Bright" not in roster_calls[0].args[0]
+        assert "Alice Ardent" not in roster_calls[1].args[0]
+
+    def test_oversized_chapter_is_bisected_before_llm_call(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_ROSTER_SECTION_TARGET_TOKENS", "1200")
+        filler = "plain filler words " * 120
+        chapters = [
+            Chapter(
+                index=1,
+                title="Long",
+                paragraphs=[
+                    f"Alice Ardent opened the door. {filler}",
+                    f"Bob Bright closed the gate. {filler}",
+                ],
+            )
+        ]
+        llm = self._fake_llm()
+
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=None,
+            llm=llm,
+            method="llm",
+            provider="ollama",
+            model="test-model",
+        )
+
+        canonicals = {g.canonical_name for g in result.characters}
+        assert canonicals == {"Alice Ardent", "Bob Bright"}
+        roster_prompts = [
+            call.args[0] for call in llm.generate.call_args_list
+            if call.args[1].__name__ == "CharacterRosterWire"
+        ]
+        assert len(roster_prompts) == 2
+        assert all(not ("Alice Ardent" in prompt and "Bob Bright" in prompt) for prompt in roster_prompts)
+
+    def test_failed_section_is_bisected_and_partial_results_continue(self):
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult
+
+        chapters = [
+            Chapter(
+                index=1,
+                title="Split",
+                paragraphs=[
+                    "Alice Ardent opened the door.",
+                    "Bob Bright closed the gate.",
+                ],
+            )
+        ]
+        llm = MagicMock()
+
+        def fake_generate(prompt, schema):
+            if schema.__name__ == "CharacterRosterWire":
+                if "Alice Ardent" in prompt and "Bob Bright" in prompt:
+                    raise RuntimeError("response truncated")
+                characters = []
+                if "Alice Ardent" in prompt:
+                    characters.append(
+                        CharacterRecordWire(
+                            slug="alice_ardent",
+                            canonical_name="Alice Ardent",
+                            aliases=["Alice Ardent"],
+                        )
+                    )
+                if "Bob Bright" in prompt:
+                    characters.append(
+                        CharacterRecordWire(
+                            slug="bob_bright",
+                            canonical_name="Bob Bright",
+                            aliases=["Bob Bright"],
+                        )
+                    )
+                return CharacterRosterWire(characters=characters)
+            if schema.__name__ == "CanonicalMergeResult":
+                return CanonicalMergeResult(merges=[])
+            if schema.__name__ == "NameNormalizationResult":
+                return NameNormalizationResult(names=[])
+            raise AssertionError(schema.__name__)
+
+        llm.generate.side_effect = fake_generate
+
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=None,
+            llm=llm,
+            method="llm",
+            provider="ollama",
+            model="test-model",
+        )
+
+        assert {g.canonical_name for g in result.characters} == {"Alice Ardent", "Bob Bright"}
+        roster_calls = [
+            call for call in llm.generate.call_args_list
+            if call.args[1].__name__ == "CharacterRosterWire"
+        ]
+        assert len(roster_calls) == 3
+
+    def test_leaf_failure_uses_heuristic_fallback_when_available(self):
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult
+
+        chapters = [Chapter(index=1, title="One", paragraphs=["Carol Clever arrived."])]
+        nlp = MagicMock()
+        doc = MagicMock()
+        ent = MagicMock()
+        ent.label_ = "PERSON"
+        ent.text = "Carol Clever"
+        doc.ents = [ent]
+        nlp.return_value = doc
+
+        llm = MagicMock()
+
+        def fake_generate(prompt, schema):
+            if schema.__name__ == "CharacterRosterWire":
+                raise RuntimeError("provider down")
+            if schema.__name__ == "CanonicalMergeResult":
+                return CanonicalMergeResult(merges=[])
+            if schema.__name__ == "NameNormalizationResult":
+                return NameNormalizationResult(names=[])
+            raise AssertionError(schema.__name__)
+
+        llm.generate.side_effect = fake_generate
+
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=nlp,
+            llm=llm,
+            method="llm",
+            provider="ollama",
+            model="test-model",
+        )
+
+        assert {g.canonical_name for g in result.characters} == {"Carol Clever"}
+
+    def test_roster_section_cache_skips_second_llm_call(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("kenkui.nlp.CONFIG_DIR", tmp_path)
+        book_path = tmp_path / "book.epub"
+        book_path.write_text("book", encoding="utf-8")
+        chapters = [Chapter(index=1, title="One", paragraphs=["Alice Ardent opened the door."])]
+
+        first = self._fake_llm()
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=None,
+            llm=first,
+            method="llm",
+            book_path=book_path,
+            provider="ollama",
+            model="test-model",
+        )
+        assert {g.canonical_name for g in result.characters} == {"Alice Ardent"}
+
+        second = self._fake_llm()
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=None,
+            llm=second,
+            method="llm",
+            book_path=book_path,
+            provider="ollama",
+            model="test-model",
+        )
+
+        assert {g.canonical_name for g in result.characters} == {"Alice Ardent"}
+        roster_calls = [
+            call for call in second.generate.call_args_list
+            if call.args[1].__name__ == "CharacterRosterWire"
+        ]
+        assert roster_calls == []
 
 
 class TestDeduplicateRosterWithLLM:

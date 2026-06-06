@@ -142,7 +142,7 @@ class LiteLLMExtractionAdapter:
     ) -> CharacterRoster:
         from kenkui.models import CharacterInfo, FastScanResult
         from kenkui.nlp import _load_spacy_model
-        from kenkui.nlp.entities import build_roster_with_llm
+        from kenkui.nlp.entities import build_roster_from_chapters_with_llm
 
         if book_path is None:
             raise ValueError("LiteLLMExtractionAdapter.build_roster() requires book_path")
@@ -162,12 +162,15 @@ class LiteLLMExtractionAdapter:
 
         _cb("Building character roster...")
         full_text = "\n\n".join("\n\n".join(ch.paragraphs) for ch in chapters)
-        roster = build_roster_with_llm(
-            full_text,
+        roster = build_roster_from_chapters_with_llm(
+            chapters,
             nlp,
             llm,
             method=self._config.discovery_method,
             step_callback=step_callback,
+            book_path=book_path,
+            provider=self._provider,
+            model=self._config.extraction_model,
         )
 
         mention_counts = _count_mentions(roster, full_text)

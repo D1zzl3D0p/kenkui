@@ -555,6 +555,130 @@ def cache_chunk_roster(roster: CharacterRoster, book_path: Path, chapter_indices
     return cache_file
 
 
+def _roster_section_cache_key(
+    book_h: str,
+    *,
+    provider: str,
+    model: str,
+    method: str,
+    prompt_version: str,
+    limit_profile: str,
+    chapter_index: int,
+    para_start: int,
+    para_end: int,
+    word_start: int | None,
+    word_end: int | None,
+) -> str:
+    """Deterministic cache key for one LLM roster extraction section."""
+    payload = {
+        "book_hash": book_h,
+        "provider": provider,
+        "model": model,
+        "method": method,
+        "prompt_version": prompt_version,
+        "limit_profile": limit_profile,
+        "chapter_index": chapter_index,
+        "para_start": para_start,
+        "para_end": para_end,
+        "word_start": word_start,
+        "word_end": word_end,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:20]
+
+
+def get_cached_roster_section(
+    book_path: Path,
+    *,
+    provider: str,
+    model: str,
+    method: str,
+    prompt_version: str,
+    limit_profile: str,
+    chapter_index: int,
+    para_start: int,
+    para_end: int,
+    word_start: int | None = None,
+    word_end: int | None = None,
+) -> CharacterRoster | None:
+    """Return a cached roster for one provider/model/method section, or None."""
+    from kenkui.nlp.models import CharacterRoster
+
+    bh = book_hash(book_path)
+    key = _roster_section_cache_key(
+        bh,
+        provider=provider,
+        model=model,
+        method=method,
+        prompt_version=prompt_version,
+        limit_profile=limit_profile,
+        chapter_index=chapter_index,
+        para_start=para_start,
+        para_end=para_end,
+        word_start=word_start,
+        word_end=word_end,
+    )
+    cache_file = _get_config_dir() / "nlp_cache" / f"{bh}-roster-section-{key}.json"
+    if not cache_file.exists():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        return CharacterRoster.model_validate(data.get("roster") or data)
+    except Exception as exc:
+        logger.warning("Failed to load roster section cache %s: %s", cache_file, exc)
+        return None
+
+
+def cache_roster_section(
+    roster: CharacterRoster,
+    book_path: Path,
+    *,
+    provider: str,
+    model: str,
+    method: str,
+    prompt_version: str,
+    limit_profile: str,
+    chapter_index: int,
+    para_start: int,
+    para_end: int,
+    word_start: int | None = None,
+    word_end: int | None = None,
+) -> Path:
+    """Write one provider/model/method roster extraction section cache."""
+    bh = book_hash(book_path)
+    cache_dir = _get_config_dir() / "nlp_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = _roster_section_cache_key(
+        bh,
+        provider=provider,
+        model=model,
+        method=method,
+        prompt_version=prompt_version,
+        limit_profile=limit_profile,
+        chapter_index=chapter_index,
+        para_start=para_start,
+        para_end=para_end,
+        word_start=word_start,
+        word_end=word_end,
+    )
+    cache_file = cache_dir / f"{bh}-roster-section-{key}.json"
+    payload = {
+        "provider": provider,
+        "model": model,
+        "method": method,
+        "prompt_version": prompt_version,
+        "limit_profile": limit_profile,
+        "chapter_index": chapter_index,
+        "para_start": para_start,
+        "para_end": para_end,
+        "word_start": word_start,
+        "word_end": word_end,
+        "roster": roster.model_dump(),
+    }
+    _atomic_write(cache_file, json.dumps(payload, ensure_ascii=False, indent=2))
+    logger.debug("Roster section cache written: %s", cache_file)
+    return cache_file
+
+
 # ---------------------------------------------------------------------------
 # Mention counting helper
 # ---------------------------------------------------------------------------
@@ -605,7 +729,7 @@ def run_fast_scan(
         ``FastScanResult`` with characters sorted by mention_count descending.
     """
     from ..models import CharacterInfo, FastScanResult
-    from .entities import build_roster_with_llm
+    from .entities import build_roster_from_chapters_with_llm
     from .llm import LLMClient
 
     if use_cache:
@@ -636,10 +760,17 @@ def run_fast_scan(
 
     # Stage 2: Build character roster
     _cb("Building character roster…")
-    # Join with \n\n so _sample_text_for_roster can split on paragraph boundaries.
-    # Joining with spaces produces a single unbroken block that defeats sampling.
     full_text = "\n\n".join("\n\n".join(ch.paragraphs) for ch in chapters)
-    roster = build_roster_with_llm(full_text, nlp, llm, method=method, step_callback=step_callback)
+    roster = build_roster_from_chapters_with_llm(
+        chapters,
+        nlp,
+        llm,
+        method=method,
+        step_callback=step_callback,
+        book_path=book_path,
+        provider="ollama",
+        model=nlp_model,
+    )
 
     char_names = ", ".join(g.canonical_name for g in roster.characters[:8])
     overflow = len(roster.characters) - 8
@@ -1221,6 +1352,8 @@ __all__ = [
     "cache_roster",
     "get_cached_chunk_roster",
     "cache_chunk_roster",
+    "get_cached_roster_section",
+    "cache_roster_section",
     "RosterCacheMeta",
     "CACHE_DIR",
     "book_hash",

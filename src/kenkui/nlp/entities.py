@@ -37,9 +37,12 @@ infer_gender_pronouns(canonical, aliases, text)        → str
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._filters import _is_proper_name
@@ -53,6 +56,8 @@ from .models import (
 )
 
 if TYPE_CHECKING:
+    from kenkui.models import Chapter
+
     from .llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -499,8 +504,233 @@ INSTRUCTIONS:
 Return ONLY the JSON — no explanation.
 """
 
+_ROSTER_SECTION_PROMPT_VERSION = "roster-section-v1"
+_DEFAULT_ROSTER_SECTION_TARGET_TOKENS = 6000
+_DEFAULT_REMOTE_CONTEXT_TOKENS = 32768
+_DEFAULT_REMOTE_OUTPUT_TOKENS = 8192
+_DEFAULT_MAX_SECTION_DEPTH = 12
+
 # Number of equally-spaced buckets to sample from the book.
 _SAMPLE_BUCKETS = 8
+
+
+@dataclass(frozen=True)
+class _LLMCallLimits:
+    provider: str
+    context_tokens: int
+    output_tokens: int
+    target_prompt_tokens: int
+    max_depth: int
+
+    @property
+    def profile(self) -> str:
+        return (
+            f"ctx{self.context_tokens}-out{self.output_tokens}-"
+            f"target{self.target_prompt_tokens}-depth{self.max_depth}"
+        )
+
+
+@dataclass(frozen=True)
+class _RosterSection:
+    chapter_index: int
+    chapter_title: str
+    paragraphs: tuple[str, ...]
+    para_start: int
+    para_end: int
+    depth: int = 0
+    word_start: int | None = None
+    word_end: int | None = None
+
+    @property
+    def label(self) -> str:
+        title = self.chapter_title or f"Chapter {self.chapter_index}"
+        if self.word_start is None:
+            return f"{title} paragraphs {self.para_start}:{self.para_end}"
+        return (
+            f"{title} paragraph {self.para_start} "
+            f"words {self.word_start}:{self.word_end}"
+        )
+
+    def text(self) -> str:
+        if self.word_start is not None:
+            words = self.paragraphs[0].split()
+            return " ".join(words[self.word_start:self.word_end])
+        return "\n\n".join(self.paragraphs)
+
+    def cache_bounds(self) -> dict[str, int | None]:
+        return {
+            "chapter_index": self.chapter_index,
+            "para_start": self.para_start,
+            "para_end": self.para_end,
+            "word_start": self.word_start,
+            "word_end": self.word_end,
+        }
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; expected integer", name, raw)
+        return default
+    return value if value > 0 else default
+
+
+def _limits_for_provider(provider: str) -> _LLMCallLimits:
+    provider_norm = (provider or "ollama").lower()
+    if provider_norm == "ollama":
+        context_tokens = _env_int("KENKUI_NLP_OLLAMA_NUM_CTX", 65536)
+        output_tokens = _env_int("KENKUI_NLP_OLLAMA_NUM_PREDICT", 32768)
+    else:
+        context_tokens = _env_int("KENKUI_NLP_REMOTE_CONTEXT_TOKENS", _DEFAULT_REMOTE_CONTEXT_TOKENS)
+        output_tokens = _env_int("KENKUI_NLP_REMOTE_OUTPUT_TOKENS", _DEFAULT_REMOTE_OUTPUT_TOKENS)
+
+    available_prompt = max(1024, context_tokens - output_tokens)
+    configured_target = _env_int(
+        "KENKUI_NLP_ROSTER_SECTION_TARGET_TOKENS",
+        _DEFAULT_ROSTER_SECTION_TARGET_TOKENS,
+    )
+    target_prompt_tokens = min(configured_target, max(1024, int(available_prompt * 0.75)))
+    max_depth = _env_int("KENKUI_NLP_ROSTER_SECTION_MAX_DEPTH", _DEFAULT_MAX_SECTION_DEPTH)
+    return _LLMCallLimits(
+        provider=provider_norm,
+        context_tokens=context_tokens,
+        output_tokens=output_tokens,
+        target_prompt_tokens=target_prompt_tokens,
+        max_depth=max_depth,
+    )
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _build_roster_prompt(section_text: str, seed_names: list[str]) -> str:
+    return _ROSTER_PROMPT.format(
+        seed_names=", ".join(_escape_format_braces(s) for s in seed_names)
+        if seed_names else "(none)",
+        sample_text=section_text,
+    )
+
+
+def _split_section(section: _RosterSection) -> list[_RosterSection]:
+    if len(section.paragraphs) > 1:
+        midpoint = len(section.paragraphs) // 2
+        left_paras = section.paragraphs[:midpoint]
+        right_paras = section.paragraphs[midpoint:]
+        split_at = section.para_start + midpoint
+        return [
+            _RosterSection(
+                chapter_index=section.chapter_index,
+                chapter_title=section.chapter_title,
+                paragraphs=left_paras,
+                para_start=section.para_start,
+                para_end=split_at,
+                depth=section.depth + 1,
+            ),
+            _RosterSection(
+                chapter_index=section.chapter_index,
+                chapter_title=section.chapter_title,
+                paragraphs=right_paras,
+                para_start=split_at,
+                para_end=section.para_end,
+                depth=section.depth + 1,
+            ),
+        ]
+
+    words = section.text().split()
+    if len(words) <= 1:
+        return []
+
+    base_start = section.word_start or 0
+    midpoint = len(words) // 2
+    word_mid = base_start + midpoint
+    word_end = section.word_end if section.word_end is not None else base_start + len(words)
+    para_index = section.para_start
+    return [
+        _RosterSection(
+            chapter_index=section.chapter_index,
+            chapter_title=section.chapter_title,
+            paragraphs=section.paragraphs,
+            para_start=para_index,
+            para_end=para_index + 1,
+            depth=section.depth + 1,
+            word_start=base_start,
+            word_end=word_mid,
+        ),
+        _RosterSection(
+            chapter_index=section.chapter_index,
+            chapter_title=section.chapter_title,
+            paragraphs=section.paragraphs,
+            para_start=para_index,
+            para_end=para_index + 1,
+            depth=section.depth + 1,
+            word_start=word_mid,
+            word_end=word_end,
+        ),
+    ]
+
+
+def _heuristic_section_roster(section_text: str, nlp) -> CharacterRoster:
+    if nlp is None:
+        return CharacterRoster(characters=[])
+    return _build_roster_spacy_chunked(section_text, nlp)
+
+
+def _load_cached_section(
+    section: _RosterSection,
+    *,
+    book_path: Path | None,
+    provider: str,
+    model: str,
+    method: str,
+    limits: _LLMCallLimits,
+) -> CharacterRoster | None:
+    if book_path is None:
+        return None
+    from kenkui.nlp import get_cached_roster_section
+
+    return get_cached_roster_section(
+        book_path,
+        provider=provider,
+        model=model,
+        method=method,
+        prompt_version=_ROSTER_SECTION_PROMPT_VERSION,
+        limit_profile=limits.profile,
+        **section.cache_bounds(),
+    )
+
+
+def _cache_section(
+    roster: CharacterRoster,
+    section: _RosterSection,
+    *,
+    book_path: Path | None,
+    provider: str,
+    model: str,
+    method: str,
+    limits: _LLMCallLimits,
+) -> None:
+    if book_path is None:
+        return
+    from kenkui.nlp import cache_roster_section
+
+    try:
+        cache_roster_section(
+            roster,
+            book_path,
+            provider=provider,
+            model=model,
+            method=method,
+            prompt_version=_ROSTER_SECTION_PROMPT_VERSION,
+            limit_profile=limits.profile,
+            **section.cache_bounds(),
+        )
+    except Exception as exc:
+        logger.warning("build_roster: failed to write roster section cache (%s)", exc)
 
 
 def _sample_text_for_roster(full_text: str, target_words: int = 4000) -> str:
@@ -725,6 +955,317 @@ def _coerce_llm_roster_response(response: object) -> CharacterRoster:
     if isinstance(response, CharacterRosterWire | CharacterRosterFullWire):
         return roster_wire_to_full(response)
     raise TypeError(f"unexpected roster response type: {type(response).__name__}")
+
+
+def _extract_roster_section(
+    section: _RosterSection,
+    *,
+    nlp,
+    llm: LLMClient,
+    explicit_llm: bool,
+    book_path: Path | None,
+    provider: str,
+    model: str,
+    method: str,
+    limits: _LLMCallLimits,
+) -> tuple[CharacterRoster, int]:
+    """Extract one section, recursively splitting when the call is too large or fails."""
+    section_text = section.text()
+    if not section_text.strip():
+        return CharacterRoster(characters=[]), 0
+
+    if section.depth > limits.max_depth:
+        logger.warning(
+            "build_roster: section %s exceeded max split depth=%d; using heuristic fallback",
+            section.label,
+            limits.max_depth,
+        )
+        return _heuristic_section_roster(section_text, nlp), 0
+
+    seed_names = [] if explicit_llm or nlp is None else extract_person_names(section_text, nlp)
+    prompt = _build_roster_prompt(section_text, seed_names)
+    est_prompt_tokens = _estimate_tokens(prompt)
+
+    if est_prompt_tokens > limits.target_prompt_tokens:
+        children = _split_section(section)
+        if children:
+            logger.info(
+                "build_roster: section %s estimated %d prompt tokens above target %d; "
+                "bisecting into %d section(s)",
+                section.label,
+                est_prompt_tokens,
+                limits.target_prompt_tokens,
+                len(children),
+            )
+            characters: list[CharacterRecord] = []
+            failures = 0
+            for child in children:
+                child_roster, child_failures = _extract_roster_section(
+                    child,
+                    nlp=nlp,
+                    llm=llm,
+                    explicit_llm=explicit_llm,
+                    book_path=book_path,
+                    provider=provider,
+                    model=model,
+                    method=method,
+                    limits=limits,
+                )
+                characters.extend(child_roster.characters)
+                failures += child_failures
+            return CharacterRoster(characters=characters), failures
+
+    cached = _load_cached_section(
+        section,
+        book_path=book_path,
+        provider=provider,
+        model=model,
+        method=method,
+        limits=limits,
+    )
+    if cached is not None:
+        logger.debug(
+            "build_roster: roster section cache hit for %s (%d character(s))",
+            section.label,
+            len(cached.characters),
+        )
+        return cached, 0
+
+    try:
+        raw_response = llm.generate(prompt, CharacterRosterWire)
+        roster = _coerce_llm_roster_response(raw_response)
+        logger.info(
+            "build_roster: LLM roster section %s returned %d character(s) "
+            "(prompt~%d tokens)",
+            section.label,
+            len(roster.characters),
+            est_prompt_tokens,
+        )
+        _cache_section(
+            roster,
+            section,
+            book_path=book_path,
+            provider=provider,
+            model=model,
+            method=method,
+            limits=limits,
+        )
+        return roster, 0
+    except Exception as exc:
+        children = _split_section(section)
+        if children:
+            logger.warning(
+                "build_roster: LLM roster section %s failed (%s); bisecting into %d section(s)",
+                section.label,
+                exc,
+                len(children),
+            )
+            characters = []
+            failures = 0
+            for child in children:
+                child_roster, child_failures = _extract_roster_section(
+                    child,
+                    nlp=nlp,
+                    llm=llm,
+                    explicit_llm=explicit_llm,
+                    book_path=book_path,
+                    provider=provider,
+                    model=model,
+                    method=method,
+                    limits=limits,
+                )
+                characters.extend(child_roster.characters)
+                failures += child_failures
+            return CharacterRoster(characters=characters), failures
+
+        logger.warning(
+            "build_roster: LLM roster leaf section %s failed (%s); using heuristic fallback",
+            section.label,
+            exc,
+        )
+        fallback = _heuristic_section_roster(section_text, nlp)
+        if fallback.characters:
+            return fallback, 1
+        return CharacterRoster(characters=[]), 1
+
+
+def _finalize_llm_roster(
+    raw: CharacterRoster,
+    *,
+    full_text: str,
+    nlp,
+    llm: LLMClient,
+    explicit_llm: bool,
+    step_callback: Callable[[str], None] | None,
+) -> CharacterRoster:
+    filtered = _filter_roster_hallucinations(raw, full_text)
+    all_names = [name for group in filtered.characters for name in group.aliases]
+
+    if not all_names:
+        logger.info("build_roster: no names survived hallucination filter; using heuristic")
+        if explicit_llm or nlp is None:
+            return CharacterRoster(characters=[])
+        return _build_roster_spacy_chunked(full_text, nlp, step_callback=step_callback)
+
+    groups = _cluster_by_heuristic(all_names)
+    logger.info(
+        "build_roster: LLM path — %d canonical characters after clustering",
+        len(groups),
+    )
+    roster_obj = CharacterRoster(characters=groups)
+    roster_obj = deduplicate_roster_with_llm(roster_obj, llm)
+    if step_callback:
+        step_callback("Deduplicated roster")
+    roster_obj = normalize_canonical_names_with_llm(roster_obj, llm)
+    if step_callback:
+        step_callback("Normalized names")
+    return roster_obj
+
+
+def build_roster_from_chapters_with_llm(
+    chapters: list[Chapter],
+    nlp=None,
+    llm: LLMClient | None = None,
+    method: str = "auto",
+    step_callback: Callable[[str], None] | None = None,
+    book_path: Path | None = None,
+    provider: str = "ollama",
+    model: str = "",
+) -> CharacterRoster:
+    """Build a roster from chapter-bounded LLM calls with recursive bisection."""
+    from .booknlp_roster import build_roster_from_booknlp
+
+    full_text = "\n\n".join("\n\n".join(ch.paragraphs) for ch in chapters)
+
+    if method == "spacy":
+        if nlp is None:
+            raise ValueError("nlp model is required for method='spacy'")
+        logger.info("build_roster: spaCy-only path")
+        roster = _build_roster_spacy_chunked(full_text, nlp, step_callback=step_callback)
+        if step_callback:
+            step_callback("Extracted characters")
+        return roster
+
+    if method == "booknlp":
+        bnlp_data = build_roster_from_booknlp(full_text)
+        if bnlp_data is None:
+            raise RuntimeError(
+                "BookNLP is not installed or failed to process the text. "
+                "Install it with: pip install booknlp"
+            )
+        roster = bnlp_data.roster
+        if step_callback:
+            step_callback("Extracted characters")
+        roster = deduplicate_roster_with_llm(roster, llm)
+        if step_callback:
+            step_callback("Deduplicated roster")
+        roster = resolve_epithets_with_llm(roster, bnlp_data.common_phrases, llm)
+        if step_callback:
+            step_callback("Resolved epithets")
+        roster = normalize_canonical_names_with_llm(roster, llm)
+        if step_callback:
+            step_callback("Normalized names")
+        return roster
+
+    if llm is None:
+        raise ValueError("llm client is required for LLM roster extraction")
+
+    if method == "auto":
+        bnlp_data = build_roster_from_booknlp(full_text)
+        if bnlp_data is not None:
+            roster = bnlp_data.roster
+            logger.info(
+                "build_roster: BookNLP path — %d canonical characters",
+                len(roster.characters),
+            )
+            if step_callback:
+                step_callback("Extracted characters")
+            roster = deduplicate_roster_with_llm(roster, llm)
+            if step_callback:
+                step_callback("Deduplicated roster")
+            roster = resolve_epithets_with_llm(roster, bnlp_data.common_phrases, llm)
+            if step_callback:
+                step_callback("Resolved epithets")
+            roster = normalize_canonical_names_with_llm(roster, llm)
+            if step_callback:
+                step_callback("Normalized names")
+            return roster
+        logger.info("build_roster: BookNLP unavailable, trying chapter-bounded LLM")
+
+    explicit_llm = method not in ("auto", "booknlp", "spacy")
+    limits = _limits_for_provider(provider)
+    sections = [
+        _RosterSection(
+            chapter_index=getattr(chapter, "index", idx),
+            chapter_title=getattr(chapter, "title", "") or f"Chapter {getattr(chapter, 'index', idx)}",
+            paragraphs=tuple(p for p in chapter.paragraphs if p.strip()),
+            para_start=0,
+            para_end=len([p for p in chapter.paragraphs if p.strip()]),
+        )
+        for idx, chapter in enumerate(chapters)
+        if any(p.strip() for p in chapter.paragraphs)
+    ]
+    if not sections:
+        return CharacterRoster(characters=[])
+
+    logger.info(
+        "build_roster: chapter-bounded LLM extraction starting sections=%d provider=%s "
+        "model=%s target_prompt_tokens=%d",
+        len(sections),
+        provider,
+        model,
+        limits.target_prompt_tokens,
+    )
+
+    raw_characters: list[CharacterRecord] = []
+    failed_sections = 0
+    for section_idx, section in enumerate(sections, start=1):
+        roster, failures = _extract_roster_section(
+            section,
+            nlp=nlp,
+            llm=llm,
+            explicit_llm=explicit_llm,
+            book_path=book_path,
+            provider=provider,
+            model=model,
+            method=method,
+            limits=limits,
+        )
+        raw_characters.extend(roster.characters)
+        failed_sections += failures
+        if step_callback:
+            step_callback(f"Block {section_idx}/{len(sections)}")
+
+    if not raw_characters and failed_sections:
+        if explicit_llm:
+            logger.warning(
+                "build_roster: all chapter-bounded LLM sections failed with no heuristic results"
+            )
+            return CharacterRoster(characters=[])
+        logger.warning(
+            "build_roster: no LLM section results; falling back to full heuristic extraction"
+        )
+        return _build_roster_spacy_chunked(full_text, nlp, step_callback=step_callback)
+
+    raw = CharacterRoster(characters=raw_characters)
+    logger.info(
+        "build_roster: LLM returned %d total entries across %d chapter section(s), "
+        "leaf_failures=%d",
+        len(raw.characters),
+        len(sections),
+        failed_sections,
+    )
+    if step_callback:
+        step_callback("Extracted characters")
+
+    return _finalize_llm_roster(
+        raw,
+        full_text=full_text,
+        nlp=nlp,
+        llm=llm,
+        explicit_llm=explicit_llm,
+        step_callback=step_callback,
+    )
 
 
 def build_roster_with_llm(
