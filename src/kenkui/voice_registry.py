@@ -157,7 +157,7 @@ def parse_compiled_filename(path: Path) -> VoiceMetadata:
     accent = parts[4] if len(parts) > 4 else None
 
     gender_map = {"M": "Male", "F": "Female"}
-    gender = gender_map.get(gender_code or "", None)
+    gender = gender_map.get(gender_code or "")
 
     return VoiceMetadata(
         name=name,

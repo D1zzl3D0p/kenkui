@@ -11,7 +11,6 @@ import pytest
 
 from kenkui.models import AppConfig, PostProcessingConfig
 
-
 # ── PostProcessingConfig model tests ──────────────────────────────────────────
 
 
@@ -129,7 +128,6 @@ class TestApplyChapterEffects:
         assert wav.stat().st_mtime == mtime_before
 
     def test_graceful_skip_when_pedalboard_missing(self, tmp_path, caplog):
-        from kenkui.post_processing import apply_chapter_effects
 
         wav = tmp_path / "ch_0001.wav"
         _write_silent_wav(wav)
@@ -262,7 +260,8 @@ class TestAutogainApplication:
 
     def _write_loud_wav(self, path: Path, sample_rate: int = 24000) -> None:
         """Write a short WAV with high amplitude samples."""
-        import struct, wave
+        import struct
+        import wave
         n = int(sample_rate * 0.05)
         with wave.open(str(path), "w") as wf:
             wf.setnchannels(1)
@@ -274,7 +273,8 @@ class TestAutogainApplication:
 
     def _write_quiet_wav(self, path: Path, sample_rate: int = 24000) -> None:
         """Write a short WAV with low amplitude samples."""
-        import struct, wave
+        import struct
+        import wave
         n = int(sample_rate * 0.05)
         with wave.open(str(path), "w") as wf:
             wf.setnchannels(1)
@@ -293,6 +293,7 @@ class TestAutogainApplication:
         pytest.importorskip("pedalboard")
         import numpy as np
         from pedalboard.io import AudioFile
+
         from kenkui.post_processing import apply_chapter_effects
 
         loud = tmp_path / "loud.wav"
@@ -330,6 +331,7 @@ class TestAutogainApplication:
         pytest.importorskip("pedalboard")
         import numpy as np
         from pedalboard.io import AudioFile
+
         from kenkui.post_processing import apply_chapter_effects
 
         loud = tmp_path / "loud.wav"

@@ -7,31 +7,21 @@ Coverage:
 - do_login — success, empty token, bad token, non-hf_ prefix
 - verify_access — OK, still-gated, unexpected error
 - open_signup/token/model_page — correct URLs, silent failure on browser error
-- ensure_huggingface_access — CLI orchestrator (skip_if_no_interaction,
-  already-OK, NOT_FOUND, NO_TOKEN path, NEEDS_TERMS path)
-- _cli_setup_authentication — choices 1, 2, 3
-- _cli_token_flow — success first try, success after retry, exhaust all retries
-- _cli_accept_terms_flow — accept+verify OK, accept+still-gated then retry,
-  accept+still-gated then give-up, reject+skip, invalid input then valid
+- ensure_huggingface_access — noninteractive compatibility status check
 - check_voice_access — built-in voice (no auth needed), custom voice (auth called)
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 from kenkui.huggingface_auth import (
     GATED_MODELS,
     HF_SIGNUP_URL,
     HF_TOKEN_URL,
     AuthStatus,
-    _cli_accept_terms_flow,
-    _cli_setup_authentication,
-    _cli_token_flow,
     check_auth_status,
     check_voice_access,
     do_login,
@@ -44,7 +34,6 @@ from kenkui.huggingface_auth import (
     verify_access,
 )
 from kenkui.voice_registry import BUILTIN_VOICE_NAMES
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -294,46 +283,42 @@ class TestBrowserHelpers:
 
 
 # ---------------------------------------------------------------------------
-# ensure_huggingface_access — CLI orchestrator
+# ensure_huggingface_access — noninteractive compatibility check
 # ---------------------------------------------------------------------------
 
 
 class TestEnsureHuggingfaceAccess:
     def test_already_ok_returns_true_without_interaction(self):
-        with patch("kenkui.huggingface_auth.check_auth_status", return_value=AuthStatus.OK):
+        with (
+            patch("kenkui.huggingface_auth.check_auth_status", return_value=AuthStatus.OK),
+            patch("builtins.input") as mock_input,
+            patch("builtins.print") as mock_print,
+        ):
             assert ensure_huggingface_access() is True
+        mock_input.assert_not_called()
+        mock_print.assert_not_called()
 
     def test_not_found_returns_false(self):
-        with patch("kenkui.huggingface_auth.check_auth_status", return_value=AuthStatus.NOT_FOUND):
+        with (
+            patch("kenkui.huggingface_auth.check_auth_status", return_value=AuthStatus.NOT_FOUND),
+            patch("builtins.input") as mock_input,
+            patch("builtins.print") as mock_print,
+        ):
             assert ensure_huggingface_access() is False
+        mock_input.assert_not_called()
+        mock_print.assert_not_called()
 
-    def test_skip_if_no_interaction_returns_false_when_not_ok(self):
+    def test_not_ok_statuses_return_false_without_prompting(self):
         for status in (AuthStatus.NO_TOKEN, AuthStatus.NEEDS_TERMS, AuthStatus.ERROR):
-            with patch("kenkui.huggingface_auth.check_auth_status", return_value=status):
-                result = ensure_huggingface_access(skip_if_no_interaction=True)
+            with (
+                patch("kenkui.huggingface_auth.check_auth_status", return_value=status),
+                patch("builtins.input") as mock_input,
+                patch("builtins.print") as mock_print,
+            ):
+                result = ensure_huggingface_access(skip_if_no_interaction=False)
             assert result is False, f"Expected False for status {status}"
-
-    def test_no_token_calls_setup_auth(self):
-        with (
-            patch("kenkui.huggingface_auth.check_auth_status", return_value=AuthStatus.NO_TOKEN),
-            patch(
-                "kenkui.huggingface_auth._cli_setup_authentication", return_value=True
-            ) as mock_setup,
-        ):
-            result = ensure_huggingface_access()
-        mock_setup.assert_called_once_with("kyutai/pocket-tts")
-        assert result is True
-
-    def test_needs_terms_calls_accept_terms(self):
-        with (
-            patch("kenkui.huggingface_auth.check_auth_status", return_value=AuthStatus.NEEDS_TERMS),
-            patch(
-                "kenkui.huggingface_auth._cli_accept_terms_flow", return_value=True
-            ) as mock_terms,
-        ):
-            result = ensure_huggingface_access()
-        mock_terms.assert_called_once_with("kyutai/pocket-tts")
-        assert result is True
+            mock_input.assert_not_called()
+            mock_print.assert_not_called()
 
     def test_ungated_model_always_ok(self):
         # Should never call HfApi at all
@@ -341,194 +326,6 @@ class TestEnsureHuggingfaceAccess:
             result = ensure_huggingface_access("ungated/model")
         mock_cls.assert_not_called()
         assert result is True
-
-
-# ---------------------------------------------------------------------------
-# _cli_setup_authentication — choice 1/2/3
-# ---------------------------------------------------------------------------
-
-
-class TestCliSetupAuthentication:
-    def _patch(self, inputs: list[str], login_ok: bool = True):
-        """Context manager stack for CLI setup tests."""
-        return (
-            patch("builtins.input", side_effect=inputs),
-            patch("kenkui.huggingface_auth.open_signup_page"),
-            patch("kenkui.huggingface_auth._cli_token_flow", return_value=login_ok),
-        )
-
-    def test_choice_3_returns_false(self):
-        with patch("builtins.input", return_value="3"), patch("builtins.print"):
-            result = _cli_setup_authentication("kyutai/pocket-tts")
-        assert result is False
-
-    def test_choice_1_goes_to_token_flow(self):
-        with (
-            patch("builtins.input", return_value="1"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth._cli_token_flow", return_value=True) as mock_tf,
-        ):
-            result = _cli_setup_authentication("kyutai/pocket-tts")
-        mock_tf.assert_called_once_with("kyutai/pocket-tts")
-        assert result is True
-
-    def test_choice_2_opens_browser_then_token_flow(self):
-        # choice "2", then "Enter" (blank) to confirm signup done
-        with (
-            patch("builtins.input", side_effect=["2", ""]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_signup_page") as mock_signup,
-            patch("kenkui.huggingface_auth._cli_token_flow", return_value=True),
-        ):
-            _cli_setup_authentication("kyutai/pocket-tts")
-        mock_signup.assert_called_once()
-
-    def test_token_flow_failure_propagates(self):
-        with (
-            patch("builtins.input", return_value="1"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth._cli_token_flow", return_value=False),
-        ):
-            result = _cli_setup_authentication("kyutai/pocket-tts")
-        assert result is False
-
-
-# ---------------------------------------------------------------------------
-# _cli_token_flow — success, retry, exhausted
-# ---------------------------------------------------------------------------
-
-
-class TestCliTokenFlow:
-    def test_valid_token_first_try(self):
-        with (
-            patch("builtins.input", return_value="hf_goodtoken"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_token_page"),
-            patch("kenkui.huggingface_auth.do_login", return_value=(True, "Token accepted.")),
-            patch(
-                "kenkui.huggingface_auth._cli_accept_terms_flow", return_value=True
-            ) as mock_terms,
-        ):
-            result = _cli_token_flow("kyutai/pocket-tts")
-        assert result is True
-        mock_terms.assert_called_once()
-
-    def test_bad_then_good_token(self):
-        # First call fails, second succeeds
-        login_responses = [(False, "bad"), (True, "ok")]
-        with (
-            patch("builtins.input", side_effect=["hf_bad", "hf_good"]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_token_page"),
-            patch("kenkui.huggingface_auth.do_login", side_effect=login_responses),
-            patch("kenkui.huggingface_auth._cli_accept_terms_flow", return_value=True),
-        ):
-            result = _cli_token_flow("kyutai/pocket-tts")
-        assert result is True
-
-    def test_all_attempts_fail_returns_false(self):
-        # 3 attempts, all fail
-        with (
-            patch("builtins.input", return_value="hf_bad"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_token_page"),
-            patch("kenkui.huggingface_auth.do_login", return_value=(False, "invalid")),
-        ):
-            result = _cli_token_flow("kyutai/pocket-tts")
-        assert result is False
-
-    def test_opens_token_page_at_start(self):
-        with (
-            patch("builtins.input", return_value="hf_t"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_token_page") as mock_tp,
-            patch("kenkui.huggingface_auth.do_login", return_value=(True, "ok")),
-            patch("kenkui.huggingface_auth._cli_accept_terms_flow", return_value=True),
-        ):
-            _cli_token_flow("kyutai/pocket-tts")
-        mock_tp.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _cli_accept_terms_flow — accept + verify, reject, retry, invalid input
-# ---------------------------------------------------------------------------
-
-
-class TestCliAcceptTermsFlow:
-    def test_accept_and_verify_ok_returns_true(self):
-        with (
-            patch("builtins.input", return_value="y"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page"),
-            patch("kenkui.huggingface_auth.verify_access", return_value=(True, "Access granted!")),
-        ):
-            result = _cli_accept_terms_flow("kyutai/pocket-tts")
-        assert result is True
-
-    def test_accept_still_gated_then_give_up(self):
-        # "y" → verify fails → "n" to retry → returns False
-        with (
-            patch("builtins.input", side_effect=["y", "n"]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page"),
-            patch("kenkui.huggingface_auth.verify_access", return_value=(False, "not yet")),
-        ):
-            result = _cli_accept_terms_flow("kyutai/pocket-tts")
-        assert result is False
-
-    def test_accept_still_gated_then_retry_then_ok(self):
-        # "y" → fail → "y" (retry) → "y" → ok
-        verify_results = [(False, "not yet"), (True, "Access granted!")]
-        with (
-            patch("builtins.input", side_effect=["y", "y", "y"]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page"),
-            patch("kenkui.huggingface_auth.verify_access", side_effect=verify_results),
-        ):
-            result = _cli_accept_terms_flow("kyutai/pocket-tts")
-        assert result is True
-
-    def test_reject_then_skip(self):
-        # "n" → skip "y" → False
-        with (
-            patch("builtins.input", side_effect=["n", "y"]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page"),
-        ):
-            result = _cli_accept_terms_flow("kyutai/pocket-tts")
-        assert result is False
-
-    def test_reject_no_skip_then_accept(self):
-        # "n" → skip "n" → "y" → verify ok
-        with (
-            patch("builtins.input", side_effect=["n", "n", "y"]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page"),
-            patch("kenkui.huggingface_auth.verify_access", return_value=(True, "ok")),
-        ):
-            result = _cli_accept_terms_flow("kyutai/pocket-tts")
-        assert result is True
-
-    def test_invalid_input_then_accept(self):
-        # "maybe" → "y" → verify ok
-        with (
-            patch("builtins.input", side_effect=["maybe", "y"]),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page"),
-            patch("kenkui.huggingface_auth.verify_access", return_value=(True, "ok")),
-        ):
-            result = _cli_accept_terms_flow("kyutai/pocket-tts")
-        assert result is True
-
-    def test_opens_model_page_at_start(self):
-        with (
-            patch("builtins.input", return_value="y"),
-            patch("builtins.print"),
-            patch("kenkui.huggingface_auth.open_model_page") as mock_mp,
-            patch("kenkui.huggingface_auth.verify_access", return_value=(True, "ok")),
-        ):
-            _cli_accept_terms_flow("kyutai/pocket-tts")
-        mock_mp.assert_called_once_with("kyutai/pocket-tts")
 
 
 # ---------------------------------------------------------------------------

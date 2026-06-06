@@ -12,7 +12,6 @@ from kenkui.models import Chapter
 from kenkui.readers import EbookMetadata
 from kenkui.services.book_cache import BookCache, BookEntry, ChapterSummary
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------

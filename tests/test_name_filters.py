@@ -5,7 +5,6 @@ import pytest
 
 from kenkui.nlp._filters import _is_proper_name
 
-
 # ---------------------------------------------------------------------------
 # Cases that should be rejected (return False)
 # ---------------------------------------------------------------------------

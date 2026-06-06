@@ -1,12 +1,7 @@
 """HuggingFace authentication helpers for custom voice access.
 
-This module provides two interfaces:
-
-1. **Programmatic API** (``check_auth_status``, ``do_login``, ``verify_access``) —
-   pure functions that return structured results, suitable for calling from a TUI.
-
-2. **Legacy CLI helpers** (``ensure_huggingface_access``) — kept for headless /
-   script usage, wraps the programmatic API with stdin/stdout interaction.
+The library core exposes status, login, verification, and URL-opening helpers.
+Callers own any interactive setup UI.
 """
 
 from __future__ import annotations
@@ -86,7 +81,11 @@ def check_auth_status(model_id: str = "kyutai/pocket-tts") -> AuthStatus:
 
     try:
         from huggingface_hub import HfApi
-        from huggingface_hub.errors import GatedRepoError, LocalTokenNotFoundError, RepositoryNotFoundError
+        from huggingface_hub.errors import (
+            GatedRepoError,
+            LocalTokenNotFoundError,
+            RepositoryNotFoundError,
+        )
     except ImportError:
         logger.warning("huggingface_hub not installed — install kenkui[custom-voices] to use custom voices")
         return AuthStatus.NO_TOKEN
@@ -179,7 +178,7 @@ def open_model_page(model_id: str = "kyutai/pocket-tts") -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy CLI helper (kept for headless / script usage)
+# Noninteractive compatibility helpers
 # ---------------------------------------------------------------------------
 
 
@@ -187,100 +186,17 @@ def ensure_huggingface_access(
     model_id: str = "kyutai/pocket-tts",
     skip_if_no_interaction: bool = False,
 ) -> bool:
-    """Ensure the user has access to *model_id*, prompting via stdin/stdout.
+    """Return True when the current environment can access *model_id*.
 
-    This is the legacy CLI flow.  In TUI mode use :class:`HuggingFaceAuthModal`
-    from ``kenkui.widgets`` instead.
+    This compatibility helper is intentionally noninteractive. Applications that
+    receive ``False`` should inspect :func:`check_auth_status` and present their
+    own login or terms-acceptance flow.
     """
+    _ = skip_if_no_interaction
     status = check_auth_status(model_id)
-
-    if status == AuthStatus.OK:
-        return True
-    if status == AuthStatus.NOT_FOUND:
-        print(f"Error: Model '{model_id}' not found on HuggingFace.")
-        return False
-    if skip_if_no_interaction:
-        return False
-
-    if status == AuthStatus.NO_TOKEN:
-        return _cli_setup_authentication(model_id)
-    if status == AuthStatus.NEEDS_TERMS:
-        return _cli_accept_terms_flow(model_id)
-    return False
-
-
-def _cli_setup_authentication(model_id: str) -> bool:
-    print()
-    print("=== HuggingFace Setup Required ===")
-    print()
-    print("Custom voices require a free HuggingFace account.")
-    print()
-    print("[1] I have an account")
-    print("[2] I need to create one  (opens browser)")
-    print("[3] Skip (custom voices won't work)")
-    choice = input("\nEnter 1, 2, or 3: ").strip()
-
-    if choice == "3":
-        return False
-
-    if choice == "2":
-        print("\nOpening signup page...")
-        open_signup_page()
-        print("Complete signup in your browser, then return here.")
-        input("Press Enter when your account is ready...")
-
-    return _cli_token_flow(model_id)
-
-
-def _cli_token_flow(model_id: str) -> bool:
-    print("\n--- Step 1: Create an Access Token ---")
-    print("Opening token creation page...")
-    open_token_page()
-    print("\nInstructions:")
-    print("  1. Click 'Create token' in the browser (select 'Read' type)")
-    print("  2. Copy the token (starts with 'hf_')")
-    print("  3. Paste it below")
-
-    for attempt in range(3):
-        print()
-        token = input("Token: ").strip()
-        ok, msg = do_login(token)
-        print(msg)
-        if ok:
-            return _cli_accept_terms_flow(model_id)
-        if attempt < 2:
-            print("Please try again.")
-
-    print("Could not authenticate. Custom voices will not be available.")
-    return False
-
-
-def _cli_accept_terms_flow(model_id: str) -> bool:
-    print("\n--- Step 2: Accept Terms of Use ---")
-    print("Opening model page...")
-    open_model_page(model_id)
-    print("\nInstructions:")
-    print("  1. Find the 'Access repository' / 'Gated model' section")
-    print("  2. Click 'Agree and access repository'")
-    print("  3. Return here")
-
-    while True:
-        print()
-        response = input("Have you accepted the terms? (y/n): ").strip().lower()
-        if response in ("y", "yes"):
-            ok, msg = verify_access(model_id)
-            print(msg)
-            if ok:
-                return True
-            retry = input("Try again? (y/n): ").strip().lower()
-            if retry not in ("y", "yes"):
-                return False
-        elif response in ("n", "no"):
-            skip = input("Skip for now? (y/n): ").strip().lower()
-            if skip in ("y", "yes"):
-                return False
-        else:
-            print("Please enter 'y' or 'n'.")
+    if status != AuthStatus.OK:
+        logger.info("HuggingFace access for %s is not ready: %s", model_id, status.value)
+    return status == AuthStatus.OK
 
 
 def check_voice_access(voice: str) -> bool:

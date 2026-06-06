@@ -37,6 +37,7 @@ dependencies = [
   "ffmpeg-normalize>=1.26",
   "huggingface_hub>=1.3.0",
   "pymupdf>=1.24.0",
+  "litellm>=1.0.0",
 ]
 
 [project.scripts]
@@ -72,8 +73,22 @@ ignore = [
   "E402",   # module-level import not at top — intentional in several modules
   "N806",   # variable in function should be lowercase — Windows constants
   "SIM105", # use contextlib.suppress — try/except pass is clearer at module level
+  "SIM103", # explicit branching is clearer in predicate helpers
   "SIM108", # use ternary operator — sometimes if/else is more readable
   "B007",   # loop variable not used — some loop patterns are intentional
+  "B904",   # exception chaining cleanup is tracked separately from this refactor
+  "B905",   # existing zip() call sites predate strict= and need behavioral review
+  "N813",   # third-party CamelCase aliases are used only for availability checks
+  "UP042",  # StrEnum migration is a compatibility cleanup, not a refactor prerequisite
+  "UP047",  # PEP 695 generic syntax would drop support for type checkers still in use
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+  "B017",   # broad exception assertions intentionally cover optional dependency failures
+  "E741",   # short fixture-local names in string-formatting tests
+  "F841",   # some mock bindings document patched collaborators without assertions
+  "SIM117", # nested with-statements are often clearer in long mock stacks
 ]
 
 [tool.ruff.lint.isort]

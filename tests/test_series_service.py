@@ -1,11 +1,8 @@
 """Tests for series_service."""
 from __future__ import annotations
 
-import tomli_w
 import pytest
-from pathlib import Path
-from unittest.mock import patch
-
+import tomli_w
 
 # ---------------------------------------------------------------------------
 # Service-layer tests
@@ -16,7 +13,7 @@ class TestListSeries:
         import kenkui.series as _series_mod
         monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
 
-        from kenkui.services.series_service import list_series, ListSeriesResult
+        from kenkui.services.series_service import ListSeriesResult, list_series
         result = list_series()
         assert isinstance(result, ListSeriesResult)
         assert result.series == []
@@ -29,7 +26,7 @@ class TestListSeries:
         data = {"name": "The Expanse", "updated_at": "", "characters": []}
         (tmp_path / "the-expanse.toml").write_bytes(tomli_w.dumps(data).encode())
 
-        from kenkui.services.series_service import list_series, ListSeriesResult, SeriesEntry
+        from kenkui.services.series_service import ListSeriesResult, SeriesEntry, list_series
         result = list_series()
         assert isinstance(result, ListSeriesResult)
         assert result.total == 1
@@ -53,7 +50,7 @@ class TestLoadSeries:
         }
         (tmp_path / "wheel-of-time.toml").write_bytes(tomli_w.dumps(data).encode())
 
-        from kenkui.services.series_service import load_series, SeriesEntry
+        from kenkui.services.series_service import SeriesEntry, load_series
         entry = load_series("wheel-of-time")
         assert isinstance(entry, SeriesEntry)
         assert entry.slug == "wheel-of-time"
@@ -84,7 +81,7 @@ class TestSaveSeries:
 
         monkeypatch.setattr(_series_mod, "save_series", _mock_save)
 
-        from kenkui.services.series_service import save_series, SeriesEntry
+        from kenkui.services.series_service import SeriesEntry, save_series
         entry = SeriesEntry(slug="test-series", name="Test Series", characters=[])
         save_series(entry)
 
@@ -96,7 +93,7 @@ class TestSaveSeries:
         import kenkui.series as _series_mod
         monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
 
-        from kenkui.services.series_service import save_series, load_series, SeriesEntry
+        from kenkui.services.series_service import SeriesEntry, load_series, save_series
         entry = SeriesEntry(slug="persisted", name="Persisted Series", characters=[])
         save_series(entry)
 
@@ -129,8 +126,9 @@ class TestDeleteSeries:
 class TestRosterCandidates:
     def test_list_roster_candidates_returns_result(self, tmp_path, monkeypatch):
         import json
-        import kenkui.series as _series_mod
+
         import kenkui.config as _config_mod
+        import kenkui.series as _series_mod
 
         monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path / "series")
         monkeypatch.setattr(_config_mod, "CONFIG_DIR", tmp_path)
@@ -166,7 +164,12 @@ class TestCreateAndMatchSeriesHelpers:
         monkeypatch.setattr(_series_mod, "_series_dir_override", tmp_path)
         from kenkui.models import CharacterInfo, FastScanResult
         from kenkui.nlp.models import CharacterRecord, CharacterRoster
-        from kenkui.services.series_service import match_series_characters, save_series, SeriesCharacterEntry, SeriesEntry
+        from kenkui.services.series_service import (
+            SeriesCharacterEntry,
+            SeriesEntry,
+            match_series_characters,
+            save_series,
+        )
 
         save_series(
             SeriesEntry(

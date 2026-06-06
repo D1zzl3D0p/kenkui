@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from kenkui.models import JobConfig, _migrate_speaker_voices_keys
-
 
 # ---------------------------------------------------------------------------
 # Unit: _migrate_speaker_voices_keys

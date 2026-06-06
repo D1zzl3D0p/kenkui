@@ -171,6 +171,7 @@ class TestWarnUnresolvableSpeakers:
     def test_missing_safetensors_emits_warning(self):
         """Speaker mapped to a nonexistent .safetensors path → warning logged."""
         from unittest.mock import patch
+
         from kenkui.parsing import _warn_unresolvable_speakers
 
         warnings = []
@@ -188,6 +189,7 @@ class TestWarnUnresolvableSpeakers:
     def test_valid_non_safetensors_voice_no_warning(self):
         """Speaker mapped to a non-safetensors voice (built-in) → no warning."""
         from unittest.mock import patch
+
         from kenkui.parsing import _warn_unresolvable_speakers
 
         warnings = []

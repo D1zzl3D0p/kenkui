@@ -6,10 +6,14 @@ KENKUI_NLP_EXTRACTION_TOOL=booknlp  → NLPConfig().extraction_tool == Extractio
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
+
+if TYPE_CHECKING:
+    from .models import AppConfig
 
 _logger = logging.getLogger(__name__)
 
@@ -42,17 +46,25 @@ class NLPConfig(BaseSettings):
     retry_backoff_base: float = 2.0
 
     @classmethod
-    def from_app_config(cls, config: "AppConfig") -> "NLPConfig":  # type: ignore[name-defined]
+    def from_app_config(cls, config: AppConfig) -> NLPConfig:
         """Build NLPConfig from an AppConfig for backwards compatibility."""
-        from .models import AppConfig  # noqa: F401 — local import avoids circular
-
         _tool_map: dict[str, ExtractionTool] = {
             "ollama": ExtractionTool.OLLAMA,
             "booknlp": ExtractionTool.BOOKNLP,
+            "litellm": ExtractionTool.LITELLM,
+            "openrouter": ExtractionTool.OPENROUTER,
+            "anthropic": ExtractionTool.ANTHROPIC,
+            "openai": ExtractionTool.OPENAI,
+            "google": ExtractionTool.GOOGLE,
         }
         _attr_map: dict[str, AttributionTool] = {
             "ollama": AttributionTool.OLLAMA,
             "booknlp": AttributionTool.BOOKNLP,
+            "litellm": AttributionTool.LITELLM,
+            "openrouter": AttributionTool.OPENROUTER,
+            "anthropic": AttributionTool.ANTHROPIC,
+            "openai": AttributionTool.OPENAI,
+            "google": AttributionTool.GOOGLE,
         }
         attr_provider = config.nlp_attribution_provider or config.nlp_provider
         extraction_tool = _tool_map.get(config.nlp_provider)

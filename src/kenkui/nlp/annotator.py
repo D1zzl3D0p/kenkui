@@ -289,13 +289,12 @@ def _build_attribution_static_block(roster: CharacterRoster) -> str:
 
     return f"""You are a literary analyst performing speaker attribution.
 
-CHARACTER ROSTER (use the slug field as the speaker value):
+CHARACTER ROSTER (use the slug field as the s value):
 {roster_block}
 
-For each [QUOTE:N] tag in the annotated chapter, return:
-- quote_id: the N from [QUOTE:N]
-- speaker: character slug, "NARRATOR", or "Unknown"
-- confidence: 1–5
+For each [QUOTE:N] tag in the annotated chapter, return one object with:
+- q: the N from [QUOTE:N]
+- s: character slug, "NARRATOR", or "Unknown"
 
 Rules:
 - Every [QUOTE:N] present MUST appear in your response — no exceptions, no skipping

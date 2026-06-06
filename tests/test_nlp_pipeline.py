@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from kenkui.models import Chapter, NLPResult, CharacterInfo
-from kenkui.nlp.models import CharacterRoster, CharacterRecord
+from kenkui.models import Chapter, CharacterInfo, NLPResult
+from kenkui.nlp.models import CharacterRecord, CharacterRoster
 from kenkui.nlp.pipeline import NLPJob, NLPJobStatus, NLPPipeline, ValidationResult
 from kenkui.nlp_config import NLPConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -197,7 +193,7 @@ def test_pipeline_attribute_returns_nlp_result(tmp_path):
     roster = _make_roster()
 
     # Mock attribution result
-    from kenkui.nlp.models import AttributionResult, AttributionItem
+    from kenkui.nlp.models import AttributionResult
     attr_result = AttributionResult(attributions=[])
     pipeline._attribution.attribute_chapter.return_value = attr_result
 
@@ -553,7 +549,7 @@ class TestAttributionCountSlugNormalization:
 
     def test_attribution_counts_uses_slugs(self, tmp_path):
         """attribution_counts keys are slugified; sentinel speakers are excluded."""
-        from kenkui.nlp.models import AttributionResult, AttributionItem
+        from kenkui.nlp.models import AttributionItem, AttributionResult
 
         pipeline = _make_pipeline()
         roster = self._make_roster_darrow_rhonna()
@@ -601,7 +597,7 @@ class TestAttributionCountSlugNormalization:
         would receive a non-zero quote_count.  The test therefore catches a real
         regression rather than passing trivially.
         """
-        from kenkui.nlp.models import AttributionResult, AttributionItem
+        from kenkui.nlp.models import AttributionItem, AttributionResult
 
         pipeline = _make_pipeline()
         # Include roster entries whose slugs equal the slugified sentinels so
@@ -637,7 +633,7 @@ class TestAttributionCountSlugNormalization:
 
     def test_quote_count_correct_via_slug_lookup(self, tmp_path):
         """ci.quote_count is correct when attribution keys are slugs matching rec.slug."""
-        from kenkui.nlp.models import AttributionResult, AttributionItem
+        from kenkui.nlp.models import AttributionItem, AttributionResult
 
         pipeline = _make_pipeline()
         roster = self._make_roster_darrow_rhonna()

@@ -1,21 +1,23 @@
 """Tests for excluded_voices filtering in suggest_cast service."""
 from unittest.mock import MagicMock, patch
-import pytest
+
 from kenkui.models import CharacterInfo
 from kenkui.services.voice_service import suggest_cast
 
 
-def _make_voices(male_names, female_names):
+def _make_voices(male_names, female_names, source="builtin"):
     voices = []
     for n in male_names:
         v = MagicMock()
         v.name = n
         v.gender = "Male"
+        v.source = source
         voices.append(v)
     for n in female_names:
         v = MagicMock()
         v.name = n
         v.gender = "Female"
+        v.source = source
         voices.append(v)
     return voices
 

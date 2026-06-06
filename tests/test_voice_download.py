@@ -1,11 +1,9 @@
 """Tests for src/kenkui/voice_download.py"""
-import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
 def test_voices_are_present_false_when_dir_missing(tmp_path):
-    from kenkui.voice_download import voices_are_present, _VOICES_LOCAL_DIR
+    from kenkui.voice_download import voices_are_present
     with patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path / "nonexistent"):
         assert voices_are_present() is False
 

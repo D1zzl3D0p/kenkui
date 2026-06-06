@@ -1,6 +1,5 @@
 """Tests for voice review UX changes (Tasks 3 and 4)."""
 
-import pytest
 
 
 def test_voice_display_format_puts_voice_first():

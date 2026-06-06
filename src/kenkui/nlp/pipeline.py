@@ -21,14 +21,15 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from kenkui.nlp import _attribution_to_segments, book_hash
 from kenkui.nlp._cache import get_cache, put_cache
 from kenkui.nlp._filters import _PRONOUNS
 from kenkui.nlp._retry import with_retry
-from kenkui.nlp import _attribution_to_segments, book_hash
-from kenkui.nlp.models import slugify as _slugify, _SPEAKER_SENTINELS
+from kenkui.nlp.models import _SPEAKER_SENTINELS
+from kenkui.nlp.models import slugify as _slugify
 
 if TYPE_CHECKING:
-    from kenkui.models import NLPResult, Chapter
+    from kenkui.models import Chapter, NLPResult
     from kenkui.nlp.models import CharacterRoster
     from kenkui.nlp_config import NLPConfig
 
@@ -77,18 +78,18 @@ class NLPJob:
     status: NLPJobStatus
     progress: int   # 0-100
     message: str
-    result: "CharacterRoster | NLPResult | None"  # populated when DONE
+    result: CharacterRoster | NLPResult | None  # populated when DONE
     error: Exception | None                        # populated when FAILED
 
     # Internal — excluded from poll() snapshots
     _thread: threading.Thread | None = field(default=None, repr=False)
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
-    def poll(self) -> "NLPJob":
+    def poll(self) -> NLPJob:
         """Return a frozen snapshot of current state (non-blocking)."""
         return dataclasses.replace(self, _thread=None)
 
-    def wait(self, timeout: float | None = None) -> "NLPJob":
+    def wait(self, timeout: float | None = None) -> NLPJob:
         """Block until done/failed or timeout. Returns snapshot."""
         if self._thread:
             self._thread.join(timeout=timeout)
@@ -107,11 +108,11 @@ class NLPJob:
 class NLPPipeline:
     """Orchestrates extraction and attribution with caching, retry, and job support."""
 
-    def __init__(self, config: "NLPConfig") -> None:
+    def __init__(self, config: NLPConfig) -> None:
         self._config = config
         from kenkui.nlp.providers._factory import (
-            get_extraction_provider,
             get_attribution_provider,
+            get_extraction_provider,
         )
         self._extraction = get_extraction_provider(config)
         self._attribution = get_attribution_provider(config)
@@ -126,7 +127,7 @@ class NLPPipeline:
         Never raises — all errors become ValidationResult(ok=False, ...).
         Returns one ValidationResult per step (extraction, attribution).
         """
-        from kenkui.models import ExtractionTool, AttributionTool
+        from kenkui.models import AttributionTool, ExtractionTool
 
         results: list[ValidationResult] = []
 
@@ -138,7 +139,13 @@ class NLPPipeline:
                     import ollama as _ollama  # noqa: F401
                 case ExtractionTool.BOOKNLP:
                     from booknlp.booknlp import BookNLP as _bnlp  # noqa: F401
-                case ExtractionTool.LITELLM:
+                case (
+                    ExtractionTool.LITELLM
+                    | ExtractionTool.OPENROUTER
+                    | ExtractionTool.ANTHROPIC
+                    | ExtractionTool.OPENAI
+                    | ExtractionTool.GOOGLE
+                ):
                     import litellm as _ll  # noqa: F401
             results.append(ValidationResult(
                 tool=extraction_tool, step="extraction", ok=True, message="Available"
@@ -156,7 +163,13 @@ class NLPPipeline:
                     import ollama as _ollama  # noqa: F401
                 case AttributionTool.BOOKNLP:
                     from booknlp.booknlp import BookNLP as _bnlp  # noqa: F401
-                case AttributionTool.LITELLM:
+                case (
+                    AttributionTool.LITELLM
+                    | AttributionTool.OPENROUTER
+                    | AttributionTool.ANTHROPIC
+                    | AttributionTool.OPENAI
+                    | AttributionTool.GOOGLE
+                ):
                     import litellm as _ll  # noqa: F401
             results.append(ValidationResult(
                 tool=attribution_tool, step="attribution", ok=True, message="Available"
@@ -175,12 +188,12 @@ class NLPPipeline:
     def extract(
         self,
         book_path: Path,
-        chapters: list["Chapter"],
-        series_roster: "CharacterRoster | None" = None,
+        chapters: list[Chapter],
+        series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[int, str], None] | None = None,
         step_callback: Callable[[str], None] | None = None,
         use_cache: bool = True,
-    ) -> "CharacterRoster":
+    ) -> CharacterRoster:
         """Run Stage 1-2: character extraction + coreference resolution.
 
         Checks cache first (if use_cache), runs the extraction provider with
@@ -267,11 +280,11 @@ class NLPPipeline:
     def attribute(
         self,
         book_path: Path,
-        chapters: list["Chapter"],
-        roster: "CharacterRoster",
+        chapters: list[Chapter],
+        roster: CharacterRoster,
         progress_callback: Callable[[int, str], None] | None = None,
         use_cache: bool = True,
-    ) -> "NLPResult":
+    ) -> NLPResult:
         """Run Stage 3-4: LLM speaker attribution using a pre-built roster.
 
         Checks cache first (if use_cache), runs attribution per chapter
@@ -282,7 +295,8 @@ class NLPPipeline:
         """
         from dataclasses import replace as _replace
 
-        from kenkui.models import CharacterInfo, CharacterRecord as AppCharacterRecord, NLPResult
+        from kenkui.models import CharacterInfo, NLPResult
+        from kenkui.models import CharacterRecord as AppCharacterRecord
 
         tool = self._config.attribution_tool.value
         model = self._config.attribution_model
@@ -368,11 +382,11 @@ class NLPPipeline:
     def run(
         self,
         book_path: Path,
-        chapters: list["Chapter"],
-        series_roster: "CharacterRoster | None" = None,
+        chapters: list[Chapter],
+        series_roster: CharacterRoster | None = None,
         progress_callback: Callable[[int, str], None] | None = None,
         use_cache: bool = True,
-    ) -> "NLPResult":
+    ) -> NLPResult:
         """Run the full pipeline: extraction then attribution.
 
         Returns:
@@ -388,8 +402,8 @@ class NLPPipeline:
     def extract_job(
         self,
         book_path: Path,
-        chapters: list["Chapter"],
-        series_roster: "CharacterRoster | None" = None,
+        chapters: list[Chapter],
+        series_roster: CharacterRoster | None = None,
         use_cache: bool = True,
     ) -> NLPJob:
         """Start extraction in a background thread and return an NLPJob immediately."""
@@ -433,8 +447,8 @@ class NLPPipeline:
     def attribute_job(
         self,
         book_path: Path,
-        chapters: list["Chapter"],
-        roster: "CharacterRoster",
+        chapters: list[Chapter],
+        roster: CharacterRoster,
         use_cache: bool = True,
     ) -> NLPJob:
         """Start attribution in a background thread and return an NLPJob immediately."""

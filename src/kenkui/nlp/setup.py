@@ -1,18 +1,16 @@
-"""Ollama model availability check and interactive setup dialogue.
-
-Called when the user chooses multi-voice mode and either no model is
-configured or they explicitly ask to reconfigure.
+"""Ollama model availability and setup helpers.
 
 Public API
 ----------
-check_llm_available(config)   → bool
-run_setup_dialogue(config)    → AppConfig | None   (None = user cancelled)
+check_llm_available(config)   -> bool
+list_recommended_models()     -> list[dict]
+pull_ollama_model(model)      -> bool
 """
 
 from __future__ import annotations
 
-import subprocess
 import logging
+import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -119,7 +117,7 @@ def check_ollama_running() -> bool:
         return False
 
 
-def check_llm_available(config: "AppConfig") -> bool:
+def check_llm_available(config: AppConfig) -> bool:
     """Return True only when Ollama is running AND the configured model is installed."""
     if not config.nlp_model:
         return False
@@ -132,116 +130,57 @@ def check_llm_available(config: "AppConfig") -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Interactive setup dialogue
+# Noninteractive setup helpers
 # ---------------------------------------------------------------------------
 
 
-def run_setup_dialogue(config: "AppConfig") -> "AppConfig | None":
-    """Walk the user through selecting and (if needed) pulling an Ollama model.
-
-    Returns an updated ``AppConfig`` with ``nlp_model`` set, or ``None`` if
-    the user cancels.  The caller is responsible for persisting the config.
-    """
-    from InquirerPy import inquirer
-    from rich.console import Console
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-    import ollama
-
-    console = Console()
-
-    console.print()
-    console.print("[bold cyan]Multi-voice NLP model setup[/bold cyan]")
-    console.print()
-
-    # ---- Check Ollama is reachable ----------------------------------------
-    if not check_ollama_running():
-        console.print("[red]Ollama is not running (or not installed).[/red]")
-        console.print(
-            "Install Ollama from [link=https://ollama.com]ollama.com[/link], "
-            "start it with [bold]ollama serve[/bold], then try again."
-        )
-        return None
-
-    # ---- Gather system info for smart recommendations ---------------------
-    ram_gb = _get_ram_gb()
-    vram_gb = _get_vram_gb()
+def list_recommended_models() -> list[dict]:
+    """Return recommended Ollama models annotated with local availability."""
     installed = _get_installed_models()
+    capacity_gb = max(_get_ram_gb(), _get_vram_gb() or 0)
 
-    capacity_gb = max(ram_gb, vram_gb or 0)
-    logger.debug("RAM %.1f GB, VRAM %s GB", ram_gb, vram_gb)
-
-    # ---- Build picker choices ---------------------------------------------
-    choices: list[dict] = []
-    for m in RECOMMENDED_MODELS:
-        fits = m["min_ram_gb"] <= capacity_gb
-        is_installed = any(m["name"].split(":")[0] == i.split(":")[0] for i in installed)
-        tag = "[green]✓ installed[/green]" if is_installed else f"~{m['size_gb']:.0f} GB"
-        dim = "" if fits else " [dim](may be slow)[/dim]"
-        label = f"{m['name']:<20} {tag}  {m['desc']}{dim}"
-        choices.append({"name": label, "value": m["name"]})
-
-    choices.append({"name": "Enter model name manually…", "value": "__custom__"})
-
-    # Put installed models first so the cursor lands on them.
-    choices.sort(
-        key=lambda c: (
-            0 if any(
-                (c["value"] or "").split(":")[0] == i.split(":")[0] for i in installed
-            ) else 1
+    results: list[dict] = []
+    for model in RECOMMENDED_MODELS:
+        name = model["name"]
+        base = name.split(":")[0]
+        results.append(
+            {
+                **model,
+                "installed": any(item.split(":")[0] == base for item in installed),
+                "fits_local_memory": model["min_ram_gb"] <= capacity_gb,
+            }
         )
-    )
+    return results
 
-    # ---- Prompt -----------------------------------------------------------
-    current = config.nlp_model
-    if current:
-        console.print(f"Current model: [bold]{current}[/bold]")
-        console.print()
 
-    selected = inquirer.select(
-        message="Select Ollama model for speaker inference:",
-        choices=choices,
-        max_height="50%",
-    ).execute()
+def pull_ollama_model(model: str, progress_callback=None) -> bool:
+    """Pull *model* through Ollama.
 
-    if selected is None:
-        return None
+    ``progress_callback`` receives the raw Ollama streaming update object when
+    supplied. Returns False when Ollama is unavailable or the pull fails.
+    """
+    if not model:
+        return False
 
-    if selected == "__custom__":
-        selected = inquirer.text(
-            message="Enter Ollama model name (e.g. llama3.2 or mistral:7b):"
-        ).execute().strip()
-        if not selected:
-            return None
+    try:
+        import ollama
 
-    # ---- Pull if not installed --------------------------------------------
-    base_selected = selected.split(":")[0]
-    already_installed = any(i.split(":")[0] == base_selected for i in installed)
+        for update in ollama.pull(model, stream=True):
+            if progress_callback is not None:
+                progress_callback(update)
+        return True
+    except Exception as exc:
+        logger.warning("Ollama pull failed for %s: %s", model, exc)
+        return False
 
-    if not already_installed:
-        console.print(f"\n[cyan]Pulling [bold]{selected}[/bold] from Ollama library…[/cyan]")
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("{task.description}"),
-                BarColumn(),
-                console=console,
-            ) as prog:
-                task = prog.add_task(f"Downloading {selected}…", total=None)
-                for update in ollama.pull(selected, stream=True):
-                    if update.total and update.completed:
-                        prog.update(
-                            task,
-                            total=update.total,
-                            completed=update.completed,
-                            description=update.status or f"Downloading {selected}…",
-                        )
-                prog.update(task, description="Done!")
-            console.print(f"[green]✓ {selected} ready[/green]\n")
-        except Exception as exc:
-            console.print(f"[red]Pull failed: {exc}[/red]")
-            console.print("You can pull it manually with: [bold]ollama pull {selected}[/bold]")
-            return None
 
-    # ---- Return updated config --------------------------------------------
-    from dataclasses import replace
-    return replace(config, nlp_model=selected)
+def run_setup_dialogue(config: AppConfig) -> AppConfig | None:
+    """Deprecated noninteractive compatibility shim.
+
+    Core no longer owns model-selection prompts. Clients should call
+    :func:`list_recommended_models`, choose a model in their own UI, call
+    :func:`pull_ollama_model` if needed, and persist the updated config.
+    """
+    _ = config
+    logger.info("run_setup_dialogue is deprecated; clients own NLP setup UI")
+    return None

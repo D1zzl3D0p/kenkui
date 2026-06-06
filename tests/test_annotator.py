@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from kenkui.nlp.annotator import annotate_chapter
 from kenkui.nlp.models import Quote
-
 
 # ---------------------------------------------------------------------------
 # Helpers

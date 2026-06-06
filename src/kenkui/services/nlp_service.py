@@ -15,16 +15,20 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace as _replace
+from dataclasses import dataclass, field
+from dataclasses import replace as _replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from kenkui.analytics import StageRecord, append_record, now_utc
 from kenkui.config import load_app_config
 from kenkui.models import (
     CharacterInfo,
-    CharacterRecord as AppCharacterRecord,
     FastScanResult,
     NLPResult,
+)
+from kenkui.models import (
+    CharacterRecord as AppCharacterRecord,
 )
 from kenkui.nlp import (
     _attribution_to_segments,
@@ -34,9 +38,13 @@ from kenkui.nlp import (
     get_cached_result,
     get_cached_roster,
 )
-from kenkui.nlp_config import NLPConfig
 from kenkui.nlp.pipeline import NLPPipeline
+from kenkui.nlp_config import NLPConfig
 from kenkui.readers import get_reader
+
+if TYPE_CHECKING:
+    from kenkui.nlp.models import CharacterRoster
+
 
 @dataclass
 class ProgressTracker:
@@ -207,6 +215,7 @@ def fast_scan(
 def full_analysis(
     ebook_path: str,
     nlp_model: str | None = None,
+    nlp_provider: str | None = None,
     config_path: str | None = None,
     extraction_progress_callback: Callable[[int, str], None] | None = None,
     attribution_progress_callback: Callable[[int, str], None] | None = None,
@@ -222,6 +231,7 @@ def full_analysis(
     Args:
         ebook_path:                    Path to the source ebook file.
         nlp_model:                     Override model name.  Falls back to AppConfig.nlp_model.
+        nlp_provider:                  Override provider name. Falls back to AppConfig.nlp_provider.
         config_path:                   Optional path/name for the kenkui config file.
         extraction_progress_callback:  Optional ``(percent: int, message: str) -> None``
                                        called during the extraction (roster-building) phase.
@@ -244,6 +254,8 @@ def full_analysis(
     cfg = load_app_config(config_path)
     if nlp_model is not None:
         cfg = cfg.model_copy(update={"nlp_model": nlp_model})
+    if nlp_provider is not None:
+        cfg = cfg.model_copy(update={"nlp_provider": nlp_provider})
     if discovery_method is not None:
         cfg = cfg.model_copy(update={"nlp_discovery_method": discovery_method})
     if attribution_provider is not None:
@@ -300,32 +312,58 @@ def full_analysis(
     if extraction_progress_callback:
         extraction_progress_callback(0, "Starting extraction")
 
-    _extract_start = now_utc()
-    _t0 = time.monotonic()
-    roster = pipeline.extract(
-        book_path=Path(ebook_path),
-        chapters=chapters,
-        series_roster=series_roster,
-        progress_callback=extraction_progress_callback,
-        step_callback=extract_tracker.advance,
-        use_cache=False,  # nlp_service handles its own cache
-    )
-    _extract_dur = time.monotonic() - _t0
-    if extraction_progress_callback:
-        extraction_progress_callback(100, "Extraction complete")
-    append_record(StageRecord(
-        stage="nlp_extraction",
-        started_at=_extract_start,
-        duration_seconds=_extract_dur,
-        success=True,
-        book_hash=book_hash(Path(ebook_path)),
-        book_title=_book_title,
-        book_char_count=_book_char_count,
-        chapter_count=len(chapters),
-        provider=cfg.nlp_provider or "",
-        model=cfg.nlp_model or "",
-        cache_hit=False,
-    ))
+    roster = None
+    if use_cache:
+        cached_roster = get_cached_roster(
+            Path(ebook_path),
+            method=_method if _method != "auto" else None,
+            provider=cfg.nlp_provider,
+        )
+        if cached_roster is not None:
+            roster = cached_roster.roster
+            if extraction_progress_callback:
+                extraction_progress_callback(100, "Extraction complete (cached)")
+            append_record(StageRecord(
+                stage="nlp_extraction",
+                started_at=now_utc(),
+                duration_seconds=0.0,
+                success=True,
+                book_hash=book_hash(Path(ebook_path)),
+                book_title=_book_title,
+                book_char_count=_book_char_count,
+                chapter_count=len(chapters),
+                provider=cfg.nlp_provider or "",
+                model=cfg.nlp_model or "",
+                cache_hit=True,
+            ))
+
+    if roster is None:
+        _extract_start = now_utc()
+        _t0 = time.monotonic()
+        roster = pipeline.extract(
+            book_path=Path(ebook_path),
+            chapters=chapters,
+            series_roster=series_roster,
+            progress_callback=extraction_progress_callback,
+            step_callback=extract_tracker.advance,
+            use_cache=False,  # nlp_service handles its own cache
+        )
+        _extract_dur = time.monotonic() - _t0
+        if extraction_progress_callback:
+            extraction_progress_callback(100, "Extraction complete")
+        append_record(StageRecord(
+            stage="nlp_extraction",
+            started_at=_extract_start,
+            duration_seconds=_extract_dur,
+            success=True,
+            book_hash=book_hash(Path(ebook_path)),
+            book_title=_book_title,
+            book_char_count=_book_char_count,
+            chapter_count=len(chapters),
+            provider=cfg.nlp_provider or "",
+            model=cfg.nlp_model or "",
+            cache_hit=False,
+        ))
 
     # Update series roster with newly discovered characters.
     if series_slug and book_slug:
@@ -388,7 +426,7 @@ def full_analysis(
 
 
 def attribute_only(
-    roster: "CharacterRoster",
+    roster: CharacterRoster,
     chapters: list,
     ebook_path: str,
     nlp_model: str | None = None,
@@ -397,7 +435,7 @@ def attribute_only(
     progress_callback: Callable[[int, str], None] | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
-) -> "NLPResult":
+) -> NLPResult:
     """Run Stage 3-4 speaker attribution against a pre-built roster.
 
     Used by the job worker when the roster already exists (from a prior scan).

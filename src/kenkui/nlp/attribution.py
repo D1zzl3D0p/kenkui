@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+
 from pydantic import ValidationError
 
+from ._filters import _PRONOUNS
 from .chunker import Chunk
 from .llm import LLMClient
-from ._filters import _PRONOUNS
-from .models import AttributionItem, AttributionResult, Quote, slugify as _slugify
+from .models import AttributionItem, AttributionResult, Quote
+from .models import slugify as _slugify
 
 logger = logging.getLogger(__name__)
 

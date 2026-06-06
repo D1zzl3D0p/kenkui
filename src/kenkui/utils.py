@@ -359,12 +359,10 @@ def clean_text(text: str) -> str:
 
 __all__ = [
     "ApostropheMode",
-    "DEFAULT_VOICES",
-    "VOICE_DESCRIPTIONS",
     "batch_text",
+    "clean_text",
     "ensure_terminal_punct",
     "extract_epub_cover",
     "normalize_for_tts",
     "sanitize_filename",
-    "clean_text",
 ]

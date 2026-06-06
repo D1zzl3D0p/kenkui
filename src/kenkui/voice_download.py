@@ -40,6 +40,7 @@ def download_voices(
     Pass ``None`` (default) for silent operation.
     """
     import shutil
+
     from huggingface_hub import snapshot_download
 
     if progress_callback is not None:

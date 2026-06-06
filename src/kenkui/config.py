@@ -112,6 +112,7 @@ _PROVIDER_ENV_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "google": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 
 CREDENTIALS_PATH = CONFIG_DIR / "credentials.toml"
@@ -163,6 +164,7 @@ _KENKUI_PROVIDER_ENV_VARS = {
     "anthropic": "KENKUI_ANTHROPIC_API_KEY",
     "openai": "KENKUI_OPENAI_API_KEY",
     "google": "KENKUI_GOOGLE_API_KEY",
+    "openrouter": "KENKUI_OPENROUTER_API_KEY",
 }
 
 

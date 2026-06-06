@@ -1,6 +1,8 @@
-from kenkui.models import CharacterRecord, CharacterInfo
+from kenkui.models import CharacterInfo, CharacterRecord
 from kenkui.nlp.models import (
     CharacterRecord as NLPCharacterRecord,
+)
+from kenkui.nlp.models import (
     TitleRecord,
 )
 

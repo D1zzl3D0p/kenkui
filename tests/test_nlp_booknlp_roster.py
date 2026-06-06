@@ -14,7 +14,6 @@ import pytest
 
 from kenkui.nlp.models import CharacterRoster
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -220,7 +219,12 @@ class TestBuildRosterWithLLMBookNLPTier:
     def test_booknlp_tier_returns_roster(self, mock_booknlp_module, tmp_path):
         """When BookNLP returns a roster, the result is a CharacterRoster."""
         from kenkui.nlp.entities import build_roster_with_llm
-        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult, NameNormalizationEntry, EpithetResolutionResult
+        from kenkui.nlp.models import (
+            CanonicalMergeResult,
+            EpithetResolutionResult,
+            NameNormalizationEntry,
+            NameNormalizationResult,
+        )
 
         bnlp_instance, bnlp_class, bnlp_mod = mock_booknlp_module
 
@@ -261,7 +265,12 @@ class TestBuildRosterWithLLMBookNLPTier:
     def test_llm_tier_used_when_booknlp_missing(self):
         """When BookNLP is missing, the LLM tier must be attempted."""
         from kenkui.nlp.entities import build_roster_with_llm
-        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult, NameNormalizationEntry, CharacterRecord
+        from kenkui.nlp.models import (
+            CanonicalMergeResult,
+            CharacterRecord,
+            NameNormalizationEntry,
+            NameNormalizationResult,
+        )
 
         nlp = MagicMock()
         doc = MagicMock()

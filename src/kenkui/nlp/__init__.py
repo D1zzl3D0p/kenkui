@@ -47,10 +47,17 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace as _replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..text_rules import SCENE_BREAK_RE, is_scene_break
-from .models import slugify as _slugify, _SPEAKER_SENTINELS
 from ._filters import _PRONOUNS
+from .models import _SPEAKER_SENTINELS
+from .models import slugify as _slugify
+
+if TYPE_CHECKING:
+    from ..models import Chapter, FastScanResult, NLPResult, Segment
+    from .attribution import AttributionResult
+    from .models import CharacterRoster
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +181,7 @@ def book_hash(book_path: Path) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-def _attribution_cache_name(book_path: Path, provider: "str | None" = None) -> str:
+def _attribution_cache_name(book_path: Path, provider: str | None = None) -> str:
     """Return the cache filename stem for a book + provider combination.
 
     Ollama (or no provider) uses the legacy ``{hash}.json`` name so existing
@@ -187,7 +194,7 @@ def _attribution_cache_name(book_path: Path, provider: "str | None" = None) -> s
     return f"{h}.json"
 
 
-def get_cached_result(book_path: Path, provider: "str | None" = None) -> "NLPResult | None":
+def get_cached_result(book_path: Path, provider: str | None = None) -> NLPResult | None:
     """Return a cached ``NLPResult`` if a valid cache file exists, else None.
 
     When *provider* is a cloud provider name the lookup uses a provider-specific
@@ -225,7 +232,7 @@ def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
         raise
 
 
-def cache_result(result: "NLPResult", book_path: Path, provider: "str | None" = None) -> Path:
+def cache_result(result: NLPResult, book_path: Path, provider: str | None = None) -> Path:
     """Serialise *result* to disk and return the cache file path.
 
     Uses a provider-specific filename for cloud providers so results from
@@ -239,7 +246,7 @@ def cache_result(result: "NLPResult", book_path: Path, provider: "str | None" = 
     return cache_file
 
 
-def attribution_cache_path(book_path: Path, provider: "str | None" = None) -> Path:
+def attribution_cache_path(book_path: Path, provider: str | None = None) -> Path:
     """Return the expected attribution cache file path for *book_path* + *provider*.
 
     The file may or may not exist — callers should check ``.exists()`` before reading.
@@ -250,7 +257,7 @@ def attribution_cache_path(book_path: Path, provider: "str | None" = None) -> Pa
 # CONFIG_DIR is exposed at module level so that patch("kenkui.nlp.CONFIG_DIR", ...) works in
 # tests.  The real value is populated lazily by _get_config_dir() to avoid importing
 # kenkui.config (and its tomli_w dependency) at module import time.
-CONFIG_DIR: "Path | None" = None
+CONFIG_DIR: Path | None = None
 
 
 def _get_config_dir() -> Path:
@@ -263,14 +270,15 @@ def _get_config_dir() -> Path:
     val = sys.modules[__name__].CONFIG_DIR
     if val is not None:
         return val  # type: ignore[return-value]
-    from ..config import CACHE_DIR as _cache
-    return _cache
+    from .. import config as _config
+
+    return _config.CACHE_DIR
 
 
 def _roster_cache_name(
     book_path: Path,
-    method: "str | None" = None,
-    provider: "str | None" = None,
+    method: str | None = None,
+    provider: str | None = None,
 ) -> str:
     """Return roster cache filename for the given method/provider combination.
 
@@ -308,12 +316,12 @@ class RosterCacheMeta:
         self.created_at = created_at
         self._data = data
 
-    def load(self) -> "FastScanResult":
+    def load(self) -> FastScanResult:
         from ..models import FastScanResult
         return FastScanResult.from_dict(self._data.get("roster_data") or self._data)
 
 
-def list_cached_rosters(book_path: Path) -> "list[RosterCacheMeta]":
+def list_cached_rosters(book_path: Path) -> list[RosterCacheMeta]:
     """Return all available roster cache files for *book_path*, newest first."""
     h = book_hash(book_path)
     cache_dir = _get_config_dir() / "nlp_cache"
@@ -358,7 +366,7 @@ def list_cached_rosters(book_path: Path) -> "list[RosterCacheMeta]":
     return results
 
 
-def get_cached_roster(book_path: Path, method: "str | None" = None, provider: "str | None" = None) -> "FastScanResult | None":
+def get_cached_roster(book_path: Path, method: str | None = None, provider: str | None = None) -> FastScanResult | None:
     """Return a cached ``FastScanResult`` if a valid roster cache file exists, else None.
 
     When *method* and *provider* are given, looks up only the matching file.
@@ -404,9 +412,9 @@ def get_cached_roster(book_path: Path, method: "str | None" = None, provider: "s
 
 def get_cached_roster_or_prompt(
     book_path: Path,
-    method: "str | None" = None,
-    provider: "str | None" = None,
-) -> "FastScanResult | None":
+    method: str | None = None,
+    provider: str | None = None,
+) -> FastScanResult | None:
     """Return a matching cached roster, or show an InquirerPy picker when multiple exist.
 
     - 0 matches → return None (caller should run fresh)
@@ -414,8 +422,6 @@ def get_cached_roster_or_prompt(
     - 2+ matches, method+provider disambiguate → return matching one
     - 2+ matches, ambiguous → show InquirerPy picker with description + timestamp
     """
-    from ..models import FastScanResult
-
     metas = list_cached_rosters(book_path)
     if not metas:
         return None
@@ -468,12 +474,12 @@ def get_cached_roster_or_prompt(
 
 
 def cache_roster(
-    result: "FastScanResult",
+    result: FastScanResult,
     book_path: Path,
-    method: "str | None" = None,
-    provider: "str | None" = None,
-    model: "str | None" = None,
-    description: "str | None" = None,
+    method: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    description: str | None = None,
 ) -> Path:
     """Serialise *result* to disk with a metadata envelope and return the cache file path."""
     import datetime
@@ -519,7 +525,7 @@ def _chunk_cache_key(book_h: str, chapter_indices: list[int]) -> str:
     return hashlib.sha256(f"{book_h}:{indices_str}".encode()).hexdigest()[:16]
 
 
-def get_cached_chunk_roster(book_path: Path, chapter_indices: list[int]) -> "CharacterRoster | None":
+def get_cached_chunk_roster(book_path: Path, chapter_indices: list[int]) -> CharacterRoster | None:
     """Return a cached ``CharacterRoster`` for one chunk, or None."""
     from kenkui.nlp.models import CharacterRoster
 
@@ -537,7 +543,7 @@ def get_cached_chunk_roster(book_path: Path, chapter_indices: list[int]) -> "Cha
         return None
 
 
-def cache_chunk_roster(roster: "CharacterRoster", book_path: Path, chapter_indices: list[int]) -> Path:
+def cache_chunk_roster(roster: CharacterRoster, book_path: Path, chapter_indices: list[int]) -> Path:
     """Write a partial ``CharacterRoster`` for one chunk to disk."""
     bh = book_hash(book_path)
     cache_dir = _get_config_dir() / "nlp_cache"
@@ -554,7 +560,7 @@ def cache_chunk_roster(roster: "CharacterRoster", book_path: Path, chapter_indic
 # ---------------------------------------------------------------------------
 
 
-def _count_mentions(roster: "CharacterRoster", full_text: str) -> dict[str, int]:
+def _count_mentions(roster: CharacterRoster, full_text: str) -> dict[str, int]:
     """Count word-boundary occurrences of each character's aliases in *full_text*.
 
     Returns a mapping of canonical name → total mention count across all aliases.
@@ -582,7 +588,7 @@ def run_fast_scan(
     progress_callback: Callable[[str], None] | None = None,
     step_callback: Callable[[str], None] | None = None,
     method: str = "auto",
-) -> "FastScanResult":
+) -> FastScanResult:
     """Run Stage 1-2 only: quote extraction + entity clustering + mention counting.
 
     Significantly faster than ``run_analysis()`` — no LLM attribution over
@@ -598,8 +604,6 @@ def run_fast_scan(
     Returns:
         ``FastScanResult`` with characters sorted by mention_count descending.
     """
-    import spacy
-
     from ..models import CharacterInfo, FastScanResult
     from .entities import build_roster_with_llm
     from .llm import LLMClient
@@ -668,7 +672,7 @@ def run_fast_scan(
 
 
 def run_attribution(
-    roster: "CharacterRoster",
+    roster: CharacterRoster,
     chapters: list,
     book_path: Path,
     nlp_model: str,
@@ -676,7 +680,7 @@ def run_attribution(
     progress_callback: Callable[[str], None] | None = None,
     confidence_threshold: int = 0,
     review_model: str = "",
-) -> "NLPResult":
+) -> NLPResult:
     """Run Stage 3-4: LLM speaker attribution using a pre-built roster.
 
     Cache-aware: returns a cached ``NLPResult`` from ``nlp_cache/{hash}.json``
@@ -705,9 +709,7 @@ def run_attribution(
         re-written with ``mention_count`` populated. Direct callers should be aware
         of this if they read the cache independently afterward.
     """
-    import spacy
-
-    from ..models import Chapter, CharacterInfo, NLPResult, Segment
+    from ..models import CharacterInfo, NLPResult, Segment
     from .attribution import attribute_all_chunks
     from .chunker import chunk_paragraphs
     from .entities import extract_person_names
@@ -851,7 +853,7 @@ def run_analysis(
     progress_callback: Callable[[str], None] | None = None,
     confidence_threshold: int = 0,
     review_model: str = "",
-) -> "NLPResult":
+) -> NLPResult:
     """Run the full NLP speaker-attribution pipeline on *chapters*.
 
     Delegates to ``run_fast_scan()`` (Stage 1-2) then ``run_attribution()``
@@ -1076,10 +1078,10 @@ def _build_segments(paragraphs: list[str], quotes: list, attributions: dict) -> 
 
 
 def _attribution_to_segments(
-    chapter: "Chapter",
-    attr_result: "AttributionResult",
-    roster: "CharacterRoster",
-) -> list["Segment"]:
+    chapter: Chapter,
+    attr_result: AttributionResult,
+    roster: CharacterRoster,
+) -> list[Segment]:
     """Convert AttributionResult + Chapter paragraphs into a Segment list.
 
     Used by NLPService when dispatching through the provider protocol.

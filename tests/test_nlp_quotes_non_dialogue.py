@@ -1,7 +1,6 @@
 """Tests for short scare-quote (non-dialogue) extraction and attribution."""
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 
 from kenkui.nlp.models import AttributionItem, AttributionResult
@@ -89,9 +88,9 @@ class TestScarequoteAttribution:
 
     def test_scare_quote_attributed_to_narrator_by_llm(self):
         """When LLM returns NARRATOR for a scare quote, attribution result is NARRATOR."""
-        from kenkui.nlp.quotes import extract_quotes
         from kenkui.nlp.attribution import attribute_all_chunks
         from kenkui.nlp.chunker import chunk_paragraphs
+        from kenkui.nlp.quotes import extract_quotes
 
         paras = ['My "friend" tried to help.']
         quotes = extract_quotes(paras)
@@ -105,9 +104,9 @@ class TestScarequoteAttribution:
 
     def test_real_dialogue_attributed_to_character(self):
         """Real dialogue in same paragraph gets attributed to character, not NARRATOR."""
-        from kenkui.nlp.quotes import extract_quotes
         from kenkui.nlp.attribution import attribute_all_chunks
         from kenkui.nlp.chunker import chunk_paragraphs
+        from kenkui.nlp.quotes import extract_quotes
 
         paras = ['"Hello," she said.']
         quotes = extract_quotes(paras)

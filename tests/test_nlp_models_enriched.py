@@ -1,9 +1,10 @@
-import pytest
 from kenkui.nlp.models import (
-    slugify,
-    TitleRecord,
     CharacterRecord as NLPCharacterRecord,
+)
+from kenkui.nlp.models import (
     CharacterRoster,
+    TitleRecord,
+    slugify,
 )
 
 

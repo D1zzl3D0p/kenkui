@@ -290,8 +290,9 @@ class TestNormalizeForTtsMode:
 # ApostropheMode round-trip through AppConfig / JobConfig
 # ---------------------------------------------------------------------------
 
-from kenkui.models import AppConfig, JobConfig
 from pathlib import Path
+
+from kenkui.models import AppConfig, JobConfig
 
 
 class TestApostropheModeModels:
@@ -395,6 +396,7 @@ class TestEnsureTerminalPunct:
 
 def test_job_config_eos_threshold_override():
     from pathlib import Path
+
     from kenkui.models import JobConfig
     job = JobConfig(ebook_path=Path("book.epub"), job_eos_threshold=-2.5)
     assert job.job_eos_threshold == -2.5
@@ -402,6 +404,7 @@ def test_job_config_eos_threshold_override():
 
 def test_job_config_post_processing_enabled_override():
     from pathlib import Path
+
     from kenkui.models import JobConfig
     job = JobConfig(ebook_path=Path("book.epub"), job_post_processing_enabled=False)
     assert job.job_post_processing_enabled is False
@@ -409,6 +412,7 @@ def test_job_config_post_processing_enabled_override():
 
 def test_job_config_pp_enabled_round_trip():
     from pathlib import Path
+
     from kenkui.models import JobConfig
     job = JobConfig(ebook_path=Path("book.epub"), job_post_processing_enabled=True)
     d = job.to_dict()
@@ -418,6 +422,7 @@ def test_job_config_pp_enabled_round_trip():
 
 def test_job_config_pp_disabled_round_trip():
     from pathlib import Path
+
     from kenkui.models import JobConfig
     job = JobConfig(ebook_path=Path("book.epub"), job_post_processing_enabled=False)
     d = job.to_dict()

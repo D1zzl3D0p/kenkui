@@ -1,9 +1,7 @@
 """Tests for the split NLP pipeline: cache_roster / get_cached_roster."""
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import patch
 
 
 def _make_fast_scan_result():

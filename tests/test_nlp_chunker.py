@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from kenkui.nlp.chunker import Chunk, chunk_paragraphs
+from kenkui.nlp.chunker import chunk_paragraphs
 from kenkui.nlp.models import Quote
 
 

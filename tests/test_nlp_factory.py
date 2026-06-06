@@ -7,18 +7,28 @@ from __future__ import annotations
 
 import pytest
 
-from kenkui.models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
-from kenkui.nlp_config import NLPConfig
+import kenkui.nlp.providers._factory as _factory_module
+from kenkui.models import (
+    AttributionExecutionMode,
+    AttributionTool,
+    ExtractionTool,
+    NlpExecutionMode,
+)
 from kenkui.nlp.providers import get_extraction_provider, get_nlp_attribution_provider
 from kenkui.nlp.providers._factory import (
-    get_extraction_provider as factory_extraction,
     get_attribution_provider as factory_attribution,
+)
+from kenkui.nlp.providers._factory import (
+    get_extraction_provider as factory_extraction,
+)
+from kenkui.nlp.providers._factory import (
     register_nlp_extension,
 )
-from kenkui.nlp.providers.local import LocalExtractionProvider, LocalAttributionProvider
-from kenkui.nlp.providers.ollama import OllamaExtractionAdapter, OllamaAttributionAdapter
-from kenkui.nlp.providers.booknlp import BookNLPExtractionAdapter, BookNLPAttributionAdapter
-import kenkui.nlp.providers._factory as _factory_module
+from kenkui.nlp.providers.booknlp import BookNLPAttributionAdapter, BookNLPExtractionAdapter
+from kenkui.nlp.providers.litellm import LiteLLMAttributionAdapter, LiteLLMExtractionAdapter
+from kenkui.nlp.providers.local import LocalAttributionProvider, LocalExtractionProvider
+from kenkui.nlp.providers.ollama import OllamaAttributionAdapter, OllamaExtractionAdapter
+from kenkui.nlp_config import NLPConfig
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +77,28 @@ def test_get_attribution_provider_booknlp_local():
     provider = get_nlp_attribution_provider(config)
     assert isinstance(provider, LocalAttributionProvider)
     assert isinstance(provider._adapter, BookNLPAttributionAdapter)
+
+
+def test_get_extraction_provider_openrouter_uses_litellm_adapter():
+    config = NLPConfig(
+        extraction_tool=ExtractionTool.OPENROUTER,
+        extraction_model="openai/gpt-4.1-mini",
+        extraction_mode=NlpExecutionMode.LOCAL,
+    )
+    provider = get_extraction_provider(config)
+    assert isinstance(provider, LocalExtractionProvider)
+    assert isinstance(provider._adapter, LiteLLMExtractionAdapter)
+
+
+def test_get_attribution_provider_openrouter_uses_litellm_adapter():
+    config = NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+        attribution_mode=AttributionExecutionMode.LOCAL,
+    )
+    provider = get_nlp_attribution_provider(config)
+    assert isinstance(provider, LocalAttributionProvider)
+    assert isinstance(provider._adapter, LiteLLMAttributionAdapter)
 
 
 # ---------------------------------------------------------------------------

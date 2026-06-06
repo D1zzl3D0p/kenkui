@@ -1,9 +1,7 @@
 import os
 import stat
-import tempfile
-from pathlib import Path
-import pytest
-from kenkui.config import load_provider_credentials, save_provider_credentials, ProviderCredentials
+
+from kenkui.config import ProviderCredentials, load_provider_credentials, save_provider_credentials
 
 
 def test_save_and_load_credentials(tmp_path):
@@ -43,3 +41,29 @@ def test_inject_credentials_as_env_vars(tmp_path, monkeypatch):
     from kenkui.config import inject_provider_env_vars
     inject_provider_env_vars(load_provider_credentials(creds_path))
     assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-test"
+
+
+def test_openrouter_credentials_are_injected(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("KENKUI_OPENROUTER_API_KEY", raising=False)
+    creds_path = tmp_path / "credentials.toml"
+    save_provider_credentials(
+        {"openrouter": ProviderCredentials(api_key="sk-or-file", default_model="openai/gpt-4.1-mini")},
+        creds_path,
+    )
+    from kenkui.config import inject_provider_env_vars
+    inject_provider_env_vars(load_provider_credentials(creds_path))
+    assert os.environ.get("OPENROUTER_API_KEY") == "sk-or-file"
+
+
+def test_kenkui_openrouter_env_overrides_credentials(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("KENKUI_OPENROUTER_API_KEY", "sk-or-env")
+    creds_path = tmp_path / "credentials.toml"
+    save_provider_credentials(
+        {"openrouter": ProviderCredentials(api_key="sk-or-file", default_model="openai/gpt-4.1-mini")},
+        creds_path,
+    )
+    from kenkui.config import inject_provider_env_vars
+    inject_provider_env_vars(load_provider_credentials(creds_path))
+    assert os.environ.get("OPENROUTER_API_KEY") == "sk-or-env"

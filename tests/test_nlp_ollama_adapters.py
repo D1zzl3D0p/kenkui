@@ -6,8 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kenkui.models import Chapter, FastScanResult, CharacterInfo
-from kenkui.nlp.models import AttributionItem, AttributionResult, AttributionItemWire, AttributionResultWire, CharacterRecord, CharacterRoster
+from kenkui.models import Chapter, CharacterInfo, FastScanResult
+from kenkui.nlp.models import (
+    AttributionItemWire,
+    AttributionResult,
+    AttributionResultWire,
+    CharacterRecord,
+    CharacterRoster,
+)
 from kenkui.nlp.providers.ollama import OllamaAttributionAdapter, OllamaExtractionAdapter
 from kenkui.nlp_config import NLPConfig
 
@@ -143,7 +149,7 @@ class TestOllamaAttributionAdapter:
     """
 
     def _wire_result(self, items: list[AttributionItemWire]) -> AttributionResultWire:
-        return AttributionResultWire(attributions=items)
+        return AttributionResultWire(a=items)
 
     def test_returns_attribution_result_for_chapter_with_quotes(self):
         config = _make_config()
@@ -151,7 +157,7 @@ class TestOllamaAttributionAdapter:
         roster = _make_roster("Alice")
         chapter = _make_chapter(['"Hello," said Alice.'])
 
-        wire = self._wire_result([AttributionItemWire(quote_id=0, speaker="alice", confidence=5)])
+        wire = self._wire_result([AttributionItemWire(q=0, s="alice")])
 
         with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=['"Hello," said Alice.']), \
              patch("kenkui.nlp.quotes.extract_quotes", return_value=[MagicMock(id=0)]), \
@@ -183,7 +189,7 @@ class TestOllamaAttributionAdapter:
         roster = _make_roster("Bob")
         chapter = _make_chapter(['"Hi," Bob said.'])
 
-        wire = self._wire_result([AttributionItemWire(quote_id=0, speaker="bob", confidence=4)])
+        wire = self._wire_result([AttributionItemWire(q=0, s="bob")])
 
         captured_model = []
 
@@ -222,8 +228,8 @@ class TestOllamaAttributionAdapter:
         chapter = _make_chapter(['"Hello," Alice said. "Bye," said Bob.'])
 
         wire = self._wire_result([
-            AttributionItemWire(quote_id=0, speaker="alice", confidence=5),
-            AttributionItemWire(quote_id=1, speaker="bob", confidence=4),
+            AttributionItemWire(q=0, s="alice"),
+            AttributionItemWire(q=1, s="bob"),
         ])
 
         with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=['"Hello," Alice said. "Bye," said Bob.']), \
@@ -290,7 +296,7 @@ class TestOllamaAttributionAdapterGapLogging:
     """When LLM returns fewer quotes than requested, a WARNING must fire at the adapter."""
 
     def _wire_result(self, items):
-        return AttributionResultWire(attributions=items)
+        return AttributionResultWire(a=items)
 
     def test_warns_when_llm_returns_fewer_quotes_than_requested(self, caplog):
         """Regression: gap between quotes sent and quotes returned was previously silent.
@@ -307,8 +313,8 @@ class TestOllamaAttributionAdapterGapLogging:
 
         # LLM only returns attribution for 2 of 3 quotes
         wire = self._wire_result([
-            AttributionItemWire(quote_id=0, speaker="alice", confidence=5),
-            AttributionItemWire(quote_id=1, speaker="bob", confidence=4),
+            AttributionItemWire(q=0, s="alice"),
+            AttributionItemWire(q=1, s="bob"),
             # quote_id=2 intentionally missing
         ])
 
@@ -345,7 +351,7 @@ class TestOllamaAttributionAdapterGapLogging:
         roster = _make_roster("Alice")
 
         wire = self._wire_result([
-            AttributionItemWire(quote_id=0, speaker="alice", confidence=5),
+            AttributionItemWire(q=0, s="alice"),
         ])
 
         with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=['"Hello," Alice said.']), \
@@ -365,3 +371,151 @@ class TestOllamaAttributionAdapterGapLogging:
         assert not gap_warnings, (
             f"No quote-gap WARNING expected when all quotes returned: {[r.message for r in gap_warnings]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Wire format slim-down + italic pre-assignment + conditional chunking
+#
+# Regressions for the 104625-char truncation and verbose output format.
+#
+# Goals:
+#   1. AttributionItemWire uses short fields (q, s) — cuts output ~60%
+#   2. italic quotes are pre-assigned NARRATOR — LLM only sees dialogue
+#   3. Chunking is a safety valve, not the default
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionWireSlimFormat:
+    """AttributionItemWire must use short field names q/s to minimise output tokens."""
+
+    def test_attribution_item_wire_has_q_field(self):
+        """Wire item must use 'q' for quote_id — short name saves output tokens."""
+        from kenkui.nlp.models import AttributionItemWire
+        item = AttributionItemWire(q=42, s="alice")
+        assert item.q == 42
+
+    def test_attribution_item_wire_has_s_field(self):
+        """Wire item must use 's' for speaker slug."""
+        from kenkui.nlp.models import AttributionItemWire
+        item = AttributionItemWire(q=0, s="mr_darcy")
+        assert item.s == "mr_darcy"
+
+    def test_attribution_result_wire_has_a_field(self):
+        """Result wrapper must use 'a' for the attributions list."""
+        from kenkui.nlp.models import AttributionItemWire, AttributionResultWire
+        result = AttributionResultWire(a=[AttributionItemWire(q=1, s="alice")])
+        assert len(result.a) == 1
+
+    def test_attribution_wire_to_full_maps_q_to_quote_id(self):
+        """attribution_wire_to_full must read 'q' as quote_id."""
+        from kenkui.nlp.models import (
+            AttributionItemWire,
+            AttributionResultWire,
+            attribution_wire_to_full,
+        )
+        wire = AttributionResultWire(a=[AttributionItemWire(q=7, s="bob")])
+        full = attribution_wire_to_full(wire)
+        assert full.attributions[0].quote_id == 7
+
+    def test_attribution_wire_to_full_maps_s_to_speaker(self):
+        """attribution_wire_to_full must read 's' as speaker."""
+        from kenkui.nlp.models import (
+            AttributionItemWire,
+            AttributionResultWire,
+            attribution_wire_to_full,
+        )
+        wire = AttributionResultWire(a=[AttributionItemWire(q=0, s="NARRATOR")])
+        full = attribution_wire_to_full(wire)
+        assert full.attributions[0].speaker == "NARRATOR"
+
+    def test_slim_wire_has_no_confidence_field(self):
+        """Wire item must NOT include confidence — extra fields waste output tokens."""
+        from kenkui.nlp.models import AttributionItemWire
+        item = AttributionItemWire(q=0, s="alice")
+        assert not hasattr(item, "confidence"), (
+            "AttributionItemWire must not include 'confidence' — it costs output tokens "
+            "and is not used downstream."
+        )
+
+
+class TestItalicQuotePreAssignment:
+    """Italic quotes must be pre-assigned NARRATOR; only dialogue quotes go to the LLM."""
+
+    def _adapter(self):
+        return OllamaAttributionAdapter(_make_config())
+
+    def _italic_quote(self, id: int, para_index: int = 0):
+        from kenkui.nlp.models import Quote
+        return Quote(id=id, text="thought", para_index=para_index, char_offset=0, kind="italic")
+
+    def _dialogue_quote(self, id: int, para_index: int = 0):
+        from kenkui.nlp.models import Quote
+        return Quote(id=id, text='"hello"', para_index=para_index, char_offset=0, kind="dialogue")
+
+    def test_italic_quotes_are_not_sent_to_llm(self):
+        """When all quotes are italic, no LLM call is made — all pre-assigned NARRATOR."""
+        adapter = self._adapter()
+        roster = _make_roster("Alice")
+        chapter = _make_chapter(["Some \x02italic thought\x03 text."])
+
+        italic = self._italic_quote(0)
+
+        with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=["Some text."]), \
+             patch("kenkui.nlp.quotes.extract_quotes", return_value=[italic]), \
+             patch("kenkui.nlp.llm.LLMClient.generate") as mock_gen:
+            result = adapter.attribute_chapter(chapter, roster)
+
+        mock_gen.assert_not_called()
+        assert len(result.attributions) == 1
+        assert result.attributions[0].speaker == "NARRATOR"
+
+    def test_italic_quotes_in_result_are_narrator(self):
+        """Italic quotes must appear in the result as NARRATOR, not Unknown."""
+        adapter = self._adapter()
+        roster = _make_roster("Alice")
+        chapter = _make_chapter(["text"])
+        italic = self._italic_quote(0)
+
+        with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=["text"]), \
+             patch("kenkui.nlp.quotes.extract_quotes", return_value=[italic]), \
+             patch("kenkui.nlp.llm.LLMClient.generate"):
+            result = adapter.attribute_chapter(chapter, roster)
+
+        assert result.attributions[0].speaker == "NARRATOR"
+
+    def test_llm_called_only_for_dialogue_quotes(self):
+        """When chapter has both italic and dialogue quotes, LLM receives only dialogue."""
+        from kenkui.nlp.models import AttributionItemWire, AttributionResultWire
+        adapter = self._adapter()
+        roster = _make_roster("Alice")
+        chapter = _make_chapter(['"Hello," said Alice. \x02thought\x03'])
+
+        italic = self._italic_quote(0)
+        dialogue = self._dialogue_quote(1)
+
+        wire = AttributionResultWire(a=[AttributionItemWire(q=1, s="alice")])
+
+        captured_quotes: list = []
+
+        def capture_annotate(paragraphs, quotes, *args, **kwargs):
+            captured_quotes.extend(quotes)
+            return "annotated"
+
+        with patch("kenkui.nlp.quotes.strip_scare_quotes", return_value=['"Hello," said Alice.']), \
+             patch("kenkui.nlp.quotes.extract_quotes", return_value=[italic, dialogue]), \
+             patch("kenkui.nlp.annotator._build_alias_to_slug", return_value={}), \
+             patch("kenkui.nlp.annotator.annotate_chapter", side_effect=capture_annotate), \
+             patch("kenkui.nlp.annotator._build_attribution_static_block", return_value=""), \
+             patch("kenkui.nlp.annotator._build_attribution_dynamic_block", return_value=""), \
+             patch("kenkui.nlp.llm.LLMClient.generate", return_value=wire):
+            result = adapter.attribute_chapter(chapter, roster)
+
+        # Only the dialogue quote should have been passed to annotate_chapter
+        assert all(q.kind != "italic" for q in captured_quotes), (
+            f"annotate_chapter received italic quotes: {captured_quotes}. "
+            "Only dialogue quotes should be sent to the LLM."
+        )
+        # Both quotes must appear in the final result
+        speakers = {a.quote_id: a.speaker for a in result.attributions}
+        assert speakers[0] == "NARRATOR", f"Italic quote must be NARRATOR, got {speakers.get(0)}"
+        assert speakers[1] == "alice", f"Dialogue quote must be attributed, got {speakers.get(1)}"

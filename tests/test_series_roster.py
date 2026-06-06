@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
-from kenkui.nlp.models import CharacterRecord, CharacterRoster, TitleRecord
 from kenkui import series as _series
+from kenkui.nlp.models import CharacterRecord, CharacterRoster
 from kenkui.services import series_service
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -176,8 +173,8 @@ def test_update_roster_merges_across_calls(tmp_path):
 
 def test_fast_scan_passes_series_roster_to_provider(tmp_path):
     """fast_scan should fetch the series roster and pass it to pipeline.extract()."""
-    from pathlib import Path
     from unittest.mock import MagicMock
+
     from kenkui.models import Chapter
     from kenkui.services.nlp_service import fast_scan
 

@@ -111,7 +111,7 @@ class VoicePoolTemplate:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict) -> "VoicePoolTemplate":
+    def from_dict(cls, data: dict) -> VoicePoolTemplate:
         t = cls()
         for role in ("protagonist", "supporting"):
             if role not in data:

@@ -1,8 +1,7 @@
 """Tests for services/download_service.py and voice_download.py progress callbacks."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
-
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # download_service tests

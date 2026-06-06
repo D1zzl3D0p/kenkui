@@ -7,10 +7,10 @@ from pathlib import Path
 from kenkui.models import (
     AppConfig,
     Chapter,
-    CharacterInfo,
-    CostStatus,
     ChapterPreset,
     ChapterSelection,
+    CharacterInfo,
+    CostStatus,
     NLPResult,
     Segment,
     TTSExecutionMode,

@@ -1,11 +1,11 @@
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from kenkui.models import AppConfig
+
+from kenkui.models import AppConfig, CharacterInfo, FastScanResult
+from kenkui.nlp.models import AttributionItemWire, AttributionResultWire
+from kenkui.nlp.models import CharacterRecord as NLPCharacterRecord
 from kenkui.nlp.providers import get_provider
 from kenkui.nlp.providers.ollama import OllamaProvider
-from kenkui.nlp.models import CharacterRecord as NLPCharacterRecord, AttributionItem, AttributionResult, AttributionItemWire, AttributionResultWire
-from kenkui.models import FastScanResult, CharacterInfo
 
 
 def test_get_provider_ollama():
@@ -69,11 +69,11 @@ def test_ollama_provider_attribute_chapter_uses_slug_keyed_pipeline():
         NLPCharacterRecord(slug="mr_darcy", canonical_name="Mr. Darcy"),
     ]
 
-    wire_result = AttributionResultWire(attributions=[
-        AttributionItemWire(quote_id=1, speaker="elizabeth_bennet", confidence=5),
-        AttributionItemWire(quote_id=2, speaker="mr_darcy", confidence=4),
-        AttributionItemWire(quote_id=3, speaker="NARRATOR", confidence=5),
-        AttributionItemWire(quote_id=4, speaker="Unknown", confidence=1),
+    wire_result = AttributionResultWire(a=[
+        AttributionItemWire(q=1, s="elizabeth_bennet"),
+        AttributionItemWire(q=2, s="mr_darcy"),
+        AttributionItemWire(q=3, s="NARRATOR"),
+        AttributionItemWire(q=4, s="Unknown"),
     ])
 
     mock_chapter = MagicMock()

@@ -1,9 +1,6 @@
 """Tests for italic span extraction as dialogue/monologue."""
 from __future__ import annotations
 
-import pytest
-
-
 # STX and ETX markers inserted by the EPUB reader around <em>/<i> content.
 _STX = "\x02"
 _ETX = "\x03"

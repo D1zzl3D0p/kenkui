@@ -6,10 +6,7 @@ assignment.  Tests are written before the implementation (TDD).
 
 from __future__ import annotations
 
-import pytest
-
 from kenkui.models import Segment
-
 
 # ---------------------------------------------------------------------------
 # Import helpers under test (will fail until implemented)
@@ -83,7 +80,6 @@ class TestSplitParagraphByQuotes:
 
     def test_unmatched_quote_falls_back_to_narrator(self):
         """A quote in the paragraph that has no attribution should be NARRATOR."""
-        from kenkui.nlp.models import AttributionItem, Quote
         para = '"Mystery line." She stared.'
         # No quotes in para_quotes → everything NARRATOR
         fn, _ = _import_helpers()
@@ -256,7 +252,7 @@ class TestAttributionToSegmentsSlugs:
         )
         speakers = {s.speaker for s in segments}
         assert "darrow" in speakers, f"Expected 'darrow' in {speakers}"
-        assert "Darrow" not in speakers, f"Canonical 'Darrow' should be slugified"
+        assert "Darrow" not in speakers, "Canonical 'Darrow' should be slugified"
 
     def test_multiword_canonical_becomes_slug(self):
         """Speaker 'Elizabeth Bennet' → slug 'elizabeth_bennet'."""

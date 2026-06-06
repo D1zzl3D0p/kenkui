@@ -16,15 +16,16 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-
-import tomli_w
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import tomli_w
+
 if TYPE_CHECKING:
     from .models import CharacterInfo, FastScanResult
+    from .nlp.models import CharacterRoster
 
 # Test seam: override the series directory in tests via monkeypatch.
 _series_dir_override: Path | None = None
@@ -93,7 +94,7 @@ def load_series(slug: str) -> SeriesManifest | None:
 
 def save_series(manifest: SeriesManifest) -> None:
     """Persist a SeriesManifest to disk atomically."""
-    manifest.updated_at = datetime.now(timezone.utc).isoformat()
+    manifest.updated_at = datetime.now(UTC).isoformat()
     data: dict = {
         "name": manifest.name,
         "updated_at": manifest.updated_at,
@@ -125,8 +126,8 @@ def list_series() -> list[SeriesManifest]:
 
 
 def match_characters(
-    characters: list["CharacterInfo"],
-    roster: "FastScanResult",
+    characters: list[CharacterInfo],
+    roster: FastScanResult,
     manifest: SeriesManifest,
 ) -> tuple[dict[str, str], set[str]]:
     """Match new-book characters to series manifest entries via alias-overlap.
@@ -204,7 +205,7 @@ def _word_overlap(a: str, b: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def load_series_roster(slug: str) -> "CharacterRoster | None":
+def load_series_roster(slug: str) -> CharacterRoster | None:
     """Return the persisted CharacterRoster for *slug*, or None if not found."""
     from .nlp.models import CharacterRoster
 
@@ -218,7 +219,7 @@ def load_series_roster(slug: str) -> "CharacterRoster | None":
         return None
 
 
-def save_series_roster(slug: str, roster: "CharacterRoster") -> None:
+def save_series_roster(slug: str, roster: CharacterRoster) -> None:
     """Persist *roster* as JSON for series *slug* (atomic write)."""
     path = series_dir() / f"{slug}-roster.json"
     tmp = path.with_suffix(".tmp")
@@ -230,10 +231,10 @@ def save_series_roster(slug: str, roster: "CharacterRoster") -> None:
 
 
 def merge_into_series_roster(
-    existing: "CharacterRoster",
-    new_roster: "CharacterRoster",
+    existing: CharacterRoster,
+    new_roster: CharacterRoster,
     book_slug: str,
-) -> "CharacterRoster":
+) -> CharacterRoster:
     """Merge a per-book CharacterRoster into the cumulative series roster.
 
     Merge rules:
@@ -394,8 +395,8 @@ def build_manifest_from_predecessor(candidate: dict, name: str) -> SeriesManifes
 
 def update_manifest(
     manifest: SeriesManifest,
-    characters: list["CharacterInfo"],
-    roster: "FastScanResult",
+    characters: list[CharacterInfo],
+    roster: FastScanResult,
     speaker_voices: dict[str, str],
     pinned: set[str],
 ) -> SeriesManifest:

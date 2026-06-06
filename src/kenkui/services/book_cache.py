@@ -90,7 +90,7 @@ def _entry_from_dict(d: dict) -> BookEntry:
     )
 
 
-def _metadata_to_dict(metadata: "EbookMetadata") -> dict:
+def _metadata_to_dict(metadata: EbookMetadata) -> dict:
     """Serialize EbookMetadata, explicitly excluding cover_image bytes."""
     return {
         "title": metadata.title,
@@ -101,7 +101,7 @@ def _metadata_to_dict(metadata: "EbookMetadata") -> dict:
     }
 
 
-def _word_count(chapter: "Chapter") -> int:
+def _word_count(chapter: Chapter) -> int:
     """Estimate word count from paragraph text."""
     return sum(len(p.split()) for p in chapter.paragraphs)
 
@@ -134,8 +134,8 @@ class BookCache:
         self,
         book_hash: str,
         ebook_path: str,
-        metadata: "EbookMetadata",
-        chapters: "list[Chapter]",
+        metadata: EbookMetadata,
+        chapters: list[Chapter],
     ) -> BookEntry:
         """Store a parsed book in the cache and return the new BookEntry."""
         summaries = [

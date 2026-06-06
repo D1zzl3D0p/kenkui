@@ -29,7 +29,7 @@ import scipy.io.wavfile
 from pydub import AudioSegment
 
 from .models import AudioResult, Chapter, Segment
-from .text_rules import SCENE_BREAK_RE, is_scene_break, split_at_scene_breaks
+from .text_rules import is_scene_break, split_at_scene_breaks
 from .utils import ApostropheMode, batch_text, ensure_terminal_punct, normalize_for_tts
 from .voice_loader import load_voice
 
@@ -41,6 +41,18 @@ logger = logging.getLogger(__name__)
 
 FIRST_CHAPTER_BATCH_SIZE = 250  # Smaller → more frequent ETA updates
 DEFAULT_BATCH_SIZE = 800  # Larger → fewer TTS calls, better throughput
+
+
+_DISABLED_MALLOC_VALUES = {"", "0", "false", "no", "off", "disable", "disabled"}
+
+
+def _sanitize_disabled_malloc_debug_env() -> None:
+    """Drop inherited macOS malloc debug toggles only when explicitly disabled."""
+    for key in ("MallocStackLogging", "MallocStackLoggingNoCompact"):
+        value = os.environ.get(key)
+        if value is not None and value.strip().lower() in _DISABLED_MALLOC_VALUES:
+            os.environ.pop(key, None)
+
 
 # ---------------------------------------------------------------------------
 # Per-process model cache
@@ -94,7 +106,7 @@ def _split_at_scene_breaks(paragraphs: list[str]) -> list[list[str]]:
     return split_at_scene_breaks(paragraphs)
 
 
-def _autogain_segment(seg: "AudioSegment", target_db: float) -> "AudioSegment":
+def _autogain_segment(seg: AudioSegment, target_db: float) -> AudioSegment:
     """RMS-normalize *seg* to *target_db* dBFS in-place.
 
     Uses numpy (transitive dependency) and pydub's ``apply_gain()``.
@@ -123,7 +135,7 @@ def _autogain_segment(seg: "AudioSegment", target_db: float) -> "AudioSegment":
 # ---------------------------------------------------------------------------
 
 
-def _pause_for_segment(pause_line_ms: int, text: str) -> "AudioSegment":
+def _pause_for_segment(pause_line_ms: int, text: str) -> AudioSegment:
     """Return silence whose duration scales logarithmically with paragraph-break count.
 
     With ``pause_line_ms=1000`` (the base value for a single paragraph boundary):
@@ -176,7 +188,7 @@ def _render_chapter_title_audio(
     pause_after_ms: int,
     intra_segment_ms: int,
     apostrophe_mode: str,
-) -> "AudioSegment":
+) -> AudioSegment:
     """Render a chapter title as audio with configurable silence.
 
     Titles with colon-delimited segments (e.g. "Chapter 1: Darrow: Castaway")
@@ -222,6 +234,8 @@ def worker_process_chapter(
 
     Executed inside a subprocess worker via ``ProcessPoolExecutor``.
     """
+    _sanitize_disabled_malloc_debug_env()
+
     # Convert SIGTERM to KeyboardInterrupt so the existing cleanup path runs.
     import signal as _signal
 
@@ -361,7 +375,7 @@ def _process_chapter_inner(
             f"{len(sub_groups)} scene group(s), {total_batches} batches ({total_chars} chars)"
         )
 
-        queue.put(("START", pid, chapter.title, total_batches, total_chars, is_first_chapter))
+        queue.put(("START", pid, chapter.title, total_batches, total_chars, is_first_chapter, chapter.index))
 
         pause_line_ms = config_dict.get("pause_line_ms", 400)
         pause_scene_break_ms = config_dict.get("pause_scene_break_ms", 4000)
@@ -507,6 +521,7 @@ def _render_multi_voice(
             total_segments,
             sum(len(s.text) for s in segments),
             False,
+            chapter.index,
         )
     )
 

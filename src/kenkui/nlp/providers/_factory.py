@@ -10,7 +10,12 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from kenkui.models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
+from kenkui.models import (
+    AttributionExecutionMode,
+    AttributionTool,
+    ExtractionTool,
+    NlpExecutionMode,
+)
 from kenkui.nlp.providers._base import AttributionProvider, ExtractionProvider
 from kenkui.nlp.providers.local import LocalAttributionProvider, LocalExtractionProvider
 
@@ -21,6 +26,21 @@ _logger = logging.getLogger(__name__)
 
 _ExtractionExt: Callable[[NLPConfig], ExtractionProvider | None] | None = None
 _AttributionExt: Callable[[NLPConfig], AttributionProvider | None] | None = None
+
+_LITELLM_EXTRACTION_TOOLS = {
+    ExtractionTool.LITELLM,
+    ExtractionTool.OPENROUTER,
+    ExtractionTool.ANTHROPIC,
+    ExtractionTool.OPENAI,
+    ExtractionTool.GOOGLE,
+}
+_LITELLM_ATTRIBUTION_TOOLS = {
+    AttributionTool.LITELLM,
+    AttributionTool.OPENROUTER,
+    AttributionTool.ANTHROPIC,
+    AttributionTool.OPENAI,
+    AttributionTool.GOOGLE,
+}
 
 
 def register_nlp_extension(
@@ -36,7 +56,10 @@ def register_nlp_extension(
     _ExtractionExt, _AttributionExt = extraction, attribution
 
 
-def _make_extraction_adapter(config: "NLPConfig") -> ExtractionProvider:
+def _make_extraction_adapter(config: NLPConfig) -> ExtractionProvider:
+    if config.extraction_tool in _LITELLM_EXTRACTION_TOOLS:
+        from kenkui.nlp.providers.litellm import LiteLLMExtractionAdapter
+        return LiteLLMExtractionAdapter(config)
     match config.extraction_tool:
         case ExtractionTool.BOOKNLP:
             from kenkui.nlp.providers.booknlp import BookNLPExtractionAdapter
@@ -48,7 +71,10 @@ def _make_extraction_adapter(config: "NLPConfig") -> ExtractionProvider:
             raise ValueError(f"Unknown extraction tool: {config.extraction_tool!r}")
 
 
-def _make_attribution_adapter(config: "NLPConfig") -> AttributionProvider:
+def _make_attribution_adapter(config: NLPConfig) -> AttributionProvider:
+    if config.attribution_tool in _LITELLM_ATTRIBUTION_TOOLS:
+        from kenkui.nlp.providers.litellm import LiteLLMAttributionAdapter
+        return LiteLLMAttributionAdapter(config)
     match config.attribution_tool:
         case AttributionTool.BOOKNLP:
             from kenkui.nlp.providers.booknlp import BookNLPAttributionAdapter
@@ -60,7 +86,7 @@ def _make_attribution_adapter(config: "NLPConfig") -> AttributionProvider:
             raise ValueError(f"Unknown attribution tool: {config.attribution_tool!r}")
 
 
-def get_extraction_provider(config: "NLPConfig") -> ExtractionProvider:
+def get_extraction_provider(config: NLPConfig) -> ExtractionProvider:
     """Return an ExtractionProvider for the given NLPConfig."""
     if config.extraction_mode != NlpExecutionMode.LOCAL:
         if _ExtractionExt is not None:
@@ -76,7 +102,7 @@ def get_extraction_provider(config: "NLPConfig") -> ExtractionProvider:
     return LocalExtractionProvider(adapter)
 
 
-def get_attribution_provider(config: "NLPConfig") -> AttributionProvider:
+def get_attribution_provider(config: NLPConfig) -> AttributionProvider:
     """Return an AttributionProvider for the given NLPConfig."""
     if config.attribution_mode != AttributionExecutionMode.LOCAL:
         if _AttributionExt is not None:

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 from kenkui.nlp.providers._base import AttributionProvider, ExtractionProvider
 from kenkui.nlp.providers._factory import (
-    get_extraction_provider,
     get_attribution_provider as get_nlp_attribution_provider,
+)
+from kenkui.nlp.providers._factory import (
+    get_extraction_provider,
 )
 
 # Re-export NLPProvider from legacy base module for backwards compatibility.

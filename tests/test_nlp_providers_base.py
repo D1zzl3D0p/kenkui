@@ -4,8 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from kenkui.nlp.providers._base import AttributionProvider, ExtractionProvider
 from kenkui.nlp.providers.local import LocalAttributionProvider, LocalExtractionProvider
 

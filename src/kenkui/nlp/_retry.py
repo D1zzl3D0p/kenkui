@@ -8,12 +8,25 @@ import time
 from collections.abc import Callable
 from typing import TypeVar
 
+from kenkui.errors import KenkuiDependencyError
+
 _logger = logging.getLogger(__name__)
 
 _RETRYABLE = (OSError, TimeoutError, ConnectionError, UnicodeDecodeError, json.JSONDecodeError)
 _NOT_RETRYABLE = (KeyboardInterrupt, SystemExit, ValueError, TypeError, AttributeError)
 
 T = TypeVar("T")
+
+
+def _simplify_provider_error(exc: Exception) -> str | None:
+    """Return a short user-facing message for known provider failures."""
+    message = str(exc)
+    if "llama-server binary not found" in message:
+        return (
+            "Ollama cannot start because its llama-server binary is missing. "
+            "Reinstall or upgrade Ollama, then restart the Ollama service."
+        )
+    return None
 
 
 def with_retry(
@@ -38,16 +51,33 @@ def with_retry(
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                simplified = _simplify_provider_error(exc)
+                if simplified is not None:
+                    _logger.warning("%s", simplified)
+                    _logger.debug(
+                        "Full non-retryable NLP provider error: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                        exc_info=True,
+                    )
+                    raise KenkuiDependencyError(simplified) from exc
                 if attempt == max_attempts:
                     break
                 wait = backoff_base ** (attempt - 1)
                 _logger.warning(
-                    "Attempt %d/%d failed (%s: %s); retrying in %.1fs",
+                    "Attempt %d/%d failed (%s); retrying in %.1fs",
+                    attempt,
+                    max_attempts,
+                    _simplify_provider_error(exc) or f"{type(exc).__name__}: {exc}",
+                    wait,
+                )
+                _logger.debug(
+                    "Full retryable NLP provider error on attempt %d/%d: %s: %s",
                     attempt,
                     max_attempts,
                     type(exc).__name__,
                     exc,
-                    wait,
+                    exc_info=True,
                 )
                 time.sleep(wait)
         raise last_exc  # type: ignore[misc]

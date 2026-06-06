@@ -18,10 +18,13 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from kenkui.voice_registry import get_registry, VoiceMetadata
-from kenkui.config import load_app_config, save_app_config, DEFAULT_CONFIG_PATH
+from kenkui.config import DEFAULT_CONFIG_PATH, load_app_config, save_app_config
+from kenkui.voice_registry import VoiceMetadata, get_registry
 
+if TYPE_CHECKING:
+    from kenkui.voice_pool import VoicePoolTemplate
 
 # ---------------------------------------------------------------------------
 # Default audition text
@@ -192,8 +195,8 @@ def audition_voice(
       (0, "Loading model"), (40, "Loading voice"),
       (70, "Synthesizing"), (100, "Done")
     """
-    from kenkui.workers import _get_or_load_model, _render_text
     from kenkui.voice_loader import load_voice
+    from kenkui.workers import _get_or_load_model, _render_text
 
     if text is None:
         text = DEFAULT_AUDITION_TEXT
@@ -449,7 +452,7 @@ def build_character_review_choices(
 
 def apply_voice_pool_template(
     roster: list,
-    template: "VoicePoolTemplate",
+    template: VoicePoolTemplate,
     series_voices: dict[str, str],
     narrator_voice: str,
     excluded_voices: list[str] | None = None,
@@ -543,7 +546,7 @@ def sort_cast(speaker_voices: dict) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def _get_chapter_cooccurrence_from_paragraphs(chapters) -> "dict[int, set[str]]":
+def _get_chapter_cooccurrence_from_paragraphs(chapters) -> dict[int, set[str]]:
     """Build {chapter_index: set of speaker names} from chapter paragraphs.
 
     Accepts chapter objects that expose either a `paragraphs` attribute
@@ -571,14 +574,14 @@ def _get_chapter_cooccurrence_from_paragraphs(chapters) -> "dict[int, set[str]]"
 
 
 def _resolve_cast_conflicts(
-    speaker_voices: "dict[str, str]",
-    char_prominence: "dict[str, int]",
-    char_gender: "dict[str, str]",
+    speaker_voices: dict[str, str],
+    char_prominence: dict[str, int],
+    char_gender: dict[str, str],
     chapters,
-    male_pool: "list[str]",
-    female_pool: "list[str]",
+    male_pool: list[str],
+    female_pool: list[str],
     narrator_voice: str,
-) -> "tuple[dict[str, str], list[str]]":
+) -> tuple[dict[str, str], list[str]]:
     """Ensure no two characters sharing a chapter are assigned the same voice.
 
     Returns (updated_speaker_voices, warnings).
@@ -664,9 +667,10 @@ def suggest_cast(
     all_voices = list_voices(config_path=config_path)
     excluded_set = set(excluded_voices or [])
 
-    # Build gender pools.
-    _all_male = [v.name for v in all_voices if (v.gender or "").lower() == "male"]
-    _all_female = [v.name for v in all_voices if (v.gender or "").lower() == "female"]
+    # Build gender pools — exclude uncompiled (.wav) voices (no redistribution rights).
+    licensed = [v for v in all_voices if v.source in ("builtin", "compiled")]
+    _all_male = [v.name for v in licensed if (v.gender or "").lower() == "male"]
+    _all_female = [v.name for v in licensed if (v.gender or "").lower() == "female"]
 
     male_voices = [v for v in _all_male if v not in excluded_set] or _all_male
     female_voices = [v for v in _all_female if v not in excluded_set] or _all_female

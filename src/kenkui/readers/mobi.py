@@ -6,6 +6,7 @@ Provides EbookReader interface for MOBI and AZW formats using the mobi library.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import tempfile
@@ -16,6 +17,8 @@ from bs4 import BeautifulSoup
 from ..chapter_classifier import ChapterClassifier
 from ..models import Chapter
 from . import EbookMetadata, EbookReader, Registry, TocEntry
+
+logger = logging.getLogger(__name__)
 
 
 @Registry.register
@@ -43,7 +46,7 @@ class MobiReader(EbookReader):
             self._temp_dir = Path(tempfile.mkdtemp(prefix="kenkui_mobi_"))
 
             if self.verbose:
-                print(f"Extracting MOBI to: {self._temp_dir}")
+                logger.info("Extracting MOBI to: %s", self._temp_dir)
 
             # mobi.extract returns (tempdir, filepath) where filepath is the main HTML
             extracted_dir, main_file = mobi.extract(str(self.filepath), self._temp_dir)
@@ -72,7 +75,7 @@ class MobiReader(EbookReader):
 
         except Exception as e:
             if self.verbose:
-                print(f"Error extracting MOBI: {e}")
+                logger.warning("Error extracting MOBI: %s", e)
             raise
 
     def _extract_cover(self):

@@ -1,7 +1,9 @@
 """Tests for voice_service.suggest_cast."""
 from __future__ import annotations
-from unittest.mock import patch, MagicMock
-from kenkui.services.voice_service import suggest_cast, SuggestCastResult
+
+from unittest.mock import MagicMock, patch
+
+from kenkui.services.voice_service import SuggestCastResult, suggest_cast
 
 
 def _make_roster(names_pronouns):
@@ -11,9 +13,17 @@ def _make_roster(names_pronouns):
             for n, p in names_pronouns]
 
 
+def _voice(name: str, gender: str, source: str = "builtin") -> MagicMock:
+    """Create a VoiceInfo-like mock with name, gender, and source set."""
+    m = MagicMock()
+    m.name = name
+    m.gender = gender
+    m.source = source
+    return m
+
+
 def test_suggest_cast_returns_suggest_cast_result():
-    voices = [MagicMock(name="alice", gender="Female"),
-              MagicMock(name="bob", gender="Male")]
+    voices = [_voice("alice", "Female"), _voice("bob", "Male")]
     roster = _make_roster([("Alice", "she/her"), ("Bob", "he/him")])
     with patch("kenkui.services.voice_service.list_voices", return_value=voices):
         result = suggest_cast(roster=roster, excluded_voices=[], default_voice="narrator")
@@ -23,9 +33,7 @@ def test_suggest_cast_returns_suggest_cast_result():
 
 
 def test_suggest_cast_excludes_excluded_voices():
-    voices = [MagicMock(name="alice", gender="Female"),
-              MagicMock(name="bob", gender="Male"),
-              MagicMock(name="carol", gender="Female")]
+    voices = [_voice("alice", "Female"), _voice("bob", "Male"), _voice("carol", "Female")]
     roster = _make_roster([("Alice", "she/her")])
     with patch("kenkui.services.voice_service.list_voices", return_value=voices):
         result = suggest_cast(roster=roster, excluded_voices=["alice"], default_voice="narrator")
@@ -43,10 +51,7 @@ def test_suggest_cast_empty_pool_falls_back_to_default_voice():
 
 def test_suggest_cast_resolves_chapter_conflicts():
     """Two chars sharing a chapter should get different voices if pool is large enough."""
-    voices = [
-        MagicMock(name="v1", gender="Female"),
-        MagicMock(name="v2", gender="Female"),
-    ]
+    voices = [_voice("v1", "Female"), _voice("v2", "Female")]
     roster = _make_roster([("Alice", "she/her"), ("Eve", "she/her")])
     chapters = [MagicMock(paragraphs=[
         MagicMock(speaker="Alice", is_spoken=True),
@@ -58,3 +63,15 @@ def test_suggest_cast_resolves_chapter_conflicts():
     alice_v = result.speaker_voices["Alice"]
     eve_v = result.speaker_voices["Eve"]
     assert alice_v != eve_v
+
+
+def test_suggest_cast_excludes_uncompiled_voices():
+    """Uncompiled (.wav) voices must never appear in the assigned pool."""
+    voices = [
+        _voice("wav_voice", "Female", source="uncompiled"),
+        _voice("builtin_voice", "Female", source="builtin"),
+    ]
+    roster = _make_roster([("Alice", "she/her")])
+    with patch("kenkui.services.voice_service.list_voices", return_value=voices):
+        result = suggest_cast(roster=roster, excluded_voices=[], default_voice="narrator")
+    assert result.speaker_voices.get("Alice") != "wav_voice"

@@ -6,17 +6,14 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from kenkui.models import Chapter
 from kenkui.nlp.booknlp_roster import BookNLPRosterData
-from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster
+from kenkui.nlp.models import AttributionResult, CharacterRecord, CharacterRoster
 from kenkui.nlp.providers.booknlp import (
     BookNLPAttributionAdapter,
     BookNLPExtractionAdapter,
     _name_to_slug,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

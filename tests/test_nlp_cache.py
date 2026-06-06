@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from kenkui.nlp._cache import (
     CacheMeta,
@@ -17,7 +15,6 @@ from kenkui.nlp._cache import (
     list_caches,
     put_cache,
 )
-
 
 FAKE_BOOK = Path("/fake/book.epub")
 FAKE_HASH = "abc123def456"
@@ -136,7 +133,7 @@ class TestDeleteCache:
         f.write_text("{}", encoding="utf-8")
         meta = CacheMeta(
             path=f, step="extraction", tool="ollama", model="llama3.2",
-            created_at=datetime.now(tz=timezone.utc), description="", book_hash=FAKE_HASH,
+            created_at=datetime.now(tz=UTC), description="", book_hash=FAKE_HASH,
         )
         delete_cache(meta)
         assert not f.exists()
@@ -144,7 +141,7 @@ class TestDeleteCache:
     def test_delete_missing_file_is_safe(self, tmp_path):
         meta = CacheMeta(
             path=tmp_path / "nonexistent.json", step="extraction", tool="ollama",
-            model="llama3.2", created_at=datetime.now(tz=timezone.utc),
+            model="llama3.2", created_at=datetime.now(tz=UTC),
             description="", book_hash=FAKE_HASH,
         )
         delete_cache(meta)  # must not raise

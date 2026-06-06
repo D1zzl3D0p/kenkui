@@ -1,7 +1,10 @@
 """Tests for NLPConfig."""
-import os
-import pytest
-from kenkui.models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
+from kenkui.models import (
+    AttributionExecutionMode,
+    AttributionTool,
+    ExtractionTool,
+    NlpExecutionMode,
+)
 from kenkui.nlp_config import NLPConfig
 
 
@@ -77,7 +80,15 @@ class TestExtractionToolEnum:
 
 class TestAttributionToolEnum:
     def test_all_values(self):
-        assert {t.value for t in AttributionTool} == {"booknlp", "ollama"}
+        assert {t.value for t in AttributionTool} == {
+            "anthropic",
+            "booknlp",
+            "google",
+            "litellm",
+            "ollama",
+            "openai",
+            "openrouter",
+        }
 
 
 class TestNLPConfigFromAppConfig:
@@ -93,6 +104,20 @@ class TestNLPConfigFromAppConfig:
         app_cfg = AppConfig.from_dict({"nlp_provider": "booknlp", "nlp_model": "small"})
         nlp_cfg = NLPConfig.from_app_config(app_cfg)
         assert nlp_cfg.extraction_tool == ExtractionTool.BOOKNLP
+
+    def test_openrouter_provider_maps_to_cloud_tool(self):
+        from kenkui.models import AppConfig
+        app_cfg = AppConfig.from_dict({
+            "nlp_provider": "openrouter",
+            "nlp_model": "openai/gpt-4.1-mini",
+            "nlp_attribution_provider": "openrouter",
+            "nlp_attribution_model": "openai/gpt-4.1-mini",
+        })
+        nlp_cfg = NLPConfig.from_app_config(app_cfg)
+        assert nlp_cfg.extraction_tool == ExtractionTool.OPENROUTER
+        assert nlp_cfg.attribution_tool == AttributionTool.OPENROUTER
+        assert nlp_cfg.extraction_model == "openai/gpt-4.1-mini"
+        assert nlp_cfg.attribution_model == "openai/gpt-4.1-mini"
 
     def test_attribution_provider_override(self):
         from kenkui.models import AppConfig

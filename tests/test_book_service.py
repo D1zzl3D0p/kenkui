@@ -8,11 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from kenkui.chapter_classifier import ChapterTags
-from kenkui.models import Chapter, ChapterPreset, ChapterSelection
+from kenkui.models import ChapterPreset, ChapterSelection
 from kenkui.services.book_cache import BookCache, BookEntry, ChapterSummary
 from kenkui.services.book_service import (
     BookParseResult,
-    ChapterFilterResult,
     filter_chapters,
     parse_book,
 )

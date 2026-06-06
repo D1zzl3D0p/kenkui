@@ -1,9 +1,11 @@
 """Tests for kenkui.nlp._retry."""
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
+from kenkui.errors import KenkuiDependencyError
 from kenkui.nlp._retry import with_retry
 
 
@@ -59,3 +61,25 @@ class TestWithRetry:
         fn = MagicMock(return_value="ok")
         with_retry(fn)(1, 2, key="val")
         fn.assert_called_once_with(1, 2, key="val")
+
+    def test_ollama_missing_llama_server_is_short_non_retryable_error(self, caplog):
+        message = (
+            "error starting llama-server: llama-server binary not found "
+            "(checked: /opt/homebrew/Cellar/ollama/0.30.4/libexec/lib/ollama/llama-server, "
+            "/opt/homebrew/Cellar/ollama/0.30.4/libexec/llama-server). "
+            "Run 'cmake -S llama/server --preset cpu && cmake --build --preset cpu' first "
+            "(status code: 500)"
+        )
+        fn = MagicMock(side_effect=RuntimeError(message))
+
+        with pytest.raises(KenkuiDependencyError) as exc_info, caplog.at_level("WARNING"):
+            with_retry(fn, max_attempts=3, backoff_base=0)()
+
+        assert fn.call_count == 1
+        assert str(exc_info.value) == (
+            "Ollama cannot start because its llama-server binary is missing. "
+            "Reinstall or upgrade Ollama, then restart the Ollama service."
+        )
+        warning_messages = [record.message for record in caplog.records if record.levelname == "WARNING"]
+        assert warning_messages == [str(exc_info.value)]
+        assert "/opt/homebrew/Cellar" not in warning_messages[0]

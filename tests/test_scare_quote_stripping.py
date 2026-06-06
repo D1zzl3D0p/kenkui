@@ -1,6 +1,5 @@
 """Tests for strip_scare_quotes() in kenkui.nlp.quotes."""
 
-import pytest
 from kenkui.nlp.quotes import strip_scare_quotes
 
 

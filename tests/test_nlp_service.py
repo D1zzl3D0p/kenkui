@@ -10,7 +10,6 @@ import pytest
 from kenkui.models import Chapter
 from kenkui.services.nlp_service import fast_scan, full_analysis
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -210,6 +209,35 @@ def test_full_analysis_calls_pipeline_extract_and_attribute_chapter(tmp_path):
 
     mock_pipeline.extract.assert_called_once()
     assert mock_pipeline._attribution.attribute_chapter.call_count == 2
+
+
+def test_full_analysis_reuses_cached_roster_and_still_attributes(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [Chapter(index=0, title="Ch 1", paragraphs=['"Hi," Jane said.'])]
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = fake_chapters
+
+    cached_roster = _make_mock_roster()
+    cached_fast = MagicMock(roster=cached_roster)
+    mock_pipeline = _make_mock_pipeline(roster=_make_mock_roster())
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=cached_fast),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
+    ):
+        full_analysis(str(fake_epub), nlp_model="llama3.2")
+
+    mock_pipeline.extract.assert_not_called()
+    mock_pipeline._attribution.attribute_chapter.assert_called_once()
+    assert mock_pipeline._attribution.attribute_chapter.call_args.args[1] is cached_roster
 
 
 def test_full_analysis_uses_config_nlp_model(tmp_path):

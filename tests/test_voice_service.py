@@ -8,8 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from kenkui.services.voice_service import (
-    ExcludeResult,
-    IncludeResult,
     VoiceInfo,
     annotate_voice_choices,
     assign_simple_cast,
@@ -29,7 +27,6 @@ from kenkui.services.voice_service import (
     top_gender_matched_voice,
 )
 from kenkui.voice_registry import VoiceMetadata
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -22,7 +22,7 @@ import logging
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -106,4 +106,4 @@ def analytics_path() -> Path:
 
 def now_utc() -> str:
     """Return the current UTC time as an ISO 8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

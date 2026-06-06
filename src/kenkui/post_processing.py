@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def apply_chapter_effects(wav_path: Path, cfg: "PostProcessingConfig") -> None:
+def apply_chapter_effects(wav_path: Path, cfg: PostProcessingConfig) -> None:
     """Apply noisereduce + pedalboard effects chain to a chapter WAV file in-place.
 
     Called from worker subprocesses after each chapter WAV is written.
@@ -41,8 +41,8 @@ def apply_chapter_effects(wav_path: Path, cfg: "PostProcessingConfig") -> None:
             HighpassFilter,
             Limiter,
             LowShelfFilter,
-            Pedalboard,
             PeakFilter,
+            Pedalboard,
         )
         from pedalboard.io import AudioFile  # type: ignore[import]
     except ImportError as exc:
@@ -143,7 +143,7 @@ def apply_chapter_effects(wav_path: Path, cfg: "PostProcessingConfig") -> None:
         )
 
 
-def normalize_output(output_path: Path, cfg: "PostProcessingConfig") -> None:
+def normalize_output(output_path: Path, cfg: PostProcessingConfig) -> None:
     """Loudness-normalize the final M4B/MP3 output file.
 
     Tries the ``ffmpeg-normalize`` Python package first (accurate two-pass
@@ -170,7 +170,7 @@ def normalize_output(output_path: Path, cfg: "PostProcessingConfig") -> None:
 # ── Private helpers ────────────────────────────────────────────────────────────
 
 
-def _normalize_with_package(output_path: Path, cfg: "PostProcessingConfig") -> None:
+def _normalize_with_package(output_path: Path, cfg: PostProcessingConfig) -> None:
     """Two-pass normalization via the ffmpeg-normalize Python package."""
     from ffmpeg_normalize import FFmpegNormalize  # type: ignore[import]
 
@@ -200,7 +200,7 @@ def _normalize_with_package(output_path: Path, cfg: "PostProcessingConfig") -> N
     )
 
 
-def _normalize_with_ffmpeg(output_path: Path, cfg: "PostProcessingConfig") -> None:
+def _normalize_with_ffmpeg(output_path: Path, cfg: PostProcessingConfig) -> None:
     """Single-pass normalization via ffmpeg loudnorm (bundled with imageio-ffmpeg)."""
     import subprocess
 

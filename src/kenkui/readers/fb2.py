@@ -6,6 +6,7 @@ Provides EbookReader interface for FB2 files using standard XML parsing.
 
 from __future__ import annotations
 
+import logging
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -15,6 +16,7 @@ from ..models import Chapter
 from . import EbookMetadata, EbookReader, Registry, TocEntry
 
 FB2_NS = {"fb": "http://www.gribuser.ru/xml/fictionbook/2/0"}
+logger = logging.getLogger(__name__)
 
 
 @Registry.register
@@ -54,7 +56,7 @@ class Fb2Reader(EbookReader):
                     self._extract_cover_from_zip(zf)
         except Exception as e:
             if self.verbose:
-                print(f"Error parsing ZIP: {e}")
+                logger.warning("Error parsing ZIP: %s", e)
 
     def _parse_xml(self, filepath: Path):
         """Parse FB2 XML file directly."""
@@ -67,7 +69,7 @@ class Fb2Reader(EbookReader):
             self._extract_cover_from_path(filepath)
         except Exception as e:
             if self.verbose:
-                print(f"Error parsing XML: {e}")
+                logger.warning("Error parsing XML: %s", e)
 
     def _parse_xml_content(self, content: bytes):
         """Parse XML content into element tree."""
@@ -86,7 +88,7 @@ class Fb2Reader(EbookReader):
 
         except ET.ParseError as e:
             if self.verbose:
-                print(f"XML parse error: {e}")
+                logger.warning("XML parse error: %s", e)
 
     def _extract_cover_from_path(self, filepath: Path):
         """Try to find cover image in same directory."""

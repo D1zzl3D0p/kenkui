@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from kenkui.voice_download import download_voices, fetch_uncompiled_voices, _VOICES_LOCAL_DIR
+from kenkui.voice_download import _VOICES_LOCAL_DIR, download_voices, fetch_uncompiled_voices
 
 
 @dataclass

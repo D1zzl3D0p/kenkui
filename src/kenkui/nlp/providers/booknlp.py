@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kenkui.models import Chapter
-from kenkui.nlp.booknlp_roster import BookNLPRosterData, build_roster_from_booknlp
+from kenkui.nlp.booknlp_roster import build_roster_from_booknlp
 from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRoster, slugify
 
 if TYPE_CHECKING:
@@ -91,7 +91,7 @@ def _name_to_slug(name: str, roster: CharacterRoster) -> str:
 class BookNLPExtractionAdapter:
     """Extracts character roster using BookNLP's literary NER + coreference."""
 
-    def __init__(self, config: "NLPConfig") -> None:
+    def __init__(self, config: NLPConfig) -> None:
         self._config = config
 
     def build_roster(
@@ -120,7 +120,7 @@ class BookNLPExtractionAdapter:
 class BookNLPAttributionAdapter:
     """Attributes quote speakers using BookNLP's neural quote detection."""
 
-    def __init__(self, config: "NLPConfig") -> None:
+    def __init__(self, config: NLPConfig) -> None:
         self._config = config
 
     def attribute_chapter(

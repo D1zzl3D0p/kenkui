@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/github/license/D1zzl3D0p/kenkui)
 ![PyPI](https://img.shields.io/pypi/v/kenkui)
 
-> **Ebook-to-audiobook conversion engine. No GPU. No nonsense.**
+> Ebook-to-audiobook conversion engine for Python clients.
 
 kenkui is a Python library that converts ebooks into high-quality M4B audiobooks using [Kyutai's pocket-tts](https://github.com/kyutai-labs/pocket-tts), running entirely on CPU.
 
@@ -30,16 +30,25 @@ uv add kenkui
 ## Quick Start
 
 ```python
+from pathlib import Path
+
 import kenkui
 
 # Load config (creates default at ~/.config/kenkui/config.toml on first run)
 config = kenkui.load_config()
 
-# Build a ProcessingConfig
+# Build a ProcessingConfig. Client apps own prompts, queues, and transport.
 proc = kenkui.ProcessingConfig(
-    ebook_path="book.epub",
-    output_path=".",
     voice="alba",
+    ebook_path=Path("book.epub"),
+    output_path=Path("."),
+    pause_line_ms=config.pause_line_ms,
+    pause_chapter_ms=config.pause_chapter_ms,
+    workers=config.workers,
+    m4b_bitrate=config.m4b_bitrate,
+    keep_temp=config.keep_temp,
+    debug_html=False,
+    chapter_filters=[],
 )
 
 # Run the conversion
@@ -60,6 +69,18 @@ ok = kenkui.run_job(proc)
 - Credits chapter: synthesized audio appended to every m4b
 - Flexible chapter selection (presets + manual override)
 - Series support: cross-book character roster with pinned voice assignments
+
+---
+
+## Library Boundary
+
+`kenkui` is the reusable core. It owns parsing, config models, NLP/cache logic,
+voice selection, rendering workers, post-processing, and public dataclasses.
+
+External clients own user interaction, HTTP routes, queues, deployment policy,
+notifications, and remote execution. `kentui` is the interactive terminal client.
+`kenkui-server` can wrap this library as a local or remote service without moving
+server policy into this package.
 
 ---
 
@@ -149,14 +170,22 @@ result = kenkui.authenticate_huggingface("hf_token_here")
 ### Job runner
 
 ```python
-from kenkui import ProcessingConfig, NarrationMode
+from pathlib import Path
+
+from kenkui import ProcessingConfig
+from kenkui.chapter_filter import FilterOperation
 
 config = ProcessingConfig(
-    ebook_path="book.epub",
-    output_path=".",
     voice="alba",
-    narration_mode=NarrationMode.SINGLE,
-    chapter_filters=[FilterOperation(type="preset", value="content-only")],
+    ebook_path=Path("book.epub"),
+    output_path=Path("."),
+    pause_line_ms=800,
+    pause_chapter_ms=2000,
+    workers=4,
+    m4b_bitrate="96k",
+    keep_temp=False,
+    debug_html=False,
+    chapter_filters=[FilterOperation("preset", "content-only")],
 )
 
 ok: bool = kenkui.run_job(config)
@@ -184,7 +213,13 @@ Voices come in three tiers:
 
 ## Configuration
 
-kenkui uses TOML config files stored at `~/.config/kenkui/` (XDG).
+kenkui uses TOML config files stored under the XDG config directory, typically
+`~/.config/kenkui/`. Cache/state files live under the XDG cache directory,
+typically `~/.cache/kenkui/`.
+
+Settings are environment-aware through the `KENKUI_` prefix. Environment values
+take precedence when constructing `AppConfig`; saved TOML files remain the local
+convenience path for desktop clients.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -197,15 +232,23 @@ kenkui uses TOML config files stored at `~/.config/kenkui/` (XDG).
 | `nlp_model` | `llama3.2` | Model for speaker attribution |
 | `credits_enabled` | `true` | Append synthesized credits audio |
 
+Logging is 12-factor friendly: library modules log through Python logging and do
+not require file logging. Clients may configure stdout/stderr or file handlers.
+Credentials should be supplied through the environment or explicit client-owned
+auth flows. Local credential files are convenience only, not the preferred
+deployment path.
+
 ---
 
 ## Non-Goals
 
-kenkui is not a general-purpose TTS framework, a GUI app, or an MP3 generator. The focus is narrow: fast, high-quality audiobook generation from ebooks.
+kenkui is not a general-purpose TTS framework, GUI app, CLI, queue server, cloud
+control plane, benchmarking system, or MP3 generator. The focus is narrow:
+fast, high-quality audiobook generation from ebooks.
 
 ---
 
-## 🙏 Special Thanks
+## Special Thanks
 
 Thanks to **Project Gutenberg** for providing some of the public-domain books included with kenkui.
 

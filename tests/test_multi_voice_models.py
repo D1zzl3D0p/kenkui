@@ -21,14 +21,12 @@ from kenkui.models import (
     AppConfig,
     Chapter,
     CharacterInfo,
-    ChapterSelection,
     JobConfig,
     NarrationMode,
     ProcessingConfig,
     Segment,
     TTSExecutionMode,
 )
-
 
 # ---------------------------------------------------------------------------
 # NarrationMode

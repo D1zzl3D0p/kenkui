@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from kenkui.nlp.quotes import extract_quotes
-from kenkui.nlp.models import Quote
 
 
 class TestExtractQuotesEmpty:

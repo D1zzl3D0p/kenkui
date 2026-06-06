@@ -1,23 +1,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-import pytest
-
-from kenkui.series import (
-    SeriesCharacter,
-    SeriesManifest,
-    load_series,
-    save_series,
-    list_series,
-    slugify,
-    series_dir,
-    match_characters,
-)
 from kenkui.models import CharacterInfo, FastScanResult
 from kenkui.nlp.models import CharacterRecord, CharacterRoster
 from kenkui.nlp.models import slugify as nlp_slugify
+from kenkui.series import (
+    SeriesCharacter,
+    SeriesManifest,
+    list_series,
+    load_series,
+    match_characters,
+    save_series,
+    slugify,
+)
 
 
 def _make_fast_result(canonical_aliases: dict[str, list[str]]) -> FastScanResult:

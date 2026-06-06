@@ -11,7 +11,7 @@ fitz = pytest.importorskip("fitz", reason="pymupdf not installed")
 # Helpers: build minimal in-memory PDFs
 # ---------------------------------------------------------------------------
 
-def _make_doc_with_text(pages: list[str]) -> "fitz.Document":
+def _make_doc_with_text(pages: list[str]) -> fitz.Document:
     """Return a fitz.Document with one page per string in *pages*."""
     doc = fitz.open()
     for text in pages:
@@ -20,7 +20,7 @@ def _make_doc_with_text(pages: list[str]) -> "fitz.Document":
     return doc
 
 
-def _make_doc_with_bookmarks(chapters: list[tuple[str, int]]) -> "fitz.Document":
+def _make_doc_with_bookmarks(chapters: list[tuple[str, int]]) -> fitz.Document:
     """Return a multi-page doc with PDF bookmarks.
 
     *chapters* is a list of (title, 1-indexed page number).
@@ -39,7 +39,7 @@ def _make_doc_with_headings(
     chapters: list[tuple[str, str]],
     heading_fontsize: float = 20.0,
     body_fontsize: float = 12.0,
-) -> "fitz.Document":
+) -> fitz.Document:
     """Return a doc without bookmarks but with visually distinct headings.
 
     *chapters* is a list of (heading_text, body_text).

@@ -13,7 +13,7 @@ fitz = pytest.importorskip("fitz", reason="pymupdf not installed")
 # Fixtures: build temporary PDFs
 # ---------------------------------------------------------------------------
 
-def _write_pdf(path: Path, doc: "fitz.Document") -> Path:
+def _write_pdf(path: Path, doc: fitz.Document) -> Path:
     doc.save(str(path))
     doc.close()
     return path
@@ -210,7 +210,6 @@ class TestPdfReaderChapters:
         assert all(isinstance(c, Chapter) for c in chapters)
 
     def test_chapter_fields_present(self, pdf_with_bookmarks):
-        from kenkui.models import Chapter
         from kenkui.readers.pdf import PdfReader
         reader = PdfReader(pdf_with_bookmarks)
         chapters = reader.get_chapters()

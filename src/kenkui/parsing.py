@@ -11,7 +11,6 @@ import warnings
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -21,22 +20,164 @@ import imageio_ffmpeg
 from .analytics import StageRecord, append_record, now_utc
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
 from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
-from .nlp.models import slugify as _slugify, _SPEAKER_SENTINELS
+from .nlp.models import _SPEAKER_SENTINELS
+from .nlp.models import slugify as _slugify
+from .progress import ChapterProgress, ProgressEvent, ProgressStage, ProgressStatus, ProgressUnit
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .voice_loader import load_voice
 from .workers import worker_process_chapter
-
 
 # ---------------------------------------------------------------------------
 # Pre-flight speaker/voice validation
 # ---------------------------------------------------------------------------
 
 
-def _warn_unresolvable_speakers(
-    chapters: list["Chapter"],
+def _load_character_genders(roster_cache_path: Path | None) -> dict[str, str]:
+    """Load {character_id -> gender_pronoun} from the roster cache, if available."""
+    if not roster_cache_path:
+        return {}
+    try:
+        from .models import FastScanResult
+        data = json.loads(Path(roster_cache_path).read_text(encoding="utf-8"))
+        result = FastScanResult.from_dict(data)
+        return {c.character_id: c.gender_pronoun for c in result.characters if c.gender_pronoun}
+    except Exception:
+        return {}
+
+
+def _auto_assign_unmapped_speakers(
+    chapters: list[Chapter],
     speaker_voices: dict[str, str],
-    log: "Callable[[str], None]",
+    narrator_voice: str,
+    log: Callable[[str], None],
+    config_path: str | None = None,
+    character_genders: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Assign voices to speakers missing from speaker_voices.
+
+    Assignment is gender-aware, prominence-aware, and chapter-conflict-avoiding:
+    - Male speakers are drawn from the male voice pool; female from female; neutral/unknown
+      from whichever gender pool has been used less (balanced fill).
+    - Speakers are sorted by segment count descending so high-prominence characters
+      get first pick of fresh voices; their voices are never shared.
+    - When fresh voices run out, low-prominence speakers share a voice with any
+      non-co-occurring, same-gender-pool character (different chapters only).
+    - Only built-in and compiled voices are used — uncompiled (.wav) voices are
+      excluded because we do not hold rights to them.
+
+    ``character_genders`` maps character_id → gender_pronoun string (e.g. "she/her").
+    When absent, all speakers are treated as gender-neutral.
+
+    Returns an updated speaker_voices dict.
+    """
+    from .services.voice_service import gender_from_pronoun, list_voices
+
+    # Collect stats for all speakers in segments.
+    speaker_prominence: dict[str, int] = {}
+    speaker_chapters: dict[str, set[int]] = {}
+    for ch_idx, ch in enumerate(chapters):
+        for seg in ch.segments or []:
+            if seg.is_scene_break or seg.speaker in _SPEAKER_SENTINELS:
+                continue
+            speaker_prominence[seg.speaker] = speaker_prominence.get(seg.speaker, 0) + 1
+            speaker_chapters.setdefault(seg.speaker, set()).add(ch_idx)
+
+    unmapped = [s for s in speaker_prominence if s not in speaker_voices]
+    if not unmapped:
+        return speaker_voices
+
+    # Sort most-prominent first so they get first pick of fresh exclusive voices.
+    unmapped.sort(key=lambda s: speaker_prominence[s], reverse=True)
+
+    # Pool: built-in + compiled only (exclude uncompiled .wav voices).
+    all_voices = list_voices(config_path=config_path)
+    licensed = [v for v in all_voices if v.source in ("builtin", "compiled")]
+
+    used_voices = set(speaker_voices.values()) | {narrator_voice}
+
+    all_male = [v.name for v in licensed if (v.gender or "").lower() == "male" and v.name != narrator_voice]
+    all_female = [v.name for v in licensed if (v.gender or "").lower() == "female" and v.name != narrator_voice]
+
+    if not all_male and not all_female:
+        # Absolute fallback: use all licensed voices gender-agnostically.
+        fallback = [v.name for v in licensed if v.name != narrator_voice] or [narrator_voice]
+        all_male = all_female = list(fallback)
+
+    male_used_count = female_used_count = 0
+
+    # Seed chapter-usage tracking from existing assignments.
+    voice_chapters: dict[str, set[int]] = {}
+    for spk, v in speaker_voices.items():
+        for ch_idx in speaker_chapters.get(spk, set()):
+            voice_chapters.setdefault(v, set()).add(ch_idx)
+
+    exclusive_voices: set[str] = set()
+    updated = dict(speaker_voices)
+    genders = character_genders or {}
+
+    def _pick_shared(pool: list[str], my_chapters: set[int]) -> str | None:
+        """Find first non-exclusive pool voice that doesn't co-occur in my_chapters."""
+        for v in pool:
+            if v in exclusive_voices:
+                continue
+            if not (voice_chapters.get(v, set()) & my_chapters):
+                return v
+        return None
+
+    for speaker in unmapped:
+        my_chapters = speaker_chapters.get(speaker, set())
+        raw_pronoun = genders.get(speaker, "")
+        gender = gender_from_pronoun(raw_pronoun)
+
+        if gender == "male":
+            pool = all_male
+        elif gender == "female":
+            pool = all_female
+        else:
+            # Neutral: pick the gender pool with fewer assigned speakers so far.
+            if male_used_count <= female_used_count:
+                pool = all_male
+                gender = "male"
+            else:
+                pool = all_female
+                gender = "female"
+
+        if not pool:
+            pool = [v.name for v in licensed if v.name != narrator_voice] or [narrator_voice]
+
+        # Try a fresh voice from the gender pool first (exclusive assignment).
+        fresh = [v for v in pool if v not in used_voices and v not in exclusive_voices]
+        if fresh:
+            voice = fresh[0]
+            exclusive_voices.add(voice)
+        else:
+            # Try to share with a non-co-occurring character in the same pool.
+            voice = _pick_shared(pool, my_chapters)
+            if voice is None:
+                # All pool voices conflict: pick the least-overlapping one.
+                non_excl = [v for v in pool if v not in exclusive_voices]
+                voice = min(
+                    non_excl or pool,
+                    key=lambda v: len(voice_chapters.get(v, set()) & my_chapters),
+                )
+
+        if gender == "male":
+            male_used_count += 1
+        else:
+            female_used_count += 1
+
+        updated[speaker] = voice
+        voice_chapters.setdefault(voice, set()).update(my_chapters)
+        log(f"INFO: auto-assigned voice '{voice}' ({gender}) to new speaker '{speaker}'")
+
+    return updated
+
+
+def _warn_unresolvable_speakers(
+    chapters: list[Chapter],
+    speaker_voices: dict[str, str],
+    log: Callable[[str], None],
 ) -> None:
     """Emit warnings for speakers that have no voice mapping or a missing safetensors path."""
     seen: set[str] = set()
@@ -126,16 +267,14 @@ warnings.filterwarnings("ignore", message=".*looks like.*")
 warnings.filterwarnings("ignore", message=".*surrogate.*")
 
 
-class SimpleConsole:
-    """Simple console output replacement for Rich."""
+class LogSink:
+    """Small logging-backed compatibility shim for old Rich-style call sites."""
 
-    def print(self, msg: str = "", style: str = ""):
+    def emit(self, msg: str = "", style: str = ""):
+        _ = style
         msg = str(msg)
-        # Strip Rich markup tags
-        import re
-
         msg = re.sub(r"\[/?[a-zA-Z_ ]+\]", "", msg)
-        print(msg)
+        logger.info("%s", msg)
 
 
 def _sanitize_for_filename(s: str) -> str:
@@ -190,116 +329,61 @@ def get_unique_output_path(output_file: Path) -> Path:
         counter += 1
 
 
-@dataclass
-class ETATracker:
-    """Tracks TTS throughput for accurate ETA calculation."""
-
-    total_chars: int
-    start_time: float = field(default_factory=time.monotonic)
-    processed_chars: int = 0
-    chapter_rates: list[float] = field(default_factory=list)
-
-    def update(self, chars: int) -> None:
-        self.processed_chars += chars
-
-    def on_chapter_complete(self, chars: int, elapsed: float) -> None:
-        if elapsed > 0:
-            self.chapter_rates.append(chars / elapsed)
-
-    @property
-    def current_rate(self) -> float:
-        """Calculate chars/second with chapter-based refinement."""
-        elapsed = time.monotonic() - self.start_time
-        if elapsed < 1 or self.processed_chars == 0:
-            return 0.0
-
-        rate = self.processed_chars / elapsed
-
-        if self.chapter_rates:
-            avg_chapter_rate = sum(self.chapter_rates) / len(self.chapter_rates)
-            rate = 0.6 * rate + 0.4 * avg_chapter_rate
-
-        return rate
-
-    def format_eta(self) -> str:
-        rate = self.current_rate
-        if rate <= 0:
-            return "--:--:--"
-
-        remaining = (self.total_chars - self.processed_chars) / rate
-        hours = int(remaining // 3600)
-        minutes = int((remaining % 3600) // 60)
-        seconds = int(remaining % 60)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-    def format_elapsed(self) -> str:
-        elapsed = time.monotonic() - self.start_time
-        hours = int(elapsed // 3600)
-        minutes = int((elapsed % 3600) // 60)
-        seconds = int(elapsed % 60)
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-    def format_rate(self) -> str:
-        rate = self.current_rate
-        if rate <= 0:
-            return "0.0"
-        return f"{rate:,.1f}"
-
-
 class AudioBuilder:
     """Builds audiobooks from ebooks with progress tracking."""
 
     def __init__(
         self,
         config: ProcessingConfig,
-        progress_callback: Callable[[float, str, int], None] | None = None,
+        progress_callback: Callable[[ProgressEvent], None] | None = None,
     ):
         """
         Initialize AudioBuilder.
 
         Args:
             config: Configuration for audio building
-            progress_callback: Optional callback(percent_complete, current_chapter, eta_seconds)
+            progress_callback: Optional callback receiving ProgressEvent facts.
         """
         self.cfg = config
         self.progress_callback = progress_callback
         self.temp_dir = Path("temp_audio_build")
-        self.console = SimpleConsole()
+        self.console = LogSink()
         self._reader: EbookReader | None = None
         self._total_batches = 0
         self._completed_batches = 0
+        self._completed_tts_units = 0
         self._current_chapter = ""
-        self.pause_check: "Callable[[], bool] | None" = None
+        self._book_hash = ""
+        self.pause_check: Callable[[], bool] | None = None
         self.was_paused: bool = False
 
-    def _report_progress(self, chapter: str = "", eta: int = 0):
-        """Report progress to callback if configured."""
-        if self.progress_callback and self._total_batches > 0:
-            percent = (self._completed_batches / self._total_batches) * 100
-            self.progress_callback(percent, chapter, eta)
-
-    def _signal_phase(self, message: str):
-        """Send a named post-TTS phase status (stitching, cover, etc.) at 100%."""
+    def _emit_progress(
+        self,
+        stage: ProgressStage,
+        status: ProgressStatus,
+        message: str = "",
+        *,
+        completed_units: float = 0.0,
+        total_units: float = 0.0,
+        unit: ProgressUnit = "",
+        active_chapters: tuple[ChapterProgress, ...] = (),
+    ) -> None:
+        """Report structured generation progress facts to the callback."""
         if self.progress_callback:
-            self.progress_callback(100.0, message, 0)
-
-    def _signal_phase_with_eta(self, message: str, pct: float, eta_sec: int):
-        """Send progress update during a named phase with actual percentage and ETA."""
-        if self.progress_callback:
-            self.progress_callback(pct, message, eta_sec)
-
-    def _calculate_eta(self, eta_tracker: ETATracker) -> int:
-        """Calculate ETA in seconds from eta_tracker."""
-        try:
-            eta_str = eta_tracker.format_eta()
-            parts = eta_str.split(":")
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-            elif len(parts) == 2:
-                return int(parts[0]) * 60 + int(parts[1])
-        except Exception:
-            pass
-        return 0
+            self.progress_callback(
+                ProgressEvent(
+                    stage=stage,
+                    status=status,
+                    message=message,
+                    completed_units=completed_units,
+                    total_units=total_units,
+                    unit=unit,
+                    book_hash=self._book_hash,
+                    provider=self.cfg.tts_provider or "kokoro",
+                    model=self.cfg.tts_model or "",
+                    active_chapters=active_chapters,
+                )
+            )
 
     def build(
         self,
@@ -313,7 +397,15 @@ class AudioBuilder:
 
         self._total_batches = total_batches
         self._completed_batches = 0
-        self._report_progress("Starting...", 0)
+        self._completed_tts_units = 0
+        self._emit_progress(
+            "tts_synthesis",
+            "started",
+            "Starting synthesis",
+            completed_units=0,
+            total_units=total_chars,
+            unit="chars",
+        )
 
         is_multi = bool(self.cfg.speaker_voices)
         narrator_label = "multi-voice" if is_multi else (
@@ -335,17 +427,23 @@ class AudioBuilder:
             _book_hash = _nlp_book_hash(self.cfg.ebook_path)
         except Exception:
             _book_hash = ""
+        self._book_hash = _book_hash
         try:
             _book_title = self._reader.get_metadata().title or "" if self._reader is not None else ""
         except Exception:
             _book_title = ""
 
         with self._managed_temp_dir():
-            print(f"Building audiobook: {output_file.name}")
+            logger.info("Building audiobook: %s", output_file.name)
 
-            # Pre-flight: warn about speaker/voice mismatches before spending hours on TTS
+            # Pre-flight: auto-assign voices to new speakers, then warn about remaining issues
             if self.cfg.speaker_voices and any(ch.segments for ch in chapters):
-                _warn_unresolvable_speakers(chapters, self.cfg.speaker_voices, print)
+                _char_genders = _load_character_genders(getattr(self.cfg, "roster_cache_path", None))
+                self.cfg.speaker_voices = _auto_assign_unmapped_speakers(
+                    chapters, self.cfg.speaker_voices, self.cfg.voice, logger.info,
+                    character_genders=_char_genders,
+                )
+                _warn_unresolvable_speakers(chapters, self.cfg.speaker_voices, logger.warning)
 
             _tts_start = now_utc()
             t0 = time.monotonic()
@@ -370,13 +468,29 @@ class AudioBuilder:
             ))
 
             if not results:
-                print("No results generated. Aborting.")
+                logger.error("No results generated. Aborting.")
+                self._emit_progress("tts_synthesis", "failed", "No audio generated")
                 return False
+            self._emit_progress(
+                "tts_synthesis",
+                "completed",
+                "Synthesis complete",
+                completed_units=total_chars,
+                total_units=total_chars,
+                unit="chars",
+            )
 
             # ── Stitching phase ──────────────────────────────────────────
             # Signal explicitly so the UI doesn't look frozen at 100%.
-            self._signal_phase("Stitching audio files…")
-            print("Stitching audio files...")
+            stitch_total_ms = sum(r.duration_ms for r in results)
+            self._emit_progress(
+                "stitching",
+                "started",
+                "Stitching audio files",
+                total_units=stitch_total_ms,
+                unit="milliseconds",
+            )
+            logger.info("Stitching audio files...")
             _stitch_start = now_utc()
             t0 = time.monotonic()
             self._stitch_files(results, output_file, narrator_label=narrator_label)
@@ -392,12 +506,20 @@ class AudioBuilder:
                 book_char_count=_book_char_count,
                 chapter_count=_chapter_count,
             ))
+            self._emit_progress(
+                "stitching",
+                "completed",
+                "Stitching complete",
+                completed_units=stitch_total_ms,
+                total_units=stitch_total_ms,
+                unit="milliseconds",
+            )
 
             # ── Loudness normalization (optional) ────────────────────────
             if self.cfg.post_processing.enabled and self.cfg.post_processing.normalize:
                 from .post_processing import normalize_output
 
-                self._signal_phase("Normalizing loudness…")
+                self._emit_progress("normalization", "started", "Normalizing loudness")
                 _norm_start = now_utc()
                 t0 = time.monotonic()
                 normalize_output(output_file, self.cfg.post_processing)
@@ -413,9 +535,10 @@ class AudioBuilder:
                     book_char_count=_book_char_count,
                     chapter_count=_chapter_count,
                 ))
+                self._emit_progress("normalization", "completed", "Normalization complete")
 
             # ── Cover embedding ──────────────────────────────────────────
-            self._signal_phase("Embedding cover art…")
+            self._emit_progress("cover_embedding", "started", "Embedding cover art")
             _cover_start = now_utc()
             t0 = time.monotonic()
             self._embed_cover(output_file)
@@ -431,8 +554,9 @@ class AudioBuilder:
                 book_char_count=_book_char_count,
                 chapter_count=_chapter_count,
             ))
+            self._emit_progress("cover_embedding", "completed", "Cover embedding complete")
 
-            print(f"Audiobook created: {output_file}")
+            logger.info("Audiobook created: %s", output_file)
             return True
 
     def _process_chapters(
@@ -447,13 +571,23 @@ class AudioBuilder:
         worker_errors: list[dict] = []
         worker_logs: list[str] = []
 
-        eta_tracker = ETATracker(total_chars)
-        chapter_start_times: dict[int, float] = {}
         completed_chapters = 0
         total_chapters = len(chapters)
 
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore
+
+        def _active_chapter_progress() -> tuple[ChapterProgress, ...]:
+            return tuple(
+                ChapterProgress(
+                    index=int(state.get("index", 0)),
+                    title=str(state.get("title", "")),
+                    completed_units=float(state.get("current", 0)),
+                    total_units=float(state.get("total", 0)),
+                    status=str(state.get("status", "advanced")),  # type: ignore[arg-type]
+                )
+                for state in sorted(worker_state.values(), key=lambda item: int(item.get("index", 0)))
+            )
 
         cfg_dict: dict = {
             "voice": self.cfg.voice,
@@ -517,27 +651,66 @@ class AudioBuilder:
                                 "current": 0,
                                 "total_chars": msg[4] if len(msg) > 4 else 0,
                                 "is_first": msg[5] if len(msg) > 5 else False,
+                                "index": msg[6] if len(msg) > 6 else 0,
+                                "status": "started",
                             }
-                            chapter_start_times[pid] = time.monotonic()
+                            self._current_chapter = worker_state[pid].get("title", "")
+                            self._emit_progress(
+                                "tts_synthesis",
+                                "message",
+                                self._current_chapter,
+                                completed_units=self._completed_tts_units,
+                                total_units=total_chars,
+                                unit="chars",
+                                active_chapters=_active_chapter_progress(),
+                            )
                         elif event == "UPDATE":
-                            chars = msg[5] if len(msg) > 5 else 1000
+                            chars = msg[5] if len(msg) > 5 else 0
                             self._completed_batches += msg[2]
-                            eta_tracker.update(chars)
+                            self._completed_tts_units = min(
+                                total_chars,
+                                self._completed_tts_units + max(0, chars),
+                            )
                             if pid in worker_state:
                                 worker_state[pid]["current"] += msg[2]
+                                worker_state[pid]["status"] = "advanced"
                                 self._current_chapter = worker_state[pid].get("title", "")
-                            eta_seconds = self._calculate_eta(eta_tracker)
-                            self._report_progress(self._current_chapter, eta_seconds)
+                            self._emit_progress(
+                                "tts_synthesis",
+                                "advanced",
+                                self._current_chapter,
+                                completed_units=self._completed_tts_units,
+                                total_units=total_chars,
+                                unit="chars",
+                                active_chapters=_active_chapter_progress(),
+                            )
                         elif event == "DONE":
                             if pid in worker_state:
-                                if pid in chapter_start_times:
-                                    elapsed = time.monotonic() - chapter_start_times[pid]
-                                    chars = worker_state[pid].get("total_chars", 0)
-                                    eta_tracker.on_chapter_complete(chars, elapsed)
-                                    del chapter_start_times[pid]
+                                worker_state[pid]["status"] = "completed"
+                                worker_state[pid]["current"] = worker_state[pid].get("total", 0)
+                                self._emit_progress(
+                                    "tts_synthesis",
+                                    "advanced",
+                                    worker_state[pid].get("title", ""),
+                                    completed_units=self._completed_tts_units,
+                                    total_units=total_chars,
+                                    unit="chars",
+                                    active_chapters=_active_chapter_progress(),
+                                )
                                 del worker_state[pid]
                                 completed_chapters += 1
                         elif event == "ERROR":
+                            if pid in worker_state:
+                                worker_state[pid]["status"] = "failed"
+                            self._emit_progress(
+                                "tts_synthesis",
+                                "failed",
+                                msg[3],
+                                completed_units=self._completed_tts_units,
+                                total_units=total_chars,
+                                unit="chars",
+                                active_chapters=_active_chapter_progress(),
+                            )
                             worker_errors.append(
                                 {
                                     "pid": pid,
@@ -562,7 +735,7 @@ class AudioBuilder:
                     results.append(res)
 
         except KeyboardInterrupt:
-            print("Interrupted by user. Shutting down workers...")
+            logger.info("Interrupted by caller. Shutting down workers...")
             if pool is not None:
                 # Terminate running worker processes immediately (SIGTERM).
                 for proc in pool._processes.values():
@@ -573,12 +746,12 @@ class AudioBuilder:
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
             if worker_errors:
-                print("Worker errors encountered:")
+                logger.error("Worker errors encountered:")
                 for err in worker_errors:
-                    print(f"- PID {err['pid']} {err['chapter']}: {err['message']}")
+                    logger.error("- PID %s %s: %s", err["pid"], err["chapter"], err["message"])
                     tb = err.get("traceback", "")
                     if tb:
-                        print(tb)
+                        logger.error("%s", tb)
 
         # Suppress unused variable warning — total_chapters used in loop above
         _ = total_chapters
@@ -627,7 +800,6 @@ class AudioBuilder:
             cmd.extend(["-movflags", "+faststart"])
         cmd.append(str(output_file))
 
-        stitch_start = time.monotonic()
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         assert proc.stdout is not None
 
@@ -637,12 +809,14 @@ class AudioBuilder:
                 try:
                     out_ms = int(line.split("=", 1)[1])
                     if total_ms > 0 and out_ms > 0:
-                        pct = min(99.0, out_ms / total_ms * 100)
-                        elapsed = time.monotonic() - stitch_start
-                        rate = out_ms / elapsed if elapsed > 0 else 0
-                        remaining_ms = (total_ms - out_ms) / rate if rate > 0 else 0
-                        eta_sec = int(remaining_ms / 1000)
-                        self._signal_phase_with_eta("Stitching audio files…", pct, eta_sec)
+                        self._emit_progress(
+                            "stitching",
+                            "advanced",
+                            "Stitching audio files",
+                            completed_units=min(out_ms, total_ms),
+                            total_units=total_ms,
+                            unit="milliseconds",
+                        )
                 except (ValueError, ZeroDivisionError):
                     pass
 
@@ -668,12 +842,12 @@ class AudioBuilder:
                 audio = MP4(str(output_file))
                 audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
                 audio.save()
-                self.console.print("Cover embedded successfully")
+                self.console.emit("Cover embedded successfully")
 
         except ImportError:
-            self.console.print("Warning: mutagen library not found. Cover not embedded.")
+            self.console.emit("Warning: mutagen library not found. Cover not embedded.")
         except Exception as e:
-            self.console.print(f"Warning: Could not embed cover: {e}")
+            self.console.emit(f"Warning: Could not embed cover: {e}")
 
     def run(self) -> bool:
         """Main entry point for audiobook creation."""
@@ -688,12 +862,12 @@ class AudioBuilder:
             # This call raises AnnotatedChaptersCacheMissError if file missing.
             included = getattr(self.cfg, "_included_indices", [])
             chapters = _load_annotated_chapters(self.cfg.annotated_chapters_path, included)
-            self.console.print(f"Loaded {len(chapters)} annotated chapters from NLP cache")
+            self.console.emit(f"Loaded {len(chapters)} annotated chapters from NLP cache")
         else:
             all_chapters = self._reader.get_chapters()
 
             if not all_chapters:
-                self.console.print(f"No chapters found in {self._reader.format_name}")
+                self.console.emit(f"No chapters found in {self._reader.format_name}")
                 return False
 
             from .chapter_filter import ChapterFilter
@@ -701,12 +875,12 @@ class AudioBuilder:
             filter_chain = ChapterFilter(self.cfg.chapter_filters)
             chapters = filter_chain.apply(all_chapters)
 
-            self.console.print(
+            self.console.emit(
                 f"Extracted {len(all_chapters)} chapters, {len(chapters)} after filtering"
             )
 
         if not chapters:
-            self.console.print("No chapters match the specified filters")
+            self.console.emit("No chapters match the specified filters")
             return False
 
         from .workers import get_batch_info
@@ -747,4 +921,4 @@ class AudioBuilder:
                 shutil.rmtree(self.temp_dir)
 
 
-__all__ = ["ETATracker", "AudioBuilder"]
+__all__ = ["AudioBuilder"]

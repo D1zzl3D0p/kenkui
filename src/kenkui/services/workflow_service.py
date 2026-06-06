@@ -110,10 +110,10 @@ def describe_voice_mode(state: dict[str, Any]) -> str:
 
 def set_characters_config(
     state: dict[str, Any],
-    method: "str | None",
-    provider: "str | None",
-    model: "str | None",
-    execution_mode: "str | None",
+    method: str | None,
+    provider: str | None,
+    model: str | None,
+    execution_mode: str | None,
 ) -> dict[str, Any]:
     """Apply character-discovery step settings to wizard state."""
     update = dict(state)
@@ -130,9 +130,9 @@ def set_characters_config(
 
 def set_attribution_config(
     state: dict[str, Any],
-    provider: "str | None",
-    model: "str | None",
-    execution_mode: "str | None",
+    provider: str | None,
+    model: str | None,
+    execution_mode: str | None,
 ) -> dict[str, Any]:
     """Apply attribution step settings to wizard state."""
     update = dict(state)

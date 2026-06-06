@@ -7,14 +7,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-from pydantic import ValidationError
-
-from kenkui.nlp.attribution import _attribute_chunk, attribute_all_chunks, _format_roster, _ATTRIBUTION_PROMPT
+from kenkui.nlp import _normalize_speaker
+from kenkui.nlp.attribution import (
+    _ATTRIBUTION_PROMPT,
+    _attribute_chunk,
+    _format_roster,
+    attribute_all_chunks,
+)
 from kenkui.nlp.chunker import Chunk
 from kenkui.nlp.models import AttributionItem, AttributionResult, Quote
-from kenkui.nlp import _normalize_speaker
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -16,7 +16,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +83,7 @@ def list_caches(
         try:
             data = json.loads(entry.read_text(encoding="utf-8"))
             created_str = data.get("created_at", "")
-            created_at = datetime.fromisoformat(created_str) if created_str else datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+            created_at = datetime.fromisoformat(created_str) if created_str else datetime.fromtimestamp(entry.stat().st_mtime, tz=UTC)
         except Exception:  # noqa: BLE001
             continue
         metas.append(CacheMeta(
@@ -139,7 +139,7 @@ def put_cache(
     cache_root.mkdir(parents=True, exist_ok=True)
 
     envelope: dict[str, Any] = {
-        "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        "created_at": datetime.now(tz=UTC).isoformat(),
         "description": description,
         "step": step,
         "tool": tool,

@@ -205,7 +205,7 @@ def match_series_characters(slug: str, fast_result_dict: dict) -> SeriesMatchRes
     )
 
 
-def get_roster(series_slug: str) -> "CharacterRoster":
+def get_roster(series_slug: str) -> CharacterRoster:
     """Return the cumulative CharacterRoster for *series_slug*.
 
     Returns an empty roster for the first book in a series (no prior roster file).
@@ -216,7 +216,7 @@ def get_roster(series_slug: str) -> "CharacterRoster":
     return existing if existing is not None else CharacterRoster(characters=[])
 
 
-def update_roster(series_slug: str, new_roster: "CharacterRoster", book_slug: str) -> None:
+def update_roster(series_slug: str, new_roster: CharacterRoster, book_slug: str) -> None:
     """Merge *new_roster* into the series roster and persist.
 
     Existing characters are updated (new aliases unioned, counts summed,

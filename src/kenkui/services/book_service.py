@@ -81,7 +81,7 @@ def parse_book(ebook_path: str, cache: BookCache) -> BookParseResult:
 
 def filter_chapters(
     book_hash_key: str,
-    selection: "ChapterSelection",  # noqa: F821 – imported below
+    selection: ChapterSelection,  # noqa: F821 – imported below
     cache: BookCache,
 ) -> ChapterFilterResult:
     """Apply a ChapterSelection to the cached chapters for *book_hash_key*.
@@ -91,8 +91,8 @@ def filter_chapters(
     Raises:
         KeyError: if *book_hash_key* is not present in *cache*.
     """
-    from kenkui.models import Chapter, ChapterPreset
     from kenkui.chapter_filter import ChapterFilter, FilterOperation
+    from kenkui.models import Chapter, ChapterPreset
 
     if selection.preset == ChapterPreset.NONE:
         # "none" means empty selection by design — return early

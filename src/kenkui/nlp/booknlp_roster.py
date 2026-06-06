@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BookNLPRosterData:
     """Output of ``build_roster_from_booknlp`` — roster plus raw common-noun phrases."""
-    roster: "CharacterRoster"
+    roster: CharacterRoster
     common_phrases: list[str]
 
 
@@ -90,7 +90,7 @@ _BOOK_ID = "kenkui"
 def build_roster_from_booknlp(
     text: str,
     model_size: str = "small",
-) -> "BookNLPRosterData | None":
+) -> BookNLPRosterData | None:
     """Run BookNLP on *text* and return a ``CharacterRoster``.
 
     Uses only the ``entity,coref`` pipeline components — quote attribution

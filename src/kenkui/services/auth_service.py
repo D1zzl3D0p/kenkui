@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from kenkui.huggingface_auth import AuthStatus, check_auth_status, do_login
 
-
 # ---------------------------------------------------------------------------
 # Return types
 # ---------------------------------------------------------------------------
