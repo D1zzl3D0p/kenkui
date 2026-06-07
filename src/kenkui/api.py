@@ -661,16 +661,25 @@ def list_cached_rosters(book_path: str | Path):
     return _list_cached_rosters(Path(book_path))
 
 
-def get_cached_nlp_result(book_path: str | Path, provider: str | None = None) -> NLPResult | None:
+def get_cached_nlp_result(
+    book_path: str | Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> NLPResult | None:
     """Return a cached attributed NLP result, if available."""
     from .nlp import get_cached_result
-    return get_cached_result(Path(book_path), provider=provider)
+    return get_cached_result(Path(book_path), provider=provider, model=model)
 
 
-def cache_nlp_result(result: NLPResult, book_path: str | Path, provider: str | None = None) -> Path:
+def cache_nlp_result(
+    result: NLPResult,
+    book_path: str | Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> Path:
     """Persist an attributed NLP result and return the cache path."""
     from .nlp import cache_result
-    return cache_result(result, Path(book_path), provider=provider)
+    return cache_result(result, Path(book_path), provider=provider, model=model)
 
 
 def cache_roster(
@@ -693,10 +702,14 @@ def cache_roster(
     )
 
 
-def nlp_attribution_cache_path(book_path: str | Path, provider: str | None = None) -> Path:
+def nlp_attribution_cache_path(
+    book_path: str | Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> Path:
     """Return the expected attributed NLP cache path for an ebook path."""
     from .nlp import attribution_cache_path
-    return attribution_cache_path(Path(book_path), provider=provider)
+    return attribution_cache_path(Path(book_path), provider=provider, model=model)
 
 
 # ---------------------------------------------------------------------------

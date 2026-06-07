@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import kenkui.nlp as legacy_nlp
+from kenkui.models import Chapter, CharacterInfo, FastScanResult, NLPResult
 from kenkui.nlp._cache import (
     CacheMeta,
     _cache_filename,
@@ -15,6 +17,7 @@ from kenkui.nlp._cache import (
     list_caches,
     put_cache,
 )
+from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
 FAKE_BOOK = Path("/fake/book.epub")
 FAKE_HASH = "abc123def456"
@@ -145,3 +148,116 @@ class TestDeleteCache:
             description="", book_hash=FAKE_HASH,
         )
         delete_cache(meta)  # must not raise
+
+
+class TestLegacyModelAwareCaches:
+    def _book(self, tmp_path: Path) -> Path:
+        book = tmp_path / "book.epub"
+        book.write_bytes(b"fake")
+        return book
+
+    def _scan_result(self, book: Path) -> FastScanResult:
+        roster = CharacterRoster(characters=[
+            CharacterRecord(slug="alice", canonical_name="Alice", aliases=["Alice"])
+        ])
+        return FastScanResult(
+            roster=roster,
+            characters=[CharacterInfo(character_id="alice", display_name="Alice")],
+            book_hash=legacy_nlp.book_hash(book),
+        )
+
+    def _nlp_result(self, book: Path) -> NLPResult:
+        return NLPResult(
+            characters=[CharacterInfo(character_id="alice", display_name="Alice")],
+            chapters=[Chapter(index=0, title="One", paragraphs=[])],
+            book_hash=legacy_nlp.book_hash(book),
+        )
+
+    def test_roster_caches_for_two_models_write_different_files(self, tmp_path):
+        book = self._book(tmp_path)
+        result = self._scan_result(book)
+        with patch("kenkui.nlp.CONFIG_DIR", tmp_path):
+            path_a = legacy_nlp.cache_roster(
+                result, book, method="llm", provider="openrouter", model="anthropic/claude-3.5"
+            )
+            path_b = legacy_nlp.cache_roster(
+                result, book, method="llm", provider="openrouter", model="openai/gpt-4o"
+            )
+
+        assert path_a != path_b
+        assert "openrouter-anthropic_claude_3_5" in path_a.name
+        assert "openrouter-openai_gpt_4o" in path_b.name
+
+    def test_attribution_caches_for_two_models_write_different_files(self, tmp_path):
+        book = self._book(tmp_path)
+        result = self._nlp_result(book)
+        with patch("kenkui.nlp.CONFIG_DIR", tmp_path):
+            path_a = legacy_nlp.cache_result(
+                result, book, provider="openrouter", model="anthropic/claude-3.5"
+            )
+            path_b = legacy_nlp.cache_result(
+                result, book, provider="openrouter", model="openai/gpt-4o"
+            )
+
+        assert path_a != path_b
+        assert "openrouter-anthropic_claude_3_5" in path_a.name
+        assert "openrouter-openai_gpt_4o" in path_b.name
+
+    def test_legacy_provider_only_roster_read_as_fallback(self, tmp_path):
+        book = self._book(tmp_path)
+        result = self._scan_result(book)
+        with patch("kenkui.nlp.CONFIG_DIR", tmp_path):
+            legacy_path = tmp_path / "nlp_cache" / legacy_nlp._roster_cache_name(
+                book, "llm", "openrouter"
+            )
+            legacy_path.parent.mkdir(parents=True)
+            legacy_path.write_text(
+                json.dumps({
+                    "created_at": "2026-01-01T00:00:00",
+                    "method": "llm",
+                    "provider": "openrouter",
+                    "model": "",
+                    "roster_data": result.to_dict(),
+                }),
+                encoding="utf-8",
+            )
+            cached = legacy_nlp.get_cached_roster(
+                book, method="llm", provider="openrouter", model="new/model"
+            )
+
+        assert cached is not None
+        assert cached.roster.characters[0].slug == "alice"
+
+    def test_exact_model_roster_cache_wins_over_legacy_fallback(self, tmp_path):
+        book = self._book(tmp_path)
+        old = self._scan_result(book)
+        new_roster = CharacterRoster(characters=[
+            CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"])
+        ])
+        new = FastScanResult(
+            roster=new_roster,
+            characters=[CharacterInfo(character_id="bob", display_name="Bob")],
+            book_hash=legacy_nlp.book_hash(book),
+        )
+        with patch("kenkui.nlp.CONFIG_DIR", tmp_path):
+            legacy_nlp.cache_roster(old, book, method="llm", provider="openrouter")
+            legacy_nlp.cache_roster(new, book, method="llm", provider="openrouter", model="new/model")
+            cached = legacy_nlp.get_cached_roster(
+                book, method="llm", provider="openrouter", model="new/model"
+            )
+
+        assert cached is not None
+        assert cached.roster.characters[0].slug == "bob"
+
+    def test_legacy_provider_only_attribution_read_as_fallback(self, tmp_path):
+        book = self._book(tmp_path)
+        result = self._nlp_result(book)
+        with patch("kenkui.nlp.CONFIG_DIR", tmp_path):
+            legacy_path = legacy_nlp.cache_result(result, book, provider="openrouter")
+            cached = legacy_nlp.get_cached_result(
+                book, provider="openrouter", model="new/model"
+            )
+
+        assert cached is not None
+        assert legacy_path.name.endswith("-openrouter.json")
+        assert cached.characters[0].character_id == "alice"

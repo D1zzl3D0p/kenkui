@@ -28,7 +28,9 @@ from pathlib import Path
 import scipy.io.wavfile
 from pydub import AudioSegment
 
-from .models import AudioResult, Chapter, Segment
+from .models import AudioResult, Chapter, Segment, _migrate_speaker_voices_keys
+from .nlp.models import _SPEAKER_SENTINELS
+from .nlp.models import slugify as _slugify
 from .text_rules import is_scene_break, split_at_scene_breaks
 from .utils import ApostropheMode, batch_text, ensure_terminal_punct, normalize_for_tts
 from .voice_loader import load_voice
@@ -465,6 +467,9 @@ def _render_multi_voice(
     """
     assert chapter.segments is not None
     segments: list[Segment] = chapter.segments
+    for seg in segments:
+        if not seg.is_scene_break and seg.speaker and seg.speaker not in _SPEAKER_SENTINELS:
+            seg.speaker = _slugify(seg.speaker)
 
     # Collect unique speakers (exclude SCENE_BREAK — no voice state needed)
     unique_speakers: list[str] = list(
@@ -477,7 +482,9 @@ def _render_multi_voice(
 
     # Load voice state for each unique speaker.
     # Per-character voice mappings are injected via config_dict["speaker_voices"].
-    speaker_voices: dict[str, str] = config_dict.get("speaker_voices", {})
+    speaker_voices: dict[str, str] = _migrate_speaker_voices_keys(
+        config_dict.get("speaker_voices", {})
+    )
     speaker_states: dict[str, object] = {}
     for speaker in unique_speakers:
         voice_name: str = str(speaker_voices.get(speaker) or config_dict.get("voice") or "alba")

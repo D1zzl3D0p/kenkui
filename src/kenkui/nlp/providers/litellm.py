@@ -147,7 +147,11 @@ class LiteLLMExtractionAdapter:
         if book_path is None:
             raise ValueError("LiteLLMExtractionAdapter.build_roster() requires book_path")
 
-        cached = get_cached_roster(book_path, provider=self._provider)
+        cached = get_cached_roster(
+            book_path,
+            provider=self._provider,
+            model=self._config.extraction_model,
+        )
         if cached is not None:
             return cached.roster
 
@@ -333,6 +337,12 @@ class LiteLLMAttributionAdapter:
         for item in all_attributions.values():
             if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
                 item.speaker = known_names.get(item.speaker, slugify(item.speaker))
+            if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
+                _logger.warning(
+                    "LiteLLMAttributionAdapter: speaker %r not in roster; using Unknown",
+                    item.speaker,
+                )
+                item.speaker = "Unknown"
 
         return AttributionResult(attributions=list(all_attributions.values()))
 

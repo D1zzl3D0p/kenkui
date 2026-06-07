@@ -19,7 +19,13 @@ import imageio_ffmpeg
 
 from .analytics import StageRecord, append_record, now_utc
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
-from .models import AudioResult, Chapter, ProcessingConfig, _normalize_bitrate
+from .models import (
+    AudioResult,
+    Chapter,
+    ProcessingConfig,
+    _migrate_speaker_voices_keys,
+    _normalize_bitrate,
+)
 from .nlp.models import _SPEAKER_SENTINELS
 from .nlp.models import slugify as _slugify
 from .progress import ChapterProgress, ProgressEvent, ProgressStage, ProgressStatus, ProgressUnit
@@ -40,10 +46,29 @@ def _load_character_genders(roster_cache_path: Path | None) -> dict[str, str]:
     try:
         from .models import FastScanResult
         data = json.loads(Path(roster_cache_path).read_text(encoding="utf-8"))
-        result = FastScanResult.from_dict(data)
-        return {c.character_id: c.gender_pronoun for c in result.characters if c.gender_pronoun}
+        result = FastScanResult.from_dict(data.get("roster_data") or data)
+        return {
+            _slugify(c.character_id): c.gender_pronoun
+            for c in result.characters
+            if c.gender_pronoun
+        }
     except Exception:
         return {}
+
+
+def _load_roster_slugs(roster_cache_path: Path | None) -> set[str]:
+    """Load valid character slugs from a roster cache, if available."""
+    if not roster_cache_path:
+        return set()
+    try:
+        from .models import FastScanResult
+        data = json.loads(Path(roster_cache_path).read_text(encoding="utf-8"))
+        result = FastScanResult.from_dict(data.get("roster_data") or data)
+        slugs = {c.slug for c in result.roster.characters}
+        slugs.update(_slugify(c.character_id) for c in result.characters)
+        return {s for s in slugs if s}
+    except Exception:
+        return set()
 
 
 def _auto_assign_unmapped_speakers(
@@ -53,6 +78,7 @@ def _auto_assign_unmapped_speakers(
     log: Callable[[str], None],
     config_path: str | None = None,
     character_genders: dict[str, str] | None = None,
+    roster_slugs: set[str] | None = None,
 ) -> dict[str, str]:
     """Assign voices to speakers missing from speaker_voices.
 
@@ -76,9 +102,12 @@ def _auto_assign_unmapped_speakers(
     # Collect stats for all speakers in segments.
     speaker_prominence: dict[str, int] = {}
     speaker_chapters: dict[str, set[int]] = {}
+    valid_slugs = roster_slugs or set()
     for ch_idx, ch in enumerate(chapters):
         for seg in ch.segments or []:
             if seg.is_scene_break or seg.speaker in _SPEAKER_SENTINELS:
+                continue
+            if valid_slugs and seg.speaker not in valid_slugs:
                 continue
             speaker_prominence[seg.speaker] = speaker_prominence.get(seg.speaker, 0) + 1
             speaker_chapters.setdefault(seg.speaker, set()).add(ch_idx)
@@ -169,7 +198,10 @@ def _auto_assign_unmapped_speakers(
 
         updated[speaker] = voice
         voice_chapters.setdefault(voice, set()).update(my_chapters)
-        log(f"INFO: auto-assigned voice '{voice}' ({gender}) to new speaker '{speaker}'")
+        log(
+            f"INFO: auto-assigned voice '{voice}' ({gender}) "
+            f"to valid roster speaker '{speaker}'"
+        )
 
     return updated
 
@@ -220,7 +252,12 @@ class AnnotatedChaptersCacheMissError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> list[Chapter]:
+def _load_annotated_chapters(
+    cache_path: Path,
+    included_indices: list[int],
+    roster_cache_path: Path | None = None,
+    log: Callable[[str], None] | None = None,
+) -> list[Chapter]:
     """Load annotated chapters from an NLP cache JSON file.
 
     Args:
@@ -247,11 +284,21 @@ def _load_annotated_chapters(cache_path: Path, included_indices: list[int]) -> l
     data = json.loads(cache_path.read_text(encoding="utf-8"))
     chapters = [Chapter.from_dict(ch) for ch in data.get("chapters", [])]
 
+    roster_slugs = _load_roster_slugs(roster_cache_path)
+    warn = log or logger.warning
+
     for chapter in chapters:
         if chapter.segments:
             for seg in chapter.segments:
                 if not seg.is_scene_break and seg.speaker and seg.speaker not in _SPEAKER_SENTINELS:
+                    original = seg.speaker
                     seg.speaker = _slugify(seg.speaker)
+                    if roster_slugs and seg.speaker not in roster_slugs:
+                        warn(
+                            f"Annotated cache speaker {original!r} is not in roster; "
+                            "remapping to 'Unknown'"
+                        )
+                        seg.speaker = "Unknown"
 
     if included_indices:
         idx_set = set(included_indices)
@@ -407,6 +454,7 @@ class AudioBuilder:
             unit="chars",
         )
 
+        self.cfg.speaker_voices = _migrate_speaker_voices_keys(self.cfg.speaker_voices)
         is_multi = bool(self.cfg.speaker_voices)
         narrator_label = "multi-voice" if is_multi else (
             Path(self.cfg.voice).stem if ("/" in self.cfg.voice or "\\" in self.cfg.voice)
@@ -437,11 +485,14 @@ class AudioBuilder:
             logger.info("Building audiobook: %s", output_file.name)
 
             # Pre-flight: auto-assign voices to new speakers, then warn about remaining issues
-            if self.cfg.speaker_voices and any(ch.segments for ch in chapters):
-                _char_genders = _load_character_genders(getattr(self.cfg, "roster_cache_path", None))
+            if any(ch.segments for ch in chapters):
+                _roster_cache_path = getattr(self.cfg, "roster_cache_path", None)
+                _char_genders = _load_character_genders(_roster_cache_path)
+                _roster_slugs = _load_roster_slugs(_roster_cache_path)
                 self.cfg.speaker_voices = _auto_assign_unmapped_speakers(
                     chapters, self.cfg.speaker_voices, self.cfg.voice, logger.info,
                     character_genders=_char_genders,
+                    roster_slugs=_roster_slugs,
                 )
                 _warn_unresolvable_speakers(chapters, self.cfg.speaker_voices, logger.warning)
 
@@ -607,7 +658,7 @@ class AudioBuilder:
             "eos_threshold": self.cfg.eos_threshold,
             "frames_after_eos": self.cfg.frames_after_eos,
             # Multi-voice: character id → voice name mapping
-            "speaker_voices": self.cfg.speaker_voices,
+            "speaker_voices": _migrate_speaker_voices_keys(self.cfg.speaker_voices),
             # Chapter-voice mode: str(chapter_index) → voice name
             "chapter_voices": self.cfg.chapter_voices,
             # Audio post-processing effects chain
@@ -861,7 +912,11 @@ class AudioBuilder:
         if self.cfg.annotated_chapters_path is not None:
             # This call raises AnnotatedChaptersCacheMissError if file missing.
             included = getattr(self.cfg, "_included_indices", [])
-            chapters = _load_annotated_chapters(self.cfg.annotated_chapters_path, included)
+            chapters = _load_annotated_chapters(
+                self.cfg.annotated_chapters_path,
+                included,
+                getattr(self.cfg, "roster_cache_path", None),
+            )
             self.console.emit(f"Loaded {len(chapters)} annotated chapters from NLP cache")
         else:
             all_chapters = self._reader.get_chapters()

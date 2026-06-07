@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -139,6 +140,37 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
         segs = {s.index: s for s in chapters[0].segments}
         assert segs[6].speaker == "Some Name"
 
+    def test_non_roster_speaker_remapped_to_unknown_when_roster_available(self, tmp_path):
+        """Stale annotated role speakers are not promoted into renderable cast keys."""
+        from kenkui.models import CharacterInfo, FastScanResult
+        from kenkui.nlp.models import CharacterRecord, CharacterRoster
+        from kenkui.parsing import _load_annotated_chapters
+
+        cache_path = self._make_cache(
+            tmp_path,
+            [{"text": "Ahoy.", "speaker": "fisherman", "index": 7, "is_scene_break": False}],
+        )
+        roster = CharacterRoster(characters=[
+            CharacterRecord(slug="darrow", canonical_name="Darrow", aliases=["Darrow"])
+        ])
+        roster_cache = tmp_path / "roster.json"
+        roster_cache.write_text(
+            json.dumps({
+                "roster_data": FastScanResult(
+                    roster=roster,
+                    characters=[CharacterInfo(character_id="darrow", display_name="Darrow")],
+                    book_hash="hash",
+                ).to_dict()
+            }),
+            encoding="utf-8",
+        )
+
+        chapters = _load_annotated_chapters(cache_path, [], roster_cache)
+        segs = {s.index: s for s in chapters[0].segments}
+
+        assert segs[0].speaker == "darrow"
+        assert segs[7].speaker == "Unknown"
+
 
 class TestWarnUnresolvableSpeakers:
     """Tests for _warn_unresolvable_speakers pre-flight helper."""
@@ -200,6 +232,54 @@ class TestWarnUnresolvableSpeakers:
             _warn_unresolvable_speakers([ch], speaker_voices, warnings.append)
 
         assert warnings == []
+
+
+class TestAutoAssignUnmappedSpeakers:
+    def _make_chapter(self, segments):
+        from kenkui.models import Chapter, Segment
+
+        segs = [
+            Segment(text=s["text"], speaker=s["speaker"], index=i,
+                    is_scene_break=s.get("is_scene_break", False))
+            for i, s in enumerate(segments)
+        ]
+        ch = Chapter(index=0, title="Ch 1", paragraphs=[])
+        ch.segments = segs
+        return ch
+
+    def test_auto_assigns_only_valid_roster_speakers(self):
+        from unittest.mock import patch
+
+        from kenkui.models import Chapter, Segment
+        from kenkui.parsing import _auto_assign_unmapped_speakers
+
+        chapter = Chapter(
+            index=0,
+            title="Ch 1",
+            paragraphs=[],
+            segments=[
+                Segment(text="Named.", speaker="darrow", index=0),
+                Segment(text="Role.", speaker="fisherman", index=1),
+            ],
+        )
+
+        with patch(
+            "kenkui.services.voice_service.list_voices",
+            return_value=[
+                SimpleNamespace(name="alba", source="builtin", gender="female"),
+                SimpleNamespace(name="cedar", source="builtin", gender="male"),
+            ],
+        ):
+            assigned = _auto_assign_unmapped_speakers(
+                [chapter],
+                {},
+                "alba",
+                lambda _msg: None,
+                roster_slugs={"darrow"},
+            )
+
+        assert "darrow" in assigned
+        assert "fisherman" not in assigned
 
     def test_sentinel_speakers_skipped(self):
         """NARRATOR and Unknown sentinels do not trigger warnings."""

@@ -513,6 +513,18 @@ _DEFAULT_MAX_SECTION_DEPTH = 12
 # Number of equally-spaced buckets to sample from the book.
 _SAMPLE_BUCKETS = 8
 
+_PAST_TENSE_VERB_RE = re.compile(r"^[a-z][a-z'-]*ed$", re.IGNORECASE)
+_COMMON_CLAUSE_VERBS = frozenset({
+    "am", "are", "asked", "be", "been", "being", "call", "called", "came",
+    "come", "comes", "cried", "did", "does", "felt", "get", "gets", "give",
+    "gives", "go", "goes", "got", "had", "has", "have", "is", "knew",
+    "know", "knows", "left", "let", "look", "looked", "made", "make",
+    "makes", "played", "put", "ran", "said", "sat", "saw", "say", "says",
+    "see", "sees", "seemed", "spoke", "stood", "take", "takes", "thought",
+    "told", "took", "turned", "walk", "walked", "was", "watched", "went",
+    "were", "whispered",
+})
+
 
 @dataclass(frozen=True)
 class _LLMCallLimits:
@@ -787,6 +799,29 @@ def _sample_text_for_roster(full_text: str, target_words: int = 4000) -> str:
     return "\n\n[...]\n\n".join(samples)
 
 
+def _is_name_like_alias(alias: str) -> bool:
+    """Return True when an LLM alias looks like a name, not a sentence span."""
+    stripped = alias.strip()
+    if len(stripped) < 2 or not _is_proper_name(stripped):
+        return False
+    if any(ch in stripped for ch in "\n\r\t;:!?\"“”"):
+        return False
+    words = stripped.split()
+    if not words:
+        return False
+    normalized = [w.strip(".,'’‘()[]{}").lower() for w in words]
+    if any(not w for w in normalized):
+        return False
+    if any(w in _COMMON_CLAUSE_VERBS or _PAST_TENSE_VERB_RE.match(w) for w in normalized[1:]):
+        return False
+    # Require at least one capitalized name token unless the phrase is an
+    # intentional title/epithet form beginning with an article.
+    first_lower = normalized[0]
+    if first_lower in _PARTICLES and len(words) > 1:
+        return True
+    return any(w[:1].isupper() for w in words)
+
+
 def _chunk_text_for_roster(full_text: str, target_words: int = 8000) -> list[str]:
     """Split *full_text* into paragraph-preserving word-budget chunks."""
     paragraphs = [p for p in full_text.split("\n\n") if p.strip()]
@@ -842,16 +877,22 @@ def _filter_roster_hallucinations(
     surviving_names: list[str] = []
     kept_count = 0
     dropped_count = 0
+    non_name_count = 0
     dropped_entries = 0
 
     for group in roster.characters:
-        kept = [
-            a for a in group.aliases
-            if len(a.strip()) >= 2
-            and bool(re.search(r'(?<!\w)' + re.escape(a.lower()) + r'(?!\w)', text_lower))
-        ]
-        dropped_aliases = max(0, len(group.aliases) - len(kept))
-        dropped_count += dropped_aliases
+        kept: list[str] = []
+        for alias in group.aliases:
+            appears_verbatim = bool(
+                re.search(r'(?<!\w)' + re.escape(alias.lower()) + r'(?!\w)', text_lower)
+            )
+            if not appears_verbatim:
+                dropped_count += 1
+                continue
+            if not _is_name_like_alias(alias):
+                non_name_count += 1
+                continue
+            kept.append(alias)
         kept_count += len(kept)
         if not kept:
             dropped_entries += 1
@@ -873,18 +914,21 @@ def _filter_roster_hallucinations(
 
     if not surviving_names:
         logger.warning(
-            "filter_hallucinations: no aliases survived (kept=%d dropped=%d entries_dropped=%d)",
+            "filter_hallucinations: no aliases survived (kept=%d hallucinated=%d non_name=%d entries_dropped=%d)",
             kept_count,
             dropped_count,
+            non_name_count,
             dropped_entries,
         )
         return CharacterRoster(characters=[])
 
     groups = _cluster_by_heuristic(surviving_names)
     logger.info(
-        "filter_hallucinations: kept %d alias(es), dropped %d alias(es), dropped %d entry(s), clustered to %d character(s)",
+        "filter_hallucinations: kept %d alias(es), dropped %d hallucinated alias(es), "
+        "dropped %d verbatim non-name alias(es), dropped %d entry(s), clustered to %d character(s)",
         kept_count,
         dropped_count,
+        non_name_count,
         dropped_entries,
         len(groups),
     )

@@ -181,7 +181,15 @@ def book_hash(book_path: Path) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-def _attribution_cache_name(book_path: Path, provider: str | None = None) -> str:
+def _cache_model_slug(model: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (model or "").lower()).strip("_")
+
+
+def _attribution_cache_name(
+    book_path: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
     """Return the cache filename stem for a book + provider combination.
 
     Ollama (or no provider) uses the legacy ``{hash}.json`` name so existing
@@ -189,12 +197,19 @@ def _attribution_cache_name(book_path: Path, provider: str | None = None) -> str
     their results are stored separately and are never confused with Ollama output.
     """
     h = book_hash(book_path)
+    model_slug = _cache_model_slug(model)
+    if provider and model_slug:
+        return f"{h}-{provider}-{model_slug}.json"
     if provider and provider != "ollama":
         return f"{h}-{provider}.json"
     return f"{h}.json"
 
 
-def get_cached_result(book_path: Path, provider: str | None = None) -> NLPResult | None:
+def get_cached_result(
+    book_path: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> NLPResult | None:
     """Return a cached ``NLPResult`` if a valid cache file exists, else None.
 
     When *provider* is a cloud provider name the lookup uses a provider-specific
@@ -204,7 +219,21 @@ def get_cached_result(book_path: Path, provider: str | None = None) -> NLPResult
     from ..models import NLPResult
 
     cache_dir = _get_config_dir() / "nlp_cache"
-    cache_file = cache_dir / _attribution_cache_name(book_path, provider)
+    cache_file = cache_dir / _attribution_cache_name(book_path, provider, model)
+    if (
+        model
+        and provider
+        and not cache_file.exists()
+    ):
+        legacy_file = cache_dir / _attribution_cache_name(book_path, provider)
+        if legacy_file.exists():
+            logger.warning(
+                "Falling back to legacy provider-only attribution cache %s for provider=%s model=%s",
+                legacy_file,
+                provider,
+                model,
+            )
+            cache_file = legacy_file
     if not cache_file.exists():
         return None
     try:
@@ -232,7 +261,12 @@ def _atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
         raise
 
 
-def cache_result(result: NLPResult, book_path: Path, provider: str | None = None) -> Path:
+def cache_result(
+    result: NLPResult,
+    book_path: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> Path:
     """Serialise *result* to disk and return the cache file path.
 
     Uses a provider-specific filename for cloud providers so results from
@@ -240,18 +274,27 @@ def cache_result(result: NLPResult, book_path: Path, provider: str | None = None
     """
     cache_dir = _get_config_dir() / "nlp_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / _attribution_cache_name(book_path, provider)
-    _atomic_write(cache_file, json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    cache_file = cache_dir / _attribution_cache_name(book_path, provider, model)
+    data = result.to_dict()
+    if provider:
+        data.setdefault("provider", provider)
+    if model:
+        data.setdefault("model", model)
+    _atomic_write(cache_file, json.dumps(data, ensure_ascii=False, indent=2))
     logger.debug("NLP cache written: %s", cache_file)
     return cache_file
 
 
-def attribution_cache_path(book_path: Path, provider: str | None = None) -> Path:
+def attribution_cache_path(
+    book_path: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> Path:
     """Return the expected attribution cache file path for *book_path* + *provider*.
 
     The file may or may not exist — callers should check ``.exists()`` before reading.
     """
-    return _get_config_dir() / "nlp_cache" / _attribution_cache_name(book_path, provider)
+    return _get_config_dir() / "nlp_cache" / _attribution_cache_name(book_path, provider, model)
 
 
 # CONFIG_DIR is exposed at module level so that patch("kenkui.nlp.CONFIG_DIR", ...) works in
@@ -279,15 +322,20 @@ def _roster_cache_name(
     book_path: Path,
     method: str | None = None,
     provider: str | None = None,
+    model: str | None = None,
 ) -> str:
     """Return roster cache filename for the given method/provider combination.
 
-    New format: ``{hash}-roster-{method}-{provider}.json``
+    New format: ``{hash}-roster-{method}-{provider}-{model}.json``
+    Provider-only format: ``{hash}-roster-{method}-{provider}.json`` (read fallback).
     Legacy format: ``{hash}-roster.json`` (treated as method=llm, provider=ollama on read).
     """
     h = book_hash(book_path)
     m = (method or "llm").lower()
     p = (provider or "ollama").lower() if m != "booknlp" else "none"
+    model_slug = _cache_model_slug(model)
+    if model_slug:
+        return f"{h}-roster-{m}-{p}-{model_slug}.json"
     return f"{h}-roster-{m}-{p}.json"
 
 
@@ -366,7 +414,12 @@ def list_cached_rosters(book_path: Path) -> list[RosterCacheMeta]:
     return results
 
 
-def get_cached_roster(book_path: Path, method: str | None = None, provider: str | None = None) -> FastScanResult | None:
+def get_cached_roster(
+    book_path: Path,
+    method: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> FastScanResult | None:
     """Return a cached ``FastScanResult`` if a valid roster cache file exists, else None.
 
     When *method* and *provider* are given, looks up only the matching file.
@@ -377,8 +430,19 @@ def get_cached_roster(book_path: Path, method: str | None = None, provider: str 
 
     cache_dir = _get_config_dir() / "nlp_cache"
 
-    if method is not None or provider is not None:
-        cache_file = cache_dir / _roster_cache_name(book_path, method, provider)
+    if method is not None or provider is not None or model is not None:
+        cache_file = cache_dir / _roster_cache_name(book_path, method, provider, model)
+        if model and not cache_file.exists():
+            legacy_file = cache_dir / _roster_cache_name(book_path, method, provider)
+            if legacy_file.exists():
+                logger.warning(
+                    "Falling back to legacy provider-only roster cache %s for method=%s provider=%s model=%s",
+                    legacy_file,
+                    method or "llm",
+                    provider or "ollama",
+                    model,
+                )
+                cache_file = legacy_file
         if not cache_file.exists():
             return None
         try:
@@ -414,12 +478,13 @@ def get_cached_roster_or_prompt(
     book_path: Path,
     method: str | None = None,
     provider: str | None = None,
+    model: str | None = None,
 ) -> FastScanResult | None:
     """Return a matching cached roster, or show an InquirerPy picker when multiple exist.
 
     - 0 matches → return None (caller should run fresh)
     - 1 match → return silently
-    - 2+ matches, method+provider disambiguate → return matching one
+    - 2+ matches, method+provider+model disambiguate → return matching one
     - 2+ matches, ambiguous → show InquirerPy picker with description + timestamp
     """
     metas = list_cached_rosters(book_path)
@@ -427,9 +492,13 @@ def get_cached_roster_or_prompt(
         return None
 
     # Try exact match first
-    if method is not None or provider is not None:
+    if method is not None or provider is not None or model is not None:
         for meta in metas:
-            if (method is None or meta.method == method) and (provider is None or meta.provider == provider):
+            if (
+                (method is None or meta.method == method)
+                and (provider is None or meta.provider == provider)
+                and (model is None or meta.model == model)
+            ):
                 try:
                     return meta.load()
                 except Exception:
@@ -491,7 +560,7 @@ def cache_roster(
     _provider = provider or "ollama"
     _model = model or ""
 
-    cache_file = cache_dir / _roster_cache_name(book_path, _method, _provider)
+    cache_file = cache_dir / _roster_cache_name(book_path, _method, _provider, _model)
 
     if _method == "booknlp":
         auto_desc = "booknlp"
@@ -733,7 +802,7 @@ def run_fast_scan(
     from .llm import LLMClient
 
     if use_cache:
-        cached = get_cached_roster(book_path)
+        cached = get_cached_roster(book_path, provider="ollama", model=nlp_model)
         if cached is not None:
             return cached
 
@@ -793,7 +862,7 @@ def run_fast_scan(
     characters.sort(key=lambda c: c.mention_count, reverse=True)
 
     result = FastScanResult(roster=roster, characters=characters, book_hash=book_hash(book_path))
-    cache_roster(result, book_path)
+    cache_roster(result, book_path, provider="ollama", model=nlp_model)
     return result
 
 
@@ -848,7 +917,7 @@ def run_attribution(
     from .quotes import extract_quotes, strip_scare_quotes
 
     if use_cache:
-        cached = get_cached_result(book_path)
+        cached = get_cached_result(book_path, provider="ollama", model=nlp_model)
         if cached is not None:
             return cached
 
@@ -878,6 +947,8 @@ def run_attribution(
         alias_to_canonical[group.canonical_name.lower()] = group.canonical_name
         for alias in group.aliases:
             alias_to_canonical[alias.lower()] = group.canonical_name
+    canonical_to_slug = {group.canonical_name: group.slug for group in roster.characters}
+    roster_slugs = {group.slug for group in roster.characters}
 
     roster_aliases: dict[str, list[str]] = {
         group.canonical_name: group.aliases for group in roster.characters
@@ -942,6 +1013,18 @@ def run_attribution(
                 item.speaker = _normalize_speaker(
                     item.speaker, alias_to_canonical, chapter_canonicals
                 )
+                if item.speaker not in _SPEAKER_SENTINELS:
+                    item.speaker = canonical_to_slug.get(item.speaker, _slugify(item.speaker))
+                    if item.speaker in _PRONOUNS:
+                        item.speaker = "NARRATOR"
+                    elif item.speaker not in roster_slugs:
+                        logger.warning(
+                            "Chapter %d: speaker %r not in roster (roster size=%d) — remapping to 'Unknown'",
+                            chapter.index,
+                            item.speaker,
+                            len(roster_slugs),
+                        )
+                        item.speaker = "Unknown"
 
             segments = _build_segments(clean_paras, quotes, all_attributions)
 
@@ -954,9 +1037,9 @@ def run_attribution(
     # Build CharacterInfo with quote_count
     characters: list[CharacterInfo] = [
         CharacterInfo(
-            character_id=group.canonical_name,
+            character_id=group.slug,
             display_name=group.canonical_name,
-            quote_count=attribution_counts.get(group.canonical_name, 0),
+            quote_count=attribution_counts.get(group.slug, 0),
             gender_pronoun=_resolve_gender(group, full_text),
         )
         for group in roster.characters
@@ -968,7 +1051,7 @@ def run_attribution(
         chapters=attributed_chapters,
         book_hash=book_hash(book_path),
     )
-    cache_result(result, book_path)
+    cache_result(result, book_path, provider="ollama", model=nlp_model)
     return result
 
 
@@ -1036,7 +1119,7 @@ def run_analysis(
         ),
     )
 
-    cache_result(nlp_result, book_path)
+    cache_result(nlp_result, book_path, provider="ollama", model=nlp_model)
     return nlp_result
 
 

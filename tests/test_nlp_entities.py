@@ -324,6 +324,16 @@ class TestFilterRosterHallucinations:
         assert "Mr. Potter" in all_aliases
         assert "Harry Potter" in all_aliases
 
+    def test_verbatim_clause_alias_removed(self):
+        text = "Simone played the final note. Simone bowed."
+        roster = self._roster(
+            ("Simone", ["Simone", "Simone played the final note"])
+        )
+        result = _filter_roster_hallucinations(roster, text)
+        all_aliases = [a for g in result.characters for a in g.aliases]
+        assert "Simone" in all_aliases
+        assert "Simone played the final note" not in all_aliases
+
     def test_hallucinated_alias_removed(self):
         text = "Harry walked in."
         roster = self._roster(
@@ -381,7 +391,18 @@ class TestFilterRosterHallucinations:
             _filter_roster_hallucinations(roster, text)
 
         assert any("dropped hallucinated entry" in r.message for r in caplog.records)
-        assert any("dropped 2 alias" in r.message for r in caplog.records)
+        assert any("dropped 2 hallucinated alias" in r.message for r in caplog.records)
+
+    def test_logs_hallucinated_and_non_name_alias_drops_distinctly(self, caplog):
+        text = "Simone played the final note. Simone smiled."
+        roster = self._roster(
+            ("Simone", ["Simone", "Simone played the final note", "Hermione Granger"])
+        )
+        with caplog.at_level(logging.INFO, logger="kenkui.nlp.entities"):
+            _filter_roster_hallucinations(roster, text)
+
+        assert any("dropped 1 hallucinated alias" in r.message for r in caplog.records)
+        assert any("dropped 1 verbatim non-name alias" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

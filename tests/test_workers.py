@@ -442,6 +442,26 @@ class TestRenderMultiVoice:
             _render_multi_voice(chapter, model, config, Path(td), queue, 1, _noop_log)
         assert "cosette" in loaded_voices
 
+    def test_display_name_speaker_voice_key_is_normalized(self):
+        """Display-name speaker_voices keys should match slug-normalized segments."""
+        segs = self._make_segments([("Line.", "Alice Liddell", 0)])
+        chapter = Chapter(index=0, title="Ch 0", paragraphs=[], segments=segs)
+        model = self._make_model()
+        queue = self._make_queue()
+        config = {"speaker_voices": {"Alice Liddell": "cosette"}}
+        loaded_voices: list[str] = []
+
+        def mock_load_voice(v: str) -> str:
+            loaded_voices.append(v)
+            return v
+
+        with (
+            patch("kenkui.workers.load_voice", side_effect=mock_load_voice),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            _render_multi_voice(chapter, model, config, Path(td), queue, 1, _noop_log)
+        assert "cosette" in loaded_voices
+
     def test_segments_reassembled_in_index_order(self):
         """Segments delivered out-of-order by index must produce a non-empty result."""
         # Provide segments with indices 2, 0, 1 (out of order)

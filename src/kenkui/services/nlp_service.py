@@ -152,7 +152,12 @@ def fast_scan(
 
     # Return cached result before the expensive parse + NLP pass.
     if use_cache:
-        cached = get_cached_roster(ebook, method=_discovery_method if _discovery_method != "auto" else None, provider=nlp_provider)
+        cached = get_cached_roster(
+            ebook,
+            method=_discovery_method if _discovery_method != "auto" else None,
+            provider=provider_name,
+            model=model_name,
+        )
         if cached is not None:
             if progress_callback:
                 progress_callback(100, "Scan complete (cached)")
@@ -382,7 +387,11 @@ def full_analysis(
 
     # Return cached result before the expensive parse + NLP pass.
     if use_cache:
-        cached = get_cached_result(ebook, provider=_attr_provider_name)
+        cached = get_cached_result(
+            ebook,
+            provider=_attr_provider_name,
+            model=attribution_model_name,
+        )
         if cached is not None:
             if attribution_progress_callback:
                 attribution_progress_callback(100, "Analysis complete (cached)")
@@ -458,6 +467,7 @@ def full_analysis(
             ebook,
             method=_method if _method != "auto" else None,
             provider=cfg.nlp_provider,
+            model=extraction_model_name,
         )
         if cached_roster is not None:
             roster = cached_roster.roster
@@ -614,7 +624,12 @@ def full_analysis(
         chapters=attributed_chapters,
         book_hash=ebook_hash,
     )
-    cache_result(result, Path(ebook_path), provider=_attr_provider_name)
+    cache_result(
+        result,
+        Path(ebook_path),
+        provider=_attr_provider_name,
+        model=attribution_model_name,
+    )
 
     append_record(StageRecord(
         stage="nlp_attribution",
@@ -749,7 +764,12 @@ def attribute_only(
         book_hash=ebook_hash,
     )
 
-    cache_result(result, Path(ebook_path), provider=_effective_provider)
+    cache_result(
+        result,
+        Path(ebook_path),
+        provider=_effective_provider,
+        model=_effective_model,
+    )
 
     if progress_callback:
         progress_callback(100, "Attribution complete")

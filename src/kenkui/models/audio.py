@@ -47,6 +47,7 @@ class ProcessingConfig:
     # --- Multi-voice fields ---
     speaker_voices: dict[str, str] = field(default_factory=dict)
     annotated_chapters_path: Path | None = None
+    roster_cache_path: Path | None = None
     # Per-chapter voice override (chapter-voice mode): str(chapter_index) → voice_name
     chapter_voices: dict[str, str] = field(default_factory=dict)
     # Audio post-processing effects chain
