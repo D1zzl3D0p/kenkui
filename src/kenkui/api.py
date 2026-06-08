@@ -86,7 +86,6 @@ from .services.series_service import (
 )
 from .utils import ApostropheMode
 from .voice_loader import load_voice
-from .voice_registry import get_bundled_voices
 from .workers import worker_process_chapter
 
 try:
@@ -549,20 +548,6 @@ def compiled_voices_available() -> bool:
     return voices_are_present()
 
 
-def fetch_voice(
-    repo_id: str | None = None,
-    patterns: list[str] | None = None,
-    progress_callback: Callable[[int, str], None] | None = None,
-) -> DownloadResult:  # noqa: F821
-    """Fetch uncompiled voice sources from HuggingFace.
-
-    Returns:
-        DownloadResult with success flag and path.
-    """
-    from .services.download_service import fetch_uncompiled
-    return fetch_uncompiled(repo_id=repo_id, patterns=patterns, progress_callback=progress_callback)
-
-
 # ---------------------------------------------------------------------------
 # Series API
 # ---------------------------------------------------------------------------
@@ -776,7 +761,6 @@ __all__ = [
     "FilterPreset",
     "FilterOperation",
     # Low-level voice helpers
-    "get_bundled_voices",
     "load_voice",
     # Workers
     "worker_process_chapter",
@@ -810,7 +794,6 @@ __all__ = [
     "import_custom_voice",
     "download_voice",
     "compiled_voices_available",
-    "fetch_voice",
     # Series API
     "list_series",
     "get_series",

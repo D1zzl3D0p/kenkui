@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import shutil
@@ -32,6 +33,13 @@ def _load_source_manifest(path: Path) -> list[dict[str, Any]]:
     if not isinstance(voices, list):
         raise ValueError("source manifest must contain a voices list")
     return voices
+
+
+def _assert_pocket_tts_version(expected: str | None) -> str:
+    installed = importlib.metadata.version("pocket-tts")
+    if expected is not None and installed != expected:
+        raise RuntimeError(f"pocket-tts {expected} is required; found {installed}")
+    return installed
 
 
 def _compile_prompt(source: str, output_path: Path) -> Path:
@@ -86,7 +94,9 @@ def build_voice_pack(
     *,
     generate_previews: bool = True,
     smoke_test: bool = False,
+    pocket_tts_version: str | None = None,
 ) -> Path:
+    build_pocket_tts_version = _assert_pocket_tts_version(pocket_tts_version)
     compiled_dir = output_dir / "compiled"
     preview_dir = output_dir / "previews"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -126,6 +136,7 @@ def build_voice_pack(
     data = {
         "schema_version": 1,
         "preview_text": PREVIEW_TEXT,
+        "pocket_tts_version": build_pocket_tts_version,
         "voices": [entry.to_manifest_dict(base_dir=output_dir) for entry in manifest_entries],
     }
     manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -153,6 +164,7 @@ def main() -> None:
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--no-previews", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--pocket-tts-version", help="Require an exact Pocket TTS build version")
     parser.add_argument("--sync-repo")
     parser.add_argument("--revision")
     args = parser.parse_args()
@@ -162,6 +174,7 @@ def main() -> None:
         args.output_dir,
         generate_previews=not args.no_previews,
         smoke_test=args.smoke_test,
+        pocket_tts_version=args.pocket_tts_version,
     )
     if args.sync_repo:
         sync_to_huggingface(args.output_dir, args.sync_repo, revision=args.revision)

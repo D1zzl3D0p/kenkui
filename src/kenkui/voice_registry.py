@@ -495,11 +495,6 @@ def get_registry() -> VoiceCatalog:
     return get_catalog()
 
 
-def get_bundled_voices() -> list[str]:
-    """Return canonical IDs for installed kenkui compiled voices."""
-    return sorted(v.voice_id for v in get_catalog().filter(origin="kenkui_compiled"))
-
-
 __all__ = [
     "BUILTIN_VOICE_NAMES",
     "DEFAULT_VOICE_PACK_REPO",
@@ -512,7 +507,6 @@ __all__ = [
     "builtin_catalog_entries",
     "compiled_voices_dir",
     "custom_voices_dir",
-    "get_bundled_voices",
     "get_catalog",
     "get_registry",
     "load_manifest",

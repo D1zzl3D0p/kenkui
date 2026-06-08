@@ -17,8 +17,9 @@ def _load_tool_module():
     return module
 
 
-def test_build_voice_pack_copies_compiled_asset_and_writes_hashes(tmp_path):
+def test_build_voice_pack_copies_compiled_asset_and_writes_hashes(tmp_path, monkeypatch):
     tool = _load_tool_module()
+    monkeypatch.setattr(tool.importlib.metadata, "version", lambda _package: "2.0.0")
     source_asset = tmp_path / "source.safetensors"
     source_asset.write_bytes(b"compiled")
     source_manifest = tmp_path / "source_manifest.json"
@@ -44,6 +45,7 @@ def test_build_voice_pack_copies_compiled_asset_and_writes_hashes(tmp_path):
         tmp_path / "pack",
         generate_previews=False,
         smoke_test=False,
+        pocket_tts_version="2.0.0",
     )
 
     entries = load_manifest(manifest)
@@ -53,3 +55,5 @@ def test_build_voice_pack_copies_compiled_asset_and_writes_hashes(tmp_path):
     assert entries[0].size_bytes == len(b"compiled")
     assert entries[0].path is not None
     assert entries[0].path.exists()
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_data["pocket_tts_version"] == "2.0.0"

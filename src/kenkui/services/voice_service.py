@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import tempfile
 import urllib.request
@@ -24,6 +25,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_AUDITION_TEXT = PREVIEW_TEXT
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass
@@ -139,6 +148,8 @@ def _download_preview(entry: VoiceCatalogEntry, out_path: Path) -> bool:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(entry.preview.url, timeout=30) as response:  # noqa: S310
         out_path.write_bytes(response.read())
+    if entry.preview.sha256 is not None and _hash_file(out_path) != entry.preview.sha256:
+        raise RuntimeError(f"Preview hash does not match manifest for {entry.voice_id!r}")
     return True
 
 
