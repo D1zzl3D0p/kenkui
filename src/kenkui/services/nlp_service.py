@@ -12,6 +12,7 @@ supported for clients that need display-neutral work units.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -60,6 +61,16 @@ class ProgressTracker:
             self.callback(pct, msg)
 
 
+_ATTRIBUTION_JOBS_RE = re.compile(r"Attribution jobs \[(\d+)/(\d+)\]")
+
+
+def _completed_attribution_units(message: str, fallback: float) -> float:
+    match = _ATTRIBUTION_JOBS_RE.search(message)
+    if match is None:
+        return fallback
+    return float(match.group(1))
+
+
 def _chapter_label(chapter) -> str:
     return chapter.title or f"Chapter {chapter.index}"
 
@@ -75,6 +86,7 @@ def _emit_nlp_progress(
     provider: str = "",
     model: str = "",
     book_hash_value: str = "",
+    active_chapters: tuple = (),
 ) -> None:
     if callback is None:
         return
@@ -89,6 +101,7 @@ def _emit_nlp_progress(
             provider=provider,
             model=model,
             book_hash=book_hash_value,
+            active_chapters=active_chapters,
         )
     )
 
@@ -590,40 +603,69 @@ def full_analysis(
 
     _attrib_start = now_utc()
     _t1 = time.monotonic()
-    for done, chapter in enumerate(chapters, start=1):
-        attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
-        segments = _attribution_to_segments(chapter, attr_result, roster)
-        attributed_chapters.append(_replace(chapter, segments=segments))
-        for item in attr_result.attributions:
-            if item.speaker not in ("NARRATOR", "Unknown"):
-                attribution_counts[item.speaker] += 1
-        attrib_tracker.advance(chapter.title or f"Chapter {chapter.index}")
-        _emit_nlp_progress(
-            attribution_progress_event_callback,
-            stage="nlp_attribution",
-            status="advanced",
-            message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
-            completed_units=done,
-            total_units=chapter_total,
-            provider=_attr_provider_name or "",
-            model=attribution_model_name,
-            book_hash_value=ebook_hash,
+
+    if (_attr_provider_name or "").lower() == "openrouter":
+        last_completed = 0.0
+
+        def _attribution_message(pct: int, msg: str) -> None:
+            nonlocal last_completed
+            if attribution_progress_callback:
+                attribution_progress_callback(pct, msg)
+            last_completed = _completed_attribution_units(msg, last_completed)
+            _emit_nlp_progress(
+                attribution_progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=msg,
+                completed_units=last_completed,
+                total_units=chapter_total,
+                provider=_attr_provider_name or "",
+                model=attribution_model_name,
+                book_hash_value=ebook_hash,
+            )
+
+        result = pipeline.attribute(
+            book_path=ebook,
+            chapters=chapters,
+            roster=roster,
+            progress_callback=_attribution_message,
+            use_cache=False,
+        )
+    else:
+        for done, chapter in enumerate(chapters, start=1):
+            attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
+            segments = _attribution_to_segments(chapter, attr_result, roster)
+            attributed_chapters.append(_replace(chapter, segments=segments))
+            for item in attr_result.attributions:
+                if item.speaker not in ("NARRATOR", "Unknown"):
+                    attribution_counts[item.speaker] += 1
+            attrib_tracker.advance(chapter.title or f"Chapter {chapter.index}")
+            _emit_nlp_progress(
+                attribution_progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
+                completed_units=done,
+                total_units=chapter_total,
+                provider=_attr_provider_name or "",
+                model=attribution_model_name,
+                book_hash_value=ebook_hash,
+            )
+
+        # Build CharacterInfo list with both mention_count and quote_count.
+        characters: list[CharacterInfo] = []
+        for rec in roster.characters:
+            ci = AppCharacterRecord.from_nlp(rec).to_character_info()
+            ci.quote_count = attribution_counts.get(rec.slug, 0)
+            characters.append(ci)
+        characters.sort(key=lambda c: c.prominence, reverse=True)
+
+        result = NLPResult(
+            characters=characters,
+            chapters=attributed_chapters,
+            book_hash=ebook_hash,
         )
     _attrib_dur = time.monotonic() - _t1
-
-    # Build CharacterInfo list with both mention_count and quote_count.
-    characters: list[CharacterInfo] = []
-    for rec in roster.characters:
-        ci = AppCharacterRecord.from_nlp(rec).to_character_info()
-        ci.quote_count = attribution_counts.get(rec.slug, 0)
-        characters.append(ci)
-    characters.sort(key=lambda c: c.prominence, reverse=True)
-
-    result = NLPResult(
-        characters=characters,
-        chapters=attributed_chapters,
-        book_hash=ebook_hash,
-    )
     cache_result(
         result,
         Path(ebook_path),
@@ -730,39 +772,67 @@ def attribute_only(
     attribution_counts: dict[str, int] = defaultdict(int)
     attributed_chapters = []
 
-    for done, chapter in enumerate(chapters, start=1):
-        attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
-        segments = _attribution_to_segments(chapter, attr_result, roster)
-        attributed_chapters.append(_replace(chapter, segments=segments))
-        for item in attr_result.attributions:
-            if item.speaker not in ("NARRATOR", "Unknown"):
-                attribution_counts[item.speaker] += 1
-        tracker.advance(chapter.title or f"Chapter {chapter.index}")
-        _emit_nlp_progress(
-            progress_event_callback,
-            stage="nlp_attribution",
-            status="advanced",
-            message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
-            completed_units=done,
-            total_units=chapter_total,
-            provider=_effective_provider or "",
-            model=_effective_model,
-            book_hash_value=ebook_hash,
+    if (_effective_provider or "").lower() == "openrouter":
+        last_completed = 0.0
+
+        def _attribution_message(pct: int, msg: str) -> None:
+            nonlocal last_completed
+            if progress_callback:
+                progress_callback(pct, msg)
+            last_completed = _completed_attribution_units(msg, last_completed)
+            _emit_nlp_progress(
+                progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=msg,
+                completed_units=last_completed,
+                total_units=chapter_total,
+                provider=_effective_provider or "",
+                model=_effective_model,
+                book_hash_value=ebook_hash,
+            )
+
+        result = pipeline.attribute(
+            book_path=ebook,
+            chapters=chapters,
+            roster=roster,
+            progress_callback=_attribution_message,
+            use_cache=False,
         )
+    else:
+        for done, chapter in enumerate(chapters, start=1):
+            attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
+            segments = _attribution_to_segments(chapter, attr_result, roster)
+            attributed_chapters.append(_replace(chapter, segments=segments))
+            for item in attr_result.attributions:
+                if item.speaker not in ("NARRATOR", "Unknown"):
+                    attribution_counts[item.speaker] += 1
+            tracker.advance(chapter.title or f"Chapter {chapter.index}")
+            _emit_nlp_progress(
+                progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
+                completed_units=done,
+                total_units=chapter_total,
+                provider=_effective_provider or "",
+                model=_effective_model,
+                book_hash_value=ebook_hash,
+            )
 
-    # Build CharacterInfo list with quote counts from the just-run attribution.
-    characters: list[CharacterInfo] = []
-    for rec in roster.characters:
-        ci = AppCharacterRecord.from_nlp(rec).to_character_info()
-        ci.quote_count = attribution_counts.get(rec.slug, 0)
-        characters.append(ci)
-    characters.sort(key=lambda c: c.prominence, reverse=True)
+        # Build CharacterInfo list with quote counts from the just-run attribution.
+        characters: list[CharacterInfo] = []
+        for rec in roster.characters:
+            ci = AppCharacterRecord.from_nlp(rec).to_character_info()
+            ci.quote_count = attribution_counts.get(rec.slug, 0)
+            characters.append(ci)
+        characters.sort(key=lambda c: c.prominence, reverse=True)
 
-    result = NLPResult(
-        characters=characters,
-        chapters=attributed_chapters,
-        book_hash=ebook_hash,
-    )
+        result = NLPResult(
+            characters=characters,
+            chapters=attributed_chapters,
+            book_hash=ebook_hash,
+        )
 
     cache_result(
         result,

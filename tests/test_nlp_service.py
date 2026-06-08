@@ -449,6 +449,54 @@ def test_full_analysis_attribution_progress_event_callback_uses_chapter_units(tm
     assert all(event.total_units == 2 for event in events)
 
 
+def test_full_analysis_openrouter_forwards_async_attribution_progress(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [
+        Chapter(index=0, title="Ch 1", paragraphs=["text1"]),
+        Chapter(index=1, title="Ch 2", paragraphs=["text2"]),
+    ]
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = fake_chapters
+
+    messages = []
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    def _attribute_side_effect(*_args, **kwargs):
+        kwargs["progress_callback"](
+            10,
+            "Attribution jobs [0/2]\n"
+            "  [1/2] running  Ch 1 - Attributing chapter via LiteLLM\n"
+            "  [2/2] running  Ch 2 - Attributing chapter via LiteLLM",
+        )
+        return mock_pipeline.attribute.return_value
+
+    mock_pipeline.attribute.side_effect = _attribute_side_effect
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+    ):
+        full_analysis(
+            str(fake_epub),
+            nlp_model="openai/gpt-4.1-mini",
+            attribution_provider="openrouter",
+            attribution_progress_callback=lambda pct, msg: messages.append((pct, msg)),
+            attribution_progress_event_callback=events.append,
+        )
+
+    assert any("[1/2] running" in msg and "[2/2] running" in msg for _pct, msg in messages)
+    assert any("[1/2] running" in event.message for event in events)
+    mock_pipeline.attribute.assert_called_once()
+
+
 def test_attribute_only_progress_event_callback_uses_chapter_units(tmp_path):
     fake_epub = tmp_path / "book.epub"
     fake_epub.write_bytes(b"fake")
@@ -478,6 +526,50 @@ def test_attribute_only_progress_event_callback_uses_chapter_units(tmp_path):
     assert [event.status for event in events] == ["started", "advanced", "advanced", "completed"]
     assert [event.completed_units for event in events] == [0, 1, 2, 2]
     assert all(event.stage == "nlp_attribution" for event in events)
+
+
+def test_attribute_only_openrouter_forwards_async_attribution_progress(tmp_path):
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    fake_chapters = [
+        Chapter(index=0, title="Ch 1", paragraphs=["text1"]),
+        Chapter(index=1, title="Ch 2", paragraphs=["text2"]),
+    ]
+    messages = []
+    events = []
+    mock_pipeline = _make_mock_pipeline()
+
+    def _attribute_side_effect(*_args, **kwargs):
+        kwargs["progress_callback"](
+            10,
+            "Attribution jobs [0/2]\n"
+            "  [1/2] running  Ch 1 - Attributing chapter via LiteLLM\n"
+            "  [2/2] running  Ch 2 - Attributing chapter via LiteLLM",
+        )
+        return mock_pipeline.attribute.return_value
+
+    mock_pipeline.attribute.side_effect = _attribute_side_effect
+
+    with (
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig"),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+    ):
+        attribute_only(
+            roster=_make_mock_roster(),
+            chapters=fake_chapters,
+            ebook_path=str(fake_epub),
+            nlp_model="openai/gpt-4.1-mini",
+            attribution_provider="openrouter",
+            progress_callback=lambda pct, msg: messages.append((pct, msg)),
+            progress_event_callback=events.append,
+        )
+
+    assert any("[1/2] running" in msg and "[2/2] running" in msg for _pct, msg in messages)
+    assert any("[2/2] running" in event.message for event in events)
+    mock_pipeline.attribute.assert_called_once()
     assert all(event.unit == "chapters" for event in events)
 
 

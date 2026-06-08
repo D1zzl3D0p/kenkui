@@ -50,6 +50,28 @@ def _run_coroutine_sync(coro):
         return executor.submit(asyncio.run, coro).result()
 
 
+def _chapter_label(chapter: Chapter) -> str:
+    return chapter.title or f"Chapter {chapter.index}"
+
+
+def _format_attribution_jobs(
+    active: dict[int, tuple[Chapter, str]],
+    *,
+    completed: int,
+    total: int,
+) -> str:
+    if not active:
+        return f"Attribution jobs [{completed}/{total}]"
+
+    width = len(str(total))
+    lines = [f"Attribution jobs [{completed}/{total}]"]
+    for position, (chapter, status) in sorted(active.items()):
+        lines.append(
+            f"  [{position:>{width}}/{total}] running  {_chapter_label(chapter)} - {status}"
+        )
+    return "\n".join(lines)
+
+
 async def _with_retry_async(
     fn: Callable[..., object],
     *args: object,
@@ -388,7 +410,7 @@ class NLPPipeline:
             async_attr = getattr(self._attribution, "attribute_chapter_async", None)
             if tool == "openrouter" and inspect.iscoroutinefunction(async_attr):
                 chapter_results = _run_coroutine_sync(
-                    self._attribute_chapters_async(chapters, roster, _adapt)
+                    self._attribute_chapters_async(chapters, roster, progress_callback)
                 )
             else:
                 chapter_results = [
@@ -445,27 +467,52 @@ class NLPPipeline:
         self,
         chapters: list[Chapter],
         roster: CharacterRoster,
-        progress_callback: Callable[[str], None],
+        progress_callback: Callable[[int, str], None] | None,
     ) -> list[tuple[Chapter, object]]:
         async_attr = getattr(self._attribution, "attribute_chapter_async", None)
         if not inspect.iscoroutinefunction(async_attr):
             raise TypeError("Attribution provider does not expose async chapter attribution")
 
         semaphore = asyncio.Semaphore(4)
+        total = max(1, len(chapters))
+        active: dict[int, tuple[Chapter, str]] = {}
+        completed = 0
 
-        async def _attribute_one(chapter: Chapter) -> tuple[Chapter, object]:
+        def _emit_snapshot() -> None:
+            if progress_callback is None:
+                return
+            pct = min(90, 10 + int(completed / total * 80))
+            progress_callback(
+                pct,
+                _format_attribution_jobs(active, completed=completed, total=total),
+            )
+
+        async def _attribute_one(position: int, chapter: Chapter) -> tuple[Chapter, object]:
+            nonlocal completed
             async with semaphore:
+                active[position] = (chapter, "queued")
+                _emit_snapshot()
+
+                def _chapter_progress(msg: str) -> None:
+                    active[position] = (chapter, msg)
+                    _emit_snapshot()
+
                 result = await _with_retry_async(
                     async_attr,
                     chapter,
                     roster,
-                    progress_callback=progress_callback,
+                    progress_callback=_chapter_progress,
                     max_attempts=self._config.retry_max_attempts,
                     backoff_base=self._config.retry_backoff_base,
                 )
+                completed += 1
+                active.pop(position, None)
+                _emit_snapshot()
                 return chapter, result
 
-        return await asyncio.gather(*(_attribute_one(chapter) for chapter in chapters))
+        return await asyncio.gather(
+            *(_attribute_one(position, chapter) for position, chapter in enumerate(chapters, start=1))
+        )
 
     # ------------------------------------------------------------------
     # run

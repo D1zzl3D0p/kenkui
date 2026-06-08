@@ -242,6 +242,7 @@ def test_pipeline_attribute_openrouter_uses_async_chapter_attribution(tmp_path):
     pipeline._config = NLPConfig(attribution_tool=AttributionTool.OPENROUTER)
     pipeline._attribution = AsyncAttribution()
     roster = _make_roster()
+    progress_messages = []
 
     book_path = tmp_path / "book.epub"
     book_path.write_bytes(b"fake")
@@ -253,10 +254,22 @@ def test_pipeline_attribute_openrouter_uses_async_chapter_attribution(tmp_path):
         patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
         patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
     ):
-        result = pipeline.attribute(book_path, chapters, roster, use_cache=True)
+        result = pipeline.attribute(
+            book_path,
+            chapters,
+            roster,
+            progress_callback=lambda pct, msg: progress_messages.append((pct, msg)),
+            use_cache=True,
+        )
 
     assert [chapter.index for chapter in result.chapters] == [0, 1, 2]
     assert pipeline._attribution.max_active > 1
+    assert any(
+        "Attribution jobs [0/3]" in message
+        and "[1/3] running" in message
+        and "[2/3] running" in message
+        for _pct, message in progress_messages
+    )
 
 
 def test_pipeline_attribute_uses_cache_when_available(tmp_path):
