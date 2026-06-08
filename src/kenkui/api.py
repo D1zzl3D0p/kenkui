@@ -377,6 +377,7 @@ def suggest_cast(
     *,
     roster: list,
     default_voice: str,
+    excluded_voices: list[str] | None = None,
     chapters: list | None = None,
     config_path: str | None = None,
 ) -> SuggestCastResult:  # noqa: F821
@@ -395,6 +396,7 @@ def suggest_cast(
     return _suggest_cast(
         roster=roster,
         default_voice=default_voice,
+        excluded_voices=excluded_voices,
         chapters=chapters,
         config_path=config_path,
     )

@@ -581,11 +581,14 @@ def suggest_cast(
     *,
     roster: list,
     default_voice: str,
+    excluded_voices: list[str] | None = None,
     chapters: list | None = None,
     config_path: str | None = None,
 ) -> SuggestCastResult:
     """Assign voices from catalog entries where ``pool_enabled`` is true."""
-    del config_path
+    # External clients may lag the breaking API and still send excluded_voices.
+    # Catalog pool_enabled state remains the only assignment filter.
+    del config_path, excluded_voices
     warnings: list[str] = []
     pool = get_catalog().pool()
     male_pool = [v.voice_id for v in pool if v.gender.lower() == "male" and v.voice_id != default_voice]

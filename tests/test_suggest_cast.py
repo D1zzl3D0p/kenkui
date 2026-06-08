@@ -56,6 +56,21 @@ def test_suggest_cast_empty_pool_falls_back_to_default_voice():
     assert result.warnings
 
 
+def test_suggest_cast_accepts_legacy_excluded_voices_keyword():
+    catalog = MagicMock()
+    catalog.pool.return_value = [_voice("alice", "Female")]
+    roster = _make_roster([("Alice", "she/her")])
+
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = suggest_cast(
+            roster=roster,
+            default_voice="narrator",
+            excluded_voices=["alice"],
+        )
+
+    assert result.speaker_voices["Alice"] == "alice"
+
+
 def test_suggest_cast_resolves_chapter_conflicts():
     catalog = MagicMock()
     catalog.pool.return_value = [_voice("v1", "Female"), _voice("v2", "Female")]
