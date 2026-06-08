@@ -20,6 +20,7 @@ from kenkui.nlp.providers.litellm import (
     LiteLLMAttributionAdapter,
     LiteLLMClient,
     _litellm_model,
+    _openrouter_extra_body,
     _remote_attribution_call_budget,
     _remote_context_tokens,
 )
@@ -117,6 +118,36 @@ def test_litellm_client_sends_strict_object_schema(monkeypatch):
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
     _assert_strict_object_schema(response_format["json_schema"]["schema"])
+
+
+def test_openrouter_requires_providers_that_support_requested_parameters(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"a": [{"q": 0, "s": "jane"}]}),
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    client.generate("prompt text", AttributionResultWire)
+
+    assert calls[0]["extra_body"]["provider"]["require_parameters"] is True
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[0]["response_format"]["json_schema"]["strict"] is True
+
+
+def test_openrouter_parameter_requirement_is_not_sent_to_other_litellm_providers(monkeypatch):
+    assert _openrouter_extra_body("openai") == {}
+    assert _openrouter_extra_body("anthropic") == {}
 
 
 def test_phi4_uses_context_hint_and_bounded_attribution_tokens(monkeypatch):

@@ -35,6 +35,16 @@ _REMOTE_CONTEXT_SAFETY_TOKENS = 128
 _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE = 8
 
 
+def _openrouter_extra_body(provider: str) -> dict[str, object]:
+    if provider.lower() != "openrouter":
+        return {}
+    return {
+        "provider": {
+            "require_parameters": True,
+        },
+    }
+
+
 def _litellm_model(provider: str, model: str) -> str:
     """Return the runtime LiteLLM model id while preserving stored model ids."""
     provider = provider.lower()
@@ -141,6 +151,9 @@ class LiteLLMClient:
             },
             "temperature": 0,
         }
+        extra_body = _openrouter_extra_body(self.provider)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
         try:
