@@ -68,6 +68,7 @@ from .series import (
     save_series as save_local_series,
 )
 from .services.auth_service import HFAuthStatus, HFLoginResult
+from .services.openrouter_service import OpenRouterModel, search_openrouter_models
 from .services.series_service import (
     ListSeriesResult,
     RosterCandidateEntry,
@@ -834,6 +835,8 @@ __all__ = [
     "get_huggingface_status",
     "HFAuthStatus",
     "HFLoginResult",
+    "OpenRouterModel",
+    "search_openrouter_models",
     "ProviderCredentials",
     "CONFIG_DIR",
     "CACHE_DIR",

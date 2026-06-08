@@ -38,6 +38,8 @@ def test_root_public_api_exports_core_entrypoints():
         "list_roster_candidates",
         "match_characters",
         "authenticate_huggingface",
+        "OpenRouterModel",
+        "search_openrouter_models",
         "run_job",
         "ProgressEvent",
         "StageRecord",
