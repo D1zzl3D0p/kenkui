@@ -129,6 +129,15 @@ def _sanitize_litellm_error(exc: Exception) -> str:
     return message or exc.__class__.__name__
 
 
+def _is_openrouter_parameter_routing_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "openrouter" in message
+        and "no endpoints found" in message
+        and "requested parameters" in message
+    )
+
+
 def _strip_code_fence(raw: str) -> str:
     text = raw.strip()
     if not text.startswith("```"):
@@ -260,83 +269,107 @@ class LiteLLMClient:
     ) -> T:
         import litellm
 
-        kwargs = self._completion_kwargs(prompt, schema, max_tokens=max_tokens)
         last_exc: Exception | None = None
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                if hasattr(litellm, "acompletion"):
-                    response = await litellm.acompletion(**kwargs)
-                else:
-                    response = await asyncio.to_thread(litellm.completion, **kwargs)
-            except Exception as exc:
-                _logger.debug(
-                    "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
-                    "completion failed raw_error=%s",
-                    self.provider,
-                    self.runtime_model,
-                    schema.__name__,
-                    max_tokens,
-                    exc,
-                )
-                _logger.warning(
-                    "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
-                    "completion failed (%s)",
-                    self.provider,
-                    self.runtime_model,
-                    schema.__name__,
-                    max_tokens,
-                    _sanitize_litellm_error(exc),
-                )
-                raise
-            raw = _message_content(response)
-            if not raw:
-                last_exc = ConnectionError(
-                    f"LiteLLM model '{self.runtime_model}' returned empty content"
-                )
-                _logger.warning(
-                    "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
-                    self.provider,
-                    self.runtime_model,
-                    schema.__name__,
-                )
-                if attempt < _MAX_RETRIES:
-                    continue
-                raise last_exc
-            try:
-                return _validate_litellm_json(raw, schema)
-            except ValidationError as exc:
-                last_exc = exc
-                _logger.debug(
-                    "LiteLLMClient.generate: provider=%s model=%s schema=%s attempt=%d "
-                    "validation failed raw_response=%r",
-                    self.provider,
-                    self.runtime_model,
-                    schema.__name__,
-                    attempt + 1,
-                    raw,
-                )
-                if attempt < _MAX_RETRIES:
+        kwargs_variants = [self._completion_kwargs(prompt, schema, max_tokens=max_tokens)]
+        if self.provider.lower() == "openrouter" and "extra_body" in kwargs_variants[0]:
+            relaxed_kwargs = dict(kwargs_variants[0])
+            relaxed_kwargs.pop("extra_body", None)
+            kwargs_variants.append(relaxed_kwargs)
+
+        for variant_idx, kwargs in enumerate(kwargs_variants):
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    if hasattr(litellm, "acompletion"):
+                        response = await litellm.acompletion(**kwargs)
+                    else:
+                        response = await asyncio.to_thread(litellm.completion, **kwargs)
+                except Exception as exc:
+                    last_exc = exc
                     _logger.debug(
-                        "LiteLLMClient.generate: provider=%s model=%s schema=%s "
-                        "validation failed response_chars=%d errors=%d; retrying",
+                        "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
+                        "completion failed raw_error=%s",
                         self.provider,
                         self.runtime_model,
                         schema.__name__,
+                        max_tokens,
+                        exc,
+                    )
+                    if (
+                        variant_idx + 1 < len(kwargs_variants)
+                        and _is_openrouter_parameter_routing_error(exc)
+                    ):
+                        _logger.warning(
+                            "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
+                            "strict OpenRouter parameter routing failed (%s); retrying without "
+                            "provider.require_parameters",
+                            self.provider,
+                            self.runtime_model,
+                            schema.__name__,
+                            max_tokens,
+                            _sanitize_litellm_error(exc),
+                        )
+                        break
+                    _logger.warning(
+                        "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
+                        "completion failed (%s)",
+                        self.provider,
+                        self.runtime_model,
+                        schema.__name__,
+                        max_tokens,
+                        _sanitize_litellm_error(exc),
+                    )
+                    raise
+                raw = _message_content(response)
+                if not raw:
+                    last_exc = ConnectionError(
+                        f"LiteLLM model '{self.runtime_model}' returned empty content"
+                    )
+                    _logger.warning(
+                        "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
+                        self.provider,
+                        self.runtime_model,
+                        schema.__name__,
+                    )
+                    if attempt < _MAX_RETRIES:
+                        continue
+                    raise last_exc
+                try:
+                    return _validate_litellm_json(raw, schema)
+                except ValidationError as exc:
+                    last_exc = exc
+                    _logger.debug(
+                        "LiteLLMClient.generate: provider=%s model=%s schema=%s attempt=%d "
+                        "validation failed raw_response=%r",
+                        self.provider,
+                        self.runtime_model,
+                        schema.__name__,
+                        attempt + 1,
+                        raw,
+                    )
+                    if attempt < _MAX_RETRIES:
+                        _logger.debug(
+                            "LiteLLMClient.generate: provider=%s model=%s schema=%s "
+                            "validation failed response_chars=%d errors=%d; retrying",
+                            self.provider,
+                            self.runtime_model,
+                            schema.__name__,
+                            len(raw),
+                            len(exc.errors()),
+                        )
+                        continue
+                    _logger.warning(
+                        "LiteLLMClient.generate: provider=%s model=%s schema=%s "
+                        "validation failed after %d attempt(s) response_chars=%d errors=%d",
+                        self.provider,
+                        self.runtime_model,
+                        schema.__name__,
+                        attempt + 1,
                         len(raw),
                         len(exc.errors()),
                     )
-                    continue
-                _logger.warning(
-                    "LiteLLMClient.generate: provider=%s model=%s schema=%s "
-                    "validation failed after %d attempt(s) response_chars=%d errors=%d",
-                    self.provider,
-                    self.runtime_model,
-                    schema.__name__,
-                    attempt + 1,
-                    len(raw),
-                    len(exc.errors()),
-                )
-                raise
+                    raise
+            else:
+                continue
 
         raise last_exc  # type: ignore[misc]
 
