@@ -43,6 +43,12 @@ class TestNLPConfigDefaults:
         cfg = NLPConfig()
         assert cfg.openrouter_attribution_concurrency == 4
 
+    def test_default_attribution_review_options(self):
+        cfg = NLPConfig()
+        assert cfg.attribution_max_quotes_per_call == 0
+        assert cfg.attribution_review_confidence is False
+        assert cfg.review_model == ""
+
 
 class TestNLPConfigFromEnv:
     def test_extraction_tool_from_env(self, monkeypatch):
@@ -79,6 +85,20 @@ class TestNLPConfigFromEnv:
         monkeypatch.setenv("KENKUI_NLP_OPENROUTER_ATTRIBUTION_CONCURRENCY", "99")
         cfg = NLPConfig()
         assert cfg.openrouter_attribution_concurrency == 32
+
+    def test_attribution_review_options_from_env(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_MAX_QUOTES_PER_CALL", "7")
+        monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_REVIEW_CONFIDENCE", "true")
+        monkeypatch.setenv("KENKUI_NLP_REVIEW_MODEL", "reviewer")
+        cfg = NLPConfig()
+        assert cfg.attribution_max_quotes_per_call == 7
+        assert cfg.attribution_review_confidence is True
+        assert cfg.review_model == "reviewer"
+
+    def test_attribution_max_quotes_per_call_is_clamped(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_MAX_QUOTES_PER_CALL", "-3")
+        cfg = NLPConfig()
+        assert cfg.attribution_max_quotes_per_call == 0
 
 
 class TestExtractionToolEnum:
@@ -138,6 +158,18 @@ class TestNLPConfigFromAppConfig:
         app_cfg = AppConfig.from_dict({"nlp_openrouter_attribution_concurrency": 12})
         nlp_cfg = NLPConfig.from_app_config(app_cfg)
         assert nlp_cfg.openrouter_attribution_concurrency == 12
+
+    def test_attribution_review_options_map_from_app_config(self):
+        from kenkui.models import AppConfig
+        app_cfg = AppConfig.from_dict({
+            "nlp_attribution_max_quotes_per_call": 5,
+            "nlp_attribution_review_confidence": True,
+            "nlp_review_model": "reviewer",
+        })
+        nlp_cfg = NLPConfig.from_app_config(app_cfg)
+        assert nlp_cfg.attribution_max_quotes_per_call == 5
+        assert nlp_cfg.attribution_review_confidence is True
+        assert nlp_cfg.review_model == "reviewer"
 
     def test_attribution_provider_override(self):
         from kenkui.models import AppConfig

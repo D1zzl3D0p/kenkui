@@ -48,6 +48,9 @@ class NLPConfig(BaseSettings):
 
     # Cloud attribution concurrency
     openrouter_attribution_concurrency: int = 4
+    attribution_max_quotes_per_call: int = 0
+    attribution_review_confidence: bool = False
+    review_model: str = ""
 
     @field_validator("openrouter_attribution_concurrency", mode="before")
     @classmethod
@@ -57,6 +60,15 @@ class NLPConfig(BaseSettings):
         except (TypeError, ValueError):
             return 4
         return min(32, max(1, value))
+
+    @field_validator("attribution_max_quotes_per_call", mode="before")
+    @classmethod
+    def _clamp_attribution_max_quotes_per_call(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, value)
 
     @classmethod
     def from_app_config(cls, config: AppConfig) -> NLPConfig:
@@ -114,6 +126,9 @@ class NLPConfig(BaseSettings):
 
         discovery_method = getattr(config, "nlp_discovery_method", "auto") or "auto"
         openrouter_concurrency = getattr(config, "nlp_openrouter_attribution_concurrency", 4)
+        attribution_max_quotes = getattr(config, "nlp_attribution_max_quotes_per_call", 0)
+        attribution_review_confidence = getattr(config, "nlp_attribution_review_confidence", False)
+        review_model = getattr(config, "nlp_review_model", "") or ""
 
         return cls(
             extraction_tool=extraction_tool,
@@ -125,4 +140,7 @@ class NLPConfig(BaseSettings):
             attribution_model=attribution_model,
             ollama_url=ollama_url,
             openrouter_attribution_concurrency=openrouter_concurrency,
+            attribution_max_quotes_per_call=attribution_max_quotes,
+            attribution_review_confidence=attribution_review_confidence,
+            review_model=review_model if isinstance(review_model, str) else "",
         )

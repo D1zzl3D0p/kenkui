@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from kenkui.models import AttributionTool, Chapter
 from kenkui.nlp.models import (
+    AttributionResultConfidenceWire,
     AttributionResultWire,
     CanonicalMergeResult,
     CharacterRecord,
@@ -100,6 +101,7 @@ def test_litellm_attribution_uses_completion_without_ollama(monkeypatch):
 def test_litellm_wire_schemas_forbid_additional_properties():
     for schema in (
         AttributionResultWire,
+        AttributionResultConfidenceWire,
         CharacterRosterWire,
         CanonicalMergeResult,
         EpithetResolutionResult,
@@ -620,5 +622,299 @@ def test_litellm_attribution_retries_missing_chunk_quotes(monkeypatch, caplog):
 
     speakers = {item.quote_id: item.speaker for item in result.attributions}
     assert speakers == {0: "jane", 1: "jane", 2: "jane", 3: "jane"}
-    assert len(calls) == 6
+    assert len(calls) == 3
     assert any("retrying 4 missing quote" in r.message for r in caplog.records)
+
+
+def test_litellm_attribution_repairs_missing_full_chapter_quote_ids(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        ids = [int(m) for m in re.findall(r"\[QUOTE:(\d+)", kwargs["messages"][0]["content"])]
+        payload = {"a": [{"q": 0, "s": "jane"}]} if len(calls) == 1 else {
+            "a": [{"q": qid, "s": "jane"} for qid in ids]
+        }
+        return {"choices": [{"message": {"content": json.dumps(payload)}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"One," Jane said. "Two," Jane said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her")
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert {item.quote_id for item in result.attributions} == {0, 1}
+    assert {item.speaker for item in result.attributions} == {"jane"}
+    assert len(calls) == 2
+
+
+def test_missing_quote_repair_prompt_includes_adjacent_paragraphs(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs["messages"][0]["content"])
+        if len(calls) == 1:
+            return {"choices": [{"message": {"content": json.dumps({"a": []})}}]}
+        ids = [int(m) for m in re.findall(r"\[QUOTE:(\d+)", calls[-1])]
+        return {
+            "choices": [{
+                "message": {"content": json.dumps({"a": [{"q": qid, "s": "jane"} for qid in ids]})}
+            }]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=[
+        "Before context with Jane.",
+        '"Middle," Jane said.',
+        "After context with Jane.",
+    ])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her")
+    ])
+
+    adapter.attribute_chapter(chapter, roster)
+
+    assert "Before context" in calls[1]
+    assert "After context" in calls[1]
+    assert "[QUOTE:0" in calls[1]
+
+
+def test_missing_quote_repair_batches_multiple_quotes(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        content = kwargs["messages"][0]["content"]
+        calls.append(content)
+        if len(calls) == 1:
+            return {"choices": [{"message": {"content": json.dumps({"a": []})}}]}
+        ids = [int(m) for m in re.findall(r"\[QUOTE:(\d+)", content)]
+        return {
+            "choices": [{
+                "message": {"content": json.dumps({"a": [{"q": qid, "s": "jane"} for qid in ids]})}
+            }]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=[
+        '"One," Jane said. "Two," Jane said. "Three," Jane said.',
+    ])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her")
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert len(calls) == 2
+    assert len(re.findall(r"\[QUOTE:\d+", calls[1])) == 3
+    assert {item.speaker for item in result.attributions} == {"jane"}
+
+
+def test_hint_conflict_is_corrected_without_resolver(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "bob"}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," Jane said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+        CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"], gender="he/him"),
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert result.attributions[0].speaker == "jane"
+    assert len(calls) == 1
+
+
+def test_guess_conflict_is_flagged_but_overridable_by_resolver(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        speaker = "jane" if kwargs["model"] == "openrouter/reviewer" else "bob"
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": speaker}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+        review_model="reviewer",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," Jane smiled.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+        CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"], gender="he/him"),
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert result.attributions[0].speaker == "jane"
+    assert [call["model"] for call in calls] == ["openrouter/openai/gpt-4.1-mini", "openrouter/reviewer"]
+
+
+def test_pronoun_conflict_rejects_incompatible_roster_speaker(monkeypatch):
+    def fake_completion(**kwargs):
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "jane"}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," he said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her")
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert result.attributions[0].speaker == "Unknown"
+
+
+def test_optional_attribution_confidence_schema_preserves_confidence(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "jane", "c": 5}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+        attribution_review_confidence=True,
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," Jane said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her")
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert result.attributions[0].confidence == 5
+    schema = calls[0]["response_format"]["json_schema"]["schema"]
+    item_ref = schema["properties"]["a"]["items"]["$ref"].split("/")[-1]
+    assert "c" in schema["$defs"][item_ref]["properties"]
+
+
+def test_quote_count_cap_splits_calls_when_token_budget_fits(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        ids = [int(m) for m in re.findall(r"\[QUOTE:(\d+)", kwargs["messages"][0]["content"])]
+        return {
+            "choices": [{
+                "message": {"content": json.dumps({"a": [{"q": qid, "s": "jane"} for qid in ids]})}
+            }]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+        attribution_max_quotes_per_call=1,
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=[
+        '"One," Jane said. "Two," Jane said. "Three," Jane said.',
+    ])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her")
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    assert len(calls) == 3
+    assert all(len(re.findall(r"\[QUOTE:\d+", call["messages"][0]["content"])) == 1 for call in calls)
+    assert {item.quote_id for item in result.attributions} == {0, 1, 2}
+
+
+def test_review_model_resolves_only_suspicious_quotes(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        if kwargs["model"] == "openrouter/reviewer":
+            return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "jane"}]})}}]}
+        return {
+            "choices": [{
+                "message": {"content": json.dumps({"a": [{"q": 0, "s": "bob"}, {"q": 1, "s": "bob"}]})}
+            }]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+        review_model="reviewer",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=[
+        '"Hello," Jane said.',
+        '"Right," Bob said.',
+    ])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+        CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"], gender="he/him"),
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    speakers = {item.quote_id: item.speaker for item in result.attributions}
+    assert speakers == {0: "jane", 1: "bob"}
+    assert len(calls) == 2
+    assert "[QUOTE:0" in calls[1]["messages"][0]["content"]
+    assert "[QUOTE:1" not in calls[1]["messages"][0]["content"]
+
+
+def test_no_resolver_call_when_review_model_is_empty(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "bob"}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," Jane said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+        CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"], gender="he/him"),
+    ])
+
+    adapter.attribute_chapter(chapter, roster)
+
+    assert len(calls) == 1

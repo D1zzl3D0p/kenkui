@@ -21,6 +21,7 @@ from kenkui.nlp.llm import _is_eof_truncation, _try_recover_truncated_json
 from kenkui.nlp.models import (
     AttributionItem,
     AttributionResult,
+    AttributionResultConfidenceWire,
     AttributionResultWire,
     CharacterRoster,
     Quote,
@@ -40,7 +41,10 @@ _REMOTE_CONTEXT_SAFETY_TOKENS = 128
 _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE = 8
 _REASONING_ATTRIBUTION_MIN_OUTPUT_TOKENS = 2048
 _MAX_RETRIES = 2
+_MISSING_RETRY_BATCH_SIZE = 4
 _PROVIDER_LIST_RE = re.compile(r"(?:^|\n)\s*Provider List:\s*https://docs\.litellm\.ai/docs/providers\s*", re.I)
+_QUOTE_TAG_RE = re.compile(r"\[QUOTE:(\d+)([^\]]*)\]")
+_QUOTE_ATTR_RE = re.compile(r'(hint|guess|pronoun)="([^"]+)"')
 _OPENROUTER_REASONING_EFFORT_ENV = "KENKUI_NLP_OPENROUTER_REASONING_EFFORT"
 _OPENROUTER_REASONING_EFFORT_DEFAULT = "minimal"
 _OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
@@ -586,6 +590,155 @@ class LiteLLMExtractionAdapter:
         return roster
 
 
+def _attribution_schema(review_confidence: bool) -> type[AttributionResultWire | AttributionResultConfidenceWire]:
+    return AttributionResultConfidenceWire if review_confidence else AttributionResultWire
+
+
+def _quote_metadata(annotated_text: str) -> dict[int, dict[str, str]]:
+    metadata: dict[int, dict[str, str]] = {}
+    for match in _QUOTE_TAG_RE.finditer(annotated_text):
+        attrs = {key: value for key, value in _QUOTE_ATTR_RE.findall(match.group(2))}
+        metadata[int(match.group(1))] = attrs
+    return metadata
+
+
+def _chapter_char_offset(paragraphs: list[str], para_index: int) -> int:
+    return sum(len(p) + 2 for p in paragraphs[:para_index])
+
+
+def _remap_quote_to_window(q: Quote, paragraphs: list[str], window_start: int) -> Quote:
+    return Quote(
+        id=q.id,
+        text=q.text,
+        para_index=q.para_index - window_start,
+        char_offset=q.char_offset - _chapter_char_offset(paragraphs, window_start),
+        kind=q.kind,
+    )
+
+
+def _quote_window(paragraphs: list[str], quotes: list[Quote]) -> tuple[list[str], list[Quote]]:
+    if not quotes:
+        return [], []
+    start = max(0, min(q.para_index for q in quotes) - 1)
+    end = min(len(paragraphs), max(q.para_index for q in quotes) + 2)
+    return paragraphs[start:end], [_remap_quote_to_window(q, paragraphs, start) for q in quotes]
+
+
+def _quote_capped_windows(
+    paragraphs: list[str],
+    quotes: list[Quote],
+    max_quotes: int,
+) -> list[tuple[list[str], list[Quote]]]:
+    if max_quotes <= 0 or len(quotes) <= max_quotes:
+        return [(paragraphs, quotes)]
+    windows = []
+    for index in range(0, len(quotes), max_quotes):
+        windows.append(_quote_window(paragraphs, quotes[index:index + max_quotes]))
+    return windows
+
+
+def _roster_indexes(roster: CharacterRoster) -> tuple[dict[str, str], dict[str, set[str]], dict[str, str]]:
+    slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
+    slug_to_aliases = {
+        c.slug: {c.canonical_name, *c.aliases, c.slug.replace("_", " ")}
+        for c in roster.characters
+    }
+    alias_to_slug = {
+        alias.lower(): slug
+        for slug, aliases in slug_to_aliases.items()
+        for alias in aliases
+        if alias
+    }
+    return slug_to_pronoun, slug_to_aliases, alias_to_slug
+
+
+def _context_mentions_speaker(
+    paragraphs: list[str],
+    quote: Quote,
+    speaker: str,
+    slug_to_aliases: dict[str, set[str]],
+) -> bool:
+    aliases = slug_to_aliases.get(speaker, set())
+    if not aliases:
+        return False
+    start = max(0, quote.para_index - 1)
+    end = min(len(paragraphs), quote.para_index + 2)
+    context = "\n".join(paragraphs[start:end]).lower()
+    return any(alias.lower() in context for alias in aliases if alias)
+
+
+def _suspicious_attributions(
+    paragraphs: list[str],
+    quotes: list[Quote],
+    attributed: dict[int, AttributionItem],
+    metadata: dict[int, dict[str, str]],
+    roster: CharacterRoster,
+) -> list[Quote]:
+    slug_to_pronoun, slug_to_aliases, _alias_to_slug = _roster_indexes(roster)
+    suspicious: list[Quote] = []
+    recent_speakers: list[str] = []
+    for q in quotes:
+        item = attributed.get(q.id)
+        if item is None:
+            suspicious.append(q)
+            continue
+        attrs = metadata.get(q.id, {})
+        speaker = item.speaker
+        reason = False
+        if speaker == "Unknown":
+            reason = True
+        elif speaker not in {"NARRATOR", "Unknown"}:
+            if attrs.get("hint") and attrs["hint"] != speaker:
+                reason = True
+            if attrs.get("guess") and attrs["guess"] != speaker:
+                reason = True
+            pronoun = attrs.get("pronoun")
+            speaker_pronoun = slug_to_pronoun.get(speaker, "")
+            if pronoun and speaker_pronoun and pronoun != speaker_pronoun:
+                reason = True
+            if not _context_mentions_speaker(paragraphs, q, speaker, slug_to_aliases):
+                previous = recent_speakers[-2:]
+                if speaker not in previous:
+                    reason = True
+        if reason:
+            suspicious.append(q)
+        if speaker not in {"NARRATOR", "Unknown"}:
+            recent_speakers.append(speaker)
+    return suspicious
+
+
+def _hint_correct_attributions(
+    attributed: dict[int, AttributionItem],
+    metadata: dict[int, dict[str, str]],
+    known_slugs: set[str],
+) -> None:
+    for quote_id, attrs in metadata.items():
+        hint = attrs.get("hint")
+        item = attributed.get(quote_id)
+        if item and hint in known_slugs and item.speaker not in {hint, "NARRATOR"}:
+            item.speaker = hint
+            item.confidence = max(item.confidence, 4)
+
+
+def _apply_local_attribution_heuristics(
+    attributed: dict[int, AttributionItem],
+    metadata: dict[int, dict[str, str]],
+    roster: CharacterRoster,
+) -> None:
+    slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
+    known_slugs = set(slug_to_pronoun)
+    _hint_correct_attributions(attributed, metadata, known_slugs)
+    for quote_id, attrs in metadata.items():
+        item = attributed.get(quote_id)
+        if not item or item.speaker in {"NARRATOR", "Unknown"}:
+            continue
+        pronoun = attrs.get("pronoun")
+        speaker_pronoun = slug_to_pronoun.get(item.speaker, "")
+        if pronoun and speaker_pronoun and pronoun != speaker_pronoun:
+            item.speaker = "Unknown"
+            item.confidence = 1
+
+
 class LiteLLMAttributionAdapter:
     """Attribute quote speakers with a LiteLLM-compatible model."""
 
@@ -641,17 +794,36 @@ class LiteLLMAttributionAdapter:
         slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
         static_block = _build_attribution_static_block(roster)
         llm = LiteLLMClient(self._provider, self._config.attribution_model)
+        schema = _attribution_schema(self._config.attribution_review_confidence)
+        max_quotes_per_call = self._config.attribution_max_quotes_per_call
+        known_slugs = {c.slug for c in roster.characters}
+        known_names = {c.canonical_name: c.slug for c in roster.characters}
+        known_names.update({alias: c.slug for c in roster.characters for alias in c.aliases})
+        full_metadata = _quote_metadata(
+            annotate_chapter(clean_paragraphs, dialogue_quotes, alias_to_slug, slug_to_pronoun)
+        )
 
         def _prompt_for(paras: list[str], dq: list[Quote]) -> str:
             annotated_text = annotate_chapter(paras, dq, alias_to_slug, slug_to_pronoun)
             return f"{static_block}\n\n{_build_attribution_dynamic_block(annotated_text)}"
 
-        async def _attribute_single(paras: list[str], dq: list[Quote]) -> dict[int, AttributionItem]:
-            prompt = _prompt_for(paras, dq)
+        async def _attribute_single(
+            paras: list[str],
+            dq: list[Quote],
+            *,
+            client: LiteLLMClient = llm,
+            prompt: str | None = None,
+        ) -> dict[int, AttributionItem]:
+            if prompt is None:
+                prompt = _prompt_for(paras, dq)
+            else:
+                prompt = f"{static_block}\n\n{prompt}"
+            if not dq:
+                return {}
             prompt_tokens, context_tokens, max_tokens = _remote_attribution_call_budget(
                 prompt,
                 len(dq),
-                llm.runtime_model,
+                client.runtime_model,
             )
             _logger.debug(
                 "LiteLLMAttributionAdapter: chapter %r call budget prompt~%d context=%d max_tokens=%d quotes=%d",
@@ -661,8 +833,73 @@ class LiteLLMAttributionAdapter:
                 max_tokens,
                 len(dq),
             )
-            result = await llm.generate_async(prompt, AttributionResultWire, max_tokens=max_tokens)
+            result = await client.generate_async(prompt, schema, max_tokens=max_tokens)
             return {item.quote_id: item for item in attribution_wire_to_full(result).attributions}
+
+        def _normalize_attributed(attributed: dict[int, AttributionItem]) -> None:
+            for item in attributed.values():
+                if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
+                    item.speaker = known_names.get(item.speaker, slugify(item.speaker))
+                if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
+                    _logger.warning(
+                        "LiteLLMAttributionAdapter: speaker %r not in roster; using Unknown",
+                        item.speaker,
+                    )
+                    item.speaker = "Unknown"
+
+        async def _resolve_suspicious(
+            paras: list[str],
+            dq: list[Quote],
+            attributed: dict[int, AttributionItem],
+        ) -> None:
+            review_model = (self._config.review_model or "").strip()
+            if not review_model:
+                _apply_local_attribution_heuristics(attributed, full_metadata, roster)
+                return
+            suspicious = _suspicious_attributions(paras, dq, attributed, full_metadata, roster)
+            if not suspicious:
+                return
+            resolver = LiteLLMClient(self._provider, review_model)
+            for batch in _quote_capped_windows(paras, suspicious, max_quotes_per_call or _MISSING_RETRY_BATCH_SIZE):
+                batch_paras, batch_quotes = batch
+                annotated = annotate_chapter(batch_paras, batch_quotes, alias_to_slug, slug_to_pronoun)
+                base_lines = [
+                    f"- q={q.id} base={attributed.get(q.id).speaker if attributed.get(q.id) else 'Missing'} "
+                    f"metadata={full_metadata.get(q.id, {})}"
+                    for q in batch_quotes
+                ]
+                prompt = (
+                    "Resolve suspicious speaker attributions.\n"
+                    "Use the local context, base label, hint/guess/pronoun metadata, and roster.\n"
+                    "Return only known roster slugs, NARRATOR, or Unknown. Prefer hint= unless local evidence "
+                    "clearly supports another speaker. Use pronoun= only to reject incompatible speakers.\n\n"
+                    f"BASE LABELS:\n{chr(10).join(base_lines)}\n\n"
+                    f"LOCAL CONTEXT:\n{annotated}"
+                )
+                try:
+                    resolved = await _attribute_single(
+                        batch_paras,
+                        batch_quotes,
+                        client=resolver,
+                        prompt=prompt,
+                    )
+                except Exception as resolve_exc:
+                    _logger.warning(
+                        "LiteLLMAttributionAdapter: chapter %r resolver failed (%s); keeping base labels",
+                        chapter_label,
+                        _sanitize_litellm_error(resolve_exc),
+                    )
+                    continue
+                _normalize_attributed(resolved)
+                for qid, item in resolved.items():
+                    if item.speaker in known_slugs or item.speaker in {"NARRATOR", "Unknown"}:
+                        attributed[qid] = item
+                    else:
+                        _logger.warning(
+                            "LiteLLMAttributionAdapter: resolver returned unknown speaker %r for quote %d; keeping base",
+                            item.speaker,
+                            qid,
+                        )
 
         async def _retry_missing_quotes(
             paras: list[str],
@@ -682,34 +919,26 @@ class LiteLLMAttributionAdapter:
                 chunk_total,
                 len(missing),
             )
-            for q in missing:
-                local_para = q.para_index
-                if local_para < 0 or local_para >= len(paras):
-                    continue
-                retry_quote = Quote(
-                    id=q.id,
-                    text=q.text,
-                    para_index=0,
-                    char_offset=q.char_offset - sum(len(p) + 2 for p in paras[:local_para]),
-                    kind=q.kind,
-                )
+            for batch in _quote_capped_windows(paras, missing, max_quotes_per_call or _MISSING_RETRY_BATCH_SIZE):
+                retry_paras, retry_quotes = batch
                 try:
-                    attributed.update(await _attribute_single([paras[local_para]], [retry_quote]))
+                    attributed.update(await _attribute_single(retry_paras, retry_quotes))
                 except Exception as retry_exc:
+                    retry_ids = [q.id for q in retry_quotes]
                     _logger.debug(
-                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote %d retry raw error: %s",
+                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote ids %s retry raw error: %s",
                         chapter_label,
                         chunk_idx,
                         chunk_total,
-                        q.id,
+                        retry_ids,
                         retry_exc,
                     )
                     _logger.warning(
-                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote %d retry failed (%s)",
+                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote ids %s retry failed (%s)",
                         chapter_label,
                         chunk_idx,
                         chunk_total,
-                        q.id,
+                        retry_ids,
                         _sanitize_litellm_error(retry_exc),
                     )
 
@@ -743,7 +972,7 @@ class LiteLLMAttributionAdapter:
                 chunk_paras = clean_paragraphs[chunk_start:chunk_end]
                 chunk_char_start = sum(len(p) + 2 for p in clean_paragraphs[:chunk_start])
                 chunk_quote_ids = set(chunk.quote_ids)
-                chunk_quotes = [
+                chunk_quotes_all = [
                     Quote(
                         id=q.id,
                         text=q.text,
@@ -754,56 +983,63 @@ class LiteLLMAttributionAdapter:
                     for q in dialogue_quotes
                     if q.id in chunk_quote_ids
                 ]
-                if not chunk_quotes:
+                if not chunk_quotes_all:
                     continue
-                try:
-                    attributed = await _attribute_single(chunk_paras, chunk_quotes)
-                    returned = len(attributed)
-                    expected = len(chunk_quotes)
-                    if returned < expected:
-                        _logger.warning(
-                            "LiteLLMAttributionAdapter: chapter %r chunk %d/%d — "
-                            "LLM returned %d/%d quotes (missing %d)",
+                for capped_idx, (call_paras, chunk_quotes) in enumerate(
+                    _quote_capped_windows(chunk_paras, chunk_quotes_all, max_quotes_per_call),
+                    start=1,
+                ):
+                    try:
+                        attributed = await _attribute_single(call_paras, chunk_quotes)
+                        returned = len(attributed)
+                        expected = len(chunk_quotes)
+                        if returned < expected:
+                            _logger.warning(
+                                "LiteLLMAttributionAdapter: chapter %r chunk %d.%d/%d — "
+                                "LLM returned %d/%d quotes (missing %d)",
+                                chapter_label,
+                                chunk_idx,
+                                capped_idx,
+                                len(chunks),
+                                returned,
+                                expected,
+                                expected - returned,
+                            )
+                            await _retry_missing_quotes(
+                                call_paras,
+                                chunk_quotes,
+                                attributed,
+                                chunk_idx=chunk_idx,
+                                chunk_total=len(chunks),
+                            )
+                        _normalize_attributed(attributed)
+                        await _resolve_suspicious(call_paras, chunk_quotes, attributed)
+                        all_attributions.update(attributed)
+                    except Exception as chunk_exc:
+                        _logger.debug(
+                            "LiteLLMAttributionAdapter: chapter %r chunk %d/%d raw error: %s",
                             chapter_label,
                             chunk_idx,
                             len(chunks),
-                            returned,
-                            expected,
-                            expected - returned,
+                            chunk_exc,
                         )
-                        await _retry_missing_quotes(
-                            chunk_paras,
-                            chunk_quotes,
-                            attributed,
-                            chunk_idx=chunk_idx,
-                            chunk_total=len(chunks),
+                        _logger.warning(
+                            "LiteLLMAttributionAdapter: chapter %r chunk %d/%d failed (%s); using Unknown",
+                            chapter_label,
+                            chunk_idx,
+                            len(chunks),
+                            _sanitize_litellm_error(chunk_exc),
                         )
-                    all_attributions.update(attributed)
-                except Exception as chunk_exc:
-                    _logger.debug(
-                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d raw error: %s",
-                        chapter_label,
-                        chunk_idx,
-                        len(chunks),
-                        chunk_exc,
-                    )
-                    _logger.warning(
-                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d failed (%s); using Unknown",
-                        chapter_label,
-                        chunk_idx,
-                        len(chunks),
-                        _sanitize_litellm_error(chunk_exc),
-                    )
-                    for q in chunk_quotes:
-                        all_attributions.setdefault(
-                            q.id,
-                            AttributionItem(
-                                quote_id=q.id,
-                                speaker="Unknown",
-                                emotion="neutral",
-                                confidence=1,
-                            ),
-                        )
+                        for q in chunk_quotes:
+                            all_attributions.setdefault(
+                                q.id,
+                                AttributionItem(
+                                    quote_id=q.id,
+                                    speaker="Unknown",
+                                    emotion="neutral",
+                                    confidence=1,
+                                ),
+                            )
 
         full_prompt = _prompt_for(clean_paragraphs, dialogue_quotes)
         full_prompt_tokens, full_context_tokens, full_max_tokens = _remote_attribution_call_budget(
@@ -811,7 +1047,11 @@ class LiteLLMAttributionAdapter:
             len(dialogue_quotes),
             llm.runtime_model,
         )
-        if full_prompt_tokens + full_max_tokens + _REMOTE_CONTEXT_SAFETY_TOKENS > full_context_tokens:
+        if max_quotes_per_call and len(dialogue_quotes) > max_quotes_per_call:
+            await _attribute_chunks(
+                f"exceeds quote-count cap ({len(dialogue_quotes)} > {max_quotes_per_call})"
+            )
+        elif full_prompt_tokens + full_max_tokens + _REMOTE_CONTEXT_SAFETY_TOKENS > full_context_tokens:
             await _attribute_chunks(
                 f"exceeds token estimate (prompt~{full_prompt_tokens} tok + "
                 f"max_tokens={full_max_tokens} vs context {full_context_tokens})"
@@ -829,6 +1069,15 @@ class LiteLLMAttributionAdapter:
                         expected,
                         expected - returned,
                     )
+                    await _retry_missing_quotes(
+                        clean_paragraphs,
+                        dialogue_quotes,
+                        attributed,
+                        chunk_idx=1,
+                        chunk_total=1,
+                    )
+                _normalize_attributed(attributed)
+                await _resolve_suspicious(clean_paragraphs, dialogue_quotes, attributed)
                 all_attributions.update(attributed)
             except Exception as exc:
                 _logger.debug(
@@ -844,18 +1093,7 @@ class LiteLLMAttributionAdapter:
                 AttributionItem(quote_id=q.id, speaker="Unknown", emotion="neutral", confidence=1),
             )
 
-        known_slugs = {c.slug for c in roster.characters}
-        known_names = {c.canonical_name: c.slug for c in roster.characters}
-        known_names.update({alias: c.slug for c in roster.characters for alias in c.aliases})
-        for item in all_attributions.values():
-            if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
-                item.speaker = known_names.get(item.speaker, slugify(item.speaker))
-            if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
-                _logger.warning(
-                    "LiteLLMAttributionAdapter: speaker %r not in roster; using Unknown",
-                    item.speaker,
-                )
-                item.speaker = "Unknown"
+        _normalize_attributed(all_attributions)
 
         return AttributionResult(attributions=list(all_attributions.values()))
 

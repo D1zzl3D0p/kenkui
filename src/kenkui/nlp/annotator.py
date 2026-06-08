@@ -301,7 +301,9 @@ Rules:
 - hint= is strong guidance (~90% accurate) — override only if context clearly contradicts it
 - guess= is a weaker signal (~50% accurate) — use as a tiebreaker, not a determination
 - pronoun= filters the roster to characters with matching pronouns
-- "NARRATOR" for scare quotes, titles, labels, non-spoken text
+- For nested or reported speech, use the original quoted speaker when clearly recoverable
+- If the original speaker is not recoverable, use the current storyteller
+- Use "NARRATOR" for labels, titles, scare quotes, and non-spoken quoted text
 - "Unknown" only when you have genuinely no basis for any guess
 - Read [NARRATOR] passages for context — they are pre-labeled, do not return them"""
 

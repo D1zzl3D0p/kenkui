@@ -78,6 +78,8 @@ class AppConfig(BaseSettings):
     nlp_roster_model: str = ""
     nlp_confidence_threshold: int = 0
     nlp_review_model: str = ""
+    nlp_attribution_max_quotes_per_call: int = 0
+    nlp_attribution_review_confidence: bool = False
     nlp_omit_position_echo: bool = True
     nlp_omit_emotion: bool = True
     nlp_compact_roster: bool = True
@@ -114,6 +116,15 @@ class AppConfig(BaseSettings):
         except (TypeError, ValueError):
             return 4
         return min(32, max(1, value))
+
+    @field_validator("nlp_attribution_max_quotes_per_call", mode="before")
+    @classmethod
+    def _clamp_nlp_attribution_max_quotes_per_call(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, value)
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)

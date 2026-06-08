@@ -311,6 +311,16 @@ class AttributionResultWire(StrictLLMWireModel):
     a: list[AttributionItemWire]
 
 
+class AttributionItemConfidenceWire(AttributionItemWire):
+    """Attribution wire used only when review confidence is explicitly enabled."""
+    c: int = Field(description="Confidence 1-5")
+
+
+class AttributionResultConfidenceWire(StrictLLMWireModel):
+    """Wire container for attribution results with explicit confidence."""
+    a: list[AttributionItemConfidenceWire]
+
+
 # ---------------------------------------------------------------------------
 # Wire → storage type conversions
 # ---------------------------------------------------------------------------
@@ -360,9 +370,9 @@ def roster_wire_to_full(wire: CharacterRosterWire | CharacterRosterFullWire) -> 
     return CharacterRoster(characters=[_char_wire_to_record(c) for c in wire.characters])
 
 
-def attribution_wire_to_full(wire: AttributionResultWire) -> AttributionResult:
+def attribution_wire_to_full(wire: AttributionResultWire | AttributionResultConfidenceWire) -> AttributionResult:
     """Convert a slim wire attribution to a full AttributionResult."""
     return AttributionResult(attributions=[
-        AttributionItem(quote_id=w.q, speaker=w.s)
+        AttributionItem(quote_id=w.q, speaker=w.s, confidence=getattr(w, "c", 3))
         for w in wire.a
     ])
