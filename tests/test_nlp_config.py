@@ -39,6 +39,10 @@ class TestNLPConfigDefaults:
         assert cfg.retry_max_attempts == 3
         assert cfg.retry_backoff_base == 2.0
 
+    def test_default_openrouter_attribution_concurrency(self):
+        cfg = NLPConfig()
+        assert cfg.openrouter_attribution_concurrency == 4
+
 
 class TestNLPConfigFromEnv:
     def test_extraction_tool_from_env(self, monkeypatch):
@@ -65,6 +69,16 @@ class TestNLPConfigFromEnv:
         monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_MODE", "modal")
         cfg = NLPConfig()
         assert cfg.attribution_mode == AttributionExecutionMode.MODAL
+
+    def test_openrouter_attribution_concurrency_from_env(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_OPENROUTER_ATTRIBUTION_CONCURRENCY", "9")
+        cfg = NLPConfig()
+        assert cfg.openrouter_attribution_concurrency == 9
+
+    def test_openrouter_attribution_concurrency_is_clamped(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_OPENROUTER_ATTRIBUTION_CONCURRENCY", "99")
+        cfg = NLPConfig()
+        assert cfg.openrouter_attribution_concurrency == 32
 
 
 class TestExtractionToolEnum:
@@ -118,6 +132,12 @@ class TestNLPConfigFromAppConfig:
         assert nlp_cfg.attribution_tool == AttributionTool.OPENROUTER
         assert nlp_cfg.extraction_model == "openai/gpt-4.1-mini"
         assert nlp_cfg.attribution_model == "openai/gpt-4.1-mini"
+
+    def test_openrouter_concurrency_maps_from_app_config(self):
+        from kenkui.models import AppConfig
+        app_cfg = AppConfig.from_dict({"nlp_openrouter_attribution_concurrency": 12})
+        nlp_cfg = NLPConfig.from_app_config(app_cfg)
+        assert nlp_cfg.openrouter_attribution_concurrency == 12
 
     def test_attribution_provider_override(self):
         from kenkui.models import AppConfig

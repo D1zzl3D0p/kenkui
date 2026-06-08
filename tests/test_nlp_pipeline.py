@@ -239,7 +239,10 @@ def test_pipeline_attribute_openrouter_uses_async_chapter_attribution(tmp_path):
             raise AssertionError("sync attribution should not be used for OpenRouter")
 
     pipeline = _make_pipeline()
-    pipeline._config = NLPConfig(attribution_tool=AttributionTool.OPENROUTER)
+    pipeline._config = NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        openrouter_attribution_concurrency=2,
+    )
     pipeline._attribution = AsyncAttribution()
     roster = _make_roster()
     progress_messages = []
@@ -263,7 +266,7 @@ def test_pipeline_attribute_openrouter_uses_async_chapter_attribution(tmp_path):
         )
 
     assert [chapter.index for chapter in result.chapters] == [0, 1, 2]
-    assert pipeline._attribution.max_active > 1
+    assert pipeline._attribution.max_active == 2
     assert any(
         "Attribution jobs [0/3]" in message
         and "[1/3] running" in message

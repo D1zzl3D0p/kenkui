@@ -6,8 +6,9 @@ KENKUI_NLP_EXTRACTION_TOOL=booknlp  → NLPConfig().extraction_tool == Extractio
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import AttributionExecutionMode, AttributionTool, ExtractionTool, NlpExecutionMode
@@ -44,6 +45,18 @@ class NLPConfig(BaseSettings):
     # Retry policy
     retry_max_attempts: int = 3
     retry_backoff_base: float = 2.0
+
+    # Cloud attribution concurrency
+    openrouter_attribution_concurrency: int = 4
+
+    @field_validator("openrouter_attribution_concurrency", mode="before")
+    @classmethod
+    def _clamp_openrouter_attribution_concurrency(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return min(32, max(1, value))
 
     @classmethod
     def from_app_config(cls, config: AppConfig) -> NLPConfig:
@@ -100,6 +113,7 @@ class NLPConfig(BaseSettings):
         attribution_model = raw_attribution_model if isinstance(raw_attribution_model, str) else "llama3.2"
 
         discovery_method = getattr(config, "nlp_discovery_method", "auto") or "auto"
+        openrouter_concurrency = getattr(config, "nlp_openrouter_attribution_concurrency", 4)
 
         return cls(
             extraction_tool=extraction_tool,
@@ -110,4 +124,5 @@ class NLPConfig(BaseSettings):
             attribution_mode=attribution_mode,
             attribution_model=attribution_model,
             ollama_url=ollama_url,
+            openrouter_attribution_concurrency=openrouter_concurrency,
         )

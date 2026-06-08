@@ -350,6 +350,7 @@ def full_analysis(
     discovery_method: str | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
+    openrouter_attribution_concurrency: int | None = None,
     use_cache: bool = True,
 ) -> NLPResult:
     """Run the full NLP speaker-attribution pipeline.
@@ -390,6 +391,10 @@ def full_analysis(
         cfg = cfg.model_copy(update={"nlp_attribution_provider": attribution_provider})
     if attribution_model is not None:
         cfg = cfg.model_copy(update={"nlp_attribution_model": attribution_model})
+    if openrouter_attribution_concurrency is not None:
+        cfg = cfg.model_copy(update={
+            "nlp_openrouter_attribution_concurrency": openrouter_attribution_concurrency
+        })
 
     _attr_provider_name = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
     extraction_provider_name = cfg.nlp_provider or ""
@@ -715,6 +720,7 @@ def attribute_only(
     progress_event_callback: Callable[[ProgressEvent], None] | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
+    openrouter_attribution_concurrency: int | None = None,
 ) -> NLPResult:
     """Run Stage 3-4 speaker attribution against a pre-built roster.
 
@@ -744,6 +750,10 @@ def attribute_only(
         cfg = cfg.model_copy(update={"nlp_attribution_provider": attribution_provider})
     if attribution_model is not None:
         cfg = cfg.model_copy(update={"nlp_attribution_model": attribution_model})
+    if openrouter_attribution_concurrency is not None:
+        cfg = cfg.model_copy(update={
+            "nlp_openrouter_attribution_concurrency": openrouter_attribution_concurrency
+        })
 
     _effective_provider = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
     _effective_model = getattr(cfg, "nlp_attribution_model", None) or cfg.nlp_model or ""

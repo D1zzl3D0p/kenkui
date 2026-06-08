@@ -216,6 +216,7 @@ def full_analysis(
     discovery_method: str | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
+    openrouter_attribution_concurrency: int | None = None,
     use_cache: bool = True,
 ) -> NLPResult:  # noqa: F821
     """Run the full NLP speaker-attribution pipeline (Stages 1-4).
@@ -237,6 +238,7 @@ def full_analysis(
         discovery_method:              Override discovery method.
         attribution_provider:          Override attribution provider.
         attribution_model:             Override attribution model.
+        openrouter_attribution_concurrency: Override concurrent OpenRouter attribution requests.
         use_cache:                     Return cached result if available (default True).
 
     Returns:
@@ -257,6 +259,7 @@ def full_analysis(
         discovery_method=discovery_method,
         attribution_provider=attribution_provider,
         attribution_model=attribution_model,
+        openrouter_attribution_concurrency=openrouter_attribution_concurrency,
         use_cache=use_cache,
     )
 
@@ -317,6 +320,7 @@ def attribute_only(
     progress_event_callback: Callable[[ProgressEvent], None] | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
+    openrouter_attribution_concurrency: int | None = None,
 ) -> NLPResult:
     """Run speaker attribution against an already discovered roster."""
     from .services.nlp_service import attribute_only as _attribute_only
@@ -331,6 +335,7 @@ def attribute_only(
         progress_event_callback=progress_event_callback,
         attribution_provider=attribution_provider,
         attribution_model=attribution_model,
+        openrouter_attribution_concurrency=openrouter_attribution_concurrency,
     )
 
 

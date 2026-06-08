@@ -473,7 +473,8 @@ class NLPPipeline:
         if not inspect.iscoroutinefunction(async_attr):
             raise TypeError("Attribution provider does not expose async chapter attribution")
 
-        semaphore = asyncio.Semaphore(4)
+        concurrency = max(1, getattr(self._config, "openrouter_attribution_concurrency", 4))
+        semaphore = asyncio.Semaphore(concurrency)
         total = max(1, len(chapters))
         active: dict[int, tuple[Chapter, str]] = {}
         completed = 0

@@ -96,6 +96,7 @@ class AppConfig(BaseSettings):
     nlp_discovery_method: str = "auto"   # "booknlp" | "llm" | "auto"
     nlp_attribution_provider: str = ""   # falls back to nlp_provider when empty
     nlp_attribution_model: str = ""      # falls back to nlp_model when empty
+    nlp_openrouter_attribution_concurrency: int = 4
     cors_origins: list[str] = Field(
         default_factory=lambda: ["tauri://localhost", "http://tauri.localhost"]
     )
@@ -104,6 +105,15 @@ class AppConfig(BaseSettings):
     @classmethod
     def _normalize_m4b_bitrate(cls, v: Any) -> str:
         return _normalize_bitrate(str(v) if v is not None else None, default="96k")
+
+    @field_validator("nlp_openrouter_attribution_concurrency", mode="before")
+    @classmethod
+    def _clamp_openrouter_attribution_concurrency(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return min(32, max(1, value))
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)

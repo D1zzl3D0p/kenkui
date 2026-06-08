@@ -39,6 +39,9 @@ class TestAppConfigDefaults:
     def test_default_nlp_model(self):
         assert AppConfig().nlp_model == "llama3.2"
 
+    def test_default_openrouter_attribution_concurrency(self):
+        assert AppConfig().nlp_openrouter_attribution_concurrency == 4
+
 
 class TestAppConfigRoundTrip:
     def test_to_dict_from_dict_identity(self):
@@ -83,6 +86,15 @@ class TestAppConfigRoundTrip:
         cfg = AppConfig(nlp_model="phi3:mini")
         restored = AppConfig.from_dict(cfg.to_dict())
         assert restored.nlp_model == "phi3:mini"
+
+    def test_openrouter_attribution_concurrency_round_trip(self):
+        cfg = AppConfig(nlp_openrouter_attribution_concurrency=12)
+        restored = AppConfig.from_dict(cfg.to_dict())
+        assert restored.nlp_openrouter_attribution_concurrency == 12
+
+    def test_openrouter_attribution_concurrency_is_clamped_on_load(self):
+        assert AppConfig.from_dict({"nlp_openrouter_attribution_concurrency": 0}).nlp_openrouter_attribution_concurrency == 1
+        assert AppConfig.from_dict({"nlp_openrouter_attribution_concurrency": 99}).nlp_openrouter_attribution_concurrency == 32
 
     def test_new_fields_backward_compatible(self):
         """Old YAML files without the new fields should load cleanly."""
