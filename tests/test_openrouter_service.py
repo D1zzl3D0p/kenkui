@@ -66,6 +66,39 @@ def test_search_openrouter_models_filters_for_strict_json_schema(monkeypatch):
     assert query["supported_parameters"] == ["structured_outputs"]
 
 
+def test_search_openrouter_models_can_leave_strict_json_schema_filter_off(monkeypatch):
+    calls = []
+
+    def fake_urlopen(url, timeout):
+        calls.append(url)
+        return _FakeResponse(
+            {
+                "data": [
+                    {
+                        "id": "openai/gpt-4.1-mini",
+                        "name": "GPT-4.1 Mini",
+                        "supported_parameters": ["structured_outputs"],
+                    },
+                    {
+                        "id": "example/plain-json",
+                        "name": "Plain JSON",
+                        "supported_parameters": ["response_format"],
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    models = search_openrouter_models(require_strict_json_schema=False)
+
+    assert [model.id for model in models] == ["openai/gpt-4.1-mini", "example/plain-json"]
+    assert [model.supports_strict_json_schema for model in models] == [True, False]
+
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(calls[0]).query)
+    assert "supported_parameters" not in query
+
+
 def test_search_openrouter_models_applies_text_search_and_limit(monkeypatch):
     def fake_urlopen(url, timeout):
         return _FakeResponse(
