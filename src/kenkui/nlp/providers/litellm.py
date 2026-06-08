@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -37,6 +39,17 @@ _REMOTE_CONTEXT_SAFETY_TOKENS = 128
 _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE = 8
 _MAX_RETRIES = 2
 _PROVIDER_LIST_RE = re.compile(r"(?:^|\n)\s*Provider List:\s*https://docs\.litellm\.ai/docs/providers\s*", re.I)
+
+
+def _run_coroutine_sync(coro):
+    """Run an async LiteLLM call from the synchronous library API."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def _openrouter_extra_body(provider: str) -> dict[str, object]:
@@ -198,9 +211,13 @@ class LiteLLMClient:
         self.model = model
         self.runtime_model = _litellm_model(provider, model)
 
-    def generate(self, prompt: str, schema: type[T], *, max_tokens: int | None = None) -> T:
-        import litellm
-
+    def _completion_kwargs(
+        self,
+        prompt: str,
+        schema: type[BaseModel],
+        *,
+        max_tokens: int | None = None,
+    ) -> dict[str, object]:
         json_schema = schema.model_json_schema()
         _logger.debug(
             "LiteLLMClient.generate: provider=%s model=%s schema=%s prompt_chars=%d max_tokens=%s schema_defs=%d",
@@ -211,7 +228,7 @@ class LiteLLMClient:
             max_tokens,
             len(json_schema.get("$defs", {})) if isinstance(json_schema, dict) else 0,
         )
-        kwargs = {
+        kwargs: dict[str, object] = {
             "model": self.runtime_model,
             "messages": [{"role": "user", "content": prompt}],
             "response_format": {
@@ -229,10 +246,28 @@ class LiteLLMClient:
             kwargs["extra_body"] = extra_body
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        return kwargs
+
+    def generate(self, prompt: str, schema: type[T], *, max_tokens: int | None = None) -> T:
+        return _run_coroutine_sync(self.generate_async(prompt, schema, max_tokens=max_tokens))
+
+    async def generate_async(
+        self,
+        prompt: str,
+        schema: type[T],
+        *,
+        max_tokens: int | None = None,
+    ) -> T:
+        import litellm
+
+        kwargs = self._completion_kwargs(prompt, schema, max_tokens=max_tokens)
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                response = litellm.completion(**kwargs)
+                if hasattr(litellm, "acompletion"):
+                    response = await litellm.acompletion(**kwargs)
+                else:
+                    response = await asyncio.to_thread(litellm.completion, **kwargs)
             except Exception as exc:
                 _logger.debug(
                     "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
@@ -393,6 +428,16 @@ class LiteLLMAttributionAdapter:
         roster: CharacterRoster,
         progress_callback: Callable[[str], None] | None = None,
     ) -> AttributionResult:
+        return _run_coroutine_sync(
+            self.attribute_chapter_async(chapter, roster, progress_callback=progress_callback)
+        )
+
+    async def attribute_chapter_async(
+        self,
+        chapter: Chapter,
+        roster: CharacterRoster,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> AttributionResult:
         from kenkui.nlp.annotator import (
             _build_alias_to_slug,
             _build_attribution_dynamic_block,
@@ -430,7 +475,7 @@ class LiteLLMAttributionAdapter:
             annotated_text = annotate_chapter(paras, dq, alias_to_slug, slug_to_pronoun)
             return f"{static_block}\n\n{_build_attribution_dynamic_block(annotated_text)}"
 
-        def _attribute_single(paras: list[str], dq: list[Quote]) -> dict[int, AttributionItem]:
+        async def _attribute_single(paras: list[str], dq: list[Quote]) -> dict[int, AttributionItem]:
             prompt = _prompt_for(paras, dq)
             prompt_tokens, context_tokens, max_tokens = _remote_attribution_call_budget(
                 prompt,
@@ -445,10 +490,10 @@ class LiteLLMAttributionAdapter:
                 max_tokens,
                 len(dq),
             )
-            result = llm.generate(prompt, AttributionResultWire, max_tokens=max_tokens)
+            result = await llm.generate_async(prompt, AttributionResultWire, max_tokens=max_tokens)
             return {item.quote_id: item for item in attribution_wire_to_full(result).attributions}
 
-        def _retry_missing_quotes(
+        async def _retry_missing_quotes(
             paras: list[str],
             chunk_quotes: list[Quote],
             attributed: dict[int, AttributionItem],
@@ -478,7 +523,7 @@ class LiteLLMAttributionAdapter:
                     kind=q.kind,
                 )
                 try:
-                    attributed.update(_attribute_single([paras[local_para]], [retry_quote]))
+                    attributed.update(await _attribute_single([paras[local_para]], [retry_quote]))
                 except Exception as retry_exc:
                     _logger.debug(
                         "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote %d retry raw error: %s",
@@ -514,7 +559,7 @@ class LiteLLMAttributionAdapter:
                         confidence=1,
                     )
 
-        def _attribute_chunks(reason: str) -> None:
+        async def _attribute_chunks(reason: str) -> None:
             _logger.warning(
                 "LiteLLMAttributionAdapter: chapter %r %s; chunking",
                 chapter_label,
@@ -541,7 +586,7 @@ class LiteLLMAttributionAdapter:
                 if not chunk_quotes:
                     continue
                 try:
-                    attributed = _attribute_single(chunk_paras, chunk_quotes)
+                    attributed = await _attribute_single(chunk_paras, chunk_quotes)
                     returned = len(attributed)
                     expected = len(chunk_quotes)
                     if returned < expected:
@@ -555,7 +600,7 @@ class LiteLLMAttributionAdapter:
                             expected,
                             expected - returned,
                         )
-                        _retry_missing_quotes(
+                        await _retry_missing_quotes(
                             chunk_paras,
                             chunk_quotes,
                             attributed,
@@ -596,13 +641,13 @@ class LiteLLMAttributionAdapter:
             llm.runtime_model,
         )
         if full_prompt_tokens + full_max_tokens + _REMOTE_CONTEXT_SAFETY_TOKENS > full_context_tokens:
-            _attribute_chunks(
+            await _attribute_chunks(
                 f"exceeds token estimate (prompt~{full_prompt_tokens} tok + "
                 f"max_tokens={full_max_tokens} vs context {full_context_tokens})"
             )
         else:
             try:
-                attributed = _attribute_single(clean_paragraphs, dialogue_quotes)
+                attributed = await _attribute_single(clean_paragraphs, dialogue_quotes)
                 returned = len(attributed)
                 expected = len(dialogue_quotes)
                 if returned < expected:
@@ -620,7 +665,7 @@ class LiteLLMAttributionAdapter:
                     chapter_label,
                     exc,
                 )
-                _attribute_chunks(f"attribution failed ({_sanitize_litellm_error(exc)})")
+                await _attribute_chunks(f"attribution failed ({_sanitize_litellm_error(exc)})")
 
         for q in quotes:
             all_attributions.setdefault(

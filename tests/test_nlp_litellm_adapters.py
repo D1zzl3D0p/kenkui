@@ -120,6 +120,37 @@ def test_litellm_client_sends_strict_object_schema(monkeypatch):
     _assert_strict_object_schema(response_format["json_schema"]["schema"])
 
 
+def test_litellm_client_prefers_async_completion(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        raise AssertionError("sync completion should not be used when acompletion exists")
+
+    async def fake_acompletion(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"a": [{"q": 0, "s": "jane"}]}),
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm",
+        SimpleNamespace(completion=fake_completion, acompletion=fake_acompletion),
+    )
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    result = client.generate("prompt text", AttributionResultWire)
+
+    assert result.a[0].s == "jane"
+    assert calls[0]["model"] == "openrouter/openai/gpt-4.1-mini"
+
+
 def test_litellm_client_extracts_json_from_provider_wrapped_response(monkeypatch):
     def fake_completion(**kwargs):
         return {

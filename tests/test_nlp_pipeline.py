@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from unittest.mock import MagicMock, patch
 
-from kenkui.models import Chapter, CharacterInfo, NLPResult
+from kenkui.models import AttributionTool, Chapter, CharacterInfo, NLPResult
 from kenkui.nlp.models import CharacterRecord, CharacterRoster
 from kenkui.nlp.pipeline import NLPJob, NLPJobStatus, NLPPipeline, ValidationResult
 from kenkui.nlp_config import NLPConfig
@@ -212,6 +213,50 @@ def test_pipeline_attribute_returns_nlp_result(tmp_path):
     assert isinstance(result, NLPResult)
     assert result.book_hash == "deadbeef"
     assert pipeline._attribution.attribute_chapter.call_count == 2
+
+
+def test_pipeline_attribute_openrouter_uses_async_chapter_attribution(tmp_path):
+    """OpenRouter attribution uses the provider async hook while preserving result order."""
+    from kenkui.nlp.models import AttributionResult
+
+    class AsyncAttribution:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+            self.calls: list[int] = []
+
+        async def attribute_chapter_async(self, chapter, roster, progress_callback=None):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                self.calls.append(chapter.index)
+                return AttributionResult(attributions=[])
+            finally:
+                self.active -= 1
+
+        def attribute_chapter(self, *args, **kwargs):
+            raise AssertionError("sync attribution should not be used for OpenRouter")
+
+    pipeline = _make_pipeline()
+    pipeline._config = NLPConfig(attribution_tool=AttributionTool.OPENROUTER)
+    pipeline._attribution = AsyncAttribution()
+    roster = _make_roster()
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter(0), _make_chapter(1, "Chapter 2"), _make_chapter(2, "Chapter 3")]
+
+    with (
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline.put_cache"),
+        patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+        patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+    ):
+        result = pipeline.attribute(book_path, chapters, roster, use_cache=True)
+
+    assert [chapter.index for chapter in result.chapters] == [0, 1, 2]
+    assert pipeline._attribution.max_active > 1
 
 
 def test_pipeline_attribute_uses_cache_when_available(tmp_path):

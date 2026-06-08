@@ -10,12 +10,16 @@ Wraps ExtractionProvider + AttributionProvider with:
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import inspect
+import logging
 import re
 import signal
 import threading
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -32,6 +36,56 @@ if TYPE_CHECKING:
     from kenkui.models import Chapter, NLPResult
     from kenkui.nlp.models import CharacterRoster
     from kenkui.nlp_config import NLPConfig
+
+_logger = logging.getLogger(__name__)
+
+
+def _run_coroutine_sync(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
+
+
+async def _with_retry_async(
+    fn: Callable[..., object],
+    *args: object,
+    max_attempts: int,
+    backoff_base: float,
+    **kwargs: object,
+) -> object:
+    last_exc: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await fn(*args, **kwargs)
+        except (KeyboardInterrupt, SystemExit, ValueError, TypeError, AttributeError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt == max_attempts:
+                break
+            wait = backoff_base ** (attempt - 1)
+            _logger.warning(
+                "Attempt %d/%d failed (%s: %s); retrying in %.1fs",
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+                exc,
+                wait,
+            )
+            _logger.debug(
+                "Full retryable NLP provider error on attempt %d/%d: %s: %s",
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            await asyncio.sleep(wait)
+    raise last_exc  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -331,13 +385,25 @@ class NLPPipeline:
             attribution_counts: dict[str, int] = defaultdict(int)
             attributed_chapters = []
 
-            for chapter in chapters:
-                attr_result = with_retry(
-                    self._attribution.attribute_chapter,
-                    max_attempts=self._config.retry_max_attempts,
-                    backoff_base=self._config.retry_backoff_base,
-                )(chapter, roster, progress_callback=_adapt)
+            async_attr = getattr(self._attribution, "attribute_chapter_async", None)
+            if tool == "openrouter" and inspect.iscoroutinefunction(async_attr):
+                chapter_results = _run_coroutine_sync(
+                    self._attribute_chapters_async(chapters, roster, _adapt)
+                )
+            else:
+                chapter_results = [
+                    (
+                        chapter,
+                        with_retry(
+                            self._attribution.attribute_chapter,
+                            max_attempts=self._config.retry_max_attempts,
+                            backoff_base=self._config.retry_backoff_base,
+                        )(chapter, roster, progress_callback=_adapt),
+                    )
+                    for chapter in chapters
+                ]
 
+            for chapter, attr_result in chapter_results:
                 segments = _attribution_to_segments(chapter, attr_result, roster)
                 attributed_chapters.append(_replace(chapter, segments=segments))
 
@@ -374,6 +440,32 @@ class NLPPipeline:
             pass  # Cache write failure is non-fatal
 
         return result
+
+    async def _attribute_chapters_async(
+        self,
+        chapters: list[Chapter],
+        roster: CharacterRoster,
+        progress_callback: Callable[[str], None],
+    ) -> list[tuple[Chapter, object]]:
+        async_attr = getattr(self._attribution, "attribute_chapter_async", None)
+        if not inspect.iscoroutinefunction(async_attr):
+            raise TypeError("Attribution provider does not expose async chapter attribution")
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def _attribute_one(chapter: Chapter) -> tuple[Chapter, object]:
+            async with semaphore:
+                result = await _with_retry_async(
+                    async_attr,
+                    chapter,
+                    roster,
+                    progress_callback=progress_callback,
+                    max_attempts=self._config.retry_max_attempts,
+                    backoff_base=self._config.retry_backoff_base,
+                )
+                return chapter, result
+
+        return await asyncio.gather(*(_attribute_one(chapter) for chapter in chapters))
 
     # ------------------------------------------------------------------
     # run
