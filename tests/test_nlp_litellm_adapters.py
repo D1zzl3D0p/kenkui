@@ -120,6 +120,91 @@ def test_litellm_client_sends_strict_object_schema(monkeypatch):
     _assert_strict_object_schema(response_format["json_schema"]["schema"])
 
 
+def test_litellm_client_extracts_json_from_provider_wrapped_response(monkeypatch):
+    def fake_completion(**kwargs):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "Provider List: https://docs.litellm.ai/docs/providers\n"
+                            "```json\n"
+                            '{"a": [{"q": 0, "s": "jane"}]}\n'
+                            "```"
+                        ),
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    result = client.generate("prompt text", AttributionResultWire)
+
+    assert result.a[0].s == "jane"
+
+
+def test_litellm_client_recovers_truncated_attribution_json(monkeypatch):
+    def fake_completion(**kwargs):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"a": [{"q": 0, "s": "jane"},\n',
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    result = client.generate("prompt text", AttributionResultWire)
+
+    assert [(item.q, item.s) for item in result.a] == [(0, "jane")]
+
+
+def test_litellm_client_retries_unrecoverable_malformed_json_without_warning(monkeypatch, caplog):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        content = '{"a":' if len(calls) == 1 else json.dumps({"a": [{"q": 0, "s": "jane"}]})
+        return {"choices": [{"message": {"content": content}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    with caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.litellm"):
+        result = client.generate("prompt text", AttributionResultWire)
+
+    assert result.a[0].s == "jane"
+    assert len(calls) == 2
+    assert not any("validation failed response_chars" in r.message for r in caplog.records)
+
+
+def test_litellm_client_strips_provider_list_from_warning_logs(monkeypatch, caplog):
+    def fake_completion(**kwargs):
+        raise RuntimeError(
+            "No provider available\n"
+            "Provider List: https://docs.litellm.ai/docs/providers"
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    with caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.litellm"):
+        try:
+            client.generate("prompt text", AttributionResultWire)
+        except RuntimeError:
+            pass
+
+    assert caplog.records
+    assert not any("Provider List:" in r.message for r in caplog.records)
+    assert not any("docs.litellm.ai/docs/providers" in r.message for r in caplog.records)
+
+
 def test_openrouter_requires_providers_that_support_requested_parameters(monkeypatch):
     calls = []
 

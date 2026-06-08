@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from kenkui.config import inject_provider_env_vars, load_provider_credentials
 from kenkui.models import Chapter
 from kenkui.nlp import _count_mentions, book_hash, cache_roster, get_cached_roster
+from kenkui.nlp.llm import _is_eof_truncation, _try_recover_truncated_json
 from kenkui.nlp.models import (
     AttributionItem,
     AttributionResult,
@@ -33,6 +35,8 @@ _DEFAULT_REMOTE_OUTPUT_TOKENS = 8192
 _MIN_REMOTE_OUTPUT_TOKENS = 256
 _REMOTE_CONTEXT_SAFETY_TOKENS = 128
 _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE = 8
+_MAX_RETRIES = 2
+_PROVIDER_LIST_RE = re.compile(r"(?:^|\n)\s*Provider List:\s*https://docs\.litellm\.ai/docs/providers\s*", re.I)
 
 
 def _openrouter_extra_body(provider: str) -> dict[str, object]:
@@ -103,6 +107,75 @@ def _remote_attribution_call_budget(prompt: str, quote_count: int, model: str) -
     return prompt_tokens, context_tokens, max(1, max_tokens)
 
 
+def _strip_provider_list(text: str) -> str:
+    return _PROVIDER_LIST_RE.sub("\n", text).strip()
+
+
+def _sanitize_litellm_error(exc: Exception) -> str:
+    message = _strip_provider_list(str(exc))
+    return message or exc.__class__.__name__
+
+
+def _strip_code_fence(raw: str) -> str:
+    text = raw.strip()
+    if not text.startswith("```"):
+        return text
+    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.I | re.S)
+    return match.group(1).strip() if match else text
+
+
+def _extract_json_object(raw: str) -> str:
+    """Return the first balanced top-level JSON object, ignoring wrapper text."""
+    text = _strip_provider_list(_strip_code_fence(raw))
+    start = text.find("{")
+    if start < 0:
+        return text
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx, char in enumerate(text[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:idx + 1]
+    return text[start:]
+
+
+def _validate_litellm_json(raw: str, schema: type[T]) -> T:
+    """Validate LiteLLM JSON, tolerating common model/provider wrappers."""
+    try:
+        return schema.model_validate_json(raw)
+    except ValidationError as original_exc:
+        normalized = _extract_json_object(raw)
+        if normalized != raw:
+            try:
+                return schema.model_validate_json(normalized)
+            except ValidationError:
+                pass
+        if _is_eof_truncation(original_exc):
+            recovered = _try_recover_truncated_json(normalized, schema)
+            if recovered is not None:
+                _logger.warning(
+                    "LiteLLMClient.generate: recovered partial %s response from truncated JSON",
+                    schema.__name__,
+                )
+                return recovered
+        raise original_exc
+
+
 def _message_content(response: object) -> str:
     try:
         choices = response.choices  # type: ignore[attr-defined]
@@ -156,41 +229,81 @@ class LiteLLMClient:
             kwargs["extra_body"] = extra_body
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        try:
-            response = litellm.completion(**kwargs)
-        except Exception as exc:
-            _logger.warning(
-                "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s completion failed (%s)",
-                self.provider,
-                self.runtime_model,
-                schema.__name__,
-                max_tokens,
-                exc,
-            )
-            raise
-        raw = _message_content(response)
-        if not raw:
-            _logger.warning(
-                "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
-                self.provider,
-                self.runtime_model,
-                schema.__name__,
-            )
-            raise ConnectionError(
-                f"LiteLLM model '{self.runtime_model}' returned empty content"
-            )
-        try:
-            return schema.model_validate_json(raw)
-        except ValidationError as exc:
-            _logger.warning(
-                "LiteLLMClient.generate: provider=%s model=%s schema=%s validation failed response_chars=%d errors=%d",
-                self.provider,
-                self.runtime_model,
-                schema.__name__,
-                len(raw),
-                len(exc.errors()),
-            )
-            raise
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = litellm.completion(**kwargs)
+            except Exception as exc:
+                _logger.debug(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
+                    "completion failed raw_error=%s",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    max_tokens,
+                    exc,
+                )
+                _logger.warning(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
+                    "completion failed (%s)",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    max_tokens,
+                    _sanitize_litellm_error(exc),
+                )
+                raise
+            raw = _message_content(response)
+            if not raw:
+                last_exc = ConnectionError(
+                    f"LiteLLM model '{self.runtime_model}' returned empty content"
+                )
+                _logger.warning(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                )
+                if attempt < _MAX_RETRIES:
+                    continue
+                raise last_exc
+            try:
+                return _validate_litellm_json(raw, schema)
+            except ValidationError as exc:
+                last_exc = exc
+                _logger.debug(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s attempt=%d "
+                    "validation failed raw_response=%r",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    attempt + 1,
+                    raw,
+                )
+                if attempt < _MAX_RETRIES:
+                    _logger.debug(
+                        "LiteLLMClient.generate: provider=%s model=%s schema=%s "
+                        "validation failed response_chars=%d errors=%d; retrying",
+                        self.provider,
+                        self.runtime_model,
+                        schema.__name__,
+                        len(raw),
+                        len(exc.errors()),
+                    )
+                    continue
+                _logger.warning(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s "
+                    "validation failed after %d attempt(s) response_chars=%d errors=%d",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    attempt + 1,
+                    len(raw),
+                    len(exc.errors()),
+                )
+                raise
+
+        raise last_exc  # type: ignore[misc]
 
 
 class LiteLLMExtractionAdapter:
@@ -367,13 +480,21 @@ class LiteLLMAttributionAdapter:
                 try:
                     attributed.update(_attribute_single([paras[local_para]], [retry_quote]))
                 except Exception as retry_exc:
+                    _logger.debug(
+                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote %d retry raw error: %s",
+                        chapter_label,
+                        chunk_idx,
+                        chunk_total,
+                        q.id,
+                        retry_exc,
+                    )
                     _logger.warning(
                         "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote %d retry failed (%s)",
                         chapter_label,
                         chunk_idx,
                         chunk_total,
                         q.id,
-                        retry_exc,
+                        _sanitize_litellm_error(retry_exc),
                     )
 
             still_missing = [q for q in chunk_quotes if q.id not in attributed]
@@ -443,12 +564,19 @@ class LiteLLMAttributionAdapter:
                         )
                     all_attributions.update(attributed)
                 except Exception as chunk_exc:
+                    _logger.debug(
+                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d raw error: %s",
+                        chapter_label,
+                        chunk_idx,
+                        len(chunks),
+                        chunk_exc,
+                    )
                     _logger.warning(
                         "LiteLLMAttributionAdapter: chapter %r chunk %d/%d failed (%s); using Unknown",
                         chapter_label,
                         chunk_idx,
                         len(chunks),
-                        chunk_exc,
+                        _sanitize_litellm_error(chunk_exc),
                     )
                     for q in chunk_quotes:
                         all_attributions.setdefault(
@@ -487,7 +615,12 @@ class LiteLLMAttributionAdapter:
                     )
                 all_attributions.update(attributed)
             except Exception as exc:
-                _attribute_chunks(f"attribution failed ({exc})")
+                _logger.debug(
+                    "LiteLLMAttributionAdapter: chapter %r attribution raw error: %s",
+                    chapter_label,
+                    exc,
+                )
+                _attribute_chunks(f"attribution failed ({_sanitize_litellm_error(exc)})")
 
         for q in quotes:
             all_attributions.setdefault(
