@@ -28,6 +28,20 @@ from kenkui.nlp_config import NLPConfig
 
 
 def _assert_strict_object_schema(schema: dict):
+    assert "default" not in schema
+    assert schema["additionalProperties"] is False
+    assert sorted(schema["required"]) == sorted(schema["properties"])
+    for property_schema in schema["properties"].values():
+        assert "default" not in property_schema
+    for def_schema in schema.get("$defs", {}).values():
+        if def_schema.get("type") == "object":
+            assert def_schema["additionalProperties"] is False
+            assert sorted(def_schema["required"]) == sorted(def_schema["properties"])
+            for property_schema in def_schema["properties"].values():
+                assert "default" not in property_schema
+
+
+def _assert_forbids_additional_properties(schema: dict):
     assert schema["additionalProperties"] is False
     for def_schema in schema.get("$defs", {}).values():
         if def_schema.get("type") == "object":
@@ -91,7 +105,7 @@ def test_litellm_wire_schemas_forbid_additional_properties():
         EpithetResolutionResult,
         NameNormalizationResult,
     ):
-        _assert_strict_object_schema(schema.model_json_schema())
+        _assert_forbids_additional_properties(schema.model_json_schema())
 
 
 def test_litellm_client_sends_strict_object_schema(monkeypatch):
@@ -118,6 +132,35 @@ def test_litellm_client_sends_strict_object_schema(monkeypatch):
     assert response_format["type"] == "json_schema"
     assert response_format["json_schema"]["strict"] is True
     _assert_strict_object_schema(response_format["json_schema"]["schema"])
+
+
+def test_litellm_client_does_not_rewrite_non_openrouter_schema_or_routing(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"characters": []}),
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openai", "gpt-4.1-mini")
+    client.generate("prompt text", CharacterRosterWire)
+
+    schema = calls[0]["response_format"]["json_schema"]["schema"]
+    assert calls[0]["temperature"] == 0
+    assert "extra_body" not in calls[0]
+    assert "reasoning" not in calls[0]
+    character_schema = schema.get("$defs", {}).get("CharacterRecordWire", {})
+    assert "aliases" in character_schema.get("properties", {})
+    assert "aliases" not in character_schema.get("required", [])
 
 
 def test_litellm_client_prefers_async_completion(monkeypatch):
@@ -149,6 +192,55 @@ def test_litellm_client_prefers_async_completion(monkeypatch):
 
     assert result.a[0].s == "jane"
     assert calls[0]["model"] == "openrouter/openai/gpt-4.1-mini"
+
+
+def test_litellm_client_extracts_content_from_object_response(monkeypatch):
+    def fake_completion(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps({"a": [{"q": 0, "s": "jane"}]})
+                    )
+                )
+            ]
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    result = client.generate("prompt text", AttributionResultWire)
+
+    assert result.a[0].s == "jane"
+
+
+def test_litellm_client_rejects_non_content_response_fields(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "parsed": {"a": [{"q": 0, "s": "jane"}]},
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    try:
+        client.generate("prompt text", AttributionResultWire)
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("non-content response fields must not be parsed as JSON")
+
+    assert len(calls) == 3
 
 
 def test_litellm_client_extracts_json_from_provider_wrapped_response(monkeypatch):
@@ -295,6 +387,79 @@ def test_openrouter_parameter_routing_failure_stays_strict(monkeypatch, caplog):
 def test_openrouter_parameter_requirement_is_not_sent_to_other_litellm_providers(monkeypatch):
     assert _openrouter_extra_body("openai") == {}
     assert _openrouter_extra_body("anthropic") == {}
+
+
+def test_openrouter_gpt5_uses_reasoning_controls_and_larger_attribution_budget(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"a": [{"q": 0, "s": "jane"}]}),
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setenv("KENKUI_NLP_OPENROUTER_REASONING_EFFORT", "low")
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-5-nano")
+    client.generate("prompt text", AttributionResultWire, max_tokens=2048)
+
+    assert calls[0]["extra_body"]["reasoning"] == {"effort": "low", "exclude": True}
+    assert calls[0]["max_tokens"] == 2048
+
+    prompt_tokens, context_tokens, max_tokens = _remote_attribution_call_budget(
+        "short prompt",
+        quote_count=1,
+        model="openrouter/openai/gpt-5-nano",
+    )
+    assert prompt_tokens < context_tokens
+    assert max_tokens == 2048
+
+
+def test_empty_content_logs_provider_metadata(monkeypatch, caplog):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "refusal": "schema not supported",
+                    },
+                    "finish_reason": "stop",
+                    "native_finish_reason": "length",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 1,
+                "total_tokens": 11,
+            },
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = LiteLLMClient("openrouter", "openai/gpt-4.1-mini")
+    with caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.litellm"):
+        try:
+            client.generate("prompt text", AttributionResultWire)
+        except ConnectionError:
+            pass
+
+    assert len(calls) == 3
+    assert any("finish_reason='stop'" in r.message for r in caplog.records)
+    assert any("native_finish_reason='length'" in r.message for r in caplog.records)
+    assert any("refusal='schema not supported'" in r.message for r in caplog.records)
+    assert any("'total_tokens': 11" in r.message for r in caplog.records)
+    assert any("message_keys=['content', 'refusal']" in r.message for r in caplog.records)
 
 
 def test_phi4_uses_context_hint_and_bounded_attribution_tokens(monkeypatch):

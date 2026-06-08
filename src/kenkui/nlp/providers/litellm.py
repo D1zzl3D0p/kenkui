@@ -8,8 +8,9 @@ import os
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -37,8 +38,12 @@ _DEFAULT_REMOTE_OUTPUT_TOKENS = 8192
 _MIN_REMOTE_OUTPUT_TOKENS = 256
 _REMOTE_CONTEXT_SAFETY_TOKENS = 128
 _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE = 8
+_REASONING_ATTRIBUTION_MIN_OUTPUT_TOKENS = 2048
 _MAX_RETRIES = 2
 _PROVIDER_LIST_RE = re.compile(r"(?:^|\n)\s*Provider List:\s*https://docs\.litellm\.ai/docs/providers\s*", re.I)
+_OPENROUTER_REASONING_EFFORT_ENV = "KENKUI_NLP_OPENROUTER_REASONING_EFFORT"
+_OPENROUTER_REASONING_EFFORT_DEFAULT = "minimal"
+_OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 
 
 def _run_coroutine_sync(coro):
@@ -58,6 +63,44 @@ def _openrouter_extra_body(provider: str) -> dict[str, object]:
     return {
         "provider": {
             "require_parameters": True,
+        },
+    }
+
+
+def _is_openrouter_provider(provider: str) -> bool:
+    return provider.lower() == "openrouter"
+
+
+def _is_reasoning_model(model: str) -> bool:
+    model_norm = model.lower()
+    if model_norm.startswith("openrouter/"):
+        model_norm = model_norm.removeprefix("openrouter/")
+    return model_norm.startswith("openai/gpt-5")
+
+
+def _openrouter_reasoning_effort() -> str:
+    raw = os.environ.get(
+        _OPENROUTER_REASONING_EFFORT_ENV,
+        _OPENROUTER_REASONING_EFFORT_DEFAULT,
+    ).strip().lower()
+    if raw in _OPENROUTER_REASONING_EFFORTS:
+        return raw
+    _logger.warning(
+        "Ignoring invalid %s=%r; expected one of %s",
+        _OPENROUTER_REASONING_EFFORT_ENV,
+        raw,
+        ", ".join(sorted(_OPENROUTER_REASONING_EFFORTS)),
+    )
+    return _OPENROUTER_REASONING_EFFORT_DEFAULT
+
+
+def _openrouter_reasoning_body(model: str) -> dict[str, object]:
+    if not _is_reasoning_model(model):
+        return {}
+    return {
+        "reasoning": {
+            "effort": _openrouter_reasoning_effort(),
+            "exclude": True,
         },
     }
 
@@ -111,10 +154,12 @@ def _remote_attribution_call_budget(prompt: str, quote_count: int, model: str) -
     prompt_tokens = _estimate_tokens(prompt)
     context_tokens = _remote_context_tokens(model)
     output_limit = _remote_output_tokens()
-    expected_response_tokens = max(
-        _MIN_REMOTE_OUTPUT_TOKENS,
-        quote_count * _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE,
+    min_output_tokens = (
+        _REASONING_ATTRIBUTION_MIN_OUTPUT_TOKENS
+        if _is_reasoning_model(model)
+        else _MIN_REMOTE_OUTPUT_TOKENS
     )
+    expected_response_tokens = max(min_output_tokens, quote_count * _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE)
     available_output_tokens = context_tokens - prompt_tokens - _REMOTE_CONTEXT_SAFETY_TOKENS
     max_tokens = min(output_limit, expected_response_tokens, available_output_tokens)
     return prompt_tokens, context_tokens, max(1, max_tokens)
@@ -198,17 +243,126 @@ def _validate_litellm_json(raw: str, schema: type[T]) -> T:
         raise original_exc
 
 
+def _normalize_strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a provider-safe strict JSON schema without changing Pydantic models."""
+    normalized = deepcopy(schema)
+
+    def visit(node: object) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+
+        node.pop("default", None)
+        properties = node.get("properties")
+        node_type = node.get("type")
+        if node_type == "object" or isinstance(properties, dict):
+            node["additionalProperties"] = False
+            if isinstance(properties, dict):
+                node["required"] = list(properties)
+
+        for value in node.values():
+            visit(value)
+
+    visit(normalized)
+    return normalized
+
+
+def _schema_for_provider(provider: str, schema: type[BaseModel]) -> dict[str, Any]:
+    json_schema = schema.model_json_schema()
+    if _is_openrouter_provider(provider):
+        return _normalize_strict_json_schema(json_schema)
+    return json_schema
+
+
+def _litellm_completion_kwargs(
+    *,
+    provider: str,
+    runtime_model: str,
+    prompt: str,
+    schema_name: str,
+    json_schema: dict[str, Any],
+    max_tokens: int | None,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "model": runtime_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "schema": json_schema,
+                "strict": True,
+            },
+        },
+    }
+    if _is_openrouter_provider(provider):
+        extra_body = _openrouter_extra_body(provider)
+        extra_body.update(_openrouter_reasoning_body(runtime_model))
+        kwargs["extra_body"] = extra_body
+    else:
+        kwargs["temperature"] = 0
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return kwargs
+
+
+def _get_attr_or_key(value: object, key: str) -> object:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _first_choice(response: object) -> object | None:
+    choices = _get_attr_or_key(response, "choices")
+    if isinstance(choices, (list, tuple)) and choices:
+        return choices[0]
+    return None
+
+
 def _message_content(response: object) -> str:
-    try:
-        choices = response.choices  # type: ignore[attr-defined]
-        message = choices[0].message
-        content = getattr(message, "content", None)
-    except Exception:
-        try:
-            content = response["choices"][0]["message"]["content"]  # type: ignore[index]
-        except Exception:
-            content = None
+    choice = _first_choice(response)
+    message = _get_attr_or_key(choice, "message") if choice is not None else None
+    content = _get_attr_or_key(message, "content")
+    if isinstance(content, list):
+        text_parts = [
+            item.get("text")
+            for item in content
+            if isinstance(item, dict)
+            and item.get("type") in {None, "text", "output_text"}
+            and isinstance(item.get("text"), str)
+        ]
+        content = "".join(text_parts)
     return content if isinstance(content, str) else ""
+
+
+def _response_diagnostics(response: object) -> dict[str, object]:
+    choice = _first_choice(response)
+    message = _get_attr_or_key(choice, "message") if choice is not None else None
+    usage = _get_attr_or_key(response, "usage")
+    if not isinstance(usage, dict):
+        usage = {
+            key: _get_attr_or_key(usage, key)
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+            if _get_attr_or_key(usage, key) is not None
+        }
+    message_keys: list[str] = []
+    if isinstance(message, dict):
+        message_keys = sorted(str(key) for key in message)
+    elif message is not None:
+        try:
+            message_keys = sorted(str(key) for key in vars(message))
+        except TypeError:
+            message_keys = []
+    return {
+        "finish_reason": _get_attr_or_key(choice, "finish_reason"),
+        "native_finish_reason": _get_attr_or_key(choice, "native_finish_reason"),
+        "refusal": _get_attr_or_key(message, "refusal"),
+        "usage": usage,
+        "message_keys": message_keys,
+    }
 
 
 class LiteLLMClient:
@@ -227,7 +381,7 @@ class LiteLLMClient:
         *,
         max_tokens: int | None = None,
     ) -> dict[str, object]:
-        json_schema = schema.model_json_schema()
+        json_schema = _schema_for_provider(self.provider, schema)
         _logger.debug(
             "LiteLLMClient.generate: provider=%s model=%s schema=%s prompt_chars=%d max_tokens=%s schema_defs=%d",
             self.provider,
@@ -237,26 +391,14 @@ class LiteLLMClient:
             max_tokens,
             len(json_schema.get("$defs", {})) if isinstance(json_schema, dict) else 0,
         )
-        kwargs: dict[str, object] = {
-            "model": self.runtime_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema.__name__,
-                    "schema": json_schema,
-                    "strict": True,
-                },
-            },
-        }
-        if self.provider.lower() != "openrouter":
-            kwargs["temperature"] = 0
-        extra_body = _openrouter_extra_body(self.provider)
-        if extra_body:
-            kwargs["extra_body"] = extra_body
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        return kwargs
+        return _litellm_completion_kwargs(
+            provider=self.provider,
+            runtime_model=self.runtime_model,
+            prompt=prompt,
+            schema_name=schema.__name__,
+            json_schema=json_schema,
+            max_tokens=max_tokens,
+        )
 
     def generate(self, prompt: str, schema: type[T], *, max_tokens: int | None = None) -> T:
         return _run_coroutine_sync(self.generate_async(prompt, schema, max_tokens=max_tokens))
@@ -315,11 +457,18 @@ class LiteLLMClient:
                 last_exc = ConnectionError(
                     f"LiteLLM model '{self.runtime_model}' returned empty content"
                 )
+                diagnostics = _response_diagnostics(response)
                 _logger.warning(
-                    "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content "
+                    "finish_reason=%r native_finish_reason=%r refusal=%r usage=%r message_keys=%r",
                     self.provider,
                     self.runtime_model,
                     schema.__name__,
+                    diagnostics["finish_reason"],
+                    diagnostics["native_finish_reason"],
+                    diagnostics["refusal"],
+                    diagnostics["usage"],
+                    diagnostics["message_keys"],
                 )
                 if attempt < _MAX_RETRIES:
                     continue
