@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
-_STRICT_JSON_SCHEMA_PARAMETER = "structured_outputs"
+_STRICT_JSON_SCHEMA_PARAMETERS = (
+    "response_format",
+    "structured_outputs",
+    "max_tokens",
+)
 
 
 @dataclass(frozen=True)
@@ -26,7 +30,10 @@ class OpenRouterModel:
     @property
     def supports_strict_json_schema(self) -> bool:
         """Return True when OpenRouter advertises JSON schema enforcement."""
-        return _STRICT_JSON_SCHEMA_PARAMETER in self.supported_parameters
+        return all(
+            parameter in self.supported_parameters
+            for parameter in _STRICT_JSON_SCHEMA_PARAMETERS
+        )
 
 
 def _coerce_openrouter_model(raw: dict[str, Any]) -> OpenRouterModel:
@@ -70,15 +77,15 @@ def search_openrouter_models(
     """Return OpenRouter catalogue models matching the supplied filters.
 
     ``require_strict_json_schema`` maps to OpenRouter's
-    ``supported_parameters=structured_outputs`` catalogue filter, then verifies
-    the returned metadata locally so callers only see models that advertise
-    JSON schema enforcement.
+    ``supported_parameters`` catalogue filter, then verifies the returned
+    metadata locally so callers only see models compatible with the strict
+    structured-output requests used by the library.
     """
     query: dict[str, str] = {}
     if output_modalities:
         query["output_modalities"] = ",".join(output_modalities)
     if require_strict_json_schema:
-        query["supported_parameters"] = _STRICT_JSON_SCHEMA_PARAMETER
+        query["supported_parameters"] = ",".join(_STRICT_JSON_SCHEMA_PARAMETERS)
 
     url = _OPENROUTER_MODELS_URL
     if query:

@@ -259,41 +259,37 @@ def test_openrouter_requires_providers_that_support_requested_parameters(monkeyp
     assert calls[0]["extra_body"]["provider"]["require_parameters"] is True
     assert calls[0]["response_format"]["type"] == "json_schema"
     assert calls[0]["response_format"]["json_schema"]["strict"] is True
+    assert "temperature" not in calls[0]
 
 
-def test_openrouter_retries_without_strict_parameter_routing(monkeypatch, caplog):
+def test_openrouter_parameter_routing_failure_stays_strict(monkeypatch, caplog):
     calls = []
 
     def fake_completion(**kwargs):
         calls.append(kwargs)
-        if len(calls) == 1:
-            raise RuntimeError(
-                "NotFoundError: OpenrouterException - "
-                '{"error":{"message":"No endpoints found that can handle the requested '
-                'parameters.","code":404}}'
-            )
-        return {
-            "choices": [
-                {
-                    "message": {
-                        "content": json.dumps({"a": [{"q": 0, "s": "jane"}]}),
-                    }
-                }
-            ]
-        }
+        raise RuntimeError(
+            "NotFoundError: OpenrouterException - "
+            '{"error":{"message":"No endpoints found that can handle the requested '
+            'parameters.","code":404}}'
+        )
 
     monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
 
     client = LiteLLMClient("openrouter", "openai/gpt-5-nano")
     with caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.litellm"):
-        result = client.generate("prompt text", AttributionResultWire)
+        try:
+            client.generate("prompt text", AttributionResultWire)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("strict OpenRouter routing failure should be surfaced")
 
-    assert result.a[0].s == "jane"
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0]["extra_body"]["provider"]["require_parameters"] is True
-    assert "extra_body" not in calls[1]
-    assert calls[1]["response_format"]["type"] == "json_schema"
-    assert any("retrying without provider.require_parameters" in r.message for r in caplog.records)
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert "temperature" not in calls[0]
+    assert any("strict OpenRouter parameter routing failed" in r.message for r in caplog.records)
+    assert not any("retrying without provider.require_parameters" in r.message for r in caplog.records)
 
 
 def test_openrouter_parameter_requirement_is_not_sent_to_other_litellm_providers(monkeypatch):

@@ -35,6 +35,7 @@ def test_search_openrouter_models_filters_for_strict_json_schema(monkeypatch):
                         "description": "OpenAI model",
                         "context_length": 1047576,
                         "supported_parameters": [
+                            "max_tokens",
                             "response_format",
                             "structured_outputs",
                             "temperature",
@@ -45,7 +46,7 @@ def test_search_openrouter_models_filters_for_strict_json_schema(monkeypatch):
                         "name": "Plain JSON",
                         "description": "Supports basic response format only",
                         "context_length": 8192,
-                        "supported_parameters": ["response_format"],
+                        "supported_parameters": ["max_tokens", "response_format"],
                     },
                 ]
             }
@@ -63,7 +64,9 @@ def test_search_openrouter_models_filters_for_strict_json_schema(monkeypatch):
     assert timeout == 3
     query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     assert query["output_modalities"] == ["text"]
-    assert query["supported_parameters"] == ["structured_outputs"]
+    assert query["supported_parameters"] == [
+        "response_format,structured_outputs,max_tokens"
+    ]
 
 
 def test_search_openrouter_models_can_leave_strict_json_schema_filter_off(monkeypatch):
@@ -77,7 +80,11 @@ def test_search_openrouter_models_can_leave_strict_json_schema_filter_off(monkey
                     {
                         "id": "openai/gpt-4.1-mini",
                         "name": "GPT-4.1 Mini",
-                        "supported_parameters": ["structured_outputs"],
+                        "supported_parameters": [
+                            "max_tokens",
+                            "response_format",
+                            "structured_outputs",
+                        ],
                     },
                     {
                         "id": "example/plain-json",
@@ -108,19 +115,31 @@ def test_search_openrouter_models_applies_text_search_and_limit(monkeypatch):
                         "id": "anthropic/claude-sonnet-4.5",
                         "name": "Claude Sonnet 4.5",
                         "description": "Anthropic model",
-                        "supported_parameters": ["structured_outputs"],
+                        "supported_parameters": [
+                            "max_tokens",
+                            "response_format",
+                            "structured_outputs",
+                        ],
                     },
                     {
                         "id": "openai/gpt-4.1-mini",
                         "name": "GPT-4.1 Mini",
                         "description": "OpenAI model",
-                        "supported_parameters": ["structured_outputs"],
+                        "supported_parameters": [
+                            "max_tokens",
+                            "response_format",
+                            "structured_outputs",
+                        ],
                     },
                     {
                         "id": "openai/gpt-5-nano",
                         "name": "GPT-5 Nano",
                         "description": "OpenAI model",
-                        "supported_parameters": ["structured_outputs"],
+                        "supported_parameters": [
+                            "max_tokens",
+                            "response_format",
+                            "structured_outputs",
+                        ],
                     },
                 ]
             }

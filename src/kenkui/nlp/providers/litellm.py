@@ -248,8 +248,9 @@ class LiteLLMClient:
                     "strict": True,
                 },
             },
-            "temperature": 0,
         }
+        if self.provider.lower() != "openrouter":
+            kwargs["temperature"] = 0
         extra_body = _openrouter_extra_body(self.provider)
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -270,45 +271,35 @@ class LiteLLMClient:
         import litellm
 
         last_exc: Exception | None = None
-        kwargs_variants = [self._completion_kwargs(prompt, schema, max_tokens=max_tokens)]
-        if self.provider.lower() == "openrouter" and "extra_body" in kwargs_variants[0]:
-            relaxed_kwargs = dict(kwargs_variants[0])
-            relaxed_kwargs.pop("extra_body", None)
-            kwargs_variants.append(relaxed_kwargs)
-
-        for variant_idx, kwargs in enumerate(kwargs_variants):
-            for attempt in range(_MAX_RETRIES + 1):
-                try:
-                    if hasattr(litellm, "acompletion"):
-                        response = await litellm.acompletion(**kwargs)
-                    else:
-                        response = await asyncio.to_thread(litellm.completion, **kwargs)
-                except Exception as exc:
-                    last_exc = exc
-                    _logger.debug(
+        kwargs = self._completion_kwargs(prompt, schema, max_tokens=max_tokens)
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                if hasattr(litellm, "acompletion"):
+                    response = await litellm.acompletion(**kwargs)
+                else:
+                    response = await asyncio.to_thread(litellm.completion, **kwargs)
+            except Exception as exc:
+                last_exc = exc
+                _logger.debug(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
+                    "completion failed raw_error=%s",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    max_tokens,
+                    exc,
+                )
+                if _is_openrouter_parameter_routing_error(exc):
+                    _logger.warning(
                         "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
-                        "completion failed raw_error=%s",
+                        "strict OpenRouter parameter routing failed (%s)",
                         self.provider,
                         self.runtime_model,
                         schema.__name__,
                         max_tokens,
-                        exc,
+                        _sanitize_litellm_error(exc),
                     )
-                    if (
-                        variant_idx + 1 < len(kwargs_variants)
-                        and _is_openrouter_parameter_routing_error(exc)
-                    ):
-                        _logger.warning(
-                            "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
-                            "strict OpenRouter parameter routing failed (%s); retrying without "
-                            "provider.require_parameters",
-                            self.provider,
-                            self.runtime_model,
-                            schema.__name__,
-                            max_tokens,
-                            _sanitize_litellm_error(exc),
-                        )
-                        break
+                else:
                     _logger.warning(
                         "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s "
                         "completion failed (%s)",
@@ -318,58 +309,56 @@ class LiteLLMClient:
                         max_tokens,
                         _sanitize_litellm_error(exc),
                     )
-                    raise
-                raw = _message_content(response)
-                if not raw:
-                    last_exc = ConnectionError(
-                        f"LiteLLM model '{self.runtime_model}' returned empty content"
-                    )
-                    _logger.warning(
-                        "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
-                        self.provider,
-                        self.runtime_model,
-                        schema.__name__,
-                    )
-                    if attempt < _MAX_RETRIES:
-                        continue
-                    raise last_exc
-                try:
-                    return _validate_litellm_json(raw, schema)
-                except ValidationError as exc:
-                    last_exc = exc
+                raise
+            raw = _message_content(response)
+            if not raw:
+                last_exc = ConnectionError(
+                    f"LiteLLM model '{self.runtime_model}' returned empty content"
+                )
+                _logger.warning(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s returned empty content",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                )
+                if attempt < _MAX_RETRIES:
+                    continue
+                raise last_exc
+            try:
+                return _validate_litellm_json(raw, schema)
+            except ValidationError as exc:
+                last_exc = exc
+                _logger.debug(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s attempt=%d "
+                    "validation failed raw_response=%r",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    attempt + 1,
+                    raw,
+                )
+                if attempt < _MAX_RETRIES:
                     _logger.debug(
-                        "LiteLLMClient.generate: provider=%s model=%s schema=%s attempt=%d "
-                        "validation failed raw_response=%r",
-                        self.provider,
-                        self.runtime_model,
-                        schema.__name__,
-                        attempt + 1,
-                        raw,
-                    )
-                    if attempt < _MAX_RETRIES:
-                        _logger.debug(
-                            "LiteLLMClient.generate: provider=%s model=%s schema=%s "
-                            "validation failed response_chars=%d errors=%d; retrying",
-                            self.provider,
-                            self.runtime_model,
-                            schema.__name__,
-                            len(raw),
-                            len(exc.errors()),
-                        )
-                        continue
-                    _logger.warning(
                         "LiteLLMClient.generate: provider=%s model=%s schema=%s "
-                        "validation failed after %d attempt(s) response_chars=%d errors=%d",
+                        "validation failed response_chars=%d errors=%d; retrying",
                         self.provider,
                         self.runtime_model,
                         schema.__name__,
-                        attempt + 1,
                         len(raw),
                         len(exc.errors()),
                     )
-                    raise
-            else:
-                continue
+                    continue
+                _logger.warning(
+                    "LiteLLMClient.generate: provider=%s model=%s schema=%s "
+                    "validation failed after %d attempt(s) response_chars=%d errors=%d",
+                    self.provider,
+                    self.runtime_model,
+                    schema.__name__,
+                    attempt + 1,
+                    len(raw),
+                    len(exc.errors()),
+                )
+                raise
 
         raise last_exc  # type: ignore[misc]
 
