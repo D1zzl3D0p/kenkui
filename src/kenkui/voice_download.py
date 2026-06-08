@@ -9,6 +9,7 @@ from .voice_registry import (
     compiled_voices_dir,
     get_catalog,
     validate_manifest,
+    verify_manifest_assets,
     voice_data_dir,
 )
 
@@ -71,7 +72,7 @@ def download_voices(
     for manifest_name in ("manifest.json", "voice_manifest.json", "voices/manifest.json"):
         manifest = local_dir / manifest_name
         if manifest.exists():
-            validate_manifest(manifest)
+            verify_manifest_assets(validate_manifest(manifest))
             break
 
     if progress_callback is not None:

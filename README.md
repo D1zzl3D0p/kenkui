@@ -128,27 +128,24 @@ result = kenkui.full_analysis(
 
 ```python
 voices = kenkui.list_voices()
-voices = kenkui.list_voices(gender="Female", accent="British", source="compiled")
+voices = kenkui.list_voices(gender="Female", accent="British", origin="kenkui_compiled")
 
 voice = kenkui.get_voice("alba")   # VoiceInfo | None
 
 cast = kenkui.suggest_cast(
     roster=scan.characters,
-    excluded_voices=["alba"],
     default_voice="sarah",
 )
-# cast.speaker_voices: dict[str, str]
+# cast.speaker_voices: dict[character_id, voice_id]
 
 narrator = kenkui.recommend_narrator(scan.characters, default_voice="alba")
 
-result = kenkui.exclude_voice("marius")   # ExcludeResult
-result = kenkui.include_voice("marius")   # IncludeResult
+kenkui.set_voice_pool_enabled("marius", False)
 
-preview = kenkui.audition_voice("alba", text="Hello world.")
+preview = kenkui.prepare_voice_preview("alba", text="Hello world.")
 # preview.audio_path, preview.duration_ms
 
 dl = kenkui.download_voice(force=False)   # DownloadResult
-dl = kenkui.fetch_voice(repo_id="user/repo")
 ```
 
 ### Series
@@ -269,4 +266,4 @@ Commercial use is permitted with attribution.
 
 Licensed under [Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/).
 
-> **Note:** Compiled voices sourced from EARS (identifiable by `EARS` in the voice name via `kenkui.list_voices()`) **may not be used for commercial purposes**. If you are building a commercial product with kenkui, use only VCTK-sourced or built-in voices.
+> **Note:** Compiled voices sourced from EARS (identifiable by the `dataset` field via `kenkui.list_voices()`) **may not be used for commercial purposes**. If you are building a commercial product with kenkui, use only VCTK-sourced or built-in voices.

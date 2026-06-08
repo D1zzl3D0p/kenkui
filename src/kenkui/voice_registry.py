@@ -283,6 +283,24 @@ def validate_manifest(path: Path) -> list[VoiceCatalogEntry]:
     return load_manifest(path)
 
 
+def verify_manifest_assets(entries: list[VoiceCatalogEntry]) -> None:
+    """Verify local manifest assets against declared size and SHA-256 metadata."""
+    for entry in entries:
+        if entry.path is not None and entry.path.exists():
+            if entry.size_bytes is not None and entry.path.stat().st_size != entry.size_bytes:
+                raise VoiceCatalogError(f"Voice {entry.voice_id!r} asset size does not match manifest")
+            if entry.sha256 is not None and _hash_file(entry.path) != entry.sha256:
+                raise VoiceCatalogError(f"Voice {entry.voice_id!r} asset hash does not match manifest")
+        if entry.preview.path:
+            preview_path = Path(entry.preview.path)
+            if (
+                preview_path.exists()
+                and entry.preview.sha256 is not None
+                and _hash_file(preview_path) != entry.preview.sha256
+            ):
+                raise VoiceCatalogError(f"Voice {entry.voice_id!r} preview hash does not match manifest")
+
+
 def _validate_unique_voice_ids(entries: list[VoiceCatalogEntry], *, source: str) -> None:
     seen: set[str] = set()
     for entry in entries:
@@ -320,15 +338,30 @@ class VoiceCatalog:
         entries = builtin_catalog_entries()
         for path in _manifest_paths(self.data_dir):
             if path.exists():
-                entries.extend(load_manifest(path))
+                entries = self._merge_entries(entries, load_manifest(path))
                 break
 
         custom_manifest = self.custom_manifest_path
         if custom_manifest.exists():
-            entries.extend(load_manifest(custom_manifest))
+            entries = self._merge_entries(entries, load_manifest(custom_manifest))
 
         _validate_unique_voice_ids(entries, source="voice catalog")
         return entries
+
+    @staticmethod
+    def _merge_entries(
+        base: list[VoiceCatalogEntry],
+        overlay: list[VoiceCatalogEntry],
+    ) -> list[VoiceCatalogEntry]:
+        merged = list(base)
+        index = {entry.voice_id: i for i, entry in enumerate(merged)}
+        for entry in overlay:
+            if entry.voice_id in index:
+                merged[index[entry.voice_id]] = entry
+            else:
+                index[entry.voice_id] = len(merged)
+                merged.append(entry)
+        return merged
 
     @property
     def custom_manifest_path(self) -> Path:
@@ -408,7 +441,13 @@ class VoiceCatalog:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if compiled_path.resolve() != destination.resolve():
             destination.write_bytes(compiled_path.read_bytes())
-        preview = PreviewInfo(path=str(preview_path)) if preview_path else PreviewInfo()
+        preview = PreviewInfo()
+        if preview_path:
+            cached_preview = preview_cache_dir() / f"{voice_id}.wav"
+            cached_preview.parent.mkdir(parents=True, exist_ok=True)
+            if preview_path.resolve() != cached_preview.resolve():
+                cached_preview.write_bytes(preview_path.read_bytes())
+            preview = PreviewInfo(path=str(cached_preview), sha256=_hash_file(cached_preview))
         entry = VoiceCatalogEntry.from_dict(
             {
                 "voice_id": voice_id,
@@ -479,6 +518,7 @@ __all__ = [
     "load_manifest",
     "preview_cache_dir",
     "validate_manifest",
+    "verify_manifest_assets",
     "voice_data_dir",
     "write_manifest",
 ]

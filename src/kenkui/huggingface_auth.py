@@ -51,11 +51,8 @@ def is_model_gated(model_id: str) -> bool:
 def is_custom_voice(voice: str) -> bool:
     """Return True if this voice requires HuggingFace authentication.
 
-    - ``hf://`` URLs always require auth.
-    - Local file paths do not require auth (user owns the file).
-    - Compiled voices (``.safetensors``) do not require auth.
-    - Built-in pocket-tts voices do not require auth.
-    - Uncompiled voices (``.wav`` audio prompts) require the gated pocket-tts model.
+    Runtime voices are catalog IDs.  Known catalog voices are either built-in
+    Pocket TTS IDs or local compiled assets and do not require HuggingFace auth.
     - Unknown voices are treated as requiring auth (safe default).
     """
     if voice.startswith("hf://"):
@@ -67,7 +64,7 @@ def is_custom_voice(voice: str) -> bool:
     meta = get_catalog().resolve(voice)
     if meta is None:
         return True  # Unknown voice — be safe
-    return meta.origin != "pocket_tts_builtin"
+    return False
 
 
 def check_auth_status(model_id: str = "kyutai/pocket-tts") -> AuthStatus:

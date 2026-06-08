@@ -14,7 +14,13 @@ from kenkui.services.voice_service import (
     set_voice_pool_enabled,
     suggest_cast,
 )
-from kenkui.voice_registry import PreviewInfo, VoiceCatalogEntry, load_manifest, write_manifest
+from kenkui.voice_registry import (
+    PreviewInfo,
+    VoiceCatalog,
+    VoiceCatalogEntry,
+    load_manifest,
+    write_manifest,
+)
 
 
 def _entry(
@@ -132,6 +138,20 @@ def test_set_voice_pool_enabled_writes_catalog_state():
     assert result.pool_enabled is False
 
 
+def test_catalog_pool_override_replaces_builtin_without_duplicate(tmp_path):
+    catalog = VoiceCatalog(data_dir=tmp_path)
+
+    updated = catalog.set_pool_enabled("alba", False)
+
+    assert updated.voice_id == "alba"
+    assert updated.pool_enabled is False
+
+    reloaded = VoiceCatalog(data_dir=tmp_path)
+    alba_entries = [v for v in reloaded.voices if v.voice_id == "alba"]
+    assert len(alba_entries) == 1
+    assert alba_entries[0].pool_enabled is False
+
+
 def test_suggest_cast_uses_pool_enabled_entries_only():
     catalog = MagicMock()
     catalog.pool.return_value = [
@@ -228,3 +248,25 @@ def test_import_custom_voice_compiles_and_writes_manifest(tmp_path):
     assert result.voice.voice_id == "my_voice"
     assert result.voice.origin == "custom_compiled"
     assert catalog_path.exists()
+
+
+def test_add_custom_voice_copies_preview_out_of_temp_dir(tmp_path, monkeypatch):
+    cache_home = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    catalog = VoiceCatalog(data_dir=tmp_path / "data")
+    compiled = tmp_path / "compiled.safetensors"
+    compiled.write_bytes(b"compiled")
+    preview = tmp_path / "preview.wav"
+    preview.write_bytes(b"preview")
+
+    entry = catalog.add_custom_voice(
+        voice_id="local_preview",
+        display_name="Local Preview",
+        gender="Female",
+        compiled_path=compiled,
+        preview_path=preview,
+    )
+
+    assert entry.preview.path is not None
+    assert Path(entry.preview.path).exists()
+    assert Path(entry.preview.path).is_relative_to(cache_home)

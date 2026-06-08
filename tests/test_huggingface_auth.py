@@ -85,6 +85,24 @@ class TestIsCustomVoice:
     def test_unknown_name_needs_auth(self):
         assert is_custom_voice("unknown_voice") is True
 
+    def test_known_compiled_catalog_voice_needs_no_auth(self, tmp_path):
+        from kenkui.voice_registry import VoiceCatalogEntry
+
+        asset = tmp_path / "voice.safetensors"
+        asset.write_bytes(b"compiled")
+        catalog = MagicMock()
+        catalog.resolve.return_value = VoiceCatalogEntry(
+            voice_id="compiled_voice",
+            display_name="Compiled Voice",
+            origin="kenkui_compiled",
+            asset_kind="safetensors",
+            gender="Female",
+            pool_enabled=True,
+            path=asset,
+        )
+        with patch("kenkui.voice_registry.get_catalog", return_value=catalog):
+            assert is_custom_voice("compiled_voice") is False
+
 
 # ---------------------------------------------------------------------------
 # is_model_gated
