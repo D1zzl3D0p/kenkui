@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
+_DEFAULT_REMOTE_CONTEXT_TOKENS = 32768
+_DEFAULT_REMOTE_OUTPUT_TOKENS = 8192
+_MIN_REMOTE_OUTPUT_TOKENS = 256
+_REMOTE_CONTEXT_SAFETY_TOKENS = 128
+_ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE = 8
 
 
 def _litellm_model(provider: str, model: str) -> str:
@@ -41,6 +47,50 @@ def _litellm_model(provider: str, model: str) -> str:
     if provider in {"anthropic", "openai"}:
         return model
     return model
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        _logger.warning("Ignoring invalid %s=%r; expected integer", name, raw)
+        return default
+    return value if value > 0 else default
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _remote_context_tokens(model: str) -> int:
+    configured = os.environ.get("KENKUI_NLP_REMOTE_CONTEXT_TOKENS")
+    if configured is not None:
+        return _env_int("KENKUI_NLP_REMOTE_CONTEXT_TOKENS", _DEFAULT_REMOTE_CONTEXT_TOKENS)
+
+    model_norm = model.lower()
+    if "microsoft/phi-4" in model_norm or model_norm.endswith("phi-4"):
+        return 16384
+    return _DEFAULT_REMOTE_CONTEXT_TOKENS
+
+
+def _remote_output_tokens() -> int:
+    return _env_int("KENKUI_NLP_REMOTE_OUTPUT_TOKENS", _DEFAULT_REMOTE_OUTPUT_TOKENS)
+
+
+def _remote_attribution_call_budget(prompt: str, quote_count: int, model: str) -> tuple[int, int, int]:
+    prompt_tokens = _estimate_tokens(prompt)
+    context_tokens = _remote_context_tokens(model)
+    output_limit = _remote_output_tokens()
+    expected_response_tokens = max(
+        _MIN_REMOTE_OUTPUT_TOKENS,
+        quote_count * _ATTRIBUTION_RESPONSE_TOKENS_PER_QUOTE,
+    )
+    available_output_tokens = context_tokens - prompt_tokens - _REMOTE_CONTEXT_SAFETY_TOKENS
+    max_tokens = min(output_limit, expected_response_tokens, available_output_tokens)
+    return prompt_tokens, context_tokens, max(1, max_tokens)
 
 
 def _message_content(response: object) -> str:
@@ -65,38 +115,43 @@ class LiteLLMClient:
         self.model = model
         self.runtime_model = _litellm_model(provider, model)
 
-    def generate(self, prompt: str, schema: type[T]) -> T:
+    def generate(self, prompt: str, schema: type[T], *, max_tokens: int | None = None) -> T:
         import litellm
 
         json_schema = schema.model_json_schema()
         _logger.debug(
-            "LiteLLMClient.generate: provider=%s model=%s schema=%s prompt_chars=%d schema_defs=%d",
+            "LiteLLMClient.generate: provider=%s model=%s schema=%s prompt_chars=%d max_tokens=%s schema_defs=%d",
             self.provider,
             self.runtime_model,
             schema.__name__,
             len(prompt),
+            max_tokens,
             len(json_schema.get("$defs", {})) if isinstance(json_schema, dict) else 0,
         )
-        try:
-            response = litellm.completion(
-                model=self.runtime_model,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema.__name__,
-                        "schema": json_schema,
-                        "strict": True,
-                    },
+        kwargs = {
+            "model": self.runtime_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema.__name__,
+                    "schema": json_schema,
+                    "strict": True,
                 },
-                temperature=0,
-            )
+            },
+            "temperature": 0,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        try:
+            response = litellm.completion(**kwargs)
         except Exception as exc:
             _logger.warning(
-                "LiteLLMClient.generate: provider=%s model=%s schema=%s completion failed (%s)",
+                "LiteLLMClient.generate: provider=%s model=%s schema=%s max_tokens=%s completion failed (%s)",
                 self.provider,
                 self.runtime_model,
                 schema.__name__,
+                max_tokens,
                 exc,
             )
             raise
@@ -245,30 +300,91 @@ class LiteLLMAttributionAdapter:
         static_block = _build_attribution_static_block(roster)
         llm = LiteLLMClient(self._provider, self._config.attribution_model)
 
-        def _attribute_single(paras: list[str], dq: list[Quote]) -> dict[int, AttributionItem]:
+        def _prompt_for(paras: list[str], dq: list[Quote]) -> str:
             annotated_text = annotate_chapter(paras, dq, alias_to_slug, slug_to_pronoun)
-            prompt = f"{static_block}\n\n{_build_attribution_dynamic_block(annotated_text)}"
-            result = llm.generate(prompt, AttributionResultWire)
+            return f"{static_block}\n\n{_build_attribution_dynamic_block(annotated_text)}"
+
+        def _attribute_single(paras: list[str], dq: list[Quote]) -> dict[int, AttributionItem]:
+            prompt = _prompt_for(paras, dq)
+            prompt_tokens, context_tokens, max_tokens = _remote_attribution_call_budget(
+                prompt,
+                len(dq),
+                llm.runtime_model,
+            )
+            _logger.debug(
+                "LiteLLMAttributionAdapter: chapter %r call budget prompt~%d context=%d max_tokens=%d quotes=%d",
+                chapter_label,
+                prompt_tokens,
+                context_tokens,
+                max_tokens,
+                len(dq),
+            )
+            result = llm.generate(prompt, AttributionResultWire, max_tokens=max_tokens)
             return {item.quote_id: item for item in attribution_wire_to_full(result).attributions}
 
-        try:
-            attributed = _attribute_single(clean_paragraphs, dialogue_quotes)
-            returned = len(attributed)
-            expected = len(dialogue_quotes)
-            if returned < expected:
-                _logger.warning(
-                    "LiteLLMAttributionAdapter: chapter %r — LLM returned %d/%d dialogue quotes (missing %d)",
-                    chapter_label,
-                    returned,
-                    expected,
-                    expected - returned,
-                )
-            all_attributions.update(attributed)
-        except Exception as exc:
+        def _retry_missing_quotes(
+            paras: list[str],
+            chunk_quotes: list[Quote],
+            attributed: dict[int, AttributionItem],
+            *,
+            chunk_idx: int,
+            chunk_total: int,
+        ) -> None:
+            missing = [q for q in chunk_quotes if q.id not in attributed]
+            if not missing:
+                return
             _logger.warning(
-                "LiteLLMAttributionAdapter: chapter %r attribution failed (%s); chunking",
+                "LiteLLMAttributionAdapter: chapter %r chunk %d/%d — retrying %d missing quote(s)",
                 chapter_label,
-                exc,
+                chunk_idx,
+                chunk_total,
+                len(missing),
+            )
+            for q in missing:
+                local_para = q.para_index
+                if local_para < 0 or local_para >= len(paras):
+                    continue
+                retry_quote = Quote(
+                    id=q.id,
+                    text=q.text,
+                    para_index=0,
+                    char_offset=q.char_offset - sum(len(p) + 2 for p in paras[:local_para]),
+                    kind=q.kind,
+                )
+                try:
+                    attributed.update(_attribute_single([paras[local_para]], [retry_quote]))
+                except Exception as retry_exc:
+                    _logger.warning(
+                        "LiteLLMAttributionAdapter: chapter %r chunk %d/%d quote %d retry failed (%s)",
+                        chapter_label,
+                        chunk_idx,
+                        chunk_total,
+                        q.id,
+                        retry_exc,
+                    )
+
+            still_missing = [q for q in chunk_quotes if q.id not in attributed]
+            if still_missing:
+                _logger.warning(
+                    "LiteLLMAttributionAdapter: chapter %r chunk %d/%d — defaulting %d missing quote(s) to Unknown",
+                    chapter_label,
+                    chunk_idx,
+                    chunk_total,
+                    len(still_missing),
+                )
+                for q in still_missing:
+                    attributed[q.id] = AttributionItem(
+                        quote_id=q.id,
+                        speaker="Unknown",
+                        emotion="neutral",
+                        confidence=1,
+                    )
+
+        def _attribute_chunks(reason: str) -> None:
+            _logger.warning(
+                "LiteLLMAttributionAdapter: chapter %r %s; chunking",
+                chapter_label,
+                reason,
             )
             chunks = chunk_paragraphs(clean_paragraphs, dialogue_quotes)
             for chunk_idx, chunk in enumerate(chunks, start=1):
@@ -305,6 +421,13 @@ class LiteLLMAttributionAdapter:
                             expected,
                             expected - returned,
                         )
+                        _retry_missing_quotes(
+                            chunk_paras,
+                            chunk_quotes,
+                            attributed,
+                            chunk_idx=chunk_idx,
+                            chunk_total=len(chunks),
+                        )
                     all_attributions.update(attributed)
                 except Exception as chunk_exc:
                     _logger.warning(
@@ -324,6 +447,34 @@ class LiteLLMAttributionAdapter:
                                 confidence=1,
                             ),
                         )
+
+        full_prompt = _prompt_for(clean_paragraphs, dialogue_quotes)
+        full_prompt_tokens, full_context_tokens, full_max_tokens = _remote_attribution_call_budget(
+            full_prompt,
+            len(dialogue_quotes),
+            llm.runtime_model,
+        )
+        if full_prompt_tokens + full_max_tokens + _REMOTE_CONTEXT_SAFETY_TOKENS > full_context_tokens:
+            _attribute_chunks(
+                f"exceeds token estimate (prompt~{full_prompt_tokens} tok + "
+                f"max_tokens={full_max_tokens} vs context {full_context_tokens})"
+            )
+        else:
+            try:
+                attributed = _attribute_single(clean_paragraphs, dialogue_quotes)
+                returned = len(attributed)
+                expected = len(dialogue_quotes)
+                if returned < expected:
+                    _logger.warning(
+                        "LiteLLMAttributionAdapter: chapter %r — LLM returned %d/%d dialogue quotes (missing %d)",
+                        chapter_label,
+                        returned,
+                        expected,
+                        expected - returned,
+                    )
+                all_attributions.update(attributed)
+            except Exception as exc:
+                _attribute_chunks(f"attribution failed ({exc})")
 
         for q in quotes:
             all_attributions.setdefault(
@@ -352,4 +503,6 @@ __all__ = [
     "LiteLLMClient",
     "LiteLLMExtractionAdapter",
     "_litellm_model",
+    "_remote_attribution_call_budget",
+    "_remote_context_tokens",
 ]
