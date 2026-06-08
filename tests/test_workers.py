@@ -1,7 +1,7 @@
 """Tests for kenkui.voice_loader and kenkui.workers helpers.
 
 Coverage:
-- load_voice — built-in names, local files, hf:// URLs, fallback
+- load_voice — catalog built-ins and compiled assets
 - get_batch_info — batch counts, first-chapter sizing, empty chapter
 - _tensor_to_audio — None, empty, 1-D, 2-D, 3-D tensors
 - _render_text — success, empty tensor, exception retry, all-fail
@@ -26,6 +26,7 @@ from pydub import AudioSegment
 
 from kenkui.models import AudioResult, Chapter, Segment
 from kenkui.voice_loader import load_voice
+from kenkui.voice_registry import VoiceCatalogEntry
 from kenkui.workers import (
     DEFAULT_BATCH_SIZE,
     FIRST_CHAPTER_BATCH_SIZE,
@@ -54,49 +55,40 @@ def _make_chapter(paragraphs: list[str], index: int = 0) -> Chapter:
 
 class TestLoadVoice:
     def test_builtin_name_returned_unchanged(self):
-        assert load_voice("alba") == "alba"
-        assert load_voice("cosette") == "cosette"
+        catalog = MagicMock()
+        catalog.resolve.return_value = VoiceCatalogEntry(
+            voice_id="alba",
+            display_name="Alba",
+            origin="pocket_tts_builtin",
+            asset_kind="pocket_tts_builtin",
+            gender="Male",
+            pool_enabled=True,
+        )
+        with patch("kenkui.voice_registry.get_catalog", return_value=catalog):
+            assert load_voice("alba") == "alba"
 
-    def test_existing_local_file_returned_as_str(self):
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(b"RIFF")  # minimal wav header stub
-            path = f.name
-        result = load_voice(path)
-        assert result == path
+    def test_compiled_asset_returns_path(self, tmp_path):
+        asset = tmp_path / "voice.safetensors"
+        asset.write_bytes(b"compiled")
+        catalog = MagicMock()
+        catalog.resolve.return_value = VoiceCatalogEntry(
+            voice_id="custom",
+            display_name="Custom",
+            origin="custom_compiled",
+            asset_kind="safetensors",
+            gender="Female",
+            pool_enabled=False,
+            path=asset,
+        )
+        with patch("kenkui.voice_registry.get_catalog", return_value=catalog):
+            assert load_voice("custom") == str(asset)
 
-    def test_nonexistent_path_treated_as_builtin(self):
-        # A path that looks like a file but doesn't exist falls through to built-in
-        result = load_voice("/nonexistent/path/voice.wav")
-        # Should return something (either the path treated as builtin name, or fallback)
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    def test_hf_url_triggers_download(self):
-        # hf_hub_download is imported inside the function; patch at huggingface_hub
-        with patch("huggingface_hub.hf_hub_download", return_value="/tmp/voice.wav") as mock_dl:
-            result = load_voice("hf://user/repo/voice.wav")
-            assert result == "/tmp/voice.wav"
-            mock_dl.assert_called_once()
-
-    def test_hf_url_bad_format_falls_back_to_alba(self):
-        with patch("huggingface_hub.hf_hub_download", side_effect=Exception("network")):
-            result = load_voice("hf://bad/url")
-            assert result == "alba"
-
-    def test_hf_url_parses_repo_and_filename(self):
-        """repo_id and filename are correctly split from hf:// URL."""
-        captured: dict = {}
-
-        def mock_download(repo_id, filename, **kwargs):
-            captured["repo_id"] = repo_id
-            captured["filename"] = filename
-            return "/tmp/voice.wav"
-
-        with patch("huggingface_hub.hf_hub_download", side_effect=mock_download):
-            load_voice("hf://myuser/myrepo/voices/speaker.wav")
-
-        assert captured["repo_id"] == "myuser/myrepo"
-        assert captured["filename"] == "voices/speaker.wav"
+    def test_unknown_voice_id_raises(self):
+        catalog = MagicMock()
+        catalog.resolve.return_value = None
+        with patch("kenkui.voice_registry.get_catalog", return_value=catalog):
+            with pytest.raises(KeyError):
+                load_voice("unknown")
 
 
 # ---------------------------------------------------------------------------

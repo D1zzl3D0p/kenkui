@@ -344,47 +344,47 @@ def list_voices(
     gender: str | None = None,
     accent: str | None = None,
     dataset: str | None = None,
-    source: str | None = None,
+    origin: str | None = None,
+    pool_enabled: bool | None = None,
     config_path: str | None = None,
 ) -> list:
     """Return all voices matching the given filters.
 
     Returns:
-        List of VoiceInfo dataclasses with name, gender, accent, source, excluded flag.
+        List of VoiceInfo dataclasses keyed by canonical voice_id.
     """
     from .services.voice_service import list_voices as _list_voices
     return _list_voices(
         gender=gender,
         accent=accent,
         dataset=dataset,
-        source=source,
+        origin=origin,
+        pool_enabled=pool_enabled,
         config_path=config_path,
     )
 
 
-def get_voice(name: str, config_path: str | None = None):
-    """Look up a single voice by name.
+def get_voice(voice_id: str, config_path: str | None = None):
+    """Look up a single voice by canonical voice_id.
 
     Returns:
         VoiceInfo if found, None otherwise.
     """
     from .services.voice_service import get_voice as _get_voice
-    return _get_voice(name, config_path=config_path)
+    return _get_voice(voice_id, config_path=config_path)
 
 
 def suggest_cast(
     *,
     roster: list,
-    excluded_voices: list[str],
     default_voice: str,
     chapters: list | None = None,
     config_path: str | None = None,
 ) -> SuggestCastResult:  # noqa: F821
-    """Assign voices to characters using round-robin pool with conflict resolution.
+    """Assign voices to characters from catalog pool-enabled voices.
 
     Args:
         roster:          List of CharacterInfo objects to assign voices to.
-        excluded_voices: Voice names to exclude from auto-assignment.
         default_voice:   Narrator voice (excluded from character pool).
         chapters:        Optional chapter list for conflict resolution.
         config_path:     Optional config file name or path.
@@ -395,7 +395,6 @@ def suggest_cast(
     from .services.voice_service import suggest_cast as _suggest_cast
     return _suggest_cast(
         roster=roster,
-        excluded_voices=excluded_voices,
         default_voice=default_voice,
         chapters=chapters,
         config_path=config_path,
@@ -404,14 +403,12 @@ def suggest_cast(
 
 def recommend_narrator(
     roster: list,
-    excluded: list[str] | None = None,
     default_voice: str = "",
 ) -> str:
     """Recommend a narrator voice based on dominant character gender in roster.
 
     Args:
         roster:        List of CharacterInfo objects.
-        excluded:      Voice names to exclude from consideration.
         default_voice: Fallback voice name.
 
     Returns:
@@ -420,7 +417,6 @@ def recommend_narrator(
     from .services.voice_service import top_gender_matched_voice
     return top_gender_matched_voice(
         roster,
-        excluded=excluded or [],
         default_voice=default_voice,
     )
 
@@ -494,45 +490,43 @@ def build_character_review_choices(
     )
 
 
-def exclude_voice(name: str, config_path: str | None = None) -> ExcludeResult:  # noqa: F821
-    """Add a voice to the excluded-from-auto-assignment list.
-
-    Returns:
-        ExcludeResult with updated excluded list and optional gender-pool warning.
-    """
-    from .services.voice_service import exclude_voice as _exclude_voice
-    return _exclude_voice(name, config_path=config_path)
+def set_voice_pool_enabled(voice_id: str, enabled: bool):
+    """Enable or disable a catalog voice for automatic assignment."""
+    from .services.voice_service import set_voice_pool_enabled as _set
+    return _set(voice_id, enabled)
 
 
-def include_voice(name: str, config_path: str | None = None) -> IncludeResult:  # noqa: F821
-    """Remove a voice from the excluded list (restores it to auto-assignment).
-
-    Returns:
-        IncludeResult with updated excluded list.
-    """
-    from .services.voice_service import include_voice as _include_voice
-    return _include_voice(name, config_path=config_path)
-
-
-def audition_voice(
-    voice_name: str,
+def prepare_voice_preview(
+    voice_id: str,
     text: str | None = None,
-    config_path: str | None = None,
-    progress_callback: Callable[[int, str], None] | None = None,
 ) -> AudioPreviewResult:  # noqa: F821
-    """Synthesize a short audio preview for a voice.
+    """Return a local playable preview path for a catalog voice."""
+    from .services.voice_service import prepare_voice_preview as _prepare
+    return _prepare(voice_id, text=text)
 
-    Saves output to ~/.cache/kenkui/previews/{voice_name}.wav.
 
-    Returns:
-        AudioPreviewResult with audio_path and duration_ms.
-    """
-    from .services.voice_service import audition_voice as _audition_voice
-    return _audition_voice(
-        voice_name,
-        text=text,
-        config_path=config_path,
-        progress_callback=progress_callback,
+def import_custom_voice(
+    *,
+    source: str,
+    voice_id: str,
+    display_name: str,
+    gender: str,
+    pool_enabled: bool = False,
+    accent: str | None = None,
+    tags: list[str] | None = None,
+    notes: str | None = None,
+):
+    """Compile a prompt source and add it as a local custom voice."""
+    from .services.voice_service import import_custom_voice as _import_custom_voice
+    return _import_custom_voice(
+        source=source,
+        voice_id=voice_id,
+        display_name=display_name,
+        gender=gender,
+        pool_enabled=pool_enabled,
+        accent=accent,
+        tags=tags,
+        notes=notes,
     )
 
 
@@ -811,9 +805,9 @@ __all__ = [
     "annotate_voice_choices",
     "format_unresolved_conflict_warnings",
     "build_character_review_choices",
-    "exclude_voice",
-    "include_voice",
-    "audition_voice",
+    "set_voice_pool_enabled",
+    "prepare_voice_preview",
+    "import_custom_voice",
     "download_voice",
     "compiled_voices_available",
     "fetch_voice",

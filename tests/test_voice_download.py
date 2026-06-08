@@ -1,52 +1,55 @@
-"""Tests for src/kenkui/voice_download.py"""
 from unittest.mock import MagicMock, patch
 
 
 def test_voices_are_present_false_when_dir_missing(tmp_path):
-    from kenkui.voice_download import voices_are_present
-    with patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path / "nonexistent"):
-        assert voices_are_present() is False
+    from kenkui import voice_download as dl
+
+    with patch("kenkui.voice_download.compiled_voices_dir", return_value=tmp_path / "missing"):
+        assert dl.voices_are_present() is False
 
 
 def test_voices_are_present_false_when_empty(tmp_path):
-    from kenkui.voice_download import voices_are_present
+    from kenkui import voice_download as dl
+
     compiled = tmp_path / "compiled"
     compiled.mkdir()
-    with patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path):
-        assert voices_are_present() is False
+    with patch("kenkui.voice_download.compiled_voices_dir", return_value=compiled):
+        assert dl.voices_are_present() is False
 
 
 def test_voices_are_present_true_with_safetensors(tmp_path):
-    from kenkui.voice_download import voices_are_present
+    from kenkui import voice_download as dl
+
     compiled = tmp_path / "compiled"
     compiled.mkdir()
-    (compiled / "TestVoice-M-VCTK-P001-American.safetensors").touch()
-    with patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path):
-        assert voices_are_present() is True
+    (compiled / "voice.safetensors").touch()
+    with patch("kenkui.voice_download.compiled_voices_dir", return_value=compiled):
+        assert dl.voices_are_present() is True
 
 
 def test_download_voices_calls_snapshot_download(tmp_path):
     from kenkui import voice_download as dl
-    mock_invalidate = MagicMock()
+
+    catalog = MagicMock()
     with (
-        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
+        patch("kenkui.voice_download.voice_data_dir", return_value=tmp_path),
         patch("huggingface_hub.snapshot_download") as mock_snap,
-        patch("kenkui.voice_download.get_registry") as mock_reg,
+        patch("kenkui.voice_download.get_catalog", return_value=catalog),
     ):
-        mock_reg.return_value.invalidate = mock_invalidate
         dl.download_voices()
+
     mock_snap.assert_called_once()
-    call_kwargs = mock_snap.call_args
-    assert call_kwargs.kwargs.get("repo_id") == dl.HF_VOICES_REPO or call_kwargs.args[0] == dl.HF_VOICES_REPO
+    assert mock_snap.call_args.kwargs["repo_id"] == dl.HF_VOICES_REPO
+    assert mock_snap.call_args.kwargs["revision"] == dl.HF_VOICES_REVISION
+    catalog.invalidate.assert_called_once()
 
 
-def test_download_voices_calls_invalidate(tmp_path):
-    from kenkui import voice_download as dl
-    mock_registry = MagicMock()
-    with (
-        patch("kenkui.voice_download._VOICES_LOCAL_DIR", tmp_path),
-        patch("huggingface_hub.snapshot_download"),
-        patch("kenkui.voice_download.get_registry", return_value=mock_registry),
-    ):
-        dl.download_voices()
-    mock_registry.invalidate.assert_called_once()
+def test_fetch_uncompiled_voices_is_removed():
+    from kenkui.voice_download import fetch_uncompiled_voices
+
+    try:
+        fetch_uncompiled_voices()
+    except RuntimeError as exc:
+        assert "Uncompiled voice sources" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")

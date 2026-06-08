@@ -63,11 +63,11 @@ def is_custom_voice(voice: str) -> bool:
     if Path(voice).exists():
         return False
 
-    from .voice_registry import get_registry
-    meta = get_registry().resolve(voice)
+    from .voice_registry import get_catalog
+    meta = get_catalog().resolve(voice)
     if meta is None:
         return True  # Unknown voice — be safe
-    return meta.source == "uncompiled"
+    return meta.origin != "pocket_tts_builtin"
 
 
 def check_auth_status(model_id: str = "kyutai/pocket-tts") -> AuthStatus:

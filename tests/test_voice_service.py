@@ -1,497 +1,230 @@
-"""Tests for kenkui.services.voice_service."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from kenkui.services.voice_service import (
     VoiceInfo,
-    annotate_voice_choices,
-    assign_simple_cast,
-    audition_voice,
-    build_character_review_choices,
-    build_roster_payload,
-    build_voice_users,
-    exclude_voice,
-    format_character_review_label,
-    format_unresolved_conflict_warnings,
-    gender_from_pronoun,
-    get_voice,
-    include_voice,
+    import_custom_voice,
     list_voices,
-    merge_speaker_voices,
-    sort_cast,
-    top_gender_matched_voice,
+    prepare_voice_preview,
+    set_voice_pool_enabled,
+    suggest_cast,
 )
-from kenkui.voice_registry import VoiceMetadata
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from kenkui.voice_registry import PreviewInfo, VoiceCatalogEntry, load_manifest, write_manifest
 
 
-def _make_meta(
-    name: str,
-    gender: str | None = "Male",
-    source: str = "builtin",
-    accent: str | None = "American",
-    dataset: str | None = None,
-    speaker_id: str | None = None,
-) -> VoiceMetadata:
-    return VoiceMetadata(
-        name=name,
-        file_path=None,
-        source=source,
+def _entry(
+    voice_id: str,
+    gender: str,
+    *,
+    pool_enabled: bool = True,
+    origin: str = "pocket_tts_builtin",
+    path: Path | None = None,
+) -> VoiceCatalogEntry:
+    return VoiceCatalogEntry(
+        voice_id=voice_id,
+        display_name=voice_id.title(),
+        origin=origin,  # type: ignore[arg-type]
+        asset_kind="pocket_tts_builtin" if origin == "pocket_tts_builtin" else "safetensors",
         gender=gender,
-        accent=accent,
-        dataset=dataset,
-        speaker_id=speaker_id,
+        pool_enabled=pool_enabled,
+        path=path,
     )
-
-
-def _make_app_config(excluded_voices: list[str] | None = None):
-    cfg = MagicMock()
-    cfg.excluded_voices = excluded_voices or []
-    return cfg
 
 
 @dataclass
 class FakeCharacter:
+    character_id: str
     gender_pronoun: str | None
     prominence: int
-    character_id: str = "Character"
-
-
-# ---------------------------------------------------------------------------
-# list_voices
-# ---------------------------------------------------------------------------
-
-
-def test_list_voices_sets_excluded_flag():
-    """Excluded flag is True for voices in excluded_voices config list."""
-    meta_a = _make_meta("alba")
-    meta_b = _make_meta("marius")
-
-    mock_registry = MagicMock()
-    mock_registry.filter.return_value = [meta_a, meta_b]
-
-    mock_config = _make_app_config(excluded_voices=["alba"])
-
-    with (
-        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-    ):
-        result = list_voices()
-
-    assert len(result) == 2
-    alba_info = next(v for v in result if v.name == "alba")
-    marius_info = next(v for v in result if v.name == "marius")
-    assert alba_info.excluded is True
-    assert marius_info.excluded is False
-
-
-def test_list_voices_filters_by_gender():
-    """list_voices passes gender filter through to registry.filter."""
-    mock_registry = MagicMock()
-    mock_registry.filter.return_value = []
-    mock_config = _make_app_config()
-
-    with (
-        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-    ):
-        list_voices(gender="Female")
-
-    mock_registry.filter.assert_called_once_with(
-        gender="Female", accent=None, dataset=None, source=None
-    )
-
-
-# ---------------------------------------------------------------------------
-# get_voice
-# ---------------------------------------------------------------------------
-
-
-def test_get_voice_found():
-    """get_voice returns a VoiceInfo with correct fields and excluded flag."""
-    meta = _make_meta("alba", gender="Male", accent="American")
-
-    mock_registry = MagicMock()
-    mock_registry.resolve.return_value = meta
-
-    mock_config = _make_app_config(excluded_voices=[])
-
-    with (
-        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-    ):
-        result = get_voice("alba")
-
-    assert result is not None
-    assert isinstance(result, VoiceInfo)
-    assert result.name == "alba"
-    assert result.gender == "Male"
-    assert result.accent == "American"
-    assert result.excluded is False
-    mock_registry.resolve.assert_called_once_with("alba")
-
-
-def test_get_voice_not_found():
-    """get_voice returns None when the registry does not recognise the name."""
-    mock_registry = MagicMock()
-    mock_registry.resolve.return_value = None
-
-    with patch("kenkui.services.voice_service.get_registry", return_value=mock_registry):
-        result = get_voice("nonexistent_voice")
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# exclude_voice
-# ---------------------------------------------------------------------------
-
-
-def test_exclude_voice_adds_to_list():
-    """exclude_voice adds the voice name to config.excluded_voices and saves."""
-    mock_config = _make_app_config(excluded_voices=[])
-    mock_config.temp = 1.0
-    mock_config.lsd_decode_steps = 10
-    mock_config.noise_clamp = 1.0
-    mock_config.eos_threshold = -4.0
-
-    mock_registry = MagicMock()
-    mock_registry.filter.return_value = []
-
-    with (
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-        patch("kenkui.services.voice_service.save_app_config") as mock_save,
-        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
-        patch("kenkui.services.voice_service.DEFAULT_CONFIG_PATH", "/fake/path.toml"),
-    ):
-        result = exclude_voice("alba")
-
-    assert "alba" in result.excluded_voices
-    mock_save.assert_called_once()
-
-
-def test_exclude_voice_already_excluded_is_noop():
-    """Re-excluding an already-excluded voice does not duplicate the entry."""
-    mock_config = _make_app_config(excluded_voices=["alba"])
-
-    mock_registry = MagicMock()
-    mock_registry.filter.return_value = []
-
-    with (
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-        patch("kenkui.services.voice_service.save_app_config"),
-        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
-        patch("kenkui.services.voice_service.DEFAULT_CONFIG_PATH", "/fake/path.toml"),
-    ):
-        result = exclude_voice("alba")
-
-    assert result.excluded_voices.count("alba") == 1
-
-
-def test_exclude_voice_warns_on_pool_exhaustion():
-    """When all Male voices are excluded, warning is set on ExcludeResult."""
-    male_meta = _make_meta("alba", gender="Male")
-    female_meta = _make_meta("fantine", gender="Female")
-
-    # After exclusion, both "alba" are excluded — entire Male pool excluded.
-    mock_config = _make_app_config(excluded_voices=["alba"])
-
-    mock_registry = MagicMock()
-    mock_registry.filter.side_effect = lambda gender=None, **_: (
-        [male_meta] if gender == "Male" else [female_meta]
-    )
-
-    with (
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-        patch("kenkui.services.voice_service.save_app_config"),
-        patch("kenkui.services.voice_service.get_registry", return_value=mock_registry),
-        patch("kenkui.services.voice_service.DEFAULT_CONFIG_PATH", "/fake/path.toml"),
-    ):
-        # Excluding the one remaining male voice (config already has "alba" excluded,
-        # but exclude_voice is idempotent, so the result still has only ["alba"])
-        result = exclude_voice("alba")
-
-    assert result.warning == "All Male voices are now excluded from auto-assignment"
-
-
-# ---------------------------------------------------------------------------
-# include_voice
-# ---------------------------------------------------------------------------
-
-
-def test_include_voice_removes_from_list():
-    """include_voice removes the voice from excluded_voices and saves."""
-    mock_config = _make_app_config(excluded_voices=["alba", "marius"])
-
-    with (
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-        patch("kenkui.services.voice_service.save_app_config") as mock_save,
-        patch("kenkui.services.voice_service.DEFAULT_CONFIG_PATH", "/fake/path.toml"),
-    ):
-        result = include_voice("alba")
-
-    assert "alba" not in result.excluded_voices
-    assert "marius" in result.excluded_voices
-    mock_save.assert_called_once()
-
-
-def test_include_voice_not_in_list_is_noop():
-    """Including a voice not in the excluded list returns unchanged list without saving."""
-    mock_config = _make_app_config(excluded_voices=["marius"])
-
-    with (
-        patch("kenkui.services.voice_service.load_app_config", return_value=mock_config),
-        patch("kenkui.services.voice_service.save_app_config") as mock_save,
-    ):
-        result = include_voice("alba")
-
-    assert result.excluded_voices == ["marius"]
-    mock_save.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# gender_from_pronoun
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "pronoun, expected",
-    [
-        ("she/her", "female"),
-        ("she/her/hers", "female"),
-        ("he/him/his", "male"),
-        ("he/him", "male"),
-        ("they/them", "they"),
-        ("", "they"),
-        (None, "they"),
-        ("female", "female"),
-        ("male", "male"),
-        ("She/Her", "female"),   # case-insensitive
-        ("HE/HIM", "male"),
-    ],
-)
-def test_gender_from_pronoun_various_inputs(pronoun, expected):
-    assert gender_from_pronoun(pronoun) == expected
-
-
-# ---------------------------------------------------------------------------
-# top_gender_matched_voice
-# ---------------------------------------------------------------------------
-
-
-def test_top_gender_matched_voice_female_dominant():
-    """Female character has more prominence → returns first female voice."""
-    chars = [
-        FakeCharacter(gender_pronoun="she/her", prominence=100),
-        FakeCharacter(gender_pronoun="he/him", prominence=50),
-    ]
-
-    female_meta = _make_meta("fantine", gender="Female")
-    male_meta = _make_meta("alba", gender="Male")
-
-    mock_registry = MagicMock()
-    mock_registry.filter.side_effect = lambda gender=None, **_: (
-        [male_meta] if gender == "Male" else [female_meta]
-    )
-
-    with patch("kenkui.services.voice_service.get_registry", return_value=mock_registry):
-        result = top_gender_matched_voice(chars, excluded=[], default_voice="alba")
-
-    assert result == "fantine"
-
-
-def test_top_gender_matched_voice_falls_back_to_default():
-    """When no voices are available (all excluded or registry empty), returns default_voice."""
-    chars = [
-        FakeCharacter(gender_pronoun="she/her", prominence=100),
-    ]
-
-    mock_registry = MagicMock()
-    mock_registry.filter.return_value = []
-
-    with patch("kenkui.services.voice_service.get_registry", return_value=mock_registry):
-        result = top_gender_matched_voice(chars, excluded=[], default_voice="fallback")
-
-    assert result == "fallback"
-
-
-def test_top_gender_matched_voice_respects_excluded():
-    """Excluded voices are not returned even when they match the dominant gender."""
-    # Two male characters with equal prominence — only "marius" is not excluded.
-    chars = [
-        FakeCharacter(gender_pronoun="he/him", prominence=80),
-        FakeCharacter(gender_pronoun="he/him", prominence=80),
-    ]
-
-    meta_excluded = _make_meta("alba", gender="Male")
-    meta_available = _make_meta("marius", gender="Male")
-
-    mock_registry = MagicMock()
-    mock_registry.filter.side_effect = lambda gender=None, **_: (
-        [meta_excluded, meta_available] if gender == "Male" else []
-    )
-
-    with patch("kenkui.services.voice_service.get_registry", return_value=mock_registry):
-        result = top_gender_matched_voice(
-            chars, excluded=["alba"], default_voice="fallback"
-        )
-
-    assert result == "marius"
-
-
-# ---------------------------------------------------------------------------
-# sort_cast
-# ---------------------------------------------------------------------------
-
-
-def test_sort_cast_narrator_last():
-    """NARRATOR is pinned alphabetically after all other speakers."""
-    cast = {
-        "NARRATOR": "alba",
-        "Alice": "fantine",
-        "Bob": "marius",
+    display_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.display_name is None:
+            self.display_name = self.character_id
+
+
+def test_manifest_validation_rejects_duplicate_ids(tmp_path):
+    path = tmp_path / "manifest.json"
+    data = {
+        "voices": [
+            {
+                "voice_id": "dup",
+                "display_name": "One",
+                "origin": "pocket_tts_builtin",
+                "asset_kind": "pocket_tts_builtin",
+                "gender": "Male",
+                "pool_enabled": True,
+            },
+            {
+                "voice_id": "dup",
+                "display_name": "Two",
+                "origin": "pocket_tts_builtin",
+                "asset_kind": "pocket_tts_builtin",
+                "gender": "Female",
+                "pool_enabled": True,
+            },
+        ]
     }
-    result = sort_cast(cast)
-    names = [k for k, _ in result]
-    assert names[-1] == "NARRATOR"
-    assert names[0] == "Alice"
-    assert names[1] == "Bob"
+    path.write_text(__import__("json").dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate voice_id"):
+        load_manifest(path)
 
 
-def test_sort_cast_alphabetical_order():
-    """Non-NARRATOR speakers are sorted case-insensitively."""
-    cast = {
-        "Zara": "v1",
-        "alice": "v2",
-        "Bob": "v3",
-    }
-    result = sort_cast(cast)
-    names = [k for k, _ in result]
-    assert names == ["alice", "Bob", "Zara"]
+def test_manifest_validation_requires_gender(tmp_path):
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        __import__("json").dumps(
+            {
+                "voices": [
+                    {
+                        "voice_id": "bad",
+                        "display_name": "Bad",
+                        "origin": "pocket_tts_builtin",
+                        "asset_kind": "pocket_tts_builtin",
+                        "pool_enabled": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid gender"):
+        load_manifest(path)
 
 
-# ---------------------------------------------------------------------------
-# assign_simple_cast
-# ---------------------------------------------------------------------------
+def test_list_voices_returns_catalog_fields():
+    catalog = MagicMock()
+    catalog.filter.return_value = [_entry("alba", "Male")]
+
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = list_voices(gender="Male", pool_enabled=True)
+
+    assert isinstance(result[0], VoiceInfo)
+    assert result[0].voice_id == "alba"
+    assert result[0].origin == "pocket_tts_builtin"
+    assert result[0].pool_enabled is True
+    catalog.filter.assert_called_once_with(
+        gender="Male",
+        accent=None,
+        dataset=None,
+        origin=None,
+        asset_kind=None,
+        pool_enabled=True,
+        status=None,
+    )
 
 
-def test_assign_simple_cast_routes_by_gender():
+def test_set_voice_pool_enabled_writes_catalog_state():
+    catalog = MagicMock()
+    catalog.set_pool_enabled.return_value = _entry("alba", "Male", pool_enabled=False)
+
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = set_voice_pool_enabled("alba", False)
+
+    assert result.voice_id == "alba"
+    assert result.pool_enabled is False
+
+
+def test_suggest_cast_uses_pool_enabled_entries_only():
+    catalog = MagicMock()
+    catalog.pool.return_value = [
+        _entry("enabled_male", "Male", pool_enabled=True),
+        _entry("enabled_female", "Female", pool_enabled=True),
+    ]
     roster = [
-        MagicMock(character_id="Rand", gender_pronoun="he/him"),
-        MagicMock(character_id="Egwene", gender_pronoun="she/her"),
-        MagicMock(character_id="Loial", gender_pronoun="they/them"),
+        FakeCharacter("Rand", "he/him", 10),
+        FakeCharacter("Egwene", "she/her", 9),
     ]
 
-    result = assign_simple_cast(
-        roster=roster,
-        narrator_voice="narrator",
-        male_voice="male-voice",
-        female_voice="female-voice",
-    )
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = suggest_cast(roster=roster, default_voice="alba")
 
-    assert result["NARRATOR"] == "narrator"
-    assert result["Rand"] == "male-voice"
-    assert result["Egwene"] == "female-voice"
-    assert result["Loial"] == "narrator"
+    assert result.speaker_voices == {
+        "Rand": "enabled_male",
+        "Egwene": "enabled_female",
+    }
 
 
-def test_format_character_review_label_includes_series_marker():
-    char = MagicMock(
-        character_id="Rand",
-        display_name="Rand al'Thor",
-        gender_pronoun="he/him",
-        prominence=100,
-    )
-    result = format_character_review_label(
-        char,
-        "alba",
-        pinned={"Rand"},
-        series_name="Wheel of Time",
-    )
-    assert "Wheel of Time" in result
-    assert result.startswith("alba")
+def test_suggest_cast_empty_pool_falls_back_to_default():
+    catalog = MagicMock()
+    catalog.pool.return_value = []
 
-
-def test_build_voice_users_groups_display_names():
-    chars = [
-        MagicMock(character_id="Rand", display_name="Rand al'Thor"),
-        MagicMock(character_id="Mat", display_name="Matrim Cauthon"),
-    ]
-    result = build_voice_users(
-        {"Rand": "alba", "Mat": "alba", "NARRATOR": "cosette"},
-        chars,
-    )
-    assert result == {"alba": ["Rand al'Thor", "Matrim Cauthon"]}
-
-
-def test_annotate_voice_choices_appends_other_users():
-    result = annotate_voice_choices(
-        [{"name": "alba", "value": "alba"}, {"name": "custom", "value": "__custom__"}],
-        {"alba": ["Alice", "Bob", "Charlie"]},
-        exclude_char_name="Alice",
-    )
-    assert result[0]["name"].endswith("  ← Bob, Charlie")
-    assert result[1]["name"] == "custom"
-
-
-def test_format_unresolved_conflict_warnings_handles_pinned_series_voice():
-    result = format_unresolved_conflict_warnings([("Rand", "Mat")], {"Rand"})
-    assert len(result) == 1
-    assert "inherited from the series" in result[0]
-
-
-def test_build_character_review_choices_sorted_by_prominence():
-    chars = [
-        MagicMock(character_id="Mat", display_name="Mat", gender_pronoun="he/him", prominence=10),
-        MagicMock(character_id="Rand", display_name="Rand", gender_pronoun="he/him", prominence=50),
-    ]
-    result = build_character_review_choices(
-        chars,
-        {"Rand": "alba", "Mat": "jean"},
-        "cosette",
-    )
-    assert [item["value"] for item in result] == ["Rand", "Mat"]
-
-
-def test_build_roster_payload_uses_character_fields():
-    chars = [
-        MagicMock(
-            character_id="Rand",
-            gender_pronoun="he/him",
-            quote_count=5,
-            mention_count=10,
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = suggest_cast(
+            roster=[FakeCharacter("Alice", "she/her", 1)],
+            default_voice="narrator",
         )
-    ]
-    assert build_roster_payload(chars) == [
-        {
-            "name": "Rand",
-            "pronoun": "he/him",
-            "quote_count": 5,
-            "mention_count": 10,
-        }
-    ]
+
+    assert result.speaker_voices["Alice"] == "narrator"
+    assert result.warnings
 
 
-def test_merge_speaker_voices_applies_overrides():
-    result = merge_speaker_voices({"Rand": "alba", "Mat": "jean"}, {"Mat": "cosette"})
-    assert result == {"Rand": "alba", "Mat": "cosette"}
+def test_prepare_voice_preview_reuses_manifest_path(tmp_path):
+    preview = tmp_path / "preview.wav"
+    preview.write_bytes(b"wav")
+    entry = VoiceCatalogEntry(
+        voice_id="custom",
+        display_name="Custom",
+        origin="custom_compiled",
+        asset_kind="safetensors",
+        gender="Female",
+        pool_enabled=False,
+        path=tmp_path / "custom.safetensors",
+        preview=PreviewInfo(path=str(preview)),
+    )
+    catalog = MagicMock()
+    catalog.resolve.return_value = entry
+
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = prepare_voice_preview("custom")
+
+    assert result.audio_path == str(preview)
 
 
-# ---------------------------------------------------------------------------
-# audition_voice — skipped (requires pocket_tts model)
-# ---------------------------------------------------------------------------
+def test_import_custom_voice_compiles_and_writes_manifest(tmp_path):
+    catalog_path = tmp_path / "custom" / "custom_manifest.json"
 
+    class FakeCatalog:
+        custom_manifest_path = catalog_path
 
-@pytest.mark.skip(reason="requires pocket_tts model — integration test only")
-def test_audition_voice_creates_wav_file():
-    result = audition_voice("alba", text="Hello world.")
-    assert result.audio_path.endswith(".wav")
-    assert result.duration_ms > 0
+        def add_custom_voice(self, **kwargs):
+            entry = VoiceCatalogEntry(
+                voice_id=kwargs["voice_id"],
+                display_name=kwargs["display_name"],
+                origin="custom_compiled",
+                asset_kind="safetensors",
+                gender=kwargs["gender"],
+                pool_enabled=kwargs["pool_enabled"],
+                path=kwargs["compiled_path"],
+                tags=tuple(kwargs["tags"] or ()),
+                notes=kwargs["notes"],
+            )
+            write_manifest(catalog_path, [entry])
+            return entry
+
+    def compiler(_source: str, output_path: Path) -> Path:
+        output_path.write_bytes(b"compiled")
+        return output_path
+
+    with patch("kenkui.services.voice_service.get_catalog", return_value=FakeCatalog()):
+        result = import_custom_voice(
+            source="prompt.wav",
+            voice_id="my_voice",
+            display_name="My Voice",
+            gender="Female",
+            pool_enabled=True,
+            tags=["narrator"],
+            notes="local test",
+            compiler=compiler,
+        )
+
+    assert result.voice.voice_id == "my_voice"
+    assert result.voice.origin == "custom_compiled"
+    assert catalog_path.exists()

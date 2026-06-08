@@ -1,227 +1,160 @@
-"""voice_service — high-level service functions for voice management.
-
-Public API:
-  list_voices(gender, accent, dataset, source, config_path) -> list[VoiceInfo]
-  get_voice(name, config_path) -> VoiceInfo | None
-  exclude_voice(name, config_path) -> ExcludeResult
-  include_voice(name, config_path) -> IncludeResult
-  audition_voice(voice_name, text, config_path, progress_callback) -> AudioPreviewResult
-  gender_from_pronoun(pronoun) -> str
-  top_gender_matched_voice(characters, excluded, default_voice) -> str
-  sort_cast(speaker_voices) -> list[tuple[str, str]]
-"""
+"""High-level voice catalog services."""
 
 from __future__ import annotations
 
 import logging
+import tempfile
+import urllib.request
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from kenkui.config import DEFAULT_CONFIG_PATH, load_app_config, save_app_config
-from kenkui.voice_registry import VoiceMetadata, get_registry
+from kenkui.voice_registry import (
+    PREVIEW_TEXT,
+    VoiceCatalogEntry,
+    get_catalog,
+    preview_cache_dir,
+)
 
 if TYPE_CHECKING:
     from kenkui.voice_pool import VoicePoolTemplate
 
-# ---------------------------------------------------------------------------
-# Default audition text
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
-DEFAULT_AUDITION_TEXT = (
-    "The rain in Spain stays mainly in the plain. "
-    "How wonderful it is to simply speak and be heard."
-)
-
-
-# ---------------------------------------------------------------------------
-# Return type dataclasses
-# ---------------------------------------------------------------------------
+DEFAULT_AUDITION_TEXT = PREVIEW_TEXT
 
 
 @dataclass
 class VoiceInfo:
-    name: str
-    source: str          # "compiled" | "builtin" | "uncompiled"
-    gender: str | None
+    voice_id: str
+    display_name: str
+    origin: str
+    asset_kind: str
+    gender: str
+    pool_enabled: bool
+    status: str
+    path: str | None
+    preview_path: str | None
+    preview_url: str | None
     accent: str | None
     dataset: str | None
     speaker_id: str | None
+    license: str | None
+    tags: tuple[str, ...]
+    notes: str | None
     description: str
     display_label: str
-    excluded: bool
 
 
 @dataclass
-class ExcludeResult:
-    excluded_voices: list[str]
-    warning: str | None   # non-None when an entire gender pool is now excluded
-
-
-@dataclass
-class IncludeResult:
-    excluded_voices: list[str]
+class PoolUpdateResult:
+    voice_id: str
+    pool_enabled: bool
 
 
 @dataclass
 class AudioPreviewResult:
-    audio_path: str      # absolute path to the saved WAV file
-    duration_ms: int
+    voice_id: str
+    audio_path: str
+    duration_ms: int | None = None
+
+
+@dataclass
+class CustomVoiceImportResult:
+    voice: VoiceInfo
+    manifest_path: str
 
 
 @dataclass
 class SuggestCastResult:
-    speaker_voices: dict[str, str]   # character_name → voice_name
+    speaker_voices: dict[str, str]
     warnings: list[str]
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _voice_metadata_to_info(v: VoiceMetadata, excluded: bool) -> VoiceInfo:
+def _entry_to_info(v: VoiceCatalogEntry) -> VoiceInfo:
     return VoiceInfo(
-        name=v.name,
-        source=v.source,
+        voice_id=v.voice_id,
+        display_name=v.display_name,
+        origin=v.origin,
+        asset_kind=v.asset_kind,
         gender=v.gender,
+        pool_enabled=v.pool_enabled,
+        status=v.status,
+        path=str(v.path) if v.path is not None else None,
+        preview_path=v.preview.path,
+        preview_url=v.preview.url,
         accent=v.accent,
         dataset=v.dataset,
         speaker_id=v.speaker_id,
+        license=v.license,
+        tags=v.tags,
+        notes=v.notes,
         description=v.description,
         display_label=v.display_label,
-        excluded=excluded,
     )
-
-
-# ---------------------------------------------------------------------------
-# Public functions
-# ---------------------------------------------------------------------------
 
 
 def list_voices(
     gender: str | None = None,
     accent: str | None = None,
     dataset: str | None = None,
-    source: str | None = None,
+    origin: str | None = None,
+    asset_kind: str | None = None,
+    pool_enabled: bool | None = None,
+    status: str | None = None,
     config_path: str | None = None,
 ) -> list[VoiceInfo]:
-    """Return all voices matching the given filters, with excluded flag set.
-
-    Voices are returned in registry order: compiled, builtin, uncompiled.
-    """
-    registry = get_registry()
-    voices = registry.filter(gender=gender, accent=accent, dataset=dataset, source=source)
-
-    config = load_app_config(config_path)
-    excluded_set = set(config.excluded_voices)
-
-    return [_voice_metadata_to_info(v, v.name in excluded_set) for v in voices]
-
-
-def get_voice(name: str, config_path: str | None = None) -> VoiceInfo | None:
-    """Look up a single voice by name. Returns None if not found."""
-    meta = get_registry().resolve(name)
-    if meta is None:
-        return None
-
-    config = load_app_config(config_path)
-    excluded_set = set(config.excluded_voices)
-    return _voice_metadata_to_info(meta, meta.name in excluded_set)
+    """Return catalog voices matching explicit metadata filters."""
+    del config_path
+    voices = get_catalog().filter(
+        gender=gender,
+        accent=accent,
+        dataset=dataset,
+        origin=origin,
+        asset_kind=asset_kind,
+        pool_enabled=pool_enabled,
+        status=status,
+    )
+    return [_entry_to_info(v) for v in voices]
 
 
-def exclude_voice(name: str, config_path: str | None = None) -> ExcludeResult:
-    """Add a voice to the excluded-from-auto-assignment list.
-
-    Does not raise if the voice is not in the registry.
-    Returns ExcludeResult with a warning string if an entire gender pool is
-    now excluded.
-    """
-    config = load_app_config(config_path)
-    dest = config_path if config_path is not None else DEFAULT_CONFIG_PATH
-
-    if name not in config.excluded_voices:
-        config.excluded_voices = list(config.excluded_voices) + [name]
-
-    registry = get_registry()
-    male_names = {v.name for v in registry.filter(gender="Male")}
-    female_names = {v.name for v in registry.filter(gender="Female")}
-    excluded_set = set(config.excluded_voices)
-
-    warnings = []
-    if male_names and male_names <= excluded_set:
-        warnings.append("All Male voices are now excluded from auto-assignment")
-    if female_names and female_names <= excluded_set:
-        warnings.append("All Female voices are now excluded from auto-assignment")
-    warning = "; ".join(warnings) if warnings else None
-
-    save_app_config(config, dest)
-    return ExcludeResult(excluded_voices=list(config.excluded_voices), warning=warning)
+def get_voice(voice_id: str, config_path: str | None = None) -> VoiceInfo | None:
+    """Look up a voice by canonical ``voice_id``."""
+    del config_path
+    entry = get_catalog().resolve(voice_id)
+    return _entry_to_info(entry) if entry is not None else None
 
 
-def include_voice(name: str, config_path: str | None = None) -> IncludeResult:
-    """Remove a voice from the excluded list, restoring it to auto-assignment.
-
-    If the voice is not in the excluded list, returns unchanged list (no-op).
-    """
-    config = load_app_config(config_path)
-
-    if name not in config.excluded_voices:
-        return IncludeResult(excluded_voices=list(config.excluded_voices))
-
-    config.excluded_voices = [v for v in config.excluded_voices if v != name]
-    dest = config_path if config_path is not None else DEFAULT_CONFIG_PATH
-    save_app_config(config, dest)
-    return IncludeResult(excluded_voices=list(config.excluded_voices))
+def set_voice_pool_enabled(voice_id: str, enabled: bool) -> PoolUpdateResult:
+    """Enable or disable a catalog voice for automatic cast assignment."""
+    entry = get_catalog().set_pool_enabled(voice_id, enabled)
+    return PoolUpdateResult(voice_id=entry.voice_id, pool_enabled=entry.pool_enabled)
 
 
-def audition_voice(
-    voice_name: str,
-    text: str | None = None,
-    config_path: str | None = None,
-    progress_callback: Callable[[int, str], None] | None = None,
-) -> AudioPreviewResult:
-    """Synthesize a short audio preview for a voice and save it to disk.
+def _download_preview(entry: VoiceCatalogEntry, out_path: Path) -> bool:
+    if not entry.preview.url:
+        return False
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(entry.preview.url, timeout=30) as response:  # noqa: S310
+        out_path.write_bytes(response.read())
+    return True
 
-    Saves output to ~/.cache/kenkui/previews/{voice_name}.wav.
-    Raises on failure (model load error, voice load error, synthesis failure).
 
-    Preview files are saved to ``~/.cache/kenkui/previews/`` (persistent, unlike /tmp)
-    so repeated calls for the same voice reuse the file.
-
-    Progress callback receives (percent: int, message: str) tuples:
-      (0, "Loading model"), (40, "Loading voice"),
-      (70, "Synthesizing"), (100, "Done")
-    """
+def _synthesize_preview(entry: VoiceCatalogEntry, out_path: Path, text: str) -> None:
+    from kenkui.config import load_app_config
     from kenkui.voice_loader import load_voice
     from kenkui.workers import _get_or_load_model, _render_text
 
-    if text is None:
-        text = DEFAULT_AUDITION_TEXT
-
-    out_path = Path.home() / ".cache" / "kenkui" / "previews" / f"{voice_name}.wav"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _cb(percent: int, message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(percent, message)
-
-    _cb(0, "Loading model")
-    config = load_app_config(config_path)
+    config = load_app_config(None)
     model = _get_or_load_model(
         config.temp,
         config.lsd_decode_steps,
         config.noise_clamp,
         config.eos_threshold,
     )
-
-    _cb(40, "Loading voice")
-    voice_resolved = load_voice(voice_name)
-    voice_state = model.get_state_for_audio_prompt(voice_resolved)
-
-    _cb(70, "Synthesizing")
+    voice_state = model.get_state_for_audio_prompt(load_voice(entry.voice_id))
     seg = _render_text(
         model,
         voice_state,
@@ -232,26 +165,112 @@ def audition_voice(
         total_batches=1,
         frames_after_eos=0,
     )
-
     if seg is None:
-        raise RuntimeError(f"Synthesis returned no audio for voice '{voice_name}'")
-
+        raise RuntimeError(f"Synthesis returned no audio for voice_id {entry.voice_id!r}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     seg.export(str(out_path), format="wav")
 
-    _cb(100, "Done")
-    return AudioPreviewResult(
-        audio_path=str(out_path),
-        duration_ms=int(seg.duration_seconds * 1000),
+
+def prepare_voice_preview(
+    voice_id: str,
+    *,
+    text: str | None = None,
+    force: bool = False,
+) -> AudioPreviewResult:
+    """Return a local playable preview path for ``voice_id``.
+
+    Hosted previews are preferred for kenkui compiled voices.  Built-in and
+    custom voices synthesize/cache a local preview when no manifest preview path
+    is already available.
+    """
+    entry = get_catalog().resolve(voice_id)
+    if entry is None:
+        raise KeyError(f"Unknown voice_id: {voice_id}")
+
+    if entry.preview.path:
+        path = Path(entry.preview.path)
+        if path.exists() and not force:
+            return AudioPreviewResult(voice_id=voice_id, audio_path=str(path), duration_ms=entry.preview.duration_ms)
+
+    out_path = preview_cache_dir() / f"{voice_id}.wav"
+    if out_path.exists() and not force:
+        return AudioPreviewResult(voice_id=voice_id, audio_path=str(out_path), duration_ms=entry.preview.duration_ms)
+
+    if entry.preview.url:
+        try:
+            if _download_preview(entry, out_path):
+                return AudioPreviewResult(voice_id=voice_id, audio_path=str(out_path), duration_ms=entry.preview.duration_ms)
+        except Exception as exc:
+            logger.warning("Failed to download hosted preview for %s: %s", voice_id, exc)
+
+    _synthesize_preview(entry, out_path, text or entry.preview.text)
+    return AudioPreviewResult(voice_id=voice_id, audio_path=str(out_path), duration_ms=None)
+
+
+def _default_compile_voice(source: str, output_path: Path) -> Path:
+    """Compile a prompt source to a Pocket TTS safetensors voice state.
+
+    The Pocket TTS export API has changed across releases, so callers and tests
+    may inject a compiler.  This default supports the common ``export_voice``
+    helper and otherwise fails loudly instead of accepting uncompiled prompts.
+    """
+    try:
+        from pocket_tts import export_voice  # type: ignore
+    except Exception as exc:  # pragma: no cover - depends on optional runtime
+        raise RuntimeError("Custom voice import requires Pocket TTS voice export support") from exc
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result = export_voice(source, str(output_path))
+    return Path(result) if result else output_path
+
+
+def import_custom_voice(
+    *,
+    source: str,
+    voice_id: str,
+    display_name: str,
+    gender: str,
+    pool_enabled: bool = False,
+    accent: str | None = None,
+    tags: list[str] | None = None,
+    notes: str | None = None,
+    compiler: Callable[[str, Path], Path] | None = None,
+    preview_generator: Callable[[str, Path], Path] | None = None,
+) -> CustomVoiceImportResult:
+    """Compile a user prompt source and add it as a local custom catalog entry."""
+    if not display_name.strip():
+        raise ValueError("display_name is required")
+    if gender not in ("Male", "Female", "Nonbinary", "Unknown"):
+        raise ValueError("gender must be Male, Female, Nonbinary, or Unknown")
+
+    with tempfile.TemporaryDirectory(prefix="kenkui-voice-import-") as td:
+        compiled_target = Path(td) / f"{voice_id}.safetensors"
+        compiled = (compiler or _default_compile_voice)(source, compiled_target)
+        if compiled.suffix != ".safetensors":
+            raise ValueError("Custom voice compiler must produce a .safetensors file")
+
+        preview_path = None
+        if preview_generator is not None:
+            preview_target = Path(td) / f"{voice_id}.wav"
+            preview_path = preview_generator(str(compiled), preview_target)
+
+        entry = get_catalog().add_custom_voice(
+            voice_id=voice_id,
+            display_name=display_name,
+            gender=gender,
+            compiled_path=compiled,
+            pool_enabled=pool_enabled,
+            accent=accent,
+            tags=tags,
+            notes=notes,
+            preview_path=preview_path,
+        )
+    return CustomVoiceImportResult(
+        voice=_entry_to_info(entry),
+        manifest_path=str(get_catalog().custom_manifest_path),
     )
 
 
-# ---------------------------------------------------------------------------
-# Voice pool helpers
-# ---------------------------------------------------------------------------
-
-
 def gender_from_pronoun(pronoun: str | None) -> str:
-    """Map a gender_pronoun string to 'male', 'female', or 'they'."""
     raw = (pronoun or "").strip().lower()
     if not raw:
         return "they"
@@ -265,18 +284,10 @@ def gender_from_pronoun(pronoun: str | None) -> str:
 
 
 def top_gender_matched_voice(
-    characters: list,          # list[CharacterInfo]
-    excluded: list[str],
+    characters: list,
     default_voice: str,
 ) -> str:
-    """Return the best auto-selected voice based on the dominant character gender.
-
-    Sorts characters by prominence descending, finds the top male/female character,
-    and returns a voice matching the dominant gender. Falls back to default_voice
-    if no gender-matched voices are available.
-    """
     by_quotes = sorted(characters, key=lambda c: c.prominence, reverse=True)
-
     top_male_quotes = 0
     top_female_quotes = 0
     for ch in by_quotes:
@@ -288,9 +299,9 @@ def top_gender_matched_voice(
             top_female_quotes = ch.prominence
             break
 
-    registry = get_registry()
-    male_voices = [v.name for v in registry.filter(gender="Male") if v.name not in excluded]
-    female_voices = [v.name for v in registry.filter(gender="Female") if v.name not in excluded]
+    pool = get_catalog().pool()
+    male_voices = [v.voice_id for v in pool if v.gender.lower() == "male" and v.voice_id != default_voice]
+    female_voices = [v.voice_id for v in pool if v.gender.lower() == "female" and v.voice_id != default_voice]
 
     if top_female_quotes > top_male_quotes and female_voices:
         return female_voices[0]
@@ -306,11 +317,6 @@ def assign_simple_cast(
     male_voice: str,
     female_voice: str,
 ) -> dict[str, str]:
-    """Assign one shared voice per binary gender pool plus narrator fallback.
-
-    ``roster`` items must expose ``character_id`` and ``gender_pronoun``.
-    Ambiguous / non-binary characters fall back to ``narrator_voice``.
-    """
     speaker_voices: dict[str, str] = {"NARRATOR": narrator_voice}
     for ch in roster:
         gender = gender_from_pronoun(getattr(ch, "gender_pronoun", None))
@@ -324,7 +330,6 @@ def assign_simple_cast(
 
 
 def build_roster_payload(characters: list) -> list[dict]:
-    """Serialize character info into the API payload shape used by voice endpoints."""
     return [
         {
             "name": character.character_id,
@@ -340,7 +345,6 @@ def merge_speaker_voices(
     base_assignments: dict[str, str],
     overrides: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Merge speaker assignments with explicit overrides winning."""
     merged = dict(base_assignments)
     if overrides:
         merged.update(overrides)
@@ -353,7 +357,6 @@ def format_character_review_label(
     pinned: set[str] | None = None,
     series_name: str | None = None,
 ) -> str:
-    """Format the CLI review label for a character/voice assignment."""
     pinned = pinned or set()
     gender = getattr(character, "gender_pronoun", None) or "?"
     prominence = getattr(character, "prominence", 0)
@@ -367,13 +370,12 @@ def build_voice_users(
     speaker_voices: dict[str, str],
     characters: list,
 ) -> dict[str, list[str]]:
-    """Build inverse map of voice name to character display names."""
     character_names = {c.character_id: c.display_name for c in characters}
     users: dict[str, list[str]] = defaultdict(list)
-    for character_id, voice_name in speaker_voices.items():
+    for character_id, voice_id in speaker_voices.items():
         if character_id == "NARRATOR":
             continue
-        users[voice_name].append(character_names.get(character_id, character_id))
+        users[voice_id].append(character_names.get(character_id, character_id))
     return dict(users)
 
 
@@ -383,15 +385,14 @@ def annotate_voice_choices(
     *,
     exclude_char_name: str | None = None,
 ) -> list[dict]:
-    """Annotate raw voice choices with other characters already using each voice."""
     result: list[dict] = []
     for choice in voice_choices:
         if choice.get("value") == "__custom__":
             result.append(choice)
             continue
-        voice_name = choice["value"]
-        users = [u for u in voice_users.get(voice_name, []) if u != exclude_char_name]
-        suffix = f"  ← {', '.join(users[:2])}" if users else ""
+        voice_id = choice["value"]
+        users = [u for u in voice_users.get(voice_id, []) if u != exclude_char_name]
+        suffix = f"  <- {', '.join(users[:2])}" if users else ""
         result.append({**choice, "name": choice["name"] + suffix})
     return result
 
@@ -400,20 +401,14 @@ def format_unresolved_conflict_warnings(
     unresolved_conflicts: list[tuple[str, str]] | None,
     pinned: set[str] | None = None,
 ) -> list[str]:
-    """Return user-facing warning strings for unresolved chapter voice conflicts."""
     warnings: list[str] = []
     pinned = pinned or set()
     for char_a, char_b in unresolved_conflicts or []:
-        if char_a in pinned:
-            inherited = char_a
-        elif char_b in pinned:
-            inherited = char_b
-        else:
-            inherited = None
+        inherited = char_a if char_a in pinned else char_b if char_b in pinned else None
         if inherited:
             warnings.append(
                 f"{char_a!r} and {char_b!r} share a chapter with the same voice. "
-                f"{inherited!r} is inherited from the series — change the other if needed."
+                f"{inherited!r} is inherited from the series; change the other if needed."
             )
         else:
             warnings.append(
@@ -431,7 +426,6 @@ def build_character_review_choices(
     pinned: set[str] | None = None,
     series_name: str | None = None,
 ) -> list[dict[str, str]]:
-    """Build review-menu entries for character voice assignments."""
     pinned = pinned or set()
     review_choices: list[dict[str, str]] = []
     for character in sorted(characters, key=lambda c: c.prominence, reverse=True):
@@ -455,46 +449,17 @@ def apply_voice_pool_template(
     template: VoicePoolTemplate,
     series_voices: dict[str, str],
     narrator_voice: str,
-    excluded_voices: list[str] | None = None,
     roster_roles: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Assign voices using the voice pool template for characters not in series_voices.
-
-    Three-tier priority:
-    1. series_voices — already inherited from series (skipped here, caller merges)
-    2. Voice pool template — role + gender + rank → voice
-    3. Round-robin fallback via suggest_cast for characters not covered by template
-
-    Args:
-        roster:          CharacterInfo-like objects (character_id, gender_pronoun, prominence).
-        template:        Loaded VoicePoolTemplate.
-        series_voices:   Already-assigned voices (highest priority, not overridden here).
-        narrator_voice:  NARRATOR fallback voice (excluded from character pools).
-        excluded_voices: Voices to exclude from pool assignment.
-        roster_roles:    Optional {character_id: role_string} from CharacterRecord data.
-
-    Returns:
-        dict mapping character_id → voice_name for previously unassigned characters.
-    """
     from collections import defaultdict
 
     from kenkui.voice_pool import _normalize_gender, _normalize_role
 
     if template.is_empty():
-        # No template configured — fall through entirely to suggest_cast
         unmatched = [c for c in roster if c.character_id not in series_voices]
-        if not unmatched:
-            return {}
-        result = suggest_cast(
-            roster=unmatched,
-            excluded_voices=excluded_voices or [],
-            default_voice=narrator_voice,
-        )
-        return result.speaker_voices
+        return suggest_cast(roster=unmatched, default_voice=narrator_voice).speaker_voices if unmatched else {}
 
     roles = roster_roles or {}
-
-    # Group unassigned characters by (role, gender), sorted by prominence desc within each group
     buckets: dict[tuple[str, str], list] = defaultdict(list)
     for ch in sorted(roster, key=lambda c: c.prominence, reverse=True):
         if ch.character_id in series_voices:
@@ -503,10 +468,8 @@ def apply_voice_pool_template(
         gender_n = _normalize_gender(getattr(ch, "gender_pronoun", "") or "")
         buckets[(role_n, gender_n)].append(ch)
 
-    # Assign voices from template ranked slots / pool
     assigned: dict[str, str] = {}
     pool_counters: dict[tuple, int] = {}
-
     for bucket_key, chars in buckets.items():
         role_n, gender_n = bucket_key
         slot = template.get_slot(role_n, gender_n)
@@ -515,58 +478,36 @@ def apply_voice_pool_template(
             if voice is not None and voice != narrator_voice:
                 assigned[ch.character_id] = voice
 
-    # Characters not covered by template → suggest_cast fallback
     uncovered = [
         c for c in roster
         if c.character_id not in series_voices and c.character_id not in assigned
     ]
     if uncovered:
-        result = suggest_cast(
-            roster=uncovered,
-            excluded_voices=excluded_voices or [],
-            default_voice=narrator_voice,
-        )
-        for char_id, voice in result.speaker_voices.items():
-            if char_id not in assigned:
-                assigned[char_id] = voice
-
+        assigned.update(suggest_cast(roster=uncovered, default_voice=narrator_voice).speaker_voices)
     return assigned
 
 
 def sort_cast(speaker_voices: dict) -> list[tuple[str, str]]:
-    """Sort cast alphabetically with NARRATOR pinned last."""
     return sorted(
         speaker_voices.items(),
         key=lambda kv: ("~" if kv[0] == "NARRATOR" else kv[0].lower()),
     )
 
 
-# ---------------------------------------------------------------------------
-# suggest_cast helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_chapter_cooccurrence_from_paragraphs(chapters) -> dict[int, set[str]]:
-    """Build {chapter_index: set of speaker names} from chapter paragraphs.
-
-    Accepts chapter objects that expose either a `paragraphs` attribute
-    (each paragraph having .speaker and .is_spoken) or a `segments` attribute
-    (each segment having .speaker).
-    """
     result: dict[int, set[str]] = {}
-    EXCLUDED = {"NARRATOR", "SCENE_BREAK", "Unknown"}
+    excluded = {"NARRATOR", "SCENE_BREAK", "Unknown"}
     for idx, ch in enumerate(chapters):
         speakers: set[str] = set()
         if hasattr(ch, "paragraphs"):
             for p in ch.paragraphs:
                 sp = getattr(p, "speaker", None)
-                is_spoken = getattr(p, "is_spoken", False)
-                if sp and is_spoken and sp not in EXCLUDED:
+                if sp and getattr(p, "is_spoken", False) and sp not in excluded:
                     speakers.add(sp)
         elif hasattr(ch, "segments"):
             for s in ch.segments:
                 sp = getattr(s, "speaker", None)
-                if sp and sp not in EXCLUDED and not getattr(s, "is_scene_break", False):
+                if sp and sp not in excluded and not getattr(s, "is_scene_break", False):
                     speakers.add(sp)
         if speakers:
             result[idx] = speakers
@@ -582,12 +523,6 @@ def _resolve_cast_conflicts(
     female_pool: list[str],
     narrator_voice: str,
 ) -> tuple[dict[str, str], list[str]]:
-    """Ensure no two characters sharing a chapter are assigned the same voice.
-
-    Returns (updated_speaker_voices, warnings).
-    """
-    logger = logging.getLogger(__name__)
-
     cooccurrence = _get_chapter_cooccurrence_from_paragraphs(chapters)
     warnings: list[str] = []
     unresolved_seen: set[frozenset] = set()
@@ -598,9 +533,8 @@ def _resolve_cast_conflicts(
         for ch_idx, ch_speakers in cooccurrence.items():
             voice_to_chars: dict[str, list[str]] = defaultdict(list)
             for sp in ch_speakers:
-                v = speaker_voices.get(sp)
-                if v:
-                    voice_to_chars[v].append(sp)
+                if sp in speaker_voices:
+                    voice_to_chars[speaker_voices[sp]].append(sp)
 
             for voice, chars in voice_to_chars.items():
                 if len(chars) <= 1:
@@ -627,67 +561,31 @@ def _resolve_cast_conflicts(
                             warnings.append(
                                 f"Voice conflict: {chars_sorted[0]!r} and "
                                 f"{char_to_reassign!r} share voice {voice!r} in chapter "
-                                f"{ch_idx} — no spare voice available."
+                                f"{ch_idx}; no spare voice available."
                             )
-                            logger.warning(
-                                "Voice conflict: %r and %r share voice %r in chapter %d "
-                                "and no spare voice is available.",
-                                chars_sorted[0], char_to_reassign, voice, ch_idx,
-                            )
-
     return speaker_voices, warnings
 
 
 def suggest_cast(
     *,
     roster: list,
-    excluded_voices: list[str],
     default_voice: str,
     chapters: list | None = None,
     config_path: str | None = None,
 ) -> SuggestCastResult:
-    """Assign voices to characters using round-robin pool + conflict resolution.
-
-    No interactive I/O, no print/Rich/sys.exit. File reads occur via list_voices
-    (voice registry + config).
-    Moved from cli/add.py._auto_assign_character_voices and
-    _resolve_chapter_voice_conflicts.
-
-    Each item in ``roster`` must have:
-      - .character_id  (str) — used as key in the returned speaker_voices dict
-      - .gender_pronoun (str | None)
-      - .prominence    (int property) — used for sorting
-
-    Returns SuggestCastResult(speaker_voices, warnings).
-    """
+    """Assign voices from catalog entries where ``pool_enabled`` is true."""
+    del config_path
     warnings: list[str] = []
-
-    # Fetch all voices from registry (respects config excluded list internally,
-    # but we apply our own excluded_voices filter on top).
-    all_voices = list_voices(config_path=config_path)
-    excluded_set = set(excluded_voices or [])
-
-    # Build gender pools — exclude uncompiled (.wav) voices (no redistribution rights).
-    licensed = [v for v in all_voices if v.source in ("builtin", "compiled")]
-    _all_male = [v.name for v in licensed if (v.gender or "").lower() == "male"]
-    _all_female = [v.name for v in licensed if (v.gender or "").lower() == "female"]
-
-    male_voices = [v for v in _all_male if v not in excluded_set] or _all_male
-    female_voices = [v for v in _all_female if v not in excluded_set] or _all_female
-
-    # Exclude narrator voice from character pools.
-    male_pool = [v for v in male_voices if v != default_voice] or male_voices
-    female_pool = [v for v in female_voices if v != default_voice] or female_voices
+    pool = get_catalog().pool()
+    male_pool = [v.voice_id for v in pool if v.gender.lower() == "male" and v.voice_id != default_voice]
+    female_pool = [v.voice_id for v in pool if v.gender.lower() == "female" and v.voice_id != default_voice]
 
     if not male_pool and not female_pool:
-        warnings.append(
-            "No voices available in the pool; all characters assigned to default_voice."
-        )
+        warnings.append("No voices are enabled in the assignment pool; using the default voice.")
 
-    male_idx, female_idx = 0, 0
-    male_quotes, female_quotes = 0, 0
+    male_idx = female_idx = 0
+    male_quotes = female_quotes = 0
     speaker_voices: dict[str, str] = {}
-
     char_prominence: dict[str, int] = {}
     char_gender: dict[str, str] = {}
 
@@ -695,49 +593,26 @@ def suggest_cast(
         gender = gender_from_pronoun(ch.gender_pronoun)
         char_prominence[ch.character_id] = ch.prominence
         char_gender[ch.character_id] = gender
-
         if gender == "male":
-            if male_pool:
-                voice = male_pool[male_idx % len(male_pool)]
-                male_idx += 1
-            else:
-                voice = default_voice
-                warnings.append(f"No male voices available; assigned default to {ch.character_id!r}.")
+            voice = male_pool[male_idx % len(male_pool)] if male_pool else default_voice
+            male_idx += 1 if male_pool else 0
             male_quotes += ch.prominence
         elif gender == "female":
-            if female_pool:
-                voice = female_pool[female_idx % len(female_pool)]
-                female_idx += 1
-            else:
-                voice = default_voice
-                warnings.append(f"No female voices available; assigned default to {ch.character_id!r}.")
+            voice = female_pool[female_idx % len(female_pool)] if female_pool else default_voice
+            female_idx += 1 if female_pool else 0
+            female_quotes += ch.prominence
+        elif male_quotes <= female_quotes and male_pool:
+            voice = male_pool[male_idx % len(male_pool)]
+            male_idx += 1
+            male_quotes += ch.prominence
+        elif female_pool:
+            voice = female_pool[female_idx % len(female_pool)]
+            female_idx += 1
             female_quotes += ch.prominence
         else:
-            # they/them — pick the pool with fewer total quotes so far
-            if male_quotes <= female_quotes:
-                if male_pool:
-                    voice = male_pool[male_idx % len(male_pool)]
-                    male_idx += 1
-                elif female_pool:
-                    voice = female_pool[female_idx % len(female_pool)]
-                    female_idx += 1
-                else:
-                    voice = default_voice
-                male_quotes += ch.prominence
-            else:
-                if female_pool:
-                    voice = female_pool[female_idx % len(female_pool)]
-                    female_idx += 1
-                elif male_pool:
-                    voice = male_pool[male_idx % len(male_pool)]
-                    male_idx += 1
-                else:
-                    voice = default_voice
-                female_quotes += ch.prominence
-
+            voice = default_voice
         speaker_voices[ch.character_id] = voice
 
-    # Resolve chapter co-occurrence conflicts if chapters provided.
     if chapters:
         speaker_voices, conflict_warnings = _resolve_cast_conflicts(
             speaker_voices=speaker_voices,
@@ -756,15 +631,15 @@ def suggest_cast(
 __all__ = [
     "DEFAULT_AUDITION_TEXT",
     "VoiceInfo",
-    "ExcludeResult",
-    "IncludeResult",
+    "PoolUpdateResult",
     "AudioPreviewResult",
+    "CustomVoiceImportResult",
     "SuggestCastResult",
     "list_voices",
     "get_voice",
-    "exclude_voice",
-    "include_voice",
-    "audition_voice",
+    "set_voice_pool_enabled",
+    "prepare_voice_preview",
+    "import_custom_voice",
     "apply_voice_pool_template",
     "assign_simple_cast",
     "build_roster_payload",

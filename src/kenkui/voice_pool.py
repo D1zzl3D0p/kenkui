@@ -175,17 +175,15 @@ def save_voice_pool_template(template: VoicePoolTemplate, path: Path | None = No
     p.write_bytes(tomli_w.dumps(template.to_dict()).encode("utf-8"))
 
 
-def auto_populate_from_voices(excluded: list[str] | None = None) -> VoicePoolTemplate:
-    """Build a starter template from currently active (non-excluded) voices."""
+def auto_populate_from_voices() -> VoicePoolTemplate:
+    """Build a starter template from catalog pool-enabled voices."""
     from kenkui.services.voice_service import list_voices
 
-    excluded_set = set(excluded or [])
-    all_voices = list_voices()
-    active = [v for v in all_voices if v.name not in excluded_set and not v.excluded]
+    active = list_voices(pool_enabled=True, status="available")
 
-    male = [v.name for v in active if (v.gender or "").lower() == "male"]
-    female = [v.name for v in active if (v.gender or "").lower() == "female"]
-    other = [v.name for v in active if (v.gender or "").lower() not in ("male", "female")]
+    male = [v.voice_id for v in active if v.gender.lower() == "male"]
+    female = [v.voice_id for v in active if v.gender.lower() == "female"]
+    other = [v.voice_id for v in active if v.gender.lower() not in ("male", "female")]
 
     t = VoicePoolTemplate()
     t.protagonist["male"] = GenderSlot(

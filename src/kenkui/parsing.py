@@ -119,18 +119,18 @@ def _auto_assign_unmapped_speakers(
     # Sort most-prominent first so they get first pick of fresh exclusive voices.
     unmapped.sort(key=lambda s: speaker_prominence[s], reverse=True)
 
-    # Pool: built-in + compiled only (exclude uncompiled .wav voices).
+    # Pool: catalog voices explicitly enabled for assignment.
     all_voices = list_voices(config_path=config_path)
-    licensed = [v for v in all_voices if v.source in ("builtin", "compiled")]
+    licensed = [v for v in all_voices if v.pool_enabled and v.status == "available"]
 
     used_voices = set(speaker_voices.values()) | {narrator_voice}
 
-    all_male = [v.name for v in licensed if (v.gender or "").lower() == "male" and v.name != narrator_voice]
-    all_female = [v.name for v in licensed if (v.gender or "").lower() == "female" and v.name != narrator_voice]
+    all_male = [v.voice_id for v in licensed if v.gender.lower() == "male" and v.voice_id != narrator_voice]
+    all_female = [v.voice_id for v in licensed if v.gender.lower() == "female" and v.voice_id != narrator_voice]
 
     if not all_male and not all_female:
         # Absolute fallback: use all licensed voices gender-agnostically.
-        fallback = [v.name for v in licensed if v.name != narrator_voice] or [narrator_voice]
+        fallback = [v.voice_id for v in licensed if v.voice_id != narrator_voice] or [narrator_voice]
         all_male = all_female = list(fallback)
 
     male_used_count = female_used_count = 0
@@ -173,7 +173,7 @@ def _auto_assign_unmapped_speakers(
                 gender = "female"
 
         if not pool:
-            pool = [v.name for v in licensed if v.name != narrator_voice] or [narrator_voice]
+            pool = [v.voice_id for v in licensed if v.voice_id != narrator_voice] or [narrator_voice]
 
         # Try a fresh voice from the gender pool first (exclusive assignment).
         fresh = [v for v in pool if v not in used_voices and v not in exclusive_voices]

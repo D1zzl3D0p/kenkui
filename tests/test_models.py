@@ -381,21 +381,7 @@ class TestQueueItemExecutionMetadata:
         assert restored.provider_status == "completed"
 
 
-class TestAppConfigExcludedVoices:
-    def test_default_is_empty_list(self):
-        assert AppConfig().excluded_voices == []
-
-    def test_round_trip(self):
-        cfg = AppConfig(excluded_voices=["alba", "cosette"])
-        restored = AppConfig.from_dict(cfg.to_dict())
-        assert restored.excluded_voices == ["alba", "cosette"]
-
-    def test_missing_key_backward_compat(self):
-        # Existing config files with no excluded_voices key must not crash
-        cfg = AppConfig.from_dict({"name": "legacy"})
-        assert cfg.excluded_voices == []
-
-    def test_null_value_backward_compat(self):
-        # Hand-edited TOML: excluded_voices = null
-        cfg = AppConfig.from_dict({"excluded_voices": None})
-        assert cfg.excluded_voices == []
+class TestAppConfigVoiceCatalogState:
+    def test_pool_state_is_not_stored_in_app_config(self):
+        cfg = AppConfig.from_dict({"name": "catalog"})
+        assert "excluded_voices" not in cfg.to_dict()

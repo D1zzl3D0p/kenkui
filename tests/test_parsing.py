@@ -266,8 +266,8 @@ class TestAutoAssignUnmappedSpeakers:
         with patch(
             "kenkui.services.voice_service.list_voices",
             return_value=[
-                SimpleNamespace(name="alba", source="builtin", gender="female"),
-                SimpleNamespace(name="cedar", source="builtin", gender="male"),
+                SimpleNamespace(voice_id="alba", pool_enabled=True, status="available", gender="female"),
+                SimpleNamespace(voice_id="cedar", pool_enabled=True, status="available", gender="male"),
             ],
         ):
             assigned = _auto_assign_unmapped_speakers(

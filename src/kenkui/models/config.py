@@ -50,6 +50,7 @@ class AppConfig(BaseSettings):
         env_nested_delimiter="__",
         arbitrary_types_allowed=True,
         populate_by_name=True,
+        extra="ignore",
     )
 
     name: str = "default"
@@ -82,7 +83,6 @@ class AppConfig(BaseSettings):
     nlp_compact_roster: bool = True
     nlp_include_character_descriptions: bool = False
     nlp_descriptions_protagonists_only: bool = True
-    excluded_voices: list[str] = Field(default_factory=list)
     credits_enabled: bool = True
     credits_acknowledgements: str = ""
     credits_license: str = ""
@@ -105,11 +105,6 @@ class AppConfig(BaseSettings):
     def _normalize_m4b_bitrate(cls, v: Any) -> str:
         return _normalize_bitrate(str(v) if v is not None else None, default="96k")
 
-    @field_validator("excluded_voices", mode="before")
-    @classmethod
-    def _coerce_excluded_voices(cls, v: Any) -> list:
-        return list(v) if v else []
-
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)
 
@@ -129,5 +124,3 @@ class AppConfig(BaseSettings):
                 return (init_settings,)
 
         return _InitOnly(**data)  # type: ignore[return-value]
-
-

@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from kenkui.voice_download import _VOICES_LOCAL_DIR, download_voices, fetch_uncompiled_voices
+from kenkui.voice_download import download_voices, fetch_uncompiled_voices, voices_local_dir
 
 
 @dataclass
@@ -21,9 +21,9 @@ def download_compiled(
     """Download compiled voices from HuggingFace."""
     try:
         download_voices(force=force, progress_callback=progress_callback)
-        return DownloadResult(success=True, path=str(_VOICES_LOCAL_DIR), message="Download complete")
+        return DownloadResult(success=True, path=str(voices_local_dir()), message="Download complete")
     except Exception as e:
-        return DownloadResult(success=False, path=str(_VOICES_LOCAL_DIR), message=str(e))
+        return DownloadResult(success=False, path=str(voices_local_dir()), message=str(e))
 
 
 def fetch_uncompiled(
@@ -34,9 +34,9 @@ def fetch_uncompiled(
     """Fetch uncompiled voice sources from HuggingFace."""
     try:
         fetch_uncompiled_voices(repo_id=repo_id, patterns=patterns, progress_callback=progress_callback)
-        return DownloadResult(success=True, path=str(_VOICES_LOCAL_DIR), message="Fetch complete")
+        return DownloadResult(success=True, path=str(voices_local_dir()), message="Fetch complete")
     except Exception as e:
-        return DownloadResult(success=False, path=str(_VOICES_LOCAL_DIR), message=str(e))
+        return DownloadResult(success=False, path=str(voices_local_dir()), message=str(e))
 
 
 __all__ = [

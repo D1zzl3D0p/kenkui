@@ -1,307 +1,342 @@
-"""Voice registry — single source of truth for voice discovery and metadata.
+"""Manifest-driven voice catalog.
 
-Provides :class:`VoiceMetadata` (structured per-voice info parsed from filenames)
-and :class:`VoiceRegistry` (lazy-scanned catalog of all available voices).
-
-Voice sources, in display priority order:
-1. **compiled** — ``.safetensors`` files in ``kenkui/voices/compiled-voices/``.
-   Filename schema: ``{Name}-{Gender}-{Dataset}-{SpeakerId}-{Accent}.safetensors``
-   These require no HuggingFace authentication.
-2. **builtin** — The 21 pocket-tts built-in voice names (``alba``, ``cosette``, …).
-   No file path; passed as a string directly to the TTS model.
-3. **uncompiled** — ``.wav`` audio-prompt files, either from the package
-   ``kenkui/voices/uncompiled-voices/`` directory or from the XDG user data dir
-   ``~/.local/share/kenkui/voices/uncompiled/``.
-   These require HuggingFace authentication (gated pocket-tts model).
+The catalog is the single source of truth for usable voices.  Raw prompts and
+filename metadata are import inputs only; render-time voice resolution uses a
+canonical ``voice_id``.
 """
 
 from __future__ import annotations
 
-import importlib.resources
+import hashlib
+import json
 import logging
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Built-in voice metadata (pocket-tts defaults, no file needed)
-# ---------------------------------------------------------------------------
+VoiceOrigin = Literal["pocket_tts_builtin", "kenkui_compiled", "custom_compiled"]
+VoiceAssetKind = Literal["pocket_tts_builtin", "safetensors"]
+VoiceStatus = Literal["available", "missing", "downloadable"]
+
+DEFAULT_VOICE_PACK_REPO = "D1zzl3D0p/kenkui-voices"
+DEFAULT_VOICE_PACK_REVISION = "main"
+MANIFEST_FILENAMES = ("manifest.json", "voice_manifest.json", "voices/manifest.json")
+CUSTOM_MANIFEST_FILENAME = "custom_manifest.json"
+PREVIEW_TEXT = (
+    "The rain in Spain stays mainly in the plain. "
+    "How wonderful it is to simply speak and be heard."
+)
+
+_VOICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
 _BUILTIN_VOICE_DATA: dict[str, dict[str, str | None]] = {
-    # Voice-donations / single-source voices
-    "alba":           {"gender": "Male",   "accent": "American", "dataset": "Alba-Mackenna", "speaker_id": "casual"},
-    "marius":         {"gender": "Male",   "accent": "American", "dataset": "Voice Donation", "speaker_id": None},
-    "javert":         {"gender": "Male",   "accent": "American", "dataset": "Voice Donation", "speaker_id": None},
-    "cosette":        {"gender": "Female", "accent": "American", "dataset": "Expresso",      "speaker_id": "ex04-ex02_confused_001_channel1_499s"},
-    # EARS
-    "jean":           {"gender": "Male",   "accent": "Southern", "dataset": "EARS", "speaker_id": "P010"},
-    # VCTK (original three, now with full metadata)
-    "fantine":        {"gender": "Female", "accent": "British",  "dataset": "VCTK", "speaker_id": "P244"},
-    "eponine":        {"gender": "Female", "accent": "British",  "dataset": "VCTK", "speaker_id": "P262"},
-    "azelma":         {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P303"},
-    # VCTK (new defaults)
-    "anna":           {"gender": "Female", "accent": "Scottish", "dataset": "VCTK", "speaker_id": "P228"},
-    "vera":           {"gender": "Female", "accent": "English",  "dataset": "VCTK", "speaker_id": "P229"},
-    "charles":        {"gender": "Male",   "accent": "English",  "dataset": "VCTK", "speaker_id": "P254"},
-    "paul":           {"gender": "Male",   "accent": "British",  "dataset": "VCTK", "speaker_id": "P259"},
-    "george":         {"gender": "Male",   "accent": "American", "dataset": "VCTK", "speaker_id": "P315"},
-    "mary":           {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P333"},
-    "jane":           {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P339"},
-    "michael":        {"gender": "Male",   "accent": "American", "dataset": "VCTK", "speaker_id": "P360"},
-    "eve":            {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P361"},
-    # Voice-zero (gender inferred from given names — NOT verified from audio)
-    "bill_boerst":    {"gender": "Male",   "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
-    "caro_davy":      {"gender": "Female", "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
-    "peter_yearsley": {"gender": "Male",   "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
-    "stuart_bell":    {"gender": "Male",   "accent": None,       "dataset": "Voice Zero", "speaker_id": None},
+    "alba": {"gender": "Male", "accent": "American", "dataset": "Alba-Mackenna", "speaker_id": "casual"},
+    "marius": {"gender": "Male", "accent": "American", "dataset": "Voice Donation", "speaker_id": None},
+    "javert": {"gender": "Male", "accent": "American", "dataset": "Voice Donation", "speaker_id": None},
+    "cosette": {
+        "gender": "Female",
+        "accent": "American",
+        "dataset": "Expresso",
+        "speaker_id": "ex04-ex02_confused_001_channel1_499s",
+    },
+    "jean": {"gender": "Male", "accent": "Southern", "dataset": "EARS", "speaker_id": "P010"},
+    "fantine": {"gender": "Female", "accent": "British", "dataset": "VCTK", "speaker_id": "P244"},
+    "eponine": {"gender": "Female", "accent": "British", "dataset": "VCTK", "speaker_id": "P262"},
+    "azelma": {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P303"},
+    "anna": {"gender": "Female", "accent": "Scottish", "dataset": "VCTK", "speaker_id": "P228"},
+    "vera": {"gender": "Female", "accent": "English", "dataset": "VCTK", "speaker_id": "P229"},
+    "charles": {"gender": "Male", "accent": "English", "dataset": "VCTK", "speaker_id": "P254"},
+    "paul": {"gender": "Male", "accent": "British", "dataset": "VCTK", "speaker_id": "P259"},
+    "george": {"gender": "Male", "accent": "American", "dataset": "VCTK", "speaker_id": "P315"},
+    "mary": {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P333"},
+    "jane": {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P339"},
+    "michael": {"gender": "Male", "accent": "American", "dataset": "VCTK", "speaker_id": "P360"},
+    "eve": {"gender": "Female", "accent": "American", "dataset": "VCTK", "speaker_id": "P361"},
+    "bill_boerst": {"gender": "Male", "accent": None, "dataset": "Voice Zero", "speaker_id": None},
+    "caro_davy": {"gender": "Female", "accent": None, "dataset": "Voice Zero", "speaker_id": None},
+    "peter_yearsley": {"gender": "Male", "accent": None, "dataset": "Voice Zero", "speaker_id": None},
+    "stuart_bell": {"gender": "Male", "accent": None, "dataset": "Voice Zero", "speaker_id": None},
 }
 
-BUILTIN_VOICE_NAMES: list[str] = list(_BUILTIN_VOICE_DATA.keys())
+BUILTIN_VOICE_NAMES: list[str] = list(_BUILTIN_VOICE_DATA)
 
 
-# ---------------------------------------------------------------------------
-# VoiceMetadata
-# ---------------------------------------------------------------------------
+class VoiceCatalogError(ValueError):
+    """Raised when a voice manifest is invalid."""
+
 
 @dataclass(frozen=True)
-class VoiceMetadata:
-    """Structured metadata for a single voice.
+class PreviewInfo:
+    text: str = PREVIEW_TEXT
+    path: str | None = None
+    url: str | None = None
+    sha256: str | None = None
+    duration_ms: int | None = None
 
-    All fields except ``name``, ``file_path``, and ``source`` may be ``None``
-    when the voice format does not encode that information (e.g. uncompiled WAVs).
-    """
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> PreviewInfo:
+        if not data:
+            return cls()
+        return cls(
+            text=str(data.get("text") or PREVIEW_TEXT),
+            path=data.get("path"),
+            url=data.get("url"),
+            sha256=data.get("sha256"),
+            duration_ms=data.get("duration_ms"),
+        )
 
-    name: str
-    """Display name / lookup key (e.g. ``"Alasdair"``, ``"alba"``)."""
+    def to_dict(self) -> dict[str, Any]:
+        return {k: v for k, v in asdict(self).items() if v is not None}
 
-    file_path: Path | None
-    """Absolute path to the voice file, or ``None`` for pocket-tts built-ins."""
 
-    source: Literal["compiled", "uncompiled", "builtin"]
-    """Where this voice comes from."""
-
-    gender: str | None
-    """``"Male"`` or ``"Female"``, or ``None`` if unknown."""
-
-    dataset: str | None
-    """Source dataset identifier (e.g. ``"VCTK"``, ``"EARS"``), or ``None``."""
-
-    speaker_id: str | None
-    """Dataset speaker ID (e.g. ``"P246"``), or ``None``."""
-
-    accent: str | None
-    """Accent / region descriptor (e.g. ``"Scottish"``, ``"English-Yorkshire"``), or ``None``."""
-
-    is_default: bool = False
-    """True for voices shipped as pocket-tts built-ins (no file path required)."""
-
-    # ------------------------------------------------------------------
-    # Display helpers
-    # ------------------------------------------------------------------
+@dataclass(frozen=True)
+class VoiceCatalogEntry:
+    voice_id: str
+    display_name: str
+    origin: VoiceOrigin
+    asset_kind: VoiceAssetKind
+    gender: str
+    pool_enabled: bool
+    path: Path | None = None
+    status: VoiceStatus = "available"
+    preview: PreviewInfo = field(default_factory=PreviewInfo)
+    accent: str | None = None
+    dataset: str | None = None
+    speaker_id: str | None = None
+    license: str | None = None
+    tags: tuple[str, ...] = ()
+    notes: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = None
 
     @property
     def description(self) -> str:
-        """Short human-readable description of this voice."""
-        if self.source == "builtin":
-            parts = []
-            if self.gender:
-                parts.append(self.gender)
-            if self.accent:
-                parts.append(self.accent)
-            if self.dataset:
-                parts.append(self.dataset)
-            parts.append("Default")
-            return " · ".join(parts)
-        if self.source == "compiled":
-            parts = []
-            if self.gender:
-                parts.append(self.gender)
-            if self.accent:
-                parts.append(self.accent)
-            if self.dataset:
-                parts.append(self.dataset)
-            return " · ".join(parts) if parts else "Compiled voice"
-        return "Custom voice"
+        parts = [self.gender]
+        if self.accent:
+            parts.append(self.accent)
+        if self.dataset:
+            parts.append(self.dataset)
+        parts.append(self.origin.replace("_", " "))
+        return " · ".join(parts)
 
     @property
     def display_label(self) -> str:
-        """Name + description in a single string for list display."""
-        desc = self.description
-        if desc:
-            return f"{self.name:<20} {desc}"
-        return self.name
+        return f"{self.display_name:<20} {self.description}"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, base_dir: Path | None = None) -> VoiceCatalogEntry:
+        voice_id = str(data.get("voice_id") or "").strip()
+        display_name = str(data.get("display_name") or "").strip()
+        origin = data.get("origin")
+        asset_kind = data.get("asset_kind")
+        gender = str(data.get("gender") or "").strip()
+        if not voice_id or not _VOICE_ID_RE.match(voice_id):
+            raise VoiceCatalogError(f"Invalid voice_id: {voice_id!r}")
+        if not display_name:
+            raise VoiceCatalogError(f"Voice {voice_id!r} is missing display_name")
+        if origin not in ("pocket_tts_builtin", "kenkui_compiled", "custom_compiled"):
+            raise VoiceCatalogError(f"Voice {voice_id!r} has invalid origin {origin!r}")
+        if asset_kind not in ("pocket_tts_builtin", "safetensors"):
+            raise VoiceCatalogError(f"Voice {voice_id!r} has invalid asset_kind {asset_kind!r}")
+        if gender not in ("Male", "Female", "Nonbinary", "Unknown"):
+            raise VoiceCatalogError(f"Voice {voice_id!r} has invalid gender {gender!r}")
+
+        raw_path = data.get("path")
+        path = Path(raw_path) if raw_path else None
+        if path is not None and not path.is_absolute() and base_dir is not None:
+            path = base_dir / path
+        status = str(data.get("status") or "available")
+        if status not in ("available", "missing", "downloadable"):
+            raise VoiceCatalogError(f"Voice {voice_id!r} has invalid status {status!r}")
+        if asset_kind == "safetensors" and path is None and status != "downloadable":
+            raise VoiceCatalogError(f"Voice {voice_id!r} is missing a compiled asset path")
+        if origin == "pocket_tts_builtin" and asset_kind != "pocket_tts_builtin":
+            raise VoiceCatalogError(f"Voice {voice_id!r} has inconsistent built-in asset_kind")
+        if origin != "pocket_tts_builtin" and asset_kind != "safetensors":
+            raise VoiceCatalogError(f"Voice {voice_id!r} must use a safetensors asset")
+
+        if path is not None and asset_kind == "safetensors" and not path.exists():
+            status = "missing"
+
+        return cls(
+            voice_id=voice_id,
+            display_name=display_name,
+            origin=origin,
+            asset_kind=asset_kind,
+            gender=gender,
+            pool_enabled=bool(data.get("pool_enabled", origin != "custom_compiled")),
+            path=path,
+            status=status,  # type: ignore[arg-type]
+            preview=PreviewInfo.from_dict(data.get("preview")),
+            accent=data.get("accent"),
+            dataset=data.get("dataset"),
+            speaker_id=data.get("speaker_id"),
+            license=data.get("license"),
+            tags=tuple(data.get("tags") or ()),
+            notes=data.get("notes"),
+            sha256=data.get("sha256"),
+            size_bytes=data.get("size_bytes"),
+        )
+
+    def to_manifest_dict(self, *, base_dir: Path | None = None) -> dict[str, Any]:
+        path = self.path
+        path_value: str | None = None
+        if path is not None:
+            try:
+                path_value = str(path.relative_to(base_dir)) if base_dir else str(path)
+            except ValueError:
+                path_value = str(path)
+        data: dict[str, Any] = {
+            "voice_id": self.voice_id,
+            "display_name": self.display_name,
+            "origin": self.origin,
+            "asset_kind": self.asset_kind,
+            "gender": self.gender,
+            "pool_enabled": self.pool_enabled,
+            "status": self.status,
+        }
+        if path_value:
+            data["path"] = path_value
+        for key in ("accent", "dataset", "speaker_id", "license", "notes", "sha256", "size_bytes"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        if self.tags:
+            data["tags"] = list(self.tags)
+        preview = self.preview.to_dict()
+        if preview:
+            data["preview"] = preview
+        return data
 
 
-# ---------------------------------------------------------------------------
-# Filename parsers (pure functions — no I/O)
-# ---------------------------------------------------------------------------
-
-def parse_compiled_filename(path: Path) -> VoiceMetadata:
-    """Parse a compiled voice filename into :class:`VoiceMetadata`.
-
-    Expected format: ``{Name}-{Gender}-{Dataset}-{SpeakerId}-{Accent}.safetensors``
-
-    The accent field may itself contain hyphens (e.g. ``English-Yorkshire``).
-    ``split("-", 4)`` is used so all trailing parts are captured as the accent.
-    """
-    stem = path.stem
-    parts = stem.split("-", 4)
-
-    name = parts[0] if len(parts) > 0 else stem
-    gender_code = parts[1] if len(parts) > 1 else None
-    dataset = parts[2] if len(parts) > 2 else None
-    speaker_id = parts[3] if len(parts) > 3 else None
-    accent = parts[4] if len(parts) > 4 else None
-
-    gender_map = {"M": "Male", "F": "Female"}
-    gender = gender_map.get(gender_code or "")
-
-    return VoiceMetadata(
-        name=name,
-        file_path=path,
-        source="compiled",
-        gender=gender,
-        dataset=dataset,
-        speaker_id=speaker_id,
-        accent=accent,
-    )
+def _xdg_data_home() -> Path:
+    raw = os.environ.get("XDG_DATA_HOME")
+    return Path(raw) if raw else Path.home() / ".local" / "share"
 
 
-def parse_uncompiled_filename(path: Path) -> VoiceMetadata:
-    """Parse an uncompiled (legacy .wav) voice filename into :class:`VoiceMetadata`.
-
-    Old format is plain PascalCase with no structured metadata.
-    """
-    return VoiceMetadata(
-        name=path.stem,
-        file_path=path,
-        source="uncompiled",
-        gender=None,
-        dataset=None,
-        speaker_id=None,
-        accent=None,
-    )
+def voice_data_dir() -> Path:
+    return _xdg_data_home() / "kenkui" / "voices"
 
 
-# ---------------------------------------------------------------------------
-# VoiceRegistry
-# ---------------------------------------------------------------------------
+def compiled_voices_dir() -> Path:
+    return voice_data_dir() / "compiled"
 
-class VoiceRegistry:
-    """Lazy-scanned catalog of all available voices.
 
-    Scans voice directories on first access and caches results.  Call
-    :meth:`invalidate` to force a re-scan (e.g. after downloading new voices).
-    """
+def custom_voices_dir() -> Path:
+    return voice_data_dir() / "custom"
 
-    def __init__(self) -> None:
-        self._voices: list[VoiceMetadata] | None = None
 
-    # ------------------------------------------------------------------
-    # Internal scan
-    # ------------------------------------------------------------------
+def preview_cache_dir() -> Path:
+    raw = os.environ.get("XDG_CACHE_HOME")
+    root = Path(raw) if raw else Path.home() / ".cache"
+    return root / "kenkui" / "previews"
 
-    def _scan(self) -> list[VoiceMetadata]:
-        results: list[VoiceMetadata] = []
 
-        # 1. Compiled voices (package bundled .safetensors)
-        results.extend(self._scan_compiled())
-
-        # 2. Built-in pocket-tts voices
-        results.extend(self._builtin_voices())
-
-        # 3. Uncompiled voices (package bundled .wav)
-        results.extend(self._scan_uncompiled_pkg())
-
-        # 4. User-downloaded uncompiled voices (XDG data dir)
-        results.extend(self._scan_uncompiled_user())
-
-        return results
-
-    def _scan_compiled(self) -> list[VoiceMetadata]:
-        voices: list[VoiceMetadata] = []
-        try:
-            compiled_dir = importlib.resources.files("kenkui") / "voices" / "compiled-voices"
-            if compiled_dir.is_dir():
-                for entry in sorted(compiled_dir.iterdir(), key=lambda e: e.name):
-                    if entry.is_file() and entry.name.endswith(".safetensors"):
-                        voices.append(parse_compiled_filename(Path(str(entry))))
-        except Exception as exc:
-            logger.debug("Could not scan compiled voices: %s", exc)
-        # Also scan user-downloaded compiled voices
-        user_compiled = Path.home() / ".local" / "share" / "kenkui" / "voices" / "compiled"
-        if user_compiled.exists():
-            for p in sorted(user_compiled.glob("*.safetensors")):
-                meta = parse_compiled_filename(p)
-                if meta:
-                    voices.append(meta)
-        return voices
-
-    def _scan_uncompiled_pkg(self) -> list[VoiceMetadata]:
-        voices: list[VoiceMetadata] = []
-        try:
-            uncompiled_dir = importlib.resources.files("kenkui") / "voices" / "uncompiled-voices"
-            if uncompiled_dir.is_dir():
-                for entry in sorted(uncompiled_dir.iterdir(), key=lambda e: e.name):
-                    if entry.is_file() and entry.name.endswith(".wav"):
-                        voices.append(parse_uncompiled_filename(Path(str(entry))))
-        except Exception as exc:
-            logger.debug("Could not scan uncompiled package voices: %s", exc)
-        return voices
-
-    def _scan_uncompiled_user(self) -> list[VoiceMetadata]:
-        voices: list[VoiceMetadata] = []
-        try:
-            xdg_data = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
-            user_dir = Path(xdg_data) / "kenkui" / "voices" / "uncompiled"
-            if user_dir.is_dir():
-                for wav_file in sorted(user_dir.glob("*.wav")):
-                    voices.append(parse_uncompiled_filename(wav_file))
-        except Exception as exc:
-            logger.debug("Could not scan user uncompiled voices: %s", exc)
-        return voices
-
-    def _builtin_voices(self) -> list[VoiceMetadata]:
-        return [
-            VoiceMetadata(
-                name=name,
-                file_path=None,
-                source="builtin",
-                gender=data["gender"],
+def builtin_catalog_entries() -> list[VoiceCatalogEntry]:
+    entries: list[VoiceCatalogEntry] = []
+    for voice_id, data in _BUILTIN_VOICE_DATA.items():
+        entries.append(
+            VoiceCatalogEntry(
+                voice_id=voice_id,
+                display_name=voice_id.replace("_", " ").title(),
+                origin="pocket_tts_builtin",
+                asset_kind="pocket_tts_builtin",
+                gender=str(data["gender"] or "Unknown"),
+                pool_enabled=True,
+                accent=data.get("accent"),
                 dataset=data.get("dataset"),
                 speaker_id=data.get("speaker_id"),
-                accent=data.get("accent"),
-                is_default=True,
             )
-            for name, data in _BUILTIN_VOICE_DATA.items()
-        ]
+        )
+    return entries
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+
+def load_manifest(path: Path) -> list[VoiceCatalogEntry]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise VoiceCatalogError(f"Invalid JSON in {path}") from exc
+    voices = raw.get("voices") if isinstance(raw, dict) else raw
+    if not isinstance(voices, list):
+        raise VoiceCatalogError(f"{path} must contain a voices list")
+    entries = [VoiceCatalogEntry.from_dict(item, base_dir=path.parent) for item in voices]
+    _validate_unique_voice_ids(entries, source=str(path))
+    return entries
+
+
+def write_manifest(path: Path, entries: list[VoiceCatalogEntry]) -> Path:
+    _validate_unique_voice_ids(entries, source=str(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "schema_version": 1,
+        "voices": [entry.to_manifest_dict(base_dir=path.parent) for entry in entries],
+    }
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def validate_manifest(path: Path) -> list[VoiceCatalogEntry]:
+    return load_manifest(path)
+
+
+def _validate_unique_voice_ids(entries: list[VoiceCatalogEntry], *, source: str) -> None:
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.voice_id in seen:
+            raise VoiceCatalogError(f"Duplicate voice_id {entry.voice_id!r} in {source}")
+        seen.add(entry.voice_id)
+
+
+def _manifest_paths(root: Path) -> list[Path]:
+    return [root / name for name in MANIFEST_FILENAMES]
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class VoiceCatalog:
+    """Lazy manifest-backed catalog."""
+
+    def __init__(self, *, data_dir: Path | None = None) -> None:
+        self.data_dir = data_dir or voice_data_dir()
+        self._voices: list[VoiceCatalogEntry] | None = None
 
     @property
-    def voices(self) -> list[VoiceMetadata]:
-        """All available voices (compiled first, then builtin, then uncompiled)."""
+    def voices(self) -> list[VoiceCatalogEntry]:
         if self._voices is None:
-            self._voices = self._scan()
+            self._voices = self._load()
         return self._voices
 
-    def resolve(self, name: str) -> VoiceMetadata | None:
-        """Find a voice by name (case-insensitive stem match).
+    def _load(self) -> list[VoiceCatalogEntry]:
+        entries = builtin_catalog_entries()
+        for path in _manifest_paths(self.data_dir):
+            if path.exists():
+                entries.extend(load_manifest(path))
+                break
 
-        Priority: compiled > builtin > uncompiled.
-        """
-        name_lower = name.lower()
-        # Strip extension if provided (e.g. "RafeBeckley.wav" → "rafebeckley")
-        if "." in name_lower:
-            name_lower = name_lower.rsplit(".", 1)[0]
+        custom_manifest = self.custom_manifest_path
+        if custom_manifest.exists():
+            entries.extend(load_manifest(custom_manifest))
 
+        _validate_unique_voice_ids(entries, source="voice catalog")
+        return entries
+
+    @property
+    def custom_manifest_path(self) -> Path:
+        return self.data_dir / "custom" / CUSTOM_MANIFEST_FILENAME
+
+    def resolve(self, voice_id: str) -> VoiceCatalogEntry | None:
         for voice in self.voices:
-            if voice.name.lower() == name_lower:
+            if voice.voice_id == voice_id:
                 return voice
         return None
 
@@ -311,63 +346,139 @@ class VoiceRegistry:
         gender: str | None = None,
         accent: str | None = None,
         dataset: str | None = None,
-        source: str | None = None,
-        is_default: bool | None = None,
-    ) -> list[VoiceMetadata]:
-        """Return voices matching all specified criteria.
-
-        Comparisons are case-insensitive.  ``None`` criteria are ignored.
-        """
-        def matches(v: VoiceMetadata) -> bool:
-            if source and v.source != source:
+        origin: str | None = None,
+        asset_kind: str | None = None,
+        pool_enabled: bool | None = None,
+        status: str | None = None,
+    ) -> list[VoiceCatalogEntry]:
+        def matches(v: VoiceCatalogEntry) -> bool:
+            if origin and v.origin != origin:
                 return False
-            if gender and (v.gender or "").lower() != gender.lower():
+            if asset_kind and v.asset_kind != asset_kind:
+                return False
+            if status and v.status != status:
+                return False
+            if pool_enabled is not None and v.pool_enabled != pool_enabled:
+                return False
+            if gender and v.gender.lower() != gender.lower():
                 return False
             if dataset and (v.dataset or "").lower() != dataset.lower():
                 return False
             if accent and (v.accent or "").lower() != accent.lower():
                 return False
-            if is_default is not None and v.is_default != is_default:
-                return False
             return True
 
         return [v for v in self.voices if matches(v)]
 
+    def pool(self) -> list[VoiceCatalogEntry]:
+        return [
+            v for v in self.voices
+            if v.pool_enabled and v.status == "available"
+        ]
+
+    def set_pool_enabled(self, voice_id: str, enabled: bool) -> VoiceCatalogEntry:
+        existing = self.resolve(voice_id)
+        if existing is None:
+            raise KeyError(f"Unknown voice_id: {voice_id}")
+        custom_manifest = self.custom_manifest_path
+        custom_entries = load_manifest(custom_manifest) if custom_manifest.exists() else []
+        entries_by_id = {entry.voice_id: entry for entry in custom_entries}
+        entries_by_id[voice_id] = replace(existing, pool_enabled=enabled)
+        write_manifest(custom_manifest, list(entries_by_id.values()))
+        self.invalidate()
+        updated = self.resolve(voice_id)
+        if updated is None:
+            raise RuntimeError(f"Failed to reload voice_id: {voice_id}")
+        return updated
+
+    def add_custom_voice(
+        self,
+        *,
+        voice_id: str,
+        display_name: str,
+        gender: str,
+        compiled_path: Path,
+        pool_enabled: bool = False,
+        accent: str | None = None,
+        tags: list[str] | None = None,
+        notes: str | None = None,
+        preview_path: Path | None = None,
+    ) -> VoiceCatalogEntry:
+        destination = self.data_dir / "custom" / f"{voice_id}.safetensors"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if compiled_path.resolve() != destination.resolve():
+            destination.write_bytes(compiled_path.read_bytes())
+        preview = PreviewInfo(path=str(preview_path)) if preview_path else PreviewInfo()
+        entry = VoiceCatalogEntry.from_dict(
+            {
+                "voice_id": voice_id,
+                "display_name": display_name,
+                "origin": "custom_compiled",
+                "asset_kind": "safetensors",
+                "gender": gender,
+                "pool_enabled": pool_enabled,
+                "path": str(destination),
+                "preview": preview.to_dict(),
+                "accent": accent,
+                "tags": tags or [],
+                "notes": notes,
+                "sha256": _hash_file(destination),
+                "size_bytes": destination.stat().st_size,
+            }
+        )
+        custom_manifest = self.custom_manifest_path
+        entries = load_manifest(custom_manifest) if custom_manifest.exists() else []
+        entries = [e for e in entries if e.voice_id != voice_id] + [entry]
+        write_manifest(custom_manifest, entries)
+        self.invalidate()
+        return entry
+
     def invalidate(self) -> None:
-        """Force a re-scan on next access (e.g. after downloading new voices)."""
         self._voices = None
 
 
-# ---------------------------------------------------------------------------
-# Module-level singleton
-# ---------------------------------------------------------------------------
-
-_registry: VoiceRegistry | None = None
+_catalog: VoiceCatalog | None = None
 
 
-def get_registry() -> VoiceRegistry:
-    """Return the shared :class:`VoiceRegistry` singleton."""
-    global _registry
-    if _registry is None:
-        _registry = VoiceRegistry()
-    return _registry
+def get_catalog() -> VoiceCatalog:
+    global _catalog
+    if _catalog is None:
+        _catalog = VoiceCatalog()
+    return _catalog
+
+
+def get_registry() -> VoiceCatalog:
+    """Return the shared catalog.
+
+    Kept as an internal convenience for modules that used the old registry name.
+    It still exposes voice_id-only resolution.
+    """
+    return get_catalog()
 
 
 def get_bundled_voices() -> list[str]:
-    """Return names of all compiled + uncompiled voices, sorted alphabetically."""
-    return sorted(
-        v.name
-        for v in get_registry().voices
-        if v.source in ("compiled", "uncompiled")
-    )
+    """Return canonical IDs for installed kenkui compiled voices."""
+    return sorted(v.voice_id for v in get_catalog().filter(origin="kenkui_compiled"))
 
 
 __all__ = [
     "BUILTIN_VOICE_NAMES",
-    "VoiceMetadata",
-    "VoiceRegistry",
-    "get_registry",
+    "DEFAULT_VOICE_PACK_REPO",
+    "DEFAULT_VOICE_PACK_REVISION",
+    "PREVIEW_TEXT",
+    "PreviewInfo",
+    "VoiceCatalog",
+    "VoiceCatalogEntry",
+    "VoiceCatalogError",
+    "builtin_catalog_entries",
+    "compiled_voices_dir",
+    "custom_voices_dir",
     "get_bundled_voices",
-    "parse_compiled_filename",
-    "parse_uncompiled_filename",
+    "get_catalog",
+    "get_registry",
+    "load_manifest",
+    "preview_cache_dir",
+    "validate_manifest",
+    "voice_data_dir",
+    "write_manifest",
 ]
