@@ -105,22 +105,22 @@ def test_download_voices_verifies_manifest_hashes(tmp_path):
                         "path": "compiled/voice.safetensors",
                         "sha256": "0" * 64,
                     }
-                ]
+                ],
             }
         ),
         encoding="utf-8",
     )
+    catalog = MagicMock()
 
     with (
         patch("kenkui.voice_download.voice_data_dir", return_value=tmp_path),
         patch("huggingface_hub.snapshot_download"),
+        patch("kenkui.voice_download.get_catalog", return_value=catalog),
     ):
-        try:
-            dl.download_voices()
-        except ValueError as exc:
-            assert "hash" in str(exc)
-        else:
-            raise AssertionError("expected hash verification failure")
+        dl.download_voices()  # must not raise
+
+    assert not asset.exists(), "mismatched file should have been removed"
+    catalog.invalidate.assert_called_once()
 
 
 def test_download_voices_requires_manifest_after_snapshot(tmp_path):
@@ -173,3 +173,85 @@ def test_fetch_uncompiled_voices_is_removed():
         assert "Uncompiled voice sources" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_verify_manifest_assets_removes_size_mismatch(tmp_path):
+    from kenkui.voice_registry import VoiceCatalogEntry, verify_manifest_assets
+
+    asset = tmp_path / "voice.safetensors"
+    asset.write_bytes(b"compiled")
+    entry = VoiceCatalogEntry(
+        voice_id="bad_size",
+        display_name="Bad Size",
+        origin="kenkui_compiled",
+        asset_kind="safetensors",
+        gender="Male",
+        pool_enabled=True,
+        path=asset,
+        size_bytes=9999,
+    )
+    failed = verify_manifest_assets([entry])
+    assert failed == ["bad_size"]
+    assert not asset.exists()
+
+
+def test_verify_manifest_assets_removes_hash_mismatch(tmp_path):
+    from kenkui.voice_registry import VoiceCatalogEntry, verify_manifest_assets
+
+    asset = tmp_path / "voice.safetensors"
+    asset.write_bytes(b"compiled")
+    entry = VoiceCatalogEntry(
+        voice_id="bad_hash",
+        display_name="Bad Hash",
+        origin="kenkui_compiled",
+        asset_kind="safetensors",
+        gender="Male",
+        pool_enabled=True,
+        path=asset,
+        sha256="0" * 64,
+    )
+    failed = verify_manifest_assets([entry])
+    assert failed == ["bad_hash"]
+    assert not asset.exists()
+
+
+def test_verify_manifest_assets_passes_valid_file(tmp_path):
+    import hashlib
+
+    from kenkui.voice_registry import VoiceCatalogEntry, verify_manifest_assets
+
+    content = b"compiled"
+    asset = tmp_path / "voice.safetensors"
+    asset.write_bytes(content)
+    sha = hashlib.sha256(content).hexdigest()
+    entry = VoiceCatalogEntry(
+        voice_id="good",
+        display_name="Good",
+        origin="kenkui_compiled",
+        asset_kind="safetensors",
+        gender="Male",
+        pool_enabled=True,
+        path=asset,
+        sha256=sha,
+        size_bytes=len(content),
+    )
+    failed = verify_manifest_assets([entry])
+    assert failed == []
+    assert asset.exists()
+
+
+def test_verify_manifest_assets_ignores_missing_file(tmp_path):
+    from kenkui.voice_registry import VoiceCatalogEntry, verify_manifest_assets
+
+    entry = VoiceCatalogEntry(
+        voice_id="missing",
+        display_name="Missing",
+        origin="kenkui_compiled",
+        asset_kind="safetensors",
+        gender="Male",
+        pool_enabled=True,
+        path=tmp_path / "nonexistent.safetensors",
+        sha256="0" * 64,
+    )
+    failed = verify_manifest_assets([entry])
+    assert failed == []

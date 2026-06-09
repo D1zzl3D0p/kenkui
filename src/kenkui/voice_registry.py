@@ -314,14 +314,31 @@ def validate_manifest(path: Path) -> list[VoiceCatalogEntry]:
     return load_manifest(path)
 
 
-def verify_manifest_assets(entries: list[VoiceCatalogEntry]) -> None:
-    """Verify local manifest assets against declared size and SHA-256 metadata."""
+def verify_manifest_assets(entries: list[VoiceCatalogEntry]) -> list[str]:
+    """Verify local manifest assets against declared size and SHA-256 metadata.
+
+    Files that fail verification are deleted so they will be treated as missing
+    on the next catalog load. Returns the voice_ids of any removed files.
+    """
+    failed: list[str] = []
     for entry in entries:
         if entry.path is not None and entry.path.exists():
             if entry.size_bytes is not None and entry.path.stat().st_size != entry.size_bytes:
-                raise VoiceCatalogError(f"Voice {entry.voice_id!r} asset size does not match manifest")
+                logger.warning(
+                    "Voice %r asset size does not match manifest; removing",
+                    entry.voice_id,
+                )
+                entry.path.unlink(missing_ok=True)
+                failed.append(entry.voice_id)
+                continue
             if entry.sha256 is not None and _hash_file(entry.path) != entry.sha256:
-                raise VoiceCatalogError(f"Voice {entry.voice_id!r} asset hash does not match manifest")
+                logger.warning(
+                    "Voice %r asset hash does not match manifest; removing",
+                    entry.voice_id,
+                )
+                entry.path.unlink(missing_ok=True)
+                failed.append(entry.voice_id)
+                continue
         if entry.preview.path:
             preview_path = Path(entry.preview.path)
             if (
@@ -329,7 +346,12 @@ def verify_manifest_assets(entries: list[VoiceCatalogEntry]) -> None:
                 and entry.preview.sha256 is not None
                 and _hash_file(preview_path) != entry.preview.sha256
             ):
-                raise VoiceCatalogError(f"Voice {entry.voice_id!r} preview hash does not match manifest")
+                logger.warning(
+                    "Voice %r preview hash does not match manifest; removing preview",
+                    entry.voice_id,
+                )
+                preview_path.unlink(missing_ok=True)
+    return failed
 
 
 def _validate_unique_voice_ids(entries: list[VoiceCatalogEntry], *, source: str) -> None:

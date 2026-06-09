@@ -1,6 +1,7 @@
 """First-run voice download from HuggingFace Hub."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from .voice_registry import (
 HF_VOICES_REPO = DEFAULT_VOICE_PACK_REPO
 HF_REPO_TYPE = "dataset"
 HF_VOICES_REVISION = DEFAULT_VOICE_PACK_REVISION
+
+logger = logging.getLogger(__name__)
 
 
 def voices_local_dir():
@@ -112,7 +115,13 @@ def download_voices(
         raise RuntimeError("Downloaded voice pack did not contain a supported manifest")
     if not voice_pack_manifest_is_current(manifest):
         raise RuntimeError("Downloaded voice pack is stale and must be rebuilt")
-    verify_manifest_assets(validate_manifest(manifest))
+    failed = verify_manifest_assets(validate_manifest(manifest))
+    if failed:
+        logger.warning(
+            "Some voices could not be verified and were removed: %s. "
+            "Run download again with force=True to retry.",
+            ", ".join(failed),
+        )
 
     if progress_callback is not None:
         progress_callback(90, "Updating voice registry")
