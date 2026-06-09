@@ -407,3 +407,56 @@ class TestRenderCoverPage:
         data, mime = extractor.render_cover_page()
         assert data is None
         assert mime is None
+
+
+# ---------------------------------------------------------------------------
+# PdfTextExtractor.configure()
+# ---------------------------------------------------------------------------
+
+class TestPdfTextExtractorConfigure:
+    """Tests for PdfTextExtractor.configure()."""
+
+    def test_configure_sets_strip_margin_notes(self):
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Text."])
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({"drop_margin_notes": False})
+        assert extractor._strip_margin_notes is False
+
+    def test_configure_sets_zone_ratios(self):
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Text."])
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({"header_zone_ratio": 0.12, "footer_zone_ratio": 0.07})
+        assert abs(extractor._header_zone_ratio - 0.12) < 1e-9
+        assert abs(extractor._footer_zone_ratio - 0.07) < 1e-9
+
+    def test_configure_ignores_unknown_keys(self):
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Text."])
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({"unknown_key": True, "drop_margin_notes": False})
+        assert extractor._strip_margin_notes is False
+
+    def test_strip_margin_notes_default_is_true(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Text."])
+        extractor = PdfTextExtractor(doc)
+        assert extractor._strip_margin_notes is True
+
+    def test_env_var_can_disable_strip_margin_notes(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_PDF_STRIP_MARGIN_NOTES", "false")
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Text."])
+        extractor = PdfTextExtractor(doc)
+        assert extractor._strip_margin_notes is False
+
+    def test_zone_defaults_are_zero(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_HEADER_ZONE", raising=False)
+        monkeypatch.delenv("KENKUI_PDF_FOOTER_ZONE", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Text."])
+        extractor = PdfTextExtractor(doc)
+        assert extractor._header_zone_ratio == 0.0
+        assert extractor._footer_zone_ratio == 0.0

@@ -54,6 +54,12 @@ class PdfTextExtractor:
         self._heading_size_ratio = float(os.environ.get("KENKUI_PDF_HEADING_SIZE_RATIO", "1.2"))
         self._footer_threshold = float(os.environ.get("KENKUI_PDF_FOOTER_THRESHOLD", "0.80"))
 
+        self._strip_margin_notes: bool = (
+            os.environ.get("KENKUI_PDF_STRIP_MARGIN_NOTES", "true").lower() == "true"
+        )
+        self._header_zone_ratio: float = float(os.environ.get("KENKUI_PDF_HEADER_ZONE", "0.0"))
+        self._footer_zone_ratio: float = float(os.environ.get("KENKUI_PDF_FOOTER_ZONE", "0.0"))
+
         self._noise_lines: set[str] | None = None
 
     # ------------------------------------------------------------------
@@ -128,6 +134,15 @@ class PdfTextExtractor:
         mat = fitz.Matrix(150 / 72, 150 / 72)
         pix = page.get_pixmap(matrix=mat)
         return pix.tobytes("png"), "image/png"
+
+    def configure(self, options: dict[str, bool | float]) -> None:
+        """Apply per-job overrides on top of env-var defaults."""
+        if "drop_margin_notes" in options:
+            self._strip_margin_notes = bool(options["drop_margin_notes"])
+        if "header_zone_ratio" in options:
+            self._header_zone_ratio = float(options["header_zone_ratio"])
+        if "footer_zone_ratio" in options:
+            self._footer_zone_ratio = float(options["footer_zone_ratio"])
 
     # ------------------------------------------------------------------
     # Text cleaning
