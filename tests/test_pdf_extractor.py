@@ -289,6 +289,18 @@ class TestExtractTextForPages:
         combined = " ".join(paras)
         assert "Running Header" not in combined
 
+    def test_verbose_mode_does_not_log_paragraph_text(self, caplog):
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["First paragraph.\n\nSecond paragraph."])
+        extractor = PdfTextExtractor(doc, verbose=True)
+
+        with caplog.at_level("DEBUG", logger="kenkui.readers._pdf_extract"):
+            paras = extractor.extract_text_for_pages(0, 0)
+
+        assert len(paras) >= 1
+        assert not any("First paragraph" in record.message for record in caplog.records)
+        assert not any("Second paragraph" in record.message for record in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # OCR seam

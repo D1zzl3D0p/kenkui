@@ -33,7 +33,7 @@ from .nlp.models import _SPEAKER_SENTINELS
 from .nlp.models import slugify as _slugify
 from .text_rules import is_scene_break, split_at_scene_breaks
 from .utils import ApostropheMode, batch_text, ensure_terminal_punct, normalize_for_tts
-from .voice_loader import load_voice
+from .voice_loader import load_voice_conditioning_source as load_voice
 
 logger = logging.getLogger(__name__)
 
@@ -360,8 +360,9 @@ def _process_chapter_inner(
             config_dict = {**config_dict, "voice": chapter_voice}
 
         # ── Single-voice path ─────────────────────────────────────────────
-        voice_path = load_voice(config_dict.get("voice") or "alba")
-        log_message(f"[Worker {pid}] Voice: {voice_path}")
+        voice_name = config_dict.get("voice") or "alba"
+        voice_path = load_voice(voice_name)
+        log_message(f"[Worker {pid}] Voice: {voice_name} -> {voice_path}")
 
         voice_state = model.get_state_for_audio_prompt(voice_path)
         log_message(f"[Worker {pid}] Voice state ready")

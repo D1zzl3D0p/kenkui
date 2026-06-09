@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from kenkui.models import Chapter
+from kenkui.chapter_filter import FilterOperation
+from kenkui.models import Chapter, ProcessingConfig
 from kenkui.readers.epub import EpubReader
 
 TEST_EPUB = Path("src/kenkui/samples/Les Miserables - Victor Hugo.epub")
@@ -70,6 +71,53 @@ class TestChapterDataclass:
         chapter = Chapter(index=2, title="Empty Chapter", paragraphs=[])
         assert chapter.index == 2
         assert chapter.paragraphs == []
+
+
+class TestPdfTranscriptOutput:
+    def _make_builder(self, tmp_path: Path):
+        from kenkui.parsing import AudioBuilder
+
+        cfg = ProcessingConfig(
+            voice="alba",
+            ebook_path=tmp_path / "book.pdf",
+            output_path=tmp_path / "out",
+            pause_line_ms=400,
+            pause_chapter_ms=2000,
+            workers=2,
+            m4b_bitrate="96k",
+            keep_temp=False,
+            debug_html=False,
+            chapter_filters=[FilterOperation("preset", "content-only")],
+        )
+        return AudioBuilder(cfg)
+
+    def test_pdf_transcripts_are_written_to_output_dir(self, tmp_path):
+        builder = self._make_builder(tmp_path)
+        emitted: list[str] = []
+        builder.console = SimpleNamespace(emit=lambda msg, style="": emitted.append(msg))
+        builder._reader = SimpleNamespace(
+            get_transcript_sections=lambda: [
+                SimpleNamespace(
+                    title="Chapter 1",
+                    start_page=0,
+                    end_page=0,
+                    raw_paragraphs=["Raw paragraph."],
+                    filtered_paragraphs=["Filtered paragraph."],
+                )
+            ]
+        )
+        chapters = [Chapter(index=0, title="Chapter 1", paragraphs=["Filtered paragraph."])]
+
+        builder._write_pdf_transcripts(tmp_path / "out" / "book.m4b", chapters)
+
+        raw_path = tmp_path / "out" / "book.transcript.raw.txt"
+        filtered_path = tmp_path / "out" / "book.transcript.filtered.txt"
+        assert raw_path.exists()
+        assert filtered_path.exists()
+        assert "Raw paragraph." in raw_path.read_text(encoding="utf-8")
+        assert "Filtered paragraph." in filtered_path.read_text(encoding="utf-8")
+        assert emitted
+        assert str(tmp_path / "out") in emitted[-1]
 
 
 class TestLoadAnnotatedChaptersSpeakerSlugNormalization:

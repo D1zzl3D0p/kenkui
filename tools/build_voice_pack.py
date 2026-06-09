@@ -12,11 +12,17 @@ import hashlib
 import importlib.metadata
 import json
 import os
-import shutil
 from pathlib import Path
 from typing import Any
 
+import scipy.io.wavfile
+
 from kenkui.voice_registry import PREVIEW_TEXT, VoiceCatalogEntry, validate_manifest
+from kenkui.voice_compiler import (
+    DEFAULT_VOICE_PACK_LANGUAGE,
+    compile_audio_prompt_source,
+    migrate_voice_asset,
+)
 
 
 def _hash_file(path: Path) -> str:
@@ -42,27 +48,22 @@ def _assert_pocket_tts_version(expected: str | None) -> str:
     return installed
 
 
-def _compile_prompt(source: str, output_path: Path) -> Path:
-    try:
-        from pocket_tts import export_voice  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("pocket_tts.export_voice is required to compile prompt sources") from exc
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = export_voice(source, str(output_path))
-    return Path(result) if result else output_path
-
-
-def _copy_or_compile(entry: dict[str, Any], compiled_dir: Path) -> Path:
+def _copy_or_compile(entry: dict[str, Any], compiled_dir: Path, *, source_base: Path) -> Path:
     voice_id = entry["voice_id"]
     destination = compiled_dir / f"{voice_id}.safetensors"
     if entry.get("prompt_source"):
-        return _compile_prompt(str(entry["prompt_source"]), destination)
+        return compile_audio_prompt_source(
+            str(entry["prompt_source"]),
+            destination,
+            language=DEFAULT_VOICE_PACK_LANGUAGE,
+            truncate=True,
+        )
     source_path = Path(str(entry.get("path") or ""))
+    if not source_path.is_absolute():
+        source_path = source_base / source_path
     if source_path.suffix != ".safetensors" or not source_path.exists():
         raise ValueError(f"{voice_id!r} must define prompt_source or an existing .safetensors path")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, destination)
-    return destination
+    return migrate_voice_asset(source_path, destination, language=DEFAULT_VOICE_PACK_LANGUAGE)
 
 
 def _generate_preview(asset_path: Path, output_path: Path) -> Path:
@@ -71,10 +72,10 @@ def _generate_preview(asset_path: Path, output_path: Path) -> Path:
     except Exception as exc:
         raise RuntimeError("pocket_tts.TTSModel is required to generate previews") from exc
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    model = TTSModel()
+    model = TTSModel.load_model(language=DEFAULT_VOICE_PACK_LANGUAGE)
     state = model.get_state_for_audio_prompt(str(asset_path))
-    audio = model.generate(PREVIEW_TEXT, voice=state)
-    audio.export(str(output_path), format="wav")
+    audio = model.generate_audio(state, PREVIEW_TEXT, frames_after_eos=2).squeeze()
+    scipy.io.wavfile.write(str(output_path), model.sample_rate, audio.cpu().numpy())
     return output_path
 
 
@@ -83,9 +84,11 @@ def _smoke_test(asset_path: Path) -> None:
         from pocket_tts import TTSModel  # type: ignore
     except Exception as exc:
         raise RuntimeError("pocket_tts.TTSModel is required for smoke tests") from exc
-    model = TTSModel()
+    model = TTSModel.load_model(language=DEFAULT_VOICE_PACK_LANGUAGE)
     state = model.get_state_for_audio_prompt(str(asset_path))
-    model.generate("Smoke test.", voice=state)
+    audio = model.generate_audio(state, "Smoke test.", frames_after_eos=2)
+    if audio.numel() == 0:
+        raise RuntimeError("Smoke test generated no audio")
 
 
 def build_voice_pack(
@@ -100,10 +103,12 @@ def build_voice_pack(
     compiled_dir = output_dir / "compiled"
     preview_dir = output_dir / "previews"
     output_dir.mkdir(parents=True, exist_ok=True)
+    compiled_dir.mkdir(parents=True, exist_ok=True)
+    preview_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_entries: list[VoiceCatalogEntry] = []
     for source_entry in _load_source_manifest(source_manifest):
-        asset_path = _copy_or_compile(source_entry, compiled_dir)
+        asset_path = _copy_or_compile(source_entry, compiled_dir, source_base=source_manifest.parent)
         if smoke_test:
             _smoke_test(asset_path)
 
@@ -135,6 +140,7 @@ def build_voice_pack(
     manifest_path = output_dir / "manifest.json"
     data = {
         "schema_version": 1,
+        "voice_pack_format_version": 2,
         "preview_text": PREVIEW_TEXT,
         "pocket_tts_version": build_pocket_tts_version,
         "voices": [entry.to_manifest_dict(base_dir=output_dir) for entry in manifest_entries],

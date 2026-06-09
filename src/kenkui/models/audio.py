@@ -44,6 +44,9 @@ class ProcessingConfig:
     noise_clamp: float | None = None
     eos_threshold: float = -4.0  # EOS detection threshold; higher (→0) = later cut-off
     frames_after_eos: int | None = None  # Frames after EoS (None = auto from text length)
+    pdf_drop_code_blocks: bool = False
+    pdf_drop_notes: bool = False
+    pdf_drop_asides: bool = False
     # --- Multi-voice fields ---
     speaker_voices: dict[str, str] = field(default_factory=dict)
     annotated_chapters_path: Path | None = None

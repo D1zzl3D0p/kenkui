@@ -107,6 +107,15 @@ class PdfTextExtractor:
                 text = self._clean_text("\n".join(lines)).strip()
                 if text:
                     paragraphs.append(text)
+                elif self._verbose:
+                    logger.debug(
+                        "PDF page %d skipped empty block at %s",
+                        page_num + 1,
+                        tuple(round(v, 2) for v in block[:4]),
+                    )
+
+            if self._verbose and paragraphs:
+                logger.debug("PDF page %d yielded %d paragraph(s)", page_num + 1, len(paragraphs))
 
         return paragraphs
 

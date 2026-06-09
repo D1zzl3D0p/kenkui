@@ -289,6 +289,12 @@ class TestProcessingConfigMultiVoice:
         cfg = self._make_cfg()
         assert cfg.annotated_chapters_path is None
 
+    def test_default_pdf_cleanup_flags_false(self):
+        cfg = self._make_cfg()
+        assert cfg.pdf_drop_code_blocks is False
+        assert cfg.pdf_drop_notes is False
+        assert cfg.pdf_drop_asides is False
+
     def test_speaker_voices_stored(self):
         voices = {"NARRATOR": "alba", "HOLMES-0": "jean"}
         cfg = self._make_cfg(speaker_voices=voices)

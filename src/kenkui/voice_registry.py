@@ -16,6 +16,8 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from .voice_compiler import is_legacy_audio_prompt_asset
+
 logger = logging.getLogger(__name__)
 
 VoiceOrigin = Literal["pocket_tts_builtin", "kenkui_compiled", "custom_compiled"]
@@ -24,6 +26,7 @@ VoiceStatus = Literal["available", "missing", "downloadable"]
 
 DEFAULT_VOICE_PACK_REPO = "D1zzl3D0p/kenkui-voices"
 DEFAULT_VOICE_PACK_REVISION = "main"
+VOICE_PACK_FORMAT_VERSION = 2
 MANIFEST_FILENAMES = ("manifest.json", "voice_manifest.json", "voices/manifest.json")
 CUSTOM_MANIFEST_FILENAME = "custom_manifest.json"
 PREVIEW_TEXT = (
@@ -159,7 +162,10 @@ class VoiceCatalogEntry:
         if origin != "pocket_tts_builtin" and asset_kind != "safetensors":
             raise VoiceCatalogError(f"Voice {voice_id!r} must use a safetensors asset")
 
-        if path is not None and asset_kind == "safetensors" and not path.exists():
+        if path is not None and asset_kind == "safetensors" and path.exists():
+            if is_legacy_audio_prompt_asset(path):
+                status = "missing"
+        elif path is not None and asset_kind == "safetensors":
             status = "missing"
 
         return cls(
@@ -226,6 +232,10 @@ def compiled_voices_dir() -> Path:
     return voice_data_dir() / "compiled"
 
 
+def bundled_voice_manifest_path() -> Path:
+    return Path(__file__).resolve().parent / "voices" / "manifest.json"
+
+
 def custom_voices_dir() -> Path:
     return voice_data_dir() / "custom"
 
@@ -266,6 +276,27 @@ def load_manifest(path: Path) -> list[VoiceCatalogEntry]:
     entries = [VoiceCatalogEntry.from_dict(item, base_dir=path.parent) for item in voices]
     _validate_unique_voice_ids(entries, source=str(path))
     return entries
+
+
+def _load_manifest_version(path: Path) -> int | None:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    version = raw.get("voice_pack_format_version")
+    if version is None:
+        return None
+    try:
+        return int(version)
+    except (TypeError, ValueError):
+        return None
+
+
+def voice_pack_manifest_is_current(path: Path) -> bool:
+    version = _load_manifest_version(path)
+    return version is not None and version >= VOICE_PACK_FORMAT_VERSION
 
 
 def write_manifest(path: Path, entries: list[VoiceCatalogEntry]) -> Path:
@@ -338,8 +369,23 @@ class VoiceCatalog:
         entries = builtin_catalog_entries()
         for path in _manifest_paths(self.data_dir):
             if path.exists():
+                version = _load_manifest_version(path)
+                if version is None or version < VOICE_PACK_FORMAT_VERSION:
+                    logger.warning(
+                        "Ignoring stale voice pack manifest %s (format %s < %s)",
+                        path,
+                        version if version is not None else "missing",
+                        VOICE_PACK_FORMAT_VERSION,
+                    )
+                    continue
                 entries = self._merge_entries(entries, load_manifest(path))
                 break
+        else:
+            packaged_manifest = bundled_voice_manifest_path()
+            if packaged_manifest.exists():
+                version = _load_manifest_version(packaged_manifest)
+                if version is not None and version >= VOICE_PACK_FORMAT_VERSION:
+                    entries = self._merge_entries(entries, load_manifest(packaged_manifest))
 
         custom_manifest = self.custom_manifest_path
         if custom_manifest.exists():
@@ -499,6 +545,7 @@ __all__ = [
     "BUILTIN_VOICE_NAMES",
     "DEFAULT_VOICE_PACK_REPO",
     "DEFAULT_VOICE_PACK_REVISION",
+    "VOICE_PACK_FORMAT_VERSION",
     "PREVIEW_TEXT",
     "PreviewInfo",
     "VoiceCatalog",
@@ -507,11 +554,13 @@ __all__ = [
     "builtin_catalog_entries",
     "compiled_voices_dir",
     "custom_voices_dir",
+    "bundled_voice_manifest_path",
     "get_catalog",
     "get_registry",
     "load_manifest",
     "preview_cache_dir",
     "validate_manifest",
+    "voice_pack_manifest_is_current",
     "verify_manifest_assets",
     "voice_data_dir",
     "write_manifest",

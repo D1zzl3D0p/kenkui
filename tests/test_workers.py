@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 from pydub import AudioSegment
+from safetensors.torch import save_file
 
 from kenkui.models import AudioResult, Chapter, Segment
 from kenkui.voice_loader import load_voice
@@ -82,6 +83,24 @@ class TestLoadVoice:
         )
         with patch("kenkui.voice_registry.get_catalog", return_value=catalog):
             assert load_voice("custom") == str(asset)
+
+    def test_legacy_compiled_asset_raises_runtime_error(self, tmp_path):
+        asset = tmp_path / "legacy.safetensors"
+        save_file({"audio_prompt": torch.zeros(1, 4, dtype=torch.float32)}, str(asset))
+        catalog = MagicMock()
+        catalog.resolve.return_value = VoiceCatalogEntry(
+            voice_id="legacy",
+            display_name="Legacy",
+            origin="kenkui_compiled",
+            asset_kind="safetensors",
+            gender="Female",
+            pool_enabled=False,
+            path=asset,
+            status="missing",
+        )
+        with patch("kenkui.voice_registry.get_catalog", return_value=catalog):
+            with pytest.raises(RuntimeError, match="stale or unavailable"):
+                load_voice("legacy")
 
     def test_unknown_voice_id_raises(self):
         catalog = MagicMock()
@@ -322,7 +341,7 @@ class TestFinaliseChapter:
         queue = self._make_queue()
         with tempfile.TemporaryDirectory() as td:
             _finalise_chapter(chapter, audio, {}, Path(td), queue, 1, _noop_log)
-        msg = queue.get_nowait()
+        msg = queue.get(timeout=1)
         assert msg[0] == "DONE"
 
     def test_filename_uses_chapter_index(self):

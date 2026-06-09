@@ -70,6 +70,9 @@ class AppConfig(BaseSettings):
     noise_clamp: float | None = None
     eos_threshold: float = -4.0
     frames_after_eos: int | None = None
+    pdf_drop_code_blocks: bool = False
+    pdf_drop_notes: bool = False
+    pdf_drop_asides: bool = False
     default_voice: str = "alba"
     default_chapter_preset: str = "content-only"
     default_output_dir: Path | None = None

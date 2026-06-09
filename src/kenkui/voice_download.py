@@ -11,6 +11,7 @@ from .voice_registry import (
     validate_manifest,
     verify_manifest_assets,
     voice_data_dir,
+    voice_pack_manifest_is_current,
 )
 
 HF_VOICES_REPO = DEFAULT_VOICE_PACK_REPO
@@ -27,6 +28,8 @@ def voices_are_present() -> bool:
     root = voice_data_dir()
     manifest = _voice_pack_manifest(root)
     if manifest is None:
+        return False
+    if not voice_pack_manifest_is_current(manifest):
         return False
     try:
         entries = validate_manifest(manifest)
@@ -107,6 +110,8 @@ def download_voices(
     manifest = _voice_pack_manifest(local_dir)
     if manifest is None:
         raise RuntimeError("Downloaded voice pack did not contain a supported manifest")
+    if not voice_pack_manifest_is_current(manifest):
+        raise RuntimeError("Downloaded voice pack is stale and must be rebuilt")
     verify_manifest_assets(validate_manifest(manifest))
 
     if progress_callback is not None:

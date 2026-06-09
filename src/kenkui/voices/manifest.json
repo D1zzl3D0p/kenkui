@@ -1,5 +1,8 @@
 {
+  "pocket_tts_version": "2.0.0",
+  "preview_text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard.",
   "schema_version": 1,
+  "voice_pack_format_version": 2,
   "voices": [
     {
       "accent": "Scottish",
@@ -8,10 +11,13 @@
       "display_name": "Alasdair",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Alasdair-M-VCTK-P246-Scottish.safetensors",
+      "path": "compiled/alasdair-m-vctk-p246-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "09b3eb7a0aa62db5503a8041ede1ff3d92de43f5b95d6f6c3df7e1bda4abea19",
-      "size_bytes": 618584,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "58567b14b7ca8312397e4817bb4a45c80b97da2b9120a18cd417de15edacca1b",
+      "size_bytes": 7423224,
       "speaker_id": "P246",
       "status": "available",
       "voice_id": "alasdair-m-vctk-p246-scottish"
@@ -23,10 +29,13 @@
       "display_name": "Alf",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Alf-M-VCTK-P270-English-Yorkshire.safetensors",
+      "path": "compiled/alf-m-vctk-p270-english-yorkshire.safetensors",
       "pool_enabled": true,
-      "sha256": "b253396369fc58cf805b68a77b51f67d51a3721b547ba3fd3a87987603b089a7",
-      "size_bytes": 663640,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "ca4c0bf056ceda321d1a2600cad827f0728d657029fb610771f4fbc39425979a",
+      "size_bytes": 7963896,
       "speaker_id": "P270",
       "status": "available",
       "voice_id": "alf-m-vctk-p270-english-yorkshire"
@@ -38,10 +47,13 @@
       "display_name": "Amara",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Amara-F-EARS-P041-African.safetensors",
+      "path": "compiled/amara-f-ears-p041-african.safetensors",
       "pool_enabled": true,
-      "sha256": "ed21965d891460885f23b67b2686896d71a9fbec3dc4011584bb685e3e0048dc",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "6bdcb8f47642a83be912bcbb413677e672638bc03ae2c579b479c9afe3a923c9",
+      "size_bytes": 6145272,
       "speaker_id": "P041",
       "status": "available",
       "voice_id": "amara-f-ears-p041-african"
@@ -53,10 +65,13 @@
       "display_name": "Angus",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Angus-M-VCTK-P255-Scottish.safetensors",
+      "path": "compiled/angus-m-vctk-p255-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "c4ceed743437d1c24aa8b1ba0d30a1dbb2d5f112e572eb139a8aa72b8ec96f19",
-      "size_bytes": 659544,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "c5b09a6e3d080154d5ecc9747a3af65733802b1009885c0216675bb044ecbc6b",
+      "size_bytes": 7914744,
       "speaker_id": "P255",
       "status": "available",
       "voice_id": "angus-m-vctk-p255-scottish"
@@ -68,10 +83,13 @@
       "display_name": "Aoife",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Aoife-F-VCTK-P351-NorthernIrish.safetensors",
+      "path": "compiled/aoife-f-vctk-p351-northernirish.safetensors",
       "pool_enabled": true,
-      "sha256": "ed9b9e4ceb223844669755d186213ab1721db9cf20e4054cc5695ffab92c0627",
-      "size_bytes": 503896,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "f02809e4e250dc87c71804db1b5bb1293a6de533b666c2e43389ca103a22ad8f",
+      "size_bytes": 6046968,
       "speaker_id": "P351",
       "status": "available",
       "voice_id": "aoife-f-vctk-p351-northernirish"
@@ -83,10 +101,13 @@
       "display_name": "Arjun",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Arjun-M-VCTK-P251-Indian.safetensors",
+      "path": "compiled/arjun-m-vctk-p251-indian.safetensors",
       "pool_enabled": true,
-      "sha256": "c54ab4d29a87616351f04ce3c27b1479f6083a1009271d5f76e93c7467ade219",
-      "size_bytes": 569432,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "e9f7e37de35a32472af620e1bfc285f4ac5b9a632ed90a4066c8e67e91fd75e5",
+      "size_bytes": 6833400,
       "speaker_id": "P251",
       "status": "available",
       "voice_id": "arjun-m-vctk-p251-indian"
@@ -98,10 +119,13 @@
       "display_name": "Aroha",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Aroha-F-VCTK-P335-NewZealand.safetensors",
+      "path": "compiled/aroha-f-vctk-p335-newzealand.safetensors",
       "pool_enabled": true,
-      "sha256": "1e4bdf028dc3ac770a57952b7ba4364becde44833f07a768641af03c1e0ce07b",
-      "size_bytes": 761944,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "76457fca656e0d12a7a60650366bf325214d10370e049508549fdb3bf25371d0",
+      "size_bytes": 9143544,
       "speaker_id": "P335",
       "status": "available",
       "voice_id": "aroha-f-vctk-p335-newzealand"
@@ -113,10 +137,13 @@
       "display_name": "Beatrix",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Beatrix-F-VCTK-P233-English.safetensors",
+      "path": "compiled/beatrix-f-vctk-p233-english.safetensors",
       "pool_enabled": true,
-      "sha256": "37e71b522025694263397f06777d11d4f409d59d96cf575a9a5cf250f5563425",
-      "size_bytes": 540760,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "af78b46b4ae6f64bbf1a000d4e472a25bda4e0f6340c787e0bcf57471b75f6d5",
+      "size_bytes": 6489336,
       "speaker_id": "P233",
       "status": "available",
       "voice_id": "beatrix-f-vctk-p233-english"
@@ -128,10 +155,13 @@
       "display_name": "Benny",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Benny-M-VCTK-P286-English-Geordie.safetensors",
+      "path": "compiled/benny-m-vctk-p286-english-geordie.safetensors",
       "pool_enabled": true,
-      "sha256": "cb9142a94dfd9a8f460ed89c6241d29735056644942fa63a56448bfa385c3ebe",
-      "size_bytes": 634968,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "366b6ed41692f99772d4aab4dfde09bb8c753586203b9d6104e2b87032ec4219",
+      "size_bytes": 7619832,
       "speaker_id": "P286",
       "status": "available",
       "voice_id": "benny-m-vctk-p286-english-geordie"
@@ -143,10 +173,13 @@
       "display_name": "Billy",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Billy-M-EARS-P101-Southern.safetensors",
+      "path": "compiled/billy-m-ears-p101-southern.safetensors",
       "pool_enabled": true,
-      "sha256": "6ee8c2133c764f3112ab6372f5bce1d8d7d7ccd70559b3a6e8cb81defa57ef17",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "57928a264677cf471ab6f06ee3cd49e90fd86b3635fb11cf1f7c640e36f7e39b",
+      "size_bytes": 6145272,
       "speaker_id": "P101",
       "status": "available",
       "voice_id": "billy-m-ears-p101-southern"
@@ -158,10 +191,13 @@
       "display_name": "Bram",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Bram-M-VCTK-P260-Scottish.safetensors",
+      "path": "compiled/bram-m-vctk-p260-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "d1b8c76507857d08b01e83720006d748412ffe0f37793b1a1f285c9f9b1dc366",
-      "size_bytes": 516184,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "3571ed32fc068d807f2d156a4ef4a60d981475804782ca884102e0985a49d36e",
+      "size_bytes": 6194424,
       "speaker_id": "P260",
       "status": "available",
       "voice_id": "bram-m-vctk-p260-scottish"
@@ -173,10 +209,13 @@
       "display_name": "Bridget",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Bridget-F-VCTK-P305-American-Philadelphia.safetensors",
+      "path": "compiled/bridget-f-vctk-p305-american-philadelphia.safetensors",
       "pool_enabled": true,
-      "sha256": "00a2bc7568e023bea67185bded6d9f35012239af3cf44b8bc58dc9f81043a8a8",
-      "size_bytes": 606296,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "a7f8b2106afc67934e1beec105264983aec9e99239603986978792fb0ea2223e",
+      "size_bytes": 7275768,
       "speaker_id": "P305",
       "status": "available",
       "voice_id": "bridget-f-vctk-p305-american-philadelphia"
@@ -188,10 +227,13 @@
       "display_name": "Brigid",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Brigid-F-VCTK-P283-Irish.safetensors",
+      "path": "compiled/brigid-f-vctk-p283-irish.safetensors",
       "pool_enabled": true,
-      "sha256": "654755afeaff77669bfa81f77d16ecd85db54b251519ba0658c638cc11ad0661",
-      "size_bytes": 602200,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "5fabb6dbc3c9a01e180c90e4000cc2d31723c1d896acf8c0b960cb07f5d564df",
+      "size_bytes": 7226616,
       "speaker_id": "P283",
       "status": "available",
       "voice_id": "brigid-f-vctk-p283-irish"
@@ -203,10 +245,13 @@
       "display_name": "Bronwen",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Bronwen-F-VCTK-P253-Welsh.safetensors",
+      "path": "compiled/bronwen-f-vctk-p253-welsh.safetensors",
       "pool_enabled": true,
-      "sha256": "afcb1784dd5961a18ef1420047a59fd9d0463659780343f9a514d36c0b4db760",
-      "size_bytes": 540760,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "b603c73ee31e815a3614de13ca0f2bf3be2652ecbfb966ad918a88b5b1bd971a",
+      "size_bytes": 6489336,
       "speaker_id": "P253",
       "status": "available",
       "voice_id": "bronwen-f-vctk-p253-welsh"
@@ -218,10 +263,13 @@
       "display_name": "Callum",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Callum-M-VCTK-P237-Scottish.safetensors",
+      "path": "compiled/callum-m-vctk-p237-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "260d71fccfeffd26f1ea492799188ad9ef29913030998e7475629b51a05e2775",
-      "size_bytes": 540760,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "1faa72d3dd5abbaa54c47171dea63a50fed1dd1f900cb24962e71f8e9aa14c67",
+      "size_bytes": 6489336,
       "speaker_id": "P237",
       "status": "available",
       "voice_id": "callum-m-vctk-p237-scottish"
@@ -233,10 +281,13 @@
       "display_name": "Celeste",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Celeste-F-EARS-P067-French.safetensors",
+      "path": "compiled/celeste-f-ears-p067-french.safetensors",
       "pool_enabled": true,
-      "sha256": "7bcbde518319ff172d9fa158a5f0ebcca134e38e2d3436a0fabac41c69fb3d02",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "8bff6df189f317188ee2bd48ddc4a852ba5cd0581013c38cb6eff20620479419",
+      "size_bytes": 6145272,
       "speaker_id": "P067",
       "status": "available",
       "voice_id": "celeste-f-ears-p067-french"
@@ -248,10 +299,13 @@
       "display_name": "Ciaran",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Ciaran-M-VCTK-P245-Irish.safetensors",
+      "path": "compiled/ciaran-m-vctk-p245-irish.safetensors",
       "pool_enabled": true,
-      "sha256": "4f1a393d943a64c1b30f73b327268ff86608225f4edd14872ef7b043e8e9e04e",
-      "size_bytes": 663640,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "b607a3c797eda3bb0505bc697dda977bf57a34205c45b6f66d64a522dea04a1e",
+      "size_bytes": 7963896,
       "speaker_id": "P245",
       "status": "available",
       "voice_id": "ciaran-m-vctk-p245-irish"
@@ -263,10 +317,13 @@
       "display_name": "Clara",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Clara-F-EARS-P027-American.safetensors",
+      "path": "compiled/clara-f-ears-p027-american.safetensors",
       "pool_enabled": true,
-      "sha256": "a06c44637e038119d82310713d55a64bfd2fd734ef7c7456da1c51b7dbe09b73",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "31f0a465e43832b5c93cb219fca752e30527a888725050324b003066430a9416",
+      "size_bytes": 6145272,
       "speaker_id": "P027",
       "status": "available",
       "voice_id": "clara-f-ears-p027-american"
@@ -278,10 +335,13 @@
       "display_name": "Cole",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Cole-M-EARS-P023-American.safetensors",
+      "path": "compiled/cole-m-ears-p023-american.safetensors",
       "pool_enabled": true,
-      "sha256": "d79050f2405ee1bb4c2255969fd968c1543aefd959b4a6ba9b13110bbb940d94",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "b1d0bf95b6163f70a0a24836c7571690a80b75712251ef744cf10894c04baa77",
+      "size_bytes": 6145272,
       "speaker_id": "P023",
       "status": "available",
       "voice_id": "cole-m-ears-p023-american"
@@ -293,10 +353,13 @@
       "display_name": "Declan",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Declan-M-VCTK-P304-NorthernIrish.safetensors",
+      "path": "compiled/declan-m-vctk-p304-northernirish.safetensors",
       "pool_enabled": true,
-      "sha256": "dbf7a6404dcda771290cc81370eabedd32ff020b0601390c50cee846f4eb13a2",
-      "size_bytes": 548952,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "1757c29e03839c928208adb570ea3997664fd222ab097874818b13b07deeea7d",
+      "size_bytes": 6587640,
       "speaker_id": "P304",
       "status": "available",
       "voice_id": "declan-m-vctk-p304-northernirish"
@@ -308,10 +371,13 @@
       "display_name": "Deon",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Deon-M-VCTK-P347-SouthAfrican.safetensors",
+      "path": "compiled/deon-m-vctk-p347-southafrican.safetensors",
       "pool_enabled": true,
-      "sha256": "503020b0ea1f8ebe6202e77ce1f82efb37642dc6f744590e1cd8b0259f1a956c",
-      "size_bytes": 671832,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "6028ab934849f79eba1098366ac34867c3724053556e71794b2739c10722dc10",
+      "size_bytes": 8062200,
       "speaker_id": "P347",
       "status": "available",
       "voice_id": "deon-m-vctk-p347-southafrican"
@@ -323,10 +389,13 @@
       "display_name": "Dolly",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Dolly-F-VCTK-P310-American-Tennessee.safetensors",
+      "path": "compiled/dolly-f-vctk-p310-american-tennessee.safetensors",
       "pool_enabled": true,
-      "sha256": "9a92b8611fc5dd09e7257d219f3bab35b2d1575e0573f790ddd7fcb1547fd228",
-      "size_bytes": 790616,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "862a454cdc848d5591f131733639cd2c3dace07aaf47f80c27d1166abb35b881",
+      "size_bytes": 9487608,
       "speaker_id": "P310",
       "status": "available",
       "voice_id": "dolly-f-vctk-p310-american-tennessee"
@@ -338,10 +407,13 @@
       "display_name": "Earl",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Earl-M-VCTK-P311-American-Midwest.safetensors",
+      "path": "compiled/earl-m-vctk-p311-american-midwest.safetensors",
       "pool_enabled": true,
-      "sha256": "bd842b8f1a42a47780df86dc98a61d4fbfe0cb8bc809b0f0556eebbc86f5423d",
-      "size_bytes": 553048,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "d04d3aceb9e5af567cd9c9cc8cd8c2b9022d8c0474e16f5ed663dc003232ac1f",
+      "size_bytes": 6636792,
       "speaker_id": "P311",
       "status": "available",
       "voice_id": "earl-m-vctk-p311-american-midwest"
@@ -353,10 +425,13 @@
       "display_name": "Edmund",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Edmund-M-EARS-P019-British.safetensors",
+      "path": "compiled/edmund-m-ears-p019-british.safetensors",
       "pool_enabled": true,
-      "sha256": "5aa8557ce33c8d09f22e47c9cbaa2ee4b90a9fd0dffb2413954c66429b100500",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "1a2daf8de5fc2b0eb6ae34bb54c6444127dfe75b356a5579c3db98d5bbdfe33c",
+      "size_bytes": 6145272,
       "speaker_id": "P019",
       "status": "available",
       "voice_id": "edmund-m-ears-p019-british"
@@ -368,10 +443,13 @@
       "display_name": "Elara",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Elara-F-EARS-P028-American.safetensors",
+      "path": "compiled/elara-f-ears-p028-american.safetensors",
       "pool_enabled": true,
-      "sha256": "28e1a48bf578e7db5b61bb18c5ee32d1fa9cc93dbbc464a51bf0aa77e0e6ecf0",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "e6e432e19098bd8408dd1c5b70cf5446593b5fc17e710b76cf97ddf7961800be",
+      "size_bytes": 6145272,
       "speaker_id": "P028",
       "status": "available",
       "voice_id": "elara-f-ears-p028-american"
@@ -383,10 +461,13 @@
       "display_name": "Elspeth",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Elspeth-F-VCTK-S5-British.safetensors",
+      "path": "compiled/elspeth-f-vctk-s5-british.safetensors",
       "pool_enabled": true,
-      "sha256": "7f8af2e1774da1f25effbafe1edf135293e44cdc24e79ca5bb4a5be7da6f8a86",
-      "size_bytes": 606296,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "c96fd3dcee43d8ef5700defe90ffcbe7bdf2c0e7e64509178467e6ff4f634f68",
+      "size_bytes": 7275768,
       "speaker_id": "S5",
       "status": "available",
       "voice_id": "elspeth-f-vctk-s5-british"
@@ -398,10 +479,13 @@
       "display_name": "Eoin",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Eoin-M-VCTK-P364-Irish.safetensors",
+      "path": "compiled/eoin-m-vctk-p364-irish.safetensors",
       "pool_enabled": true,
-      "sha256": "433e4510e23f476a44fa027ec853b6c320f2958f0549421f3f5d2b049570f924",
-      "size_bytes": 696408,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "c1a5335fe4e460586c9fd4b4302f5f3bd4ad09b1c46c2b1c1f8e44cab195bec8",
+      "size_bytes": 8357112,
       "speaker_id": "P364",
       "status": "available",
       "voice_id": "eoin-m-vctk-p364-irish"
@@ -413,10 +497,13 @@
       "display_name": "Fergus",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Fergus-M-VCTK-P247-Scottish.safetensors",
+      "path": "compiled/fergus-m-vctk-p247-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "1afeaac38c034a94155ccfb71c56bccf1a391cf088c069e313ef1b5dfcce00c3",
-      "size_bytes": 540760,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "f9810e7df84c5d6aca522d116e2cbdf33206a21ffd6e1c27dec2fa58b626a575",
+      "size_bytes": 6489336,
       "speaker_id": "P247",
       "status": "available",
       "voice_id": "fergus-m-vctk-p247-scottish"
@@ -428,10 +515,13 @@
       "display_name": "Finlay",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Finlay-M-VCTK-P263-Scottish.safetensors",
+      "path": "compiled/finlay-m-vctk-p263-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "188030856d710d4019cb57efe39ce5c736d63e4fd9a6c3384424d338831d275f",
-      "size_bytes": 540760,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "d449ce450f03e594eca15016d6d819da8007825a2593398c368a6cae2563f182",
+      "size_bytes": 6489336,
       "speaker_id": "P263",
       "status": "available",
       "voice_id": "finlay-m-vctk-p263-scottish"
@@ -443,10 +533,13 @@
       "display_name": "Flint",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Flint-M-EARS-P102-American.safetensors",
+      "path": "compiled/flint-m-ears-p102-american.safetensors",
       "pool_enabled": true,
-      "sha256": "cb940d5ed90d2845d18b05c55e5a05a6d814c99235701d5f1a8abfeaa5b53a75",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "ce1318bce7f06555cc8c400f8531af24d55bc1f1ab795019ba9baa22497d141e",
+      "size_bytes": 6145272,
       "speaker_id": "P102",
       "status": "available",
       "voice_id": "flint-m-ears-p102-american"
@@ -458,10 +551,13 @@
       "display_name": "Flynn",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Flynn-M-VCTK-P326-Australian.safetensors",
+      "path": "compiled/flynn-m-vctk-p326-australian.safetensors",
       "pool_enabled": true,
-      "sha256": "d4b88ee2f43ba2a72d89b162084b14b49cb73fff8f011bc0450828c44c9e165d",
-      "size_bytes": 553048,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "6914d2c9acb29dee9e5475334d6316d25715277c7a12fb053ac96d41fdc61195",
+      "size_bytes": 6636792,
       "speaker_id": "P326",
       "status": "available",
       "voice_id": "flynn-m-vctk-p326-australian"
@@ -473,10 +569,13 @@
       "display_name": "Frankie",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Frankie-F-VCTK-P297-American-NewYork.safetensors",
+      "path": "compiled/frankie-f-vctk-p297-american-newyork.safetensors",
       "pool_enabled": true,
-      "sha256": "8a0a203c753698034f032e2b8a249c00755de3d892cb4787f8706941a04d155a",
-      "size_bytes": 659544,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "2ca7941a8e44d7743b4862da56fa7076c3e8f110ff4a72ee87d976d2bea5fe01",
+      "size_bytes": 7914744,
       "speaker_id": "P297",
       "status": "available",
       "voice_id": "frankie-f-vctk-p297-american-newyork"
@@ -488,10 +587,13 @@
       "display_name": "Garrett",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Garrett-M-EARS-P017-American.safetensors",
+      "path": "compiled/garrett-m-ears-p017-american.safetensors",
       "pool_enabled": true,
-      "sha256": "2144f848b50bfc312e7cc6887156f3d7788794147867baa6b04fcbef57c26094",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "12567377174c9ef373272bb6770b3fc9dbd99cbf55a591a8d77145e4590b5660",
+      "size_bytes": 6145272,
       "speaker_id": "P017",
       "status": "available",
       "voice_id": "garrett-m-ears-p017-american"
@@ -503,10 +605,13 @@
       "display_name": "Georgie",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Georgie-F-VCTK-P269-English-Geordie.safetensors",
+      "path": "compiled/georgie-f-vctk-p269-english-geordie.safetensors",
       "pool_enabled": true,
-      "sha256": "049971707a4dda943a67bdb2573c8942894a5ca8f31ba517102e6d63f1ff843a",
-      "size_bytes": 536664,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "4679161d139f17738611498457edac367876d08117e1c26ac19de10fcab40cdd",
+      "size_bytes": 6440184,
       "speaker_id": "P269",
       "status": "available",
       "voice_id": "georgie-f-vctk-p269-english-geordie"
@@ -518,10 +623,13 @@
       "display_name": "Grant",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Grant-M-EARS-P009-American.safetensors",
+      "path": "compiled/grant-m-ears-p009-american.safetensors",
       "pool_enabled": true,
-      "sha256": "db599a50af2f626c958cb60b480f23144255bfaede62a5866e4b6484054ed690",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "332c1c0e720dd8e1c5fd630826656c3899f1f993ec368b5b9967667f7dadc45f",
+      "size_bytes": 6145272,
       "speaker_id": "P009",
       "status": "available",
       "voice_id": "grant-m-ears-p009-american"
@@ -533,10 +641,13 @@
       "display_name": "Hamish",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Hamish-M-VCTK-P252-Scottish.safetensors",
+      "path": "compiled/hamish-m-vctk-p252-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "73438f9ee57242553e8205f95d7407093e6cbdb1aa48ce5a7ab034a9626999bc",
-      "size_bytes": 581720,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "4a97aad4a29f58513e29e98f4a32e90b35629809bb41d6ff0659b88abdc8a3e7",
+      "size_bytes": 6980856,
       "speaker_id": "P252",
       "status": "available",
       "voice_id": "hamish-m-vctk-p252-scottish"
@@ -548,10 +659,13 @@
       "display_name": "Harper",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Harper-F-EARS-P064-American.safetensors",
+      "path": "compiled/harper-f-ears-p064-american.safetensors",
       "pool_enabled": true,
-      "sha256": "0a19b3e36275bbe2a3ff3851bdcf9867a1123d58185909dad30629a271502f96",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "f7e170b361f01f968b1be5a8990e92461a3aa778fc023086b1d3aa747799cc88",
+      "size_bytes": 6145272,
       "speaker_id": "P064",
       "status": "available",
       "voice_id": "harper-f-ears-p064-american"
@@ -563,10 +677,13 @@
       "display_name": "Huck",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Huck-M-EARS-P099-Southern.safetensors",
+      "path": "compiled/huck-m-ears-p099-southern.safetensors",
       "pool_enabled": true,
-      "sha256": "3efb19387eb282491462796cd6ec41e8dc36a3668e6ba341b1bcf7c7925a8a67",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "49fd06a1b2d2bd1450c79ac1287c414b2549354ac2530059491952e283bbe239",
+      "size_bytes": 6145272,
       "speaker_id": "P099",
       "status": "available",
       "voice_id": "huck-m-ears-p099-southern"
@@ -578,10 +695,13 @@
       "display_name": "Isabeau",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Isabeau-F-VCTK-P280-French.safetensors",
+      "path": "compiled/isabeau-f-vctk-p280-french.safetensors",
       "pool_enabled": true,
-      "sha256": "df929e04f00f0e2fd32101f2e595be90704f026205ce40e68e04f5ba1005e8de",
-      "size_bytes": 610392,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "936f5102383a087b2c064c479fe7fb9c0796925d49b29e36c47e23638236e56f",
+      "size_bytes": 7324920,
       "speaker_id": "P280",
       "status": "available",
       "voice_id": "isabeau-f-vctk-p280-french"
@@ -593,10 +713,13 @@
       "display_name": "Laurel",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Laurel-F-VCTK-P343-Canadian.safetensors",
+      "path": "compiled/laurel-f-vctk-p343-canadian.safetensors",
       "pool_enabled": true,
-      "sha256": "95796299d4e605dd8cf80a16a9016ac616ab9e269eb2f4403edd22c0bca5379f",
-      "size_bytes": 639064,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "1e149ff44b6658ca83b425acbf6f7d415fed53818a144bbe0298f90cfbb9f184",
+      "size_bytes": 7668984,
       "speaker_id": "P343",
       "status": "available",
       "voice_id": "laurel-f-vctk-p343-canadian"
@@ -608,10 +731,13 @@
       "display_name": "Lexie",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Lexie-F-VCTK-P306-American-NewYork.safetensors",
+      "path": "compiled/lexie-f-vctk-p306-american-newyork.safetensors",
       "pool_enabled": true,
-      "sha256": "7fcdbc713478dcaf8400434cc223332fd8fb69c889dfaf9bd3d0f90b66c9a861",
-      "size_bytes": 753752,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "46cf2c36911580261bbb6fdf466a85dca58abcd346bc5d29f3d232bd03c2836e",
+      "size_bytes": 9045240,
       "speaker_id": "P306",
       "status": "available",
       "voice_id": "lexie-f-vctk-p306-american-newyork"
@@ -623,10 +749,13 @@
       "display_name": "Luca",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Luca-M-EARS-P042-European.safetensors",
+      "path": "compiled/luca-m-ears-p042-european.safetensors",
       "pool_enabled": true,
-      "sha256": "c843bb01bf337bc8af92a08af0bcd202f373ed3fa9a5cf6c4f305df7a40ef2e1",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "3fa7f01c2e673448910999e61c1b00125538c06567268426defe8fe26b8e8353",
+      "size_bytes": 6145272,
       "speaker_id": "P042",
       "status": "available",
       "voice_id": "luca-m-ears-p042-european"
@@ -638,10 +767,13 @@
       "display_name": "Lyra",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Lyra-F-EARS-P058-American.safetensors",
+      "path": "compiled/lyra-f-ears-p058-american.safetensors",
       "pool_enabled": true,
-      "sha256": "5c703191cb71e4c5060b6309ac69258409808ee27fdb04ba43e7f5e43962dce6",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "d3c27afdefc2ac75b2076f592da0049b62f10a9e991ca1973d7d199cce44f945",
+      "size_bytes": 6145272,
       "speaker_id": "P058",
       "status": "available",
       "voice_id": "lyra-f-ears-p058-american"
@@ -653,10 +785,13 @@
       "display_name": "Mabel",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Mabel-F-VCTK-P267-English-Yorkshire.safetensors",
+      "path": "compiled/mabel-f-vctk-p267-english-yorkshire.safetensors",
       "pool_enabled": true,
-      "sha256": "0b09158b0c713e830fc72be457793f97c8342982e7e26ef32d9866863dc24b87",
-      "size_bytes": 585816,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "4e77cdcf672f22e20c2ef4b14634c0d47f177b3eab0f1a2c2287cfaba8dae39d",
+      "size_bytes": 7030008,
       "speaker_id": "P267",
       "status": "available",
       "voice_id": "mabel-f-vctk-p267-english-yorkshire"
@@ -668,10 +803,13 @@
       "display_name": "Marco",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Marco-M-VCTK-P334-American-Chicago.safetensors",
+      "path": "compiled/marco-m-vctk-p334-american-chicago.safetensors",
       "pool_enabled": true,
-      "sha256": "a249522e71238238b547ebd6eb68a6c454248c15f426c1b9a0f604cc8e49ccef",
-      "size_bytes": 491608,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "25f9d1ffeb0904ea329203c4581faf26918d890e08d5c551dac7ad69ad1bcf9c",
+      "size_bytes": 5899512,
       "speaker_id": "P334",
       "status": "available",
       "voice_id": "marco-m-vctk-p334-american-chicago"
@@ -683,10 +821,13 @@
       "display_name": "Marin",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Marin-F-VCTK-P299-American-California.safetensors",
+      "path": "compiled/marin-f-vctk-p299-american-california.safetensors",
       "pool_enabled": true,
-      "sha256": "e7f576aa47234ac16b09e9ae0fa7cc90436d785b7af73829d56359adce864d40",
-      "size_bytes": 544856,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "2a50e5aee57d36126756f263b3532b6204c5171cc06a1a18886ed6f0dd037715",
+      "size_bytes": 6538488,
       "speaker_id": "P299",
       "status": "available",
       "voice_id": "marin-f-vctk-p299-american-california"
@@ -698,10 +839,13 @@
       "display_name": "Miles",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Miles-M-EARS-P022-American.safetensors",
+      "path": "compiled/miles-m-ears-p022-american.safetensors",
       "pool_enabled": true,
-      "sha256": "cb662d6383d489fbdd6f21dbc0a031e4250dc3db1697e9bae7ed0a2f92b505b6",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "7ff804d23af4033d1663acbd436cde344915ac7391e25b0f75cb1881f0bf7178",
+      "size_bytes": 6145272,
       "speaker_id": "P022",
       "status": "available",
       "voice_id": "miles-m-ears-p022-american"
@@ -713,10 +857,13 @@
       "display_name": "Moira",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Moira-F-VCTK-P249-Scottish.safetensors",
+      "path": "compiled/moira-f-vctk-p249-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "02965ac8b7ddf7090dcdc5e9d1600ff5fc76e8c7beb1ea2677db690c006e22c2",
-      "size_bytes": 589912,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "fb79ebbac938653e51f9c7a50239856e67fa6910b095bc4a4befdc7b14fdcc69",
+      "size_bytes": 7079160,
       "speaker_id": "P249",
       "status": "available",
       "voice_id": "moira-f-vctk-p249-scottish"
@@ -728,10 +875,13 @@
       "display_name": "Nadia",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Nadia-F-EARS-P093-American.safetensors",
+      "path": "compiled/nadia-f-ears-p093-american.safetensors",
       "pool_enabled": true,
-      "sha256": "94074ce229ca42666cdbf5eebd2a2d3830b1cd79ee519708b4b1ad89b87d00a5",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "3ebf97ce01a4f2269a9e9ef5bf4028eadebbb6d40ef108fef577f3b1d084a1df",
+      "size_bytes": 6145272,
       "speaker_id": "P093",
       "status": "available",
       "voice_id": "nadia-f-ears-p093-american"
@@ -743,10 +893,13 @@
       "display_name": "Nora",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Nora-F-VCTK-P308-American.safetensors",
+      "path": "compiled/nora-f-vctk-p308-american.safetensors",
       "pool_enabled": true,
-      "sha256": "c9ad0760b76a4e5e3149000e4beeae71407c7d2524bf05a2b6ace278d4425444",
-      "size_bytes": 528472,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "266347379049cb8b4a0d7110e27a64953bde23612fbe3f727266e6968caf74e4",
+      "size_bytes": 6341880,
       "speaker_id": "P308",
       "status": "available",
       "voice_id": "nora-f-vctk-p308-american"
@@ -758,10 +911,13 @@
       "display_name": "Ozzy",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Ozzy-M-VCTK-P256-English-Birmingham.safetensors",
+      "path": "compiled/ozzy-m-vctk-p256-english-birmingham.safetensors",
       "pool_enabled": true,
-      "sha256": "9687137d39a4008b793811a1367fdcf20f1c750d6823ffddaa90e70cb118040b",
-      "size_bytes": 639064,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "4d1e4339fadd3ab24de7f6b0bcbd8a0d495cef14d6ce9055c5a68e76008f5dcb",
+      "size_bytes": 7668984,
       "speaker_id": "P256",
       "status": "available",
       "voice_id": "ozzy-m-vctk-p256-english-birmingham"
@@ -773,10 +929,13 @@
       "display_name": "Priya",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Priya-F-VCTK-P248-Indian.safetensors",
+      "path": "compiled/priya-f-vctk-p248-indian.safetensors",
       "pool_enabled": true,
-      "sha256": "b894902cec489071172ccce9efb93bed80d274f31dabde236c535ca894389a3a",
-      "size_bytes": 688216,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "6ee45546b281e598f334fb97c357c023b093f9c56f22e0454d988c5ed839506d",
+      "size_bytes": 8258808,
       "speaker_id": "P248",
       "status": "available",
       "voice_id": "priya-f-vctk-p248-indian"
@@ -788,10 +947,13 @@
       "display_name": "Reid",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Reid-M-VCTK-P363-Canadian.safetensors",
+      "path": "compiled/reid-m-vctk-p363-canadian.safetensors",
       "pool_enabled": true,
-      "sha256": "cc9a137e43b3df0291b160ee855f9577e69f19fd30bf20aefe06e130dfb9427f",
-      "size_bytes": 516184,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "a81e47e76cda7d3e4a0838200897f4012d51468ef6d3ef8fb859890500be202c",
+      "size_bytes": 6194424,
       "speaker_id": "P363",
       "status": "available",
       "voice_id": "reid-m-vctk-p363-canadian"
@@ -803,10 +965,13 @@
       "display_name": "Rex",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Rex-M-VCTK-P243-English-London.safetensors",
+      "path": "compiled/rex-m-vctk-p243-english-london.safetensors",
       "pool_enabled": true,
-      "sha256": "40fcc754d060403b465b01c2c732380ff7ca6bd2d8b74f9935bb7595c6220322",
-      "size_bytes": 643160,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "245aa345149d01c7e3529baad92aef890168ed2e2be63e8de4180e51392c7c21",
+      "size_bytes": 7718136,
       "speaker_id": "P243",
       "status": "available",
       "voice_id": "rex-m-vctk-p243-english-london"
@@ -818,10 +983,13 @@
       "display_name": "Roan",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Roan-M-EARS-P105-Southern.safetensors",
+      "path": "compiled/roan-m-ears-p105-southern.safetensors",
       "pool_enabled": true,
-      "sha256": "58a8805538aa46c5bc63daa634bc3edb96fba9a59cc8c1b2a527439ecb7328e9",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "fe0da30b45bd65bb3992e56754682cefb2a20f123cf213f9a75594e3ed432fee",
+      "size_bytes": 6145272,
       "speaker_id": "P105",
       "status": "available",
       "voice_id": "roan-m-ears-p105-southern"
@@ -833,10 +1001,13 @@
       "display_name": "Rohan",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Rohan-M-VCTK-P376-Indian.safetensors",
+      "path": "compiled/rohan-m-vctk-p376-indian.safetensors",
       "pool_enabled": true,
-      "sha256": "23eda1170c0f31f44a827199ed10328013b61789ee37306a03809f831731ab35",
-      "size_bytes": 544856,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "27357c98e7b99764d14a3e2b88ef2a17fb2bef0305ba58cc28d2d28567e4c146",
+      "size_bytes": 6538488,
       "speaker_id": "P376",
       "status": "available",
       "voice_id": "rohan-m-vctk-p376-indian"
@@ -848,10 +1019,13 @@
       "display_name": "Rory",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Rory-M-VCTK-P272-Scottish.safetensors",
+      "path": "compiled/rory-m-vctk-p272-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "1b8b233451538bf26d9a873eaf81572a7170001351824350338e373a4f29e952",
-      "size_bytes": 520280,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "c229a2af8b232e55b9fb86ef52e435d4d0b145151f192754b03ae029342584af",
+      "size_bytes": 6243576,
       "speaker_id": "P272",
       "status": "available",
       "voice_id": "rory-m-vctk-p272-scottish"
@@ -863,10 +1037,13 @@
       "display_name": "Sage",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Sage-F-EARS-P055-American.safetensors",
+      "path": "compiled/sage-f-ears-p055-american.safetensors",
       "pool_enabled": true,
-      "sha256": "a099669abe00cc0385122ce9777097b6ddb49c5f5aa044299bf8a349318dc8a2",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "c539e9d981e9ceac804658d2980e697497759162c79fae09c83294b48343e0d8",
+      "size_bytes": 6145272,
       "speaker_id": "P055",
       "status": "available",
       "voice_id": "sage-f-ears-p055-american"
@@ -878,10 +1055,13 @@
       "display_name": "Saoirse",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Saoirse-F-VCTK-P266-Irish.safetensors",
+      "path": "compiled/saoirse-f-vctk-p266-irish.safetensors",
       "pool_enabled": true,
-      "sha256": "4c00b23fc4a87951398a2e20be7b682f2154acf57217b699d770ce6e5159f537",
-      "size_bytes": 548952,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "15e2bc40854984ce2dfd00dbd3422f769733371eecc540940e78924927d42470",
+      "size_bytes": 6587640,
       "speaker_id": "P266",
       "status": "available",
       "voice_id": "saoirse-f-vctk-p266-irish"
@@ -893,10 +1073,13 @@
       "display_name": "Seamus",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Seamus-M-VCTK-P298-Irish.safetensors",
+      "path": "compiled/seamus-m-vctk-p298-irish.safetensors",
       "pool_enabled": true,
-      "sha256": "09e05c83f3620251aed74fba5547665769827db514fb32055a7882683a2b8f28",
-      "size_bytes": 503896,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "d5564b3fd964e00531ce982f3b7d1759f3760a0b0a55aa92b6d5f14ddd954e6d",
+      "size_bytes": 6046968,
       "speaker_id": "P298",
       "status": "available",
       "voice_id": "seamus-m-vctk-p298-irish"
@@ -908,10 +1091,13 @@
       "display_name": "Tavish",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Tavish-M-VCTK-P284-Scottish.safetensors",
+      "path": "compiled/tavish-m-vctk-p284-scottish.safetensors",
       "pool_enabled": true,
-      "sha256": "d54ba2b69ae1d55c89ce312992e00ef018473b716419d648c2b7e1697b2042ae",
-      "size_bytes": 491608,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "bef55268619b77d2d05f31903e98e01c4b27fca5ab30070f9fd46626869581a9",
+      "size_bytes": 5899512,
       "speaker_id": "P284",
       "status": "available",
       "voice_id": "tavish-m-vctk-p284-scottish"
@@ -923,10 +1109,13 @@
       "display_name": "Thandi",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Thandi-F-VCTK-P323-SouthAfrican.safetensors",
+      "path": "compiled/thandi-f-vctk-p323-southafrican.safetensors",
       "pool_enabled": true,
-      "sha256": "ecf6256765cd7392f7a8f73ae838f7922fffef08d9e8202f4e02ff74ea3504dc",
-      "size_bytes": 708696,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "35884158787c4badb8c6da3a2e79a44fa9a6fc54957b69ce54385e2dc7f8fecd",
+      "size_bytes": 8504568,
       "speaker_id": "P323",
       "status": "available",
       "voice_id": "thandi-f-vctk-p323-southafrican"
@@ -938,10 +1127,13 @@
       "display_name": "Trace",
       "gender": "Male",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Trace-M-EARS-P107-American.safetensors",
+      "path": "compiled/trace-m-ears-p107-american.safetensors",
       "pool_enabled": true,
-      "sha256": "a1b50a3346bd4d55501479a0612a418400fd2585c9c17f420e32fca182c3adfc",
-      "size_bytes": 512088,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "ef1d4b7e2d9e3a6ee9cb02a40e6dee05ac57994e6c71916c475f360592842b21",
+      "size_bytes": 6145272,
       "speaker_id": "P107",
       "status": "available",
       "voice_id": "trace-m-ears-p107-american"
@@ -953,10 +1145,13 @@
       "display_name": "Vivienne",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Vivienne-F-VCTK-P231-English.safetensors",
+      "path": "compiled/vivienne-f-vctk-p231-english.safetensors",
       "pool_enabled": true,
-      "sha256": "d00d9580a3732b3c5f247a85b848944349a6e1da69a107324694dbe52ae3d954",
-      "size_bytes": 475224,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "d86fd881c32f68f391bf0407776c3233ee65bf19a18265d5b72c127a4e1b4151",
+      "size_bytes": 5702904,
       "speaker_id": "P231",
       "status": "available",
       "voice_id": "vivienne-f-vctk-p231-english"
@@ -968,10 +1163,13 @@
       "display_name": "Wren",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Wren-F-VCTK-P301-American.safetensors",
+      "path": "compiled/wren-f-vctk-p301-american.safetensors",
       "pool_enabled": true,
-      "sha256": "84193d365ab6b54a8be18c4d97e7ea1490048855b7495cc330e731a9904f93fd",
-      "size_bytes": 581720,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "86201d81de52265e756d6c7e03e916c1086f4d29902600edf1c37776ded0f9b6",
+      "size_bytes": 6980856,
       "speaker_id": "P301",
       "status": "available",
       "voice_id": "wren-f-vctk-p301-american"
@@ -983,10 +1181,13 @@
       "display_name": "Zola",
       "gender": "Female",
       "origin": "kenkui_compiled",
-      "path": "compiled-voices/Zola-F-VCTK-P314-SouthAfrican.safetensors",
+      "path": "compiled/zola-f-vctk-p314-southafrican.safetensors",
       "pool_enabled": true,
-      "sha256": "833c6c64dab9a757bc535efee5c91305d24936400ffabc99c226f6ea3d9fb609",
-      "size_bytes": 581720,
+      "preview": {
+        "text": "The rain in Spain stays mainly in the plain. How wonderful it is to simply speak and be heard."
+      },
+      "sha256": "89126835aa6ad0083c7c9f971f32eff05aaf184154cadf1dc923e854b0549b0f",
+      "size_bytes": 6980856,
       "speaker_id": "P314",
       "status": "available",
       "voice_id": "zola-f-vctk-p314-southafrican"

@@ -106,6 +106,10 @@ class EbookReader(ABC):
         """
         pass
 
+    def configure_pdf_extraction(self, options: dict[str, bool] | None = None) -> None:
+        """Configure PDF-specific cleanup options when supported by the reader."""
+        del options
+
     def count_chapters(self) -> int:
         """Quickly count chapters without extracting full content.
 

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from kenkui.voice_compiler import compile_audio_prompt_source
+from kenkui.voice_loader import load_voice_conditioning_source
 from kenkui.voice_registry import (
     PREVIEW_TEXT,
     VoiceCatalogEntry,
@@ -155,7 +157,6 @@ def _download_preview(entry: VoiceCatalogEntry, out_path: Path) -> bool:
 
 def _synthesize_preview(entry: VoiceCatalogEntry, out_path: Path, text: str) -> None:
     from kenkui.config import load_app_config
-    from kenkui.voice_loader import load_voice
     from kenkui.workers import _get_or_load_model, _render_text
 
     config = load_app_config(None)
@@ -165,7 +166,7 @@ def _synthesize_preview(entry: VoiceCatalogEntry, out_path: Path, text: str) -> 
         config.noise_clamp,
         config.eos_threshold,
     )
-    voice_state = model.get_state_for_audio_prompt(load_voice(entry.voice_id))
+    voice_state = model.get_state_for_audio_prompt(load_voice_conditioning_source(entry.voice_id))
     seg = _render_text(
         model,
         voice_state,
@@ -219,19 +220,8 @@ def prepare_voice_preview(
 
 
 def _default_compile_voice(source: str, output_path: Path) -> Path:
-    """Compile a prompt source to a Pocket TTS safetensors voice state.
-
-    The Pocket TTS export API has changed across releases, so callers and tests
-    may inject a compiler.  This default supports the common ``export_voice``
-    helper and otherwise fails loudly instead of accepting uncompiled prompts.
-    """
-    try:
-        from pocket_tts import export_voice  # type: ignore
-    except Exception as exc:  # pragma: no cover - depends on optional runtime
-        raise RuntimeError("Custom voice import requires Pocket TTS voice export support") from exc
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = export_voice(source, str(output_path))
-    return Path(result) if result else output_path
+    """Compile a prompt source to a Pocket TTS voice-state safetensors file."""
+    return compile_audio_prompt_source(source, output_path)
 
 
 def import_custom_voice(

@@ -903,6 +903,7 @@ class AudioBuilder:
     def run(self) -> bool:
         """Main entry point for audiobook creation."""
         self._reader = get_reader(self.cfg.ebook_path, self.cfg.verbose)
+        self._configure_reader(self._reader)
 
         # ── Chapter loading ───────────────────────────────────────────────
         # Multi-voice jobs reference an NLP cache file.  Load annotated
@@ -962,6 +963,9 @@ class AudioBuilder:
 
         output_file = get_unique_output_path(output_file)
 
+        if hasattr(self._reader, "get_transcript_sections"):
+            self._write_pdf_transcripts(output_file, chapters)
+
         return self.build(chapters, output_file, chapter_batch_info, total_batches, total_chars)
 
     @contextmanager
@@ -974,6 +978,70 @@ class AudioBuilder:
         finally:
             if not self.cfg.keep_temp and self.temp_dir.exists():
                 shutil.rmtree(self.temp_dir)
+
+    def _configure_reader(self, reader) -> None:
+        pdf_options = {
+            "drop_code_blocks": bool(getattr(self.cfg, "pdf_drop_code_blocks", False)),
+            "drop_notes": bool(getattr(self.cfg, "pdf_drop_notes", False)),
+            "drop_asides": bool(getattr(self.cfg, "pdf_drop_asides", False)),
+        }
+        if any(pdf_options.values()):
+            reader.configure_pdf_extraction(pdf_options)
+
+    def _write_pdf_transcripts(self, output_file: Path, filtered_chapters: list[Chapter]) -> None:
+        if self._reader is None or not hasattr(self._reader, "get_transcript_sections"):
+            return
+        sections = self._reader.get_transcript_sections()
+        transcript_dir = output_file.parent
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_path = transcript_dir / f"{output_file.stem}.transcript.raw.txt"
+        filtered_path = transcript_dir / f"{output_file.stem}.transcript.filtered.txt"
+        raw_path.write_text(self._format_pdf_raw_transcript(sections), encoding="utf-8")
+        filtered_path.write_text(
+            self._format_pdf_filtered_transcript(filtered_chapters),
+            encoding="utf-8",
+        )
+        self.console.emit(f"text transcript copied to {transcript_dir}")
+
+    @staticmethod
+    def _format_pdf_raw_transcript(sections) -> str:
+        lines: list[str] = ["# PDF Raw Transcript", ""]
+        for section in sections:
+            lines.append(f"## {section.title}")
+            lines.append(f"Pages: {section.start_page + 1}-{section.end_page + 1}")
+            lines.append("")
+            paragraphs = list(getattr(section, "raw_paragraphs", []) or [])
+            if not paragraphs:
+                lines.append("[no extractable text]")
+                lines.append("")
+                continue
+            for paragraph in paragraphs:
+                lines.extend(paragraph.splitlines() or [paragraph])
+                lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    @staticmethod
+    def _format_pdf_filtered_transcript(chapters: list[Chapter]) -> str:
+        lines: list[str] = ["# PDF Filtered Transcript", ""]
+        for chapter in chapters:
+            lines.append(f"## {chapter.title}")
+            lines.append("")
+            if chapter.segments is None:
+                paragraphs = chapter.paragraphs
+                for paragraph in paragraphs:
+                    lines.extend(paragraph.splitlines() or [paragraph])
+                    lines.append("")
+                continue
+            for segment in chapter.segments:
+                if segment.is_scene_break:
+                    lines.append("*** SCENE BREAK ***")
+                elif segment.speaker and segment.speaker != "NARRATOR":
+                    lines.append(f"[{segment.speaker}] {segment.text}")
+                else:
+                    lines.append(segment.text)
+                lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
 
 
 __all__ = ["AudioBuilder"]

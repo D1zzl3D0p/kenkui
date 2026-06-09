@@ -2,29 +2,27 @@ import json
 from unittest.mock import MagicMock, patch
 
 
-def _write_voice_pack_manifest(root, voice_id="voice"):
+def _write_voice_pack_manifest(root, voice_id="voice", *, format_version: int | None = 2):
     compiled = root / "compiled"
     compiled.mkdir(parents=True, exist_ok=True)
     asset = compiled / f"{voice_id}.safetensors"
     asset.write_bytes(b"compiled")
-    (root / "manifest.json").write_text(
-        json.dumps(
+    manifest = {
+        "voices": [
             {
-                "voices": [
-                    {
-                        "voice_id": voice_id,
-                        "display_name": voice_id.title(),
-                        "origin": "kenkui_compiled",
-                        "asset_kind": "safetensors",
-                        "gender": "Female",
-                        "pool_enabled": True,
-                        "path": f"compiled/{voice_id}.safetensors",
-                    }
-                ]
+                "voice_id": voice_id,
+                "display_name": voice_id.title(),
+                "origin": "kenkui_compiled",
+                "asset_kind": "safetensors",
+                "gender": "Female",
+                "pool_enabled": True,
+                "path": f"compiled/{voice_id}.safetensors",
             }
-        ),
-        encoding="utf-8",
-    )
+        ]
+    }
+    if format_version is not None:
+        manifest["voice_pack_format_version"] = format_version
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_voices_are_present_false_when_dir_missing(tmp_path):
@@ -60,6 +58,14 @@ def test_voices_are_present_true_with_manifest_and_asset(tmp_path):
         assert dl.voices_are_present() is True
 
 
+def test_voices_are_present_false_with_legacy_manifest(tmp_path):
+    from kenkui import voice_download as dl
+
+    _write_voice_pack_manifest(tmp_path, format_version=None)
+    with patch("kenkui.voice_download.voice_data_dir", return_value=tmp_path):
+        assert dl.voices_are_present() is False
+
+
 def test_download_voices_calls_snapshot_download(tmp_path):
     from kenkui import voice_download as dl
 
@@ -87,6 +93,7 @@ def test_download_voices_verifies_manifest_hashes(tmp_path):
     (tmp_path / "manifest.json").write_text(
         json.dumps(
             {
+                "voice_pack_format_version": 2,
                 "voices": [
                     {
                         "voice_id": "bad_hash",

@@ -107,6 +107,31 @@ def pdf_blank(tmp_path) -> Path:
     return _write_pdf(tmp_path / "blank.pdf", doc)
 
 
+@pytest.fixture
+def pdf_with_notes_and_code(tmp_path) -> Path:
+    """A PDF containing prose, note-style content, and a code block."""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((50, 80), "Chapter 1", fontsize=20)
+    page.insert_text(
+        (50, 130),
+        "This prose paragraph should remain in the transcript and audio pipeline.",
+        fontsize=12,
+    )
+    page.insert_text(
+        (50, 200),
+        "Note: this explanatory note should be filtered out when note cleanup is enabled.",
+        fontsize=12,
+    )
+    page.insert_text(
+        (50, 270),
+        "def sample():\n    return 42\n    return 43",
+        fontsize=12,
+    )
+    doc.set_toc([[1, "Chapter 1", 1]])
+    return _write_pdf(tmp_path / "notes_and_code.pdf", doc)
+
+
 # ---------------------------------------------------------------------------
 # TestPdfReaderInitialization
 # ---------------------------------------------------------------------------
@@ -241,6 +266,32 @@ class TestPdfReaderChapters:
         chapters = reader.get_chapters()
         all_text = " ".join(p for c in chapters for p in c.paragraphs)
         assert "My Running Header" not in all_text
+
+    def test_pdf_cleanup_options_filter_notes_and_code(self, pdf_with_notes_and_code):
+        from kenkui.readers.pdf import PdfReader
+
+        reader = PdfReader(pdf_with_notes_and_code)
+        reader.configure_pdf_extraction(
+            {
+                "drop_code_blocks": True,
+                "drop_notes": True,
+                "drop_asides": True,
+            }
+        )
+        chapters = reader.get_chapters(min_text_len=1)
+        combined = " ".join(" ".join(ch.paragraphs) for ch in chapters)
+        assert "Note:" not in combined
+        assert "def sample" not in combined
+        assert "This prose paragraph" in combined
+
+        sections = reader.get_transcript_sections()
+        assert sections
+        raw = " ".join(" ".join(section.raw_paragraphs) for section in sections)
+        filtered = " ".join(" ".join(section.filtered_paragraphs) for section in sections)
+        assert "Note:" in raw
+        assert "def sample" in raw
+        assert "Note:" not in filtered
+        assert "def sample" not in filtered
 
     def test_blank_pdf_raises_value_error(self, pdf_blank):
         from kenkui.readers.pdf import PdfReader
