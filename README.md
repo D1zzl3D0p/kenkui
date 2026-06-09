@@ -62,7 +62,7 @@ ok = kenkui.run_job(proc)
 - Freaky fast M4B audiobook generation — 100% CPU, no GPU
 - Multithreaded chapter processing
 - Supports EPUB, MOBI/AZW/AZW3/AZW4, and FB2
-- Multi-voice narration via NLP speaker attribution (Ollama, Anthropic, OpenAI, Google)
+- Multi-voice narration via NLP speaker attribution (Ollama, Anthropic, OpenAI, Google, OpenRouter, LiteLLM)
 - Voice pool template for automatic voice assignment by role + gender + rank
 - Chapter-voice mode: distinct voice per chapter
 - Broadcast-quality audio post-processing chain
@@ -201,10 +201,10 @@ Voices come in three tiers:
 | Tier | Source | Auth required? |
 |------|--------|---------------|
 | **Compiled** | Downloaded from HuggingFace on first run | No |
-| **Built-in** | 8 pocket-tts defaults | No |
-| **Custom** | `.wav` files (user-provided or fetched) | Yes (HuggingFace) |
+| **Built-in** | Pocket TTS defaults bundled by kenkui | No |
+| **Custom** | User-provided prompt sources compiled locally | No |
 
-**Built-in voices:** `alba, marius, javert, jean, fantine, cosette, eponine, azelma`
+**Built-in voices:** `alba, marius, javert, cosette, jean, fantine, eponine, azelma, anna, vera, charles, paul, george, mary, jane, michael, eve, bill_boerst, caro_davy, peter_yearsley, stuart_bell`
 
 ---
 
