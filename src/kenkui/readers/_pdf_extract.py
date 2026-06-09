@@ -11,6 +11,7 @@ import os
 import re
 from collections import Counter
 from collections.abc import Callable
+from functools import lru_cache
 
 import fitz
 
@@ -190,7 +191,7 @@ class PdfTextExtractor:
             start_page = max(0, min(item[2] - 1, n_pages - 1))  # 1-indexed → 0-indexed
 
             if i + 1 < len(raw):
-                end_page = max(start_page, raw[i + 1][2] - 2)
+                end_page = raw[i + 1][2] - 2
             else:
                 end_page = n_pages - 1
 
@@ -265,10 +266,24 @@ class PdfTextExtractor:
 
     def _get_table_bboxes(self, page: fitz.Page) -> list[tuple[float, float, float, float]]:
         """Return bounding boxes of detected tables on a page."""
+        layout_bboxes = self._get_layout_table_bboxes(page)
+        if layout_bboxes:
+            return layout_bboxes
         try:
             return [tuple(t.bbox) for t in page.find_tables().tables]  # type: ignore[misc]
         except Exception:
             return []
+
+    def _get_layout_table_bboxes(self, page: fitz.Page) -> list[tuple[float, float, float, float]]:
+        """Return table bounding boxes from pymupdf_layout when available."""
+        detector = _get_pymupdf_layout_table_detector()
+        if detector is None:
+            return []
+        try:
+            result = detector(page)
+        except Exception:
+            return []
+        return _coerce_table_bboxes(result)
 
 
 # ---------------------------------------------------------------------------
@@ -289,3 +304,86 @@ def _bbox_overlaps_any(
         if ix1 > ix0 and iy1 > iy0:
             return True
     return False
+
+
+@lru_cache(maxsize=1)
+def _get_pymupdf_layout_table_detector():
+    """Return a best-effort table detector from pymupdf_layout, if installed."""
+    try:
+        import pymupdf_layout  # type: ignore[import-not-found]
+    except Exception:
+        return None
+
+    candidate_names = (
+        "find_tables",
+        "extract_tables",
+        "get_tables",
+        "analyze_page",
+        "analyze",
+        "page_layout",
+    )
+
+    for name in candidate_names:
+        detector = getattr(pymupdf_layout, name, None)
+        if callable(detector):
+            return detector
+
+    factory_names = (
+        "LayoutAnalyzer",
+        "PageLayoutAnalyzer",
+        "PageAnalyzer",
+        "DocumentLayout",
+        "Layout",
+        "Analyzer",
+    )
+    for name in factory_names:
+        factory = getattr(pymupdf_layout, name, None)
+        if factory is None:
+            continue
+        try:
+            instance = factory()
+        except TypeError:
+            continue
+        for method_name in candidate_names:
+            detector = getattr(instance, method_name, None)
+            if callable(detector):
+                return detector
+
+    return None
+
+
+def _coerce_table_bboxes(result) -> list[tuple[float, float, float, float]]:
+    """Normalize a layout result into plain bounding boxes."""
+    if result is None:
+        return []
+
+    if isinstance(result, dict):
+        for key in ("tables", "table_bboxes", "bboxes", "boxes", "regions"):
+            if key in result:
+                return _coerce_table_bboxes(result[key])
+        return []
+
+    bbox = getattr(result, "bbox", None)
+    if bbox is not None:
+        try:
+            return [tuple(float(v) for v in bbox)]
+        except Exception:
+            return []
+
+    tables = getattr(result, "tables", None)
+    if tables is not None:
+        return _coerce_table_bboxes(tables)
+
+    if isinstance(result, (list, tuple, set)):
+        boxes: list[tuple[float, float, float, float]] = []
+        for item in result:
+            boxes.extend(_coerce_table_bboxes(item))
+        return boxes
+
+    try:
+        values = tuple(float(v) for v in result)
+    except Exception:
+        return []
+    if len(values) == 4:
+        return [values]
+    return []

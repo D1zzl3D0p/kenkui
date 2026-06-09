@@ -175,6 +175,31 @@ class TestExtractTocFromBookmarks:
         toc = extractor.extract_toc()
         assert toc[0].href.startswith("page:")
 
+    def test_same_page_entries_give_chapter_empty_range(self):
+        """Parent chapter must not duplicate content with its first child."""
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_bookmarks([
+            ("Chapter 1", 1),
+            ("1.1 Introduction", 1),
+            ("1.2 Details", 3),
+        ])
+        extractor = PdfTextExtractor(doc)
+        toc = extractor.extract_toc()
+
+        assert len(toc) == 3
+
+        def _parse(href: str) -> tuple[int, int]:
+            _, page_range = href.split(":", 1)
+            start_s, end_s = page_range.split("-", 1)
+            return int(start_s), int(end_s)
+
+        ch1_start, ch1_end = _parse(toc[0].href)
+        assert ch1_end < ch1_start, "Chapter 1 should have an empty range (end < start)"
+
+        intro_start, intro_end = _parse(toc[1].href)
+        assert intro_start == 0
+        assert intro_end == 1
+
 
 # ---------------------------------------------------------------------------
 # extract_toc — heading heuristic path
@@ -300,6 +325,30 @@ class TestExtractTextForPages:
         assert len(paras) >= 1
         assert not any("First paragraph" in record.message for record in caplog.records)
         assert not any("Second paragraph" in record.message for record in caplog.records)
+
+    def test_prefers_pymupdf_layout_table_detector_when_available(self, monkeypatch):
+        import sys
+        import types
+
+        PdfTextExtractor = _get_extractor_class()
+        doc = _make_doc_with_text(["Table block should be excluded.", "Body text remains."])
+        extractor = PdfTextExtractor(doc)
+
+        fake_module = types.SimpleNamespace(
+            find_tables=lambda page: types.SimpleNamespace(
+                tables=[
+                    types.SimpleNamespace(bbox=(0.0, 0.0, 100.0, 100.0)),
+                ]
+            )
+        )
+        monkeypatch.setitem(sys.modules, "pymupdf_layout", fake_module)
+
+        from kenkui.readers import _pdf_extract as pdf_extract_mod
+
+        pdf_extract_mod._get_pymupdf_layout_table_detector.cache_clear()
+        boxes = extractor._get_table_bboxes(doc[0])
+
+        assert boxes == [(0.0, 0.0, 100.0, 100.0)]
 
 
 # ---------------------------------------------------------------------------
