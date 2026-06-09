@@ -325,6 +325,7 @@ def test_full_analysis_uses_config_nlp_model(tmp_path):
         patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
         patch("kenkui.services.nlp_service.NLPConfig") as mock_nlp_cfg_cls,
         patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
         patch("kenkui.services.nlp_service.cache_result"),
         patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
         patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
@@ -334,6 +335,40 @@ def test_full_analysis_uses_config_nlp_model(tmp_path):
 
     mock_cfg.assert_called_once_with(None)
     mock_nlp_cfg_cls.from_app_config.assert_called_once_with(mock_config)
+
+
+def test_full_analysis_attribution_review_overrides_reach_nlp_config(tmp_path):
+    """Advanced attribution kwargs should update AppConfig before NLPConfig construction."""
+    from kenkui.models import AppConfig
+
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = [Chapter(index=0, title="Ch", paragraphs=["t"])]
+    mock_pipeline = _make_mock_pipeline()
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig") as mock_nlp_cfg_cls,
+        patch("kenkui.services.nlp_service.get_cached_result", return_value=None),
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]),
+        patch("kenkui.services.nlp_service.load_app_config", return_value=AppConfig()),
+    ):
+        full_analysis(
+            str(fake_epub),
+            attribution_max_quotes_per_call=20,
+            attribution_review_confidence=True,
+            review_model="reviewer",
+        )
+
+    passed_config = mock_nlp_cfg_cls.from_app_config.call_args.args[0]
+    assert passed_config.nlp_attribution_max_quotes_per_call == 20
+    assert passed_config.nlp_attribution_review_confidence is True
+    assert passed_config.nlp_review_model == "reviewer"
 
 
 def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
@@ -526,6 +561,37 @@ def test_attribute_only_progress_event_callback_uses_chapter_units(tmp_path):
     assert [event.status for event in events] == ["started", "advanced", "advanced", "completed"]
     assert [event.completed_units for event in events] == [0, 1, 2, 2]
     assert all(event.stage == "nlp_attribution" for event in events)
+
+
+def test_attribute_only_attribution_review_overrides_reach_nlp_config(tmp_path):
+    """Advanced attribution kwargs should update AppConfig for attribution-only runs."""
+    from kenkui.models import AppConfig
+
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+    fake_chapters = [Chapter(index=0, title="Ch 1", paragraphs=["text1"])]
+    mock_pipeline = _make_mock_pipeline()
+
+    with (
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig") as mock_nlp_cfg_cls,
+        patch("kenkui.services.nlp_service.cache_result"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service.load_app_config", return_value=AppConfig()),
+    ):
+        attribute_only(
+            roster=_make_mock_roster(),
+            chapters=fake_chapters,
+            ebook_path=str(fake_epub),
+            attribution_max_quotes_per_call=12,
+            attribution_review_confidence=True,
+            review_model="reviewer-small",
+        )
+
+    passed_config = mock_nlp_cfg_cls.from_app_config.call_args.args[0]
+    assert passed_config.nlp_attribution_max_quotes_per_call == 12
+    assert passed_config.nlp_attribution_review_confidence is True
+    assert passed_config.nlp_review_model == "reviewer-small"
 
 
 def test_attribute_only_openrouter_forwards_async_attribution_progress(tmp_path):

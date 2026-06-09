@@ -92,7 +92,7 @@ from .workers import worker_process_chapter
 try:
     __version__ = importlib.metadata.version("kenkui")
 except importlib.metadata.PackageNotFoundError:
-    __version__ = "1.0.0"
+    __version__ = "2.1.0"
 
 __author__ = "Sumner MacArthur"
 __license__ = "GPL-3.0"
@@ -218,6 +218,9 @@ def full_analysis(
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
     openrouter_attribution_concurrency: int | None = None,
+    attribution_max_quotes_per_call: int | None = None,
+    attribution_review_confidence: bool | None = None,
+    review_model: str | None = None,
     use_cache: bool = True,
 ) -> NLPResult:  # noqa: F821
     """Run the full NLP speaker-attribution pipeline (Stages 1-4).
@@ -240,6 +243,9 @@ def full_analysis(
         attribution_provider:          Override attribution provider.
         attribution_model:             Override attribution model.
         openrouter_attribution_concurrency: Override concurrent OpenRouter attribution requests.
+        attribution_max_quotes_per_call: Override max quotes per attribution request; 0 disables capping.
+        attribution_review_confidence: Override whether review schema preserves confidence.
+        review_model:                  Override optional resolver review model.
         use_cache:                     Return cached result if available (default True).
 
     Returns:
@@ -261,6 +267,9 @@ def full_analysis(
         attribution_provider=attribution_provider,
         attribution_model=attribution_model,
         openrouter_attribution_concurrency=openrouter_attribution_concurrency,
+        attribution_max_quotes_per_call=attribution_max_quotes_per_call,
+        attribution_review_confidence=attribution_review_confidence,
+        review_model=review_model,
         use_cache=use_cache,
     )
 
@@ -322,6 +331,9 @@ def attribute_only(
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
     openrouter_attribution_concurrency: int | None = None,
+    attribution_max_quotes_per_call: int | None = None,
+    attribution_review_confidence: bool | None = None,
+    review_model: str | None = None,
 ) -> NLPResult:
     """Run speaker attribution against an already discovered roster."""
     from .services.nlp_service import attribute_only as _attribute_only
@@ -337,6 +349,9 @@ def attribute_only(
         attribution_provider=attribution_provider,
         attribution_model=attribution_model,
         openrouter_attribution_concurrency=openrouter_attribution_concurrency,
+        attribution_max_quotes_per_call=attribution_max_quotes_per_call,
+        attribution_review_confidence=attribution_review_confidence,
+        review_model=review_model,
     )
 
 

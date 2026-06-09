@@ -351,6 +351,9 @@ def full_analysis(
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
     openrouter_attribution_concurrency: int | None = None,
+    attribution_max_quotes_per_call: int | None = None,
+    attribution_review_confidence: bool | None = None,
+    review_model: str | None = None,
     use_cache: bool = True,
 ) -> NLPResult:
     """Run the full NLP speaker-attribution pipeline.
@@ -395,6 +398,16 @@ def full_analysis(
         cfg = cfg.model_copy(update={
             "nlp_openrouter_attribution_concurrency": openrouter_attribution_concurrency
         })
+    if attribution_max_quotes_per_call is not None:
+        cfg = cfg.model_copy(update={
+            "nlp_attribution_max_quotes_per_call": attribution_max_quotes_per_call
+        })
+    if attribution_review_confidence is not None:
+        cfg = cfg.model_copy(update={
+            "nlp_attribution_review_confidence": attribution_review_confidence
+        })
+    if review_model is not None:
+        cfg = cfg.model_copy(update={"nlp_review_model": review_model})
 
     _attr_provider_name = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
     extraction_provider_name = cfg.nlp_provider or ""
@@ -721,6 +734,9 @@ def attribute_only(
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
     openrouter_attribution_concurrency: int | None = None,
+    attribution_max_quotes_per_call: int | None = None,
+    attribution_review_confidence: bool | None = None,
+    review_model: str | None = None,
 ) -> NLPResult:
     """Run Stage 3-4 speaker attribution against a pre-built roster.
 
@@ -754,6 +770,16 @@ def attribute_only(
         cfg = cfg.model_copy(update={
             "nlp_openrouter_attribution_concurrency": openrouter_attribution_concurrency
         })
+    if attribution_max_quotes_per_call is not None:
+        cfg = cfg.model_copy(update={
+            "nlp_attribution_max_quotes_per_call": attribution_max_quotes_per_call
+        })
+    if attribution_review_confidence is not None:
+        cfg = cfg.model_copy(update={
+            "nlp_attribution_review_confidence": attribution_review_confidence
+        })
+    if review_model is not None:
+        cfg = cfg.model_copy(update={"nlp_review_model": review_model})
 
     _effective_provider = getattr(cfg, "nlp_attribution_provider", "") or cfg.nlp_provider
     _effective_model = getattr(cfg, "nlp_attribution_model", None) or cfg.nlp_model or ""
