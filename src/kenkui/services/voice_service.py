@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AUDITION_TEXT = PREVIEW_TEXT
 
+_VOICE_ORIGIN_SORT_ORDER = {
+    "pocket_tts_builtin": 0,
+    "kenkui_compiled": 1,
+    "custom_compiled": 2,
+}
+
 
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -128,7 +134,15 @@ def list_voices(
         pool_enabled=pool_enabled,
         status=status,
     )
-    return [_entry_to_info(v) for v in voices]
+    infos = [_entry_to_info(v) for v in voices]
+    return sorted(
+        infos,
+        key=lambda v: (
+            _VOICE_ORIGIN_SORT_ORDER.get(v.origin, len(_VOICE_ORIGIN_SORT_ORDER)),
+            v.display_name.lower(),
+            v.voice_id.lower(),
+        ),
+    )
 
 
 def get_voice(voice_id: str, config_path: str | None = None) -> VoiceInfo | None:

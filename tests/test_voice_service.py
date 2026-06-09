@@ -107,7 +107,10 @@ def test_manifest_validation_requires_gender(tmp_path):
 
 def test_list_voices_returns_catalog_fields():
     catalog = MagicMock()
-    catalog.filter.return_value = [_entry("alba", "Male")]
+    catalog.filter.return_value = [
+        _entry("custom_voice", "Female", origin="custom_compiled"),
+        _entry("alba", "Male"),
+    ]
 
     with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
         result = list_voices(gender="Male", pool_enabled=True)
@@ -116,6 +119,7 @@ def test_list_voices_returns_catalog_fields():
     assert result[0].voice_id == "alba"
     assert result[0].origin == "pocket_tts_builtin"
     assert result[0].pool_enabled is True
+    assert [voice.voice_id for voice in result] == ["alba", "custom_voice"]
     catalog.filter.assert_called_once_with(
         gender="Male",
         accent=None,
@@ -125,6 +129,26 @@ def test_list_voices_returns_catalog_fields():
         pool_enabled=True,
         status=None,
     )
+
+
+def test_list_voices_sorting_all_origins():
+    """pocket_tts_builtin < kenkui_compiled < custom_compiled regardless of input order."""
+    catalog = MagicMock()
+    catalog.filter.return_value = [
+        _entry("custom_voice", "Female", origin="custom_compiled"),
+        _entry("downloaded_voice", "Male", origin="kenkui_compiled"),
+        _entry("alba", "Male"),
+    ]
+
+    with patch("kenkui.services.voice_service.get_catalog", return_value=catalog):
+        result = list_voices()
+
+    assert [v.origin for v in result] == [
+        "pocket_tts_builtin",
+        "kenkui_compiled",
+        "custom_compiled",
+    ]
+    assert [v.voice_id for v in result] == ["alba", "downloaded_voice", "custom_voice"]
 
 
 def test_set_voice_pool_enabled_writes_catalog_state():
