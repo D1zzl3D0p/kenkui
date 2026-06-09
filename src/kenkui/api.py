@@ -193,7 +193,7 @@ def filter_chapters(book_hash: str, selection) -> ChapterFilterResult:  # noqa: 
 def load_chapters(
     ebook_path: str | Path,
     chapter_filters: list[FilterOperation] | None = None,
-    pdf_cleanup_options: dict[str, bool] | None = None,
+    pdf_cleanup_options: dict[str, bool | float] | None = None,
 ) -> list[Chapter]:
     """Load full Chapter objects from an ebook, optionally applying filters."""
     reader = get_reader(Path(ebook_path))

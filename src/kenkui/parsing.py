@@ -980,13 +980,15 @@ class AudioBuilder:
                 shutil.rmtree(self.temp_dir)
 
     def _configure_reader(self, reader) -> None:
-        pdf_options = {
+        pdf_options: dict[str, bool | float] = {
             "drop_code_blocks": bool(getattr(self.cfg, "pdf_drop_code_blocks", False)),
             "drop_notes": bool(getattr(self.cfg, "pdf_drop_notes", False)),
             "drop_asides": bool(getattr(self.cfg, "pdf_drop_asides", False)),
+            "drop_margin_notes": bool(getattr(self.cfg, "pdf_drop_margin_notes", True)),
+            "header_zone_ratio": float(getattr(self.cfg, "pdf_header_zone_ratio", 0.0)),
+            "footer_zone_ratio": float(getattr(self.cfg, "pdf_footer_zone_ratio", 0.0)),
         }
-        if any(pdf_options.values()):
-            reader.configure_pdf_extraction(pdf_options)
+        reader.configure_pdf_extraction(pdf_options)
 
     def _write_pdf_transcripts(self, output_file: Path, filtered_chapters: list[Chapter]) -> None:
         if self._reader is None or not hasattr(self._reader, "get_transcript_sections"):

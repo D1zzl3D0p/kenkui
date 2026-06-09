@@ -47,6 +47,9 @@ class ProcessingConfig:
     pdf_drop_code_blocks: bool = False
     pdf_drop_notes: bool = False
     pdf_drop_asides: bool = False
+    pdf_drop_margin_notes: bool = True
+    pdf_header_zone_ratio: float = 0.0
+    pdf_footer_zone_ratio: float = 0.0
     # --- Multi-voice fields ---
     speaker_voices: dict[str, str] = field(default_factory=dict)
     annotated_chapters_path: Path | None = None
