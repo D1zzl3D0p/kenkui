@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from .voice_registry import (
     DEFAULT_VOICE_PACK_REPO,
     DEFAULT_VOICE_PACK_REVISION,
-    compiled_voices_dir,
     get_catalog,
     validate_manifest,
     verify_manifest_assets,
@@ -23,9 +23,46 @@ def voices_local_dir():
 
 
 def voices_are_present() -> bool:
-    """Return True if compiled voice files exist in the user data directory."""
-    d = compiled_voices_dir()
-    return d.exists() and any(d.glob("*.safetensors"))
+    """Return True when the managed compiled voice pack is cataloged and usable."""
+    root = voice_data_dir()
+    manifest = _voice_pack_manifest(root)
+    if manifest is None:
+        return False
+    try:
+        entries = validate_manifest(manifest)
+    except Exception:
+        return False
+    return any(
+        entry.origin == "kenkui_compiled"
+        and entry.status == "available"
+        and entry.path is not None
+        and entry.path.exists()
+        for entry in entries
+    )
+
+
+def _voice_pack_manifest(root: Path) -> Path | None:
+    for name in ("manifest.json", "voice_manifest.json", "voices/manifest.json"):
+        path = root / name
+        if path.exists():
+            return path
+    return None
+
+
+def _remove_managed_voice_pack(root: Path) -> None:
+    import shutil
+
+    for name in ("manifest.json", "voice_manifest.json"):
+        path = root / name
+        if path.exists():
+            path.unlink()
+    for name in ("compiled", "previews", "voices"):
+        path = root / name
+        if path.exists():
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
 
 
 def download_voices(
@@ -44,8 +81,6 @@ def download_voices(
     (90, "Updating voice registry"), (100, "Download complete").
     Pass ``None`` (default) for silent operation.
     """
-    import shutil
-
     from huggingface_hub import snapshot_download
 
     if progress_callback is not None:
@@ -53,7 +88,7 @@ def download_voices(
 
     local_dir = voice_data_dir()
     if force and local_dir.exists():
-        shutil.rmtree(local_dir)
+        _remove_managed_voice_pack(local_dir)
 
     local_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,11 +104,10 @@ def download_voices(
         ignore_patterns=["*.md", "*.gitattributes", ".gitattributes", "sources/**", "uncompiled/**"],
     )
 
-    for manifest_name in ("manifest.json", "voice_manifest.json", "voices/manifest.json"):
-        manifest = local_dir / manifest_name
-        if manifest.exists():
-            verify_manifest_assets(validate_manifest(manifest))
-            break
+    manifest = _voice_pack_manifest(local_dir)
+    if manifest is None:
+        raise RuntimeError("Downloaded voice pack did not contain a supported manifest")
+    verify_manifest_assets(validate_manifest(manifest))
 
     if progress_callback is not None:
         progress_callback(90, "Updating voice registry")

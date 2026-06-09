@@ -1,7 +1,33 @@
 """Tests for services/download_service.py and voice_download.py."""
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
+
+
+def _write_voice_pack_manifest(root):
+    compiled = root / "compiled"
+    compiled.mkdir(parents=True, exist_ok=True)
+    asset = compiled / "voice.safetensors"
+    asset.write_bytes(b"compiled")
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "voices": [
+                    {
+                        "voice_id": "voice",
+                        "display_name": "Voice",
+                        "origin": "kenkui_compiled",
+                        "asset_kind": "safetensors",
+                        "gender": "Female",
+                        "pool_enabled": True,
+                        "path": "compiled/voice.safetensors",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_download_compiled_success(tmp_path):
@@ -69,7 +95,7 @@ def test_download_voices_callback_called(tmp_path):
     catalog = MagicMock()
     with (
         patch("kenkui.voice_download.voice_data_dir", return_value=tmp_path),
-        patch("huggingface_hub.snapshot_download"),
+        patch("huggingface_hub.snapshot_download", side_effect=lambda **_: _write_voice_pack_manifest(tmp_path)),
         patch("kenkui.voice_download.get_catalog", return_value=catalog),
     ):
         from kenkui import voice_download as dl
@@ -84,7 +110,7 @@ def test_download_voices_no_callback_is_silent(tmp_path):
     catalog = MagicMock()
     with (
         patch("kenkui.voice_download.voice_data_dir", return_value=tmp_path),
-        patch("huggingface_hub.snapshot_download"),
+        patch("huggingface_hub.snapshot_download", side_effect=lambda **_: _write_voice_pack_manifest(tmp_path)),
         patch("kenkui.voice_download.get_catalog", return_value=catalog),
     ):
         from kenkui import voice_download as dl
@@ -96,7 +122,10 @@ def test_download_voices_uses_pinned_revision(tmp_path):
     catalog = MagicMock()
     with (
         patch("kenkui.voice_download.voice_data_dir", return_value=tmp_path),
-        patch("huggingface_hub.snapshot_download") as mock_snap,
+        patch(
+            "huggingface_hub.snapshot_download",
+            side_effect=lambda **_: _write_voice_pack_manifest(tmp_path),
+        ) as mock_snap,
         patch("kenkui.voice_download.get_catalog", return_value=catalog),
     ):
         from kenkui import voice_download as dl
