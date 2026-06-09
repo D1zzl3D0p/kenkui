@@ -460,3 +460,76 @@ class TestPdfTextExtractorConfigure:
         extractor = PdfTextExtractor(doc)
         assert extractor._header_zone_ratio == 0.0
         assert extractor._footer_zone_ratio == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Span-level extraction / margin note filtering
+# ---------------------------------------------------------------------------
+
+class TestStripMarginNotes:
+    """Span-level extraction correctly identifies and removes margin-column text."""
+
+    def test_body_column_x_range_from_dominant_line_starts(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = fitz.open()
+        page = doc.new_page(width=540, height=666)
+        for i in range(20):
+            page.insert_text((70, 100 + i * 20), f"Body line {i}.", fontsize=10)
+        page.insert_text((420, 200), "Margin note line one.", fontsize=9)
+        page.insert_text((420, 220), "Margin note line two.", fontsize=9)
+
+        extractor = PdfTextExtractor(doc)
+        x0, x1 = extractor._get_body_x_range(page)
+
+        assert abs(x0 - 70) <= 15, f"body x0 should be ~70, got {x0}"
+        assert x1 < 420, f"body x1 should be less than margin at 420, got {x1}"
+
+    def test_span_level_excludes_right_margin_blocks(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = fitz.open()
+        page = doc.new_page(width=540, height=666)
+        for i in range(20):
+            page.insert_text((70, 100 + i * 20), f"Body text line {i}.", fontsize=10)
+        page.insert_text((420, 200), "Right margin note content.", fontsize=9)
+
+        extractor = PdfTextExtractor(doc)
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+
+        assert "Body text line" in combined
+        assert "Right margin note content" not in combined
+
+    def test_span_level_excludes_left_margin_blocks(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = fitz.open()
+        page = doc.new_page(width=540, height=666)
+        for i in range(20):
+            page.insert_text((200, 100 + i * 20), f"Body text line {i}.", fontsize=10)
+        page.insert_text((30, 200), "Left margin note content.", fontsize=9)
+
+        extractor = PdfTextExtractor(doc)
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+
+        assert "Body text line" in combined
+        assert "Left margin note content" not in combined
+
+    def test_configure_drop_margin_notes_false_includes_margin(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = fitz.open()
+        page = doc.new_page(width=540, height=666)
+        for i in range(20):
+            page.insert_text((70, 100 + i * 20), f"Body text line {i}.", fontsize=10)
+        page.insert_text((420, 200), "Margin note content.", fontsize=9)
+
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({"drop_margin_notes": False})
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+
+        assert "Body text line" in combined
+        assert "Margin note content" in combined

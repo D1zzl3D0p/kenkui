@@ -79,50 +79,122 @@ class PdfTextExtractor:
     def extract_text_for_pages(self, start: int, end: int) -> list[str]:
         """Extract clean paragraphs from pages [start, end] (inclusive, 0-indexed).
 
-        Uses block-level extraction so each PDF text block becomes a paragraph
-        candidate — more reliable than splitting on double-newlines since PDFs
-        rarely emit those in raw text output.
+        Dispatches to span-level extraction (filters margin notes) when
+        strip_margin_notes is True, otherwise uses block-level extraction.
         """
         noise = self._detect_headers_footers()
         paragraphs: list[str] = []
 
         for page_num in range(start, min(end + 1, len(self._doc))):
             page = self._doc[page_num]
-            # sort=True preserves reading order across multi-column layouts
-            blocks = page.get_text("blocks", sort=True)
-            text_blocks = [b for b in blocks if b[6] == 0]  # type 0 = text, 1 = image
+            page_height = page.rect.height
+            if self._strip_margin_notes:
+                paragraphs.extend(self._extract_page_span_level(page, page_height, noise))
+            else:
+                paragraphs.extend(self._extract_page_block_level(page, page_height, noise))
 
-            if not text_blocks:
-                if self._ocr_backend is not None:
-                    raw = self._ocr_backend(page)
-                    parts = [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
-                    paragraphs.extend(parts)
-                else:
-                    if self._verbose:
-                        logger.warning("Page %d has no text layer; skipping", page_num)
+        return paragraphs
+
+    def _extract_page_block_level(
+        self,
+        page: fitz.Page,
+        page_height: float,
+        noise: set[str],
+    ) -> list[str]:
+        """Extract paragraphs using block-level text (original behavior + zone filtering)."""
+        blocks = page.get_text("blocks", sort=True)
+        text_blocks = [b for b in blocks if b[6] == 0]
+
+        if not text_blocks:
+            if self._ocr_backend is not None:
+                raw = self._ocr_backend(page)
+                return [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
+            if self._verbose:
+                logger.warning("Page %d has no text layer; skipping", page.number)
+            return []
+
+        table_bboxes = self._get_table_bboxes(page)
+        paragraphs: list[str] = []
+
+        for block in text_blocks:
+            if self._header_zone_ratio > 0 and block[3] < page_height * self._header_zone_ratio:
+                continue
+            if self._footer_zone_ratio > 0 and block[1] > page_height * (1 - self._footer_zone_ratio):
+                continue
+            if _bbox_overlaps_any(block[:4], table_bboxes):
                 continue
 
-            # Collect table bounding boxes to skip table blocks
-            table_bboxes = self._get_table_bboxes(page)
+            lines = [ln for ln in block[4].splitlines() if ln.strip() not in noise]
+            text = self._clean_text("\n".join(lines)).strip()
+            if text:
+                paragraphs.append(text)
+            elif self._verbose:
+                logger.debug(
+                    "PDF page %d skipped empty block at %s",
+                    page.number + 1,
+                    tuple(round(v, 2) for v in block[:4]),
+                )
 
-            for block in text_blocks:
-                if _bbox_overlaps_any(block[:4], table_bboxes):
-                    continue
+        if self._verbose and paragraphs:
+            logger.debug("PDF page %d yielded %d paragraph(s)", page.number + 1, len(paragraphs))
 
-                # Strip noise lines within the block
-                lines = [ln for ln in block[4].splitlines() if ln.strip() not in noise]
-                text = self._clean_text("\n".join(lines)).strip()
-                if text:
-                    paragraphs.append(text)
-                elif self._verbose:
-                    logger.debug(
-                        "PDF page %d skipped empty block at %s",
-                        page_num + 1,
-                        tuple(round(v, 2) for v in block[:4]),
-                    )
+        return paragraphs
 
-            if self._verbose and paragraphs:
-                logger.debug("PDF page %d yielded %d paragraph(s)", page_num + 1, len(paragraphs))
+    def _extract_page_span_level(
+        self,
+        page: fitz.Page,
+        page_height: float,
+        noise: set[str],
+    ) -> list[str]:
+        """Extract paragraphs from body column only, filtering margin-note spans."""
+        page_data = page.get_text("dict", sort=True)
+        text_blocks = [b for b in page_data.get("blocks", []) if b.get("type") == 0]
+
+        if not text_blocks:
+            if self._ocr_backend is not None:
+                raw = self._ocr_backend(page)
+                return [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
+            if self._verbose:
+                logger.warning("Page %d has no text layer; skipping", page.number)
+            return []
+
+        body_x0, body_x1 = self._get_body_x_range(page)
+        table_bboxes = self._get_table_bboxes(page)
+        paragraphs: list[str] = []
+
+        for block in text_blocks:
+            bbox = block["bbox"]
+            if self._header_zone_ratio > 0 and bbox[3] < page_height * self._header_zone_ratio:
+                continue
+            if self._footer_zone_ratio > 0 and bbox[1] > page_height * (1 - self._footer_zone_ratio):
+                continue
+            if _bbox_overlaps_any(bbox, table_bboxes):
+                continue
+
+            lines: list[str] = []
+            for line in block.get("lines", []):
+                parts = [
+                    s["text"]
+                    for s in line.get("spans", [])
+                    if body_x0 - 5 <= s["bbox"][0] <= body_x1 + 5
+                ]
+                if parts:
+                    line_text = "".join(parts).rstrip()
+                    if line_text.strip() not in noise:
+                        lines.append(line_text)
+
+            text = self._clean_text("\n".join(lines)).strip()
+            if text:
+                paragraphs.append(text)
+            elif self._verbose:
+                logger.debug(
+                    "PDF page %d skipped empty block at %s",
+                    page.number + 1,
+                    tuple(round(v, 2) for v in bbox),
+                )
+
+        if self._verbose and paragraphs:
+            logger.debug("PDF page %d yielded %d paragraph(s)", page.number + 1, len(paragraphs))
 
         return paragraphs
 
@@ -189,6 +261,37 @@ class PdfTextExtractor:
             if count >= min_occurrences and count > 1
         }
         return self._noise_lines
+
+    def _get_body_x_range(self, page: fitz.Page) -> tuple[float, float]:
+        """Determine body text column x-range from the dominant line-start positions."""
+        data = page.get_text("dict")
+        line_x0_counts: Counter[int] = Counter()
+        line_x0_to_x1: dict[int, list[float]] = {}
+
+        for block in data.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                spans = [s for s in line.get("spans", []) if s["text"].strip()]
+                if not spans:
+                    continue
+                line_x0 = round(min(s["bbox"][0] for s in spans))
+                line_x1 = max(s["bbox"][2] for s in spans)
+                line_x0_counts[line_x0] += 1
+                line_x0_to_x1.setdefault(line_x0, []).append(line_x1)
+
+        if not line_x0_counts:
+            return (0.0, page.rect.width)
+
+        dominant_x0 = float(line_x0_counts.most_common(1)[0][0])
+        x1_values = [
+            x1
+            for x0, x1s in line_x0_to_x1.items()
+            if abs(x0 - dominant_x0) <= 20
+            for x1 in x1s
+        ]
+        body_x1 = max(x1_values) if x1_values else dominant_x0 + page.rect.width / 2
+        return (dominant_x0 - 5.0, body_x1 + 5.0)
 
     # ------------------------------------------------------------------
     # TOC extraction strategies
