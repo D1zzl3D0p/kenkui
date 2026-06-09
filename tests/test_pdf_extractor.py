@@ -609,3 +609,45 @@ class TestZoneFiltering:
         assert "Body text in middle" in combined
         assert "Header zone text" not in combined
         assert "Footer zone text" not in combined
+
+
+# ---------------------------------------------------------------------------
+# PdfReader.configure_pdf_extraction propagation
+# ---------------------------------------------------------------------------
+
+class TestPdfReaderConfigurePdfExtraction:
+    """configure_pdf_extraction forwards options to the underlying extractor."""
+
+    def test_drop_margin_notes_propagates_to_extractor(self, tmp_path):
+        from kenkui.readers.pdf import PdfReader
+
+        doc = _make_doc_with_text(["Content page."] * 3)
+        pdf_path = tmp_path / "test.pdf"
+        doc.save(str(pdf_path))
+
+        reader = PdfReader(pdf_path)
+        reader.configure_pdf_extraction({"drop_margin_notes": False})
+        assert reader._extractor._strip_margin_notes is False
+
+    def test_zone_ratios_propagate_to_extractor(self, tmp_path):
+        from kenkui.readers.pdf import PdfReader
+
+        doc = _make_doc_with_text(["Content page."] * 3)
+        pdf_path = tmp_path / "test.pdf"
+        doc.save(str(pdf_path))
+
+        reader = PdfReader(pdf_path)
+        reader.configure_pdf_extraction({"header_zone_ratio": 0.08, "footer_zone_ratio": 0.06})
+        assert abs(reader._extractor._header_zone_ratio - 0.08) < 1e-9
+        assert abs(reader._extractor._footer_zone_ratio - 0.06) < 1e-9
+
+    def test_boolean_cleanup_options_still_work(self, tmp_path):
+        from kenkui.readers.pdf import PdfReader
+
+        doc = _make_doc_with_text(["Note: something."])
+        pdf_path = tmp_path / "test.pdf"
+        doc.save(str(pdf_path))
+
+        reader = PdfReader(pdf_path)
+        reader.configure_pdf_extraction({"drop_notes": True})
+        assert reader._pdf_cleanup_options.get("drop_notes") is True

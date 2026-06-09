@@ -54,8 +54,9 @@ class PdfReader(EbookReader):
         self._pdf_cleanup_options: dict[str, bool] = {}
         self._transcript_sections: list[PdfTranscriptSection] = []
 
-    def configure_pdf_extraction(self, options: dict[str, bool] | None = None) -> None:
+    def configure_pdf_extraction(self, options: dict[str, bool | float] | None = None) -> None:
         self._pdf_cleanup_options = dict(options or {})
+        self._extractor.configure(self._pdf_cleanup_options)
 
     def get_metadata(self) -> EbookMetadata:
         meta = self._doc.metadata or {}
