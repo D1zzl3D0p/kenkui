@@ -326,9 +326,16 @@ class TestExtractTextForPages:
         assert not any("First paragraph" in record.message for record in caplog.records)
         assert not any("Second paragraph" in record.message for record in caplog.records)
 
-    def test_prefers_pymupdf_layout_table_detector_when_available(self, monkeypatch):
+    def test_prefers_pymupdf_layout_table_detector_when_available(self, monkeypatch, request):
         import sys
         import types
+
+        from kenkui.readers import _pdf_extract as pdf_extract_mod
+
+        # Clear cache before the test and register a finalizer to clear it after,
+        # so the fake detector does not leak into subsequent tests.
+        pdf_extract_mod._get_pymupdf_layout_table_detector.cache_clear()
+        request.addfinalizer(pdf_extract_mod._get_pymupdf_layout_table_detector.cache_clear)
 
         PdfTextExtractor = _get_extractor_class()
         doc = _make_doc_with_text(["Table block should be excluded.", "Body text remains."])
@@ -342,8 +349,6 @@ class TestExtractTextForPages:
             )
         )
         monkeypatch.setitem(sys.modules, "pymupdf_layout", fake_module)
-
-        from kenkui.readers import _pdf_extract as pdf_extract_mod
 
         pdf_extract_mod._get_pymupdf_layout_table_detector.cache_clear()
         boxes = extractor._get_table_bboxes(doc[0])
@@ -533,3 +538,74 @@ class TestStripMarginNotes:
 
         assert "Body text line" in combined
         assert "Margin note content" in combined
+
+
+# ---------------------------------------------------------------------------
+# Header / footer zone filtering
+# ---------------------------------------------------------------------------
+
+class TestZoneFiltering:
+    """header_zone_ratio and footer_zone_ratio skip blocks in the top/bottom zones."""
+
+    def _make_page_with_zones(self):
+        doc = fitz.open()
+        page = doc.new_page(width=540, height=666)
+        ph = 666.0
+        page.insert_text((50, ph * 0.05), "Header zone text.", fontsize=10)
+        page.insert_text((50, ph * 0.50), "Body text in middle.", fontsize=10)
+        page.insert_text((50, ph * 0.96), "Footer zone text.", fontsize=10)
+        return doc
+
+    def test_header_zone_skips_top_block(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = self._make_page_with_zones()
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({"drop_margin_notes": False, "header_zone_ratio": 0.10})
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+        assert "Body text in middle" in combined
+        assert "Header zone text" not in combined
+
+    def test_footer_zone_skips_bottom_block(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = self._make_page_with_zones()
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({"drop_margin_notes": False, "footer_zone_ratio": 0.10})
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+        assert "Body text in middle" in combined
+        assert "Footer zone text" not in combined
+
+    def test_zero_ratio_disables_zone_filtering(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = self._make_page_with_zones()
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({
+            "drop_margin_notes": False,
+            "header_zone_ratio": 0.0,
+            "footer_zone_ratio": 0.0,
+        })
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+        assert "Header zone text" in combined
+        assert "Body text in middle" in combined
+        assert "Footer zone text" in combined
+
+    def test_both_zones_active_via_configure(self, monkeypatch):
+        monkeypatch.delenv("KENKUI_PDF_STRIP_MARGIN_NOTES", raising=False)
+        PdfTextExtractor = _get_extractor_class()
+        doc = self._make_page_with_zones()
+        extractor = PdfTextExtractor(doc)
+        extractor.configure({
+            "drop_margin_notes": False,
+            "header_zone_ratio": 0.10,
+            "footer_zone_ratio": 0.10,
+        })
+        paras = extractor.extract_text_for_pages(0, 0)
+        combined = " ".join(paras)
+        assert "Body text in middle" in combined
+        assert "Header zone text" not in combined
+        assert "Footer zone text" not in combined
