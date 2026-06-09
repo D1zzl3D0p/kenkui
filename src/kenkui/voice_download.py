@@ -48,7 +48,7 @@ def voices_are_present() -> bool:
 
 
 def _voice_pack_manifest(root: Path) -> Path | None:
-    for name in ("manifest.json", "voice_manifest.json", "voices/manifest.json"):
+    for name in ("manifest.json", "voice_manifest.json"):
         path = root / name
         if path.exists():
             return path
@@ -106,8 +106,12 @@ def download_voices(
         repo_type=HF_REPO_TYPE,
         revision=HF_VOICES_REVISION,
         local_dir=str(local_dir),
-        allow_patterns=["manifest.json", "voice_manifest.json", "voices/**", "compiled/**", "previews/**"],
-        ignore_patterns=["*.md", "*.gitattributes", ".gitattributes", "sources/**", "uncompiled/**"],
+        allow_patterns=["manifest.json", "voice_manifest.json", "compiled/**", "previews/**"],
+        ignore_patterns=[
+            "*.md", "*.gitattributes", ".gitattributes",
+            "sources/**", "uncompiled/**",
+            "compiled-voices/**", "uncompiled-voices/**",
+        ],
     )
 
     manifest = _voice_pack_manifest(local_dir)

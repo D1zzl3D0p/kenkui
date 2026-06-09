@@ -27,7 +27,7 @@ VoiceStatus = Literal["available", "missing", "downloadable"]
 DEFAULT_VOICE_PACK_REPO = "D1zzl3D0p/kenkui-voices"
 DEFAULT_VOICE_PACK_REVISION = "main"
 VOICE_PACK_FORMAT_VERSION = 2
-MANIFEST_FILENAMES = ("manifest.json", "voice_manifest.json", "voices/manifest.json")
+MANIFEST_FILENAMES = ("manifest.json", "voice_manifest.json")
 CUSTOM_MANIFEST_FILENAME = "custom_manifest.json"
 PREVIEW_TEXT = (
     "The rain in Spain stays mainly in the plain. "

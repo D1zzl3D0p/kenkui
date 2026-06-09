@@ -13,6 +13,7 @@ def _write_voice_pack_manifest(root):
     (root / "manifest.json").write_text(
         json.dumps(
             {
+                "voice_pack_format_version": 2,
                 "voices": [
                     {
                         "voice_id": "voice",
@@ -23,7 +24,7 @@ def _write_voice_pack_manifest(root):
                         "pool_enabled": True,
                         "path": "compiled/voice.safetensors",
                     }
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -135,6 +136,16 @@ def test_download_voices_uses_pinned_revision(tmp_path):
     assert mock_snap.call_args.kwargs["repo_id"] == dl.HF_VOICES_REPO
     assert mock_snap.call_args.kwargs["revision"] == dl.HF_VOICES_REVISION
     assert "uncompiled/**" in mock_snap.call_args.kwargs["ignore_patterns"]
+    assert "voices/**" not in mock_snap.call_args.kwargs["allow_patterns"]
+    assert "compiled-voices/**" in mock_snap.call_args.kwargs["ignore_patterns"]
+
+
+def test_voice_pack_manifest_does_not_search_nested_voices_dir(tmp_path):
+    from kenkui.voice_download import _voice_pack_manifest
+
+    (tmp_path / "voices").mkdir()
+    (tmp_path / "voices" / "manifest.json").write_text("{}", encoding="utf-8")
+    assert _voice_pack_manifest(tmp_path) is None
 
 
 def test_fetch_uncompiled_voices_is_removed():
