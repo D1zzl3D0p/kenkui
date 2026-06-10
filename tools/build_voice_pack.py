@@ -52,8 +52,11 @@ def _copy_or_compile(entry: dict[str, Any], compiled_dir: Path, *, source_base: 
     voice_id = entry["voice_id"]
     destination = compiled_dir / f"{voice_id}.safetensors"
     if entry.get("prompt_source"):
+        prompt_path = Path(str(entry["prompt_source"]))
+        if not prompt_path.is_absolute():
+            prompt_path = source_base / prompt_path
         return compile_audio_prompt_source(
-            str(entry["prompt_source"]),
+            str(prompt_path),
             destination,
             language=DEFAULT_VOICE_PACK_LANGUAGE,
             truncate=True,
