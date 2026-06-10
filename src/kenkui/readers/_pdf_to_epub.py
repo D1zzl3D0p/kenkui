@@ -59,13 +59,15 @@ _patch_ebooklib_title_roundtrip()
 # Skip labels — content we never want narrated
 _SKIP_LABEL_NAMES = {
     "table",
-    "picture",
-    "figure",
+    "picture",   # DocItemLabel.PICTURE is the correct name (not "figure")
     "footnote",
     "code",
     "caption",
     "page_header",
     "page_footer",
+    "chart",
+    "formula",
+    "title",     # document-level metadata title, not body text
 }
 
 # Text labels — content we narrate
@@ -100,7 +102,8 @@ class PdfToEpubConverter:
         The EPUB is written to the same directory as the PDF with a .epub
         extension.  Subsequent calls are cached by PDF mtime.
         """
-        epub_path = pdf_path.with_suffix(".epub")
+        suffix = ".ocr.epub" if force_ocr else ".epub"
+        epub_path = pdf_path.with_suffix(suffix)
         if _is_cached(pdf_path, epub_path):
             logger.info("PDF→EPUB cache hit: %s", epub_path.name)
             return epub_path
@@ -174,16 +177,25 @@ def _extract_chapters(
     chapters: list[tuple[str, list[str]]] = []
     current_title = fallback_title
     current_paragraphs: list[str] = []
+    # Track whether the current chunk was explicitly introduced by a section
+    # header (True) or is the implicit preamble before any header (False).
+    _in_named_section = False
 
     for item, _level in doc.iterate_items():
         label = item.label
         label_value = label.value if hasattr(label, "value") else str(label)
 
         if label == section_header_label or label_value == "section_header":
-            if current_paragraphs:
+            # Flush the previous section.  If it was the implicit preamble
+            # (before any header) and it has no paragraphs, skip it — we don't
+            # want a synthetic empty chapter polluting the output.  If it was
+            # a named section (even empty), always keep it so consecutive
+            # headers don't silently drop a title.
+            if _in_named_section or current_paragraphs:
                 chapters.append((current_title, current_paragraphs))
-                current_paragraphs = []
+            current_paragraphs = []
             current_title = (getattr(item, "text", "") or "").strip() or fallback_title
+            _in_named_section = True
             continue
 
         if label in skip_labels or label_value in skip_label_values:
@@ -194,8 +206,8 @@ def _extract_chapters(
             if text:
                 current_paragraphs.append(text)
 
-    # Flush final chapter
-    if current_paragraphs:
+    # Flush final chapter.  Same rule: keep if named or has content.
+    if _in_named_section or current_paragraphs:
         chapters.append((current_title, current_paragraphs))
 
     if not chapters:

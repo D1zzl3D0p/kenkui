@@ -243,6 +243,35 @@ class TestChapterExtraction:
         assert "Footnote text." not in content
         assert "def foo" not in content
 
+    def test_consecutive_section_headers_preserve_all_titles(self, tmp_path):
+        """A section header with no content before next header is not silently dropped."""
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
+        from ebooklib import epub as epub_lib
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [
+            (_make_item(Label.SECTION_HEADER, "Preface"), 0),
+            # No text — immediately followed by another header
+            (_make_item(Label.SECTION_HEADER, "Chapter One"), 0),
+            (_make_item(Label.TEXT, "Real content here."), 1),
+        ]
+        require_rv = _mock_require_docling(items)
+
+        with patch("kenkui.readers._pdf_to_epub._require_docling", return_value=require_rv):
+            epub_path = PdfToEpubConverter().convert(pdf)
+
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            book = epub_lib.read_epub(str(epub_path))
+
+        content_items = [i for i in book.get_items() if i.file_name.startswith("chapter_")]
+        titles = [i.title for i in content_items]
+        # Both Preface and Chapter One must be present
+        assert "Preface" in titles
+        assert "Chapter One" in titles
+
     def test_list_items_are_included_as_paragraphs(self, tmp_path):
         """LIST_ITEM label is treated as regular paragraph content."""
         from kenkui.readers._pdf_to_epub import PdfToEpubConverter
@@ -325,4 +354,26 @@ class TestForceOcr:
             PdfToEpubConverter().convert(pdf)
 
         MockPipelineOptions.assert_called_once_with(do_ocr=False)
+
+    def test_force_ocr_uses_separate_cache_file(self, tmp_path):
+        """force_ocr=True and force_ocr=False use separate cache files."""
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [(_make_item(Label.TEXT, "Content."), 0)]
+
+        require_rv = _mock_require_docling(items)
+        with patch("kenkui.readers._pdf_to_epub._require_docling", return_value=require_rv):
+            normal_path = PdfToEpubConverter().convert(pdf, force_ocr=False)
+
+        require_rv2 = _mock_require_docling(items)
+        with patch("kenkui.readers._pdf_to_epub._require_docling", return_value=require_rv2):
+            ocr_path = PdfToEpubConverter().convert(pdf, force_ocr=True)
+
+        assert normal_path != ocr_path
+        assert normal_path.suffix == ".epub"
+        assert str(ocr_path).endswith(".ocr.epub")
+        assert normal_path.exists()
+        assert ocr_path.exists()
 
