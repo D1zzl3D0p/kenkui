@@ -12,6 +12,8 @@ import logging
 import uuid
 from pathlib import Path
 
+import html as _html
+
 import fitz
 from ebooklib import epub
 from ebooklib.epub import EpubHtml, EpubReader
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 def _patch_ebooklib_title_roundtrip() -> None:
     """Ensure EpubHtml.title is populated from XHTML <title> after read_epub."""
+    if getattr(EpubReader._load_manifest, "_kenkui_patched", False):
+        return
     from ebooklib.utils import parse_html_string
 
     _orig = EpubReader._load_manifest
@@ -46,6 +50,7 @@ def _patch_ebooklib_title_roundtrip() -> None:
                 except Exception:
                     pass
 
+    _patched._kenkui_patched = True  # type: ignore[attr-defined]
     EpubReader._load_manifest = _patched  # type: ignore[method-assign]
 
 
@@ -124,9 +129,8 @@ def _is_cached(pdf_path: Path, epub_path: Path) -> bool:
 def _read_pdf_metadata(pdf_path: Path) -> tuple[str, str | None]:
     """Read title and author from PDF metadata using pymupdf."""
     try:
-        doc = fitz.open(str(pdf_path))
-        meta = doc.metadata or {}
-        doc.close()
+        with fitz.open(str(pdf_path)) as doc:
+            meta = doc.metadata or {}
         title = (meta.get("title") or "").strip() or pdf_path.stem
         author = (meta.get("author") or "").strip() or None
         return title, author
@@ -237,4 +241,4 @@ def _write_epub(
 
 
 def _html_escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _html.escape(text)
