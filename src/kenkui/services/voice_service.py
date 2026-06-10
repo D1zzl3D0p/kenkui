@@ -181,18 +181,22 @@ def _synthesize_preview(entry: VoiceCatalogEntry, out_path: Path, text: str) -> 
         config.eos_threshold,
     )
     voice_state = model.get_state_for_audio_prompt(load_voice_conditioning_source(entry.voice_id))
+    _render_log: list[str] = []
     seg = _render_text(
         model,
         voice_state,
         text,
-        log_message=lambda _: None,
+        log_message=_render_log.append,
         pid=0,
         batch_idx=0,
         total_batches=1,
         frames_after_eos=0,
     )
     if seg is None:
-        raise RuntimeError(f"Synthesis returned no audio for voice_id {entry.voice_id!r}")
+        detail = " | ".join(_render_log) if _render_log else "no detail available"
+        raise RuntimeError(
+            f"Synthesis returned no audio for voice_id {entry.voice_id!r}: {detail}"
+        )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     seg.export(str(out_path), format="wav")
 
