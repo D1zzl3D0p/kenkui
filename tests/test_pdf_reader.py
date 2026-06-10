@@ -18,12 +18,6 @@ try:
 except ImportError:
     _docling_installed = False
 
-pytestmark = pytest.mark.skipif(
-    _docling_installed,
-    reason="existing tests target pymupdf fallback; skip when docling is installed",
-)
-
-
 # ---------------------------------------------------------------------------
 # Fixtures: build temporary PDFs
 # ---------------------------------------------------------------------------
@@ -152,6 +146,10 @@ def pdf_with_notes_and_code(tmp_path) -> Path:
 # ---------------------------------------------------------------------------
 
 class TestPdfReaderInitialization:
+    pytestmark = pytest.mark.skipif(
+        _docling_installed,
+        reason="tests the pymupdf fallback path only",
+    )
 
     def test_initializes_from_path(self, pdf_with_bookmarks):
         from kenkui.readers.pdf import PdfReader
@@ -181,6 +179,10 @@ class TestPdfReaderInitialization:
 # ---------------------------------------------------------------------------
 
 class TestPdfReaderMetadata:
+    pytestmark = pytest.mark.skipif(
+        _docling_installed,
+        reason="tests the pymupdf fallback path only",
+    )
 
     def test_extracts_title_from_metadata(self, pdf_with_bookmarks):
         from kenkui.readers.pdf import PdfReader
@@ -208,6 +210,10 @@ class TestPdfReaderMetadata:
 # ---------------------------------------------------------------------------
 
 class TestPdfReaderToc:
+    pytestmark = pytest.mark.skipif(
+        _docling_installed,
+        reason="tests the pymupdf fallback path only",
+    )
 
     def test_toc_from_bookmarks(self, pdf_with_bookmarks):
         from kenkui.readers import TocEntry
@@ -239,6 +245,10 @@ class TestPdfReaderToc:
 # ---------------------------------------------------------------------------
 
 class TestPdfReaderChapters:
+    pytestmark = pytest.mark.skipif(
+        _docling_installed,
+        reason="tests the pymupdf fallback path only",
+    )
 
     def test_returns_list_of_chapters(self, pdf_with_bookmarks):
         from kenkui.models import Chapter
@@ -320,6 +330,10 @@ class TestPdfReaderChapters:
 # ---------------------------------------------------------------------------
 
 class TestPdfReaderCover:
+    pytestmark = pytest.mark.skipif(
+        _docling_installed,
+        reason="tests the pymupdf fallback path only",
+    )
 
     def test_cover_returns_bytes(self, pdf_with_bookmarks):
         from kenkui.readers.pdf import PdfReader
@@ -353,3 +367,151 @@ class TestPdfReaderRegistry:
         from kenkui.readers.pdf import PdfReader
         reader = get_reader(pdf_with_bookmarks)
         assert isinstance(reader, PdfReader)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for TestPdfReaderDoclingPath (docling mock utilities)
+# ---------------------------------------------------------------------------
+
+def _make_pdf(path: Path) -> Path:
+    """Write a minimal real PDF so mtime comparisons work."""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((50, 100), "Hello world", fontsize=12)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def _mock_docling_label():
+    """Return a namespace of DocItemLabel-like string constants."""
+    class _L:
+        SECTION_HEADER = "section_header"
+        TEXT = "text"
+        PARAGRAPH = "paragraph"
+        LIST_ITEM = "list_item"
+        TABLE = "table"
+        PICTURE = "picture"
+        FOOTNOTE = "footnote"
+        CODE = "code"
+        CAPTION = "caption"
+        PAGE_HEADER = "page_header"
+        PAGE_FOOTER = "page_footer"
+    return _L()
+
+
+def _make_item(label, text: str):
+    from unittest.mock import MagicMock
+    item = MagicMock()
+    item.label = label
+    item.text = text
+    return item
+
+
+def _mock_require_docling(doc_items: list):
+    """
+    Return a patcher for _require_docling that produces a DocumentConverter
+    whose .convert().document.iterate_items() yields doc_items.
+
+    doc_items: list of (item, level) pairs already built with _make_item().
+    """
+    from unittest.mock import MagicMock
+
+    MockPipelineOptions = MagicMock()
+    MockFormatOption = MagicMock()
+    MockInputFormat = MagicMock()
+    MockInputFormat.PDF = "PDF"
+
+    mock_doc = MagicMock()
+    mock_doc.iterate_items.return_value = iter(doc_items)
+
+    mock_result = MagicMock()
+    mock_result.document = mock_doc
+
+    MockConverter = MagicMock()
+    MockConverter.return_value.convert.return_value = mock_result
+
+    Label = _mock_docling_label()
+
+    return (
+        MockConverter,
+        MockFormatOption,
+        MockPipelineOptions,
+        MockInputFormat,
+        Label,
+    )
+
+
+# ---------------------------------------------------------------------------
+# TestPdfReaderDoclingPath
+# ---------------------------------------------------------------------------
+
+class TestPdfReaderDoclingPath:
+    """Tests for PdfReader when _DOCLING_AVAILABLE is True."""
+
+    def test_get_chapters_delegates_to_epub_reader(self, tmp_path):
+        """PdfReader.get_chapters() calls EpubReader.get_chapters() on docling path."""
+        import warnings
+        from kenkui.readers.pdf import PdfReader
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [
+            (_make_item(Label.SECTION_HEADER, "Ch1"), 0),
+            (_make_item(Label.TEXT, "Real paragraph here."), 1),
+        ]
+        require_rv = _mock_require_docling(items)
+
+        with patch("kenkui.readers._pdf_to_epub._require_docling", return_value=require_rv), \
+             patch("kenkui.readers.pdf._DOCLING_AVAILABLE", True):
+            reader = PdfReader(pdf)
+            chapters = reader.get_chapters()
+
+        assert len(chapters) == 1
+        assert chapters[0].title == "Ch1"
+        assert any("Real paragraph here." in p for p in chapters[0].paragraphs)
+
+    def test_configure_pdf_extraction_stores_force_ocr(self, tmp_path):
+        """configure_pdf_extraction({'force_ocr': True}) is honoured on docling path."""
+        from kenkui.readers.pdf import PdfReader
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [(_make_item(Label.TEXT, "Content."), 0)]
+        (MockConverter, MockFmt, MockPipelineOpts, MockInput, L) = _mock_require_docling(items)
+
+        with patch(
+            "kenkui.readers._pdf_to_epub._require_docling",
+            return_value=(MockConverter, MockFmt, MockPipelineOpts, MockInput, L),
+        ), patch("kenkui.readers.pdf._DOCLING_AVAILABLE", True):
+            reader = PdfReader(pdf)
+            reader.configure_pdf_extraction({"force_ocr": True})
+            reader.get_chapters()
+
+        MockPipelineOpts.assert_called_once_with(do_ocr=True)
+
+    def test_get_transcript_sections_returns_empty_on_docling_path(self, tmp_path):
+        """Transcript sections are not available on the docling path (use the .epub)."""
+        from kenkui.readers.pdf import PdfReader
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        with patch("kenkui.readers.pdf._DOCLING_AVAILABLE", True):
+            reader = PdfReader(pdf)
+            assert reader.get_transcript_sections() == []
+
+    def test_fallback_path_used_when_docling_unavailable(self, tmp_path):
+        """When _DOCLING_AVAILABLE is False, PdfReader uses the pymupdf path."""
+        from kenkui.readers.pdf import PdfReader
+
+        doc = fitz.open()
+        doc.set_metadata({"title": "Fallback Book", "author": "Bob"})
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((50, 100), "Hello from pymupdf path.", fontsize=12)
+        pdf = tmp_path / "fallback.pdf"
+        doc.save(str(pdf))
+        doc.close()
+
+        with patch("kenkui.readers.pdf._DOCLING_AVAILABLE", False):
+            reader = PdfReader(pdf)
+            meta = reader.get_metadata()
+        assert meta.title == "Fallback Book"

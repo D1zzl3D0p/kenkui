@@ -14,10 +14,14 @@ import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..chapter_classifier import ChapterClassifier
 from ..models import Chapter
 from . import EbookMetadata, EbookReader, Registry, TocEntry
+
+if TYPE_CHECKING:
+    from .epub import EpubReader as _EpubReader
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +82,10 @@ class PdfReader(EbookReader):
 
     # ── Docling path helpers ──────────────────────────────────────────────
 
-    def _init_docling_reader(self):
+    def _init_docling_reader(self) -> None:
+        # Import EpubReader here rather than at module top to avoid a circular import
+        # (readers/__init__.py imports both epub and pdf modules).
+        # Import PdfToEpubConverter lazily since _pdf_to_epub imports docling at call time.
         from .epub import EpubReader
         from ._pdf_to_epub import PdfToEpubConverter
 
@@ -87,7 +94,7 @@ class PdfReader(EbookReader):
             warnings.simplefilter("always")
             self._epub_reader = EpubReader(epub_path, verbose=self.verbose)
 
-    def _ensure_epub_reader(self):
+    def _ensure_epub_reader(self) -> "_EpubReader":
         if self._epub_reader is None:
             self._init_docling_reader()
         return self._epub_reader
@@ -116,6 +123,12 @@ class PdfReader(EbookReader):
         opts = dict(options or {})
         if _DOCLING_AVAILABLE:
             self._force_ocr = bool(opts.get("force_ocr", False))
+            ignored = {k: v for k, v in opts.items() if k != "force_ocr"}
+            if ignored:
+                logger.debug(
+                    "configure_pdf_extraction: ignoring options on docling path (handled at conversion): %s",
+                    list(ignored.keys()),
+                )
         else:
             self._pdf_cleanup_options = opts
             self._extractor.configure(opts)
@@ -147,8 +160,16 @@ class PdfReader(EbookReader):
         return self._extractor.render_cover_page()
 
     def get_transcript_sections(self) -> list[PdfTranscriptSection]:
-        """Available only on the pymupdf fallback path; empty on docling path."""
+        """Available only on the pymupdf fallback path; empty on docling path.
+
+        On the docling path, inspect the generated .epub file alongside the
+        source PDF for an equivalent view of the extracted content.
+        """
         if _DOCLING_AVAILABLE:
+            logger.debug(
+                "get_transcript_sections: not available on docling path — "
+                "inspect the generated .epub alongside the source PDF instead"
+            )
             return []
         return list(self._transcript_sections)
 
