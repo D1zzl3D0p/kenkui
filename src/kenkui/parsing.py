@@ -987,6 +987,7 @@ class AudioBuilder:
             "drop_margin_notes": bool(getattr(self.cfg, "pdf_drop_margin_notes", True)),
             "header_zone_ratio": float(getattr(self.cfg, "pdf_header_zone_ratio", 0.0)),
             "footer_zone_ratio": float(getattr(self.cfg, "pdf_footer_zone_ratio", 0.0)),
+            "force_ocr": bool(getattr(self.cfg, "pdf_force_ocr", False)),
         }
         reader.configure_pdf_extraction(pdf_options)
 
