@@ -325,3 +325,86 @@ class TestForceOcr:
             PdfToEpubConverter().convert(pdf)
 
         MockPipelineOptions.assert_called_once_with(do_ocr=False)
+
+
+# ---------------------------------------------------------------------------
+# PdfReader integration: docling path
+# ---------------------------------------------------------------------------
+
+class TestPdfReaderDoclingPath:
+    """Tests for PdfReader when _DOCLING_AVAILABLE is True."""
+
+    def test_get_chapters_delegates_to_epub_reader(self, tmp_path):
+        """PdfReader.get_chapters() calls EpubReader.get_chapters() on docling path."""
+        import warnings
+        from kenkui.readers.pdf import PdfReader
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [
+            (_make_item(Label.SECTION_HEADER, "Ch1"), 0),
+            (_make_item(Label.TEXT, "Real paragraph here."), 1),
+        ]
+        require_rv = _mock_require_docling(items)
+
+        with patch("kenkui.readers._pdf_to_epub._require_docling", return_value=require_rv), \
+             patch("kenkui.readers.pdf._DOCLING_AVAILABLE", True):
+            reader = PdfReader(pdf)
+            chapters = reader.get_chapters()
+
+        assert len(chapters) == 1
+        assert chapters[0].title == "Ch1"
+        assert any("Real paragraph here." in p for p in chapters[0].paragraphs)
+
+    def test_configure_pdf_extraction_stores_force_ocr(self, tmp_path):
+        """configure_pdf_extraction({'force_ocr': True}) is honoured on docling path."""
+        from kenkui.readers.pdf import PdfReader
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [(_make_item(Label.TEXT, "Content."), 0)]
+        (MockConverter, MockFmt, MockPipelineOpts, MockInput, L) = _mock_require_docling(items)
+
+        with patch(
+            "kenkui.readers._pdf_to_epub._require_docling",
+            return_value=(MockConverter, MockFmt, MockPipelineOpts, MockInput, L),
+        ), patch("kenkui.readers.pdf._DOCLING_AVAILABLE", True):
+            reader = PdfReader(pdf)
+            reader.configure_pdf_extraction({"force_ocr": True})
+            reader.get_chapters()
+
+        MockPipelineOpts.assert_called_once_with(do_ocr=True)
+
+    def test_get_transcript_sections_returns_empty_on_docling_path(self, tmp_path):
+        """Transcript sections are not available on the docling path (use the .epub)."""
+        from kenkui.readers.pdf import PdfReader
+
+        pdf = _make_pdf(tmp_path / "book.pdf")
+        Label = _mock_docling_label()
+        items = [(_make_item(Label.TEXT, "Content."), 0)]
+        require_rv = _mock_require_docling(items)
+
+        with patch("kenkui.readers._pdf_to_epub._require_docling", return_value=require_rv), \
+             patch("kenkui.readers.pdf._DOCLING_AVAILABLE", True):
+            reader = PdfReader(pdf)
+            reader.get_chapters()
+            assert reader.get_transcript_sections() == []
+
+    def test_fallback_path_used_when_docling_unavailable(self, tmp_path):
+        """When _DOCLING_AVAILABLE is False, PdfReader uses the pymupdf path."""
+        import fitz as _fitz
+        from kenkui.readers.pdf import PdfReader
+
+        # Build a real PDF with fitz so pymupdf path can open it
+        doc = _fitz.open()
+        doc.set_metadata({"title": "Fallback Book", "author": "Bob"})
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((50, 100), "Hello from pymupdf path.", fontsize=12)
+        pdf = tmp_path / "fallback.pdf"
+        doc.save(str(pdf))
+        doc.close()
+
+        with patch("kenkui.readers.pdf._DOCLING_AVAILABLE", False):
+            reader = PdfReader(pdf)
+            meta = reader.get_metadata()
+        assert meta.title == "Fallback Book"

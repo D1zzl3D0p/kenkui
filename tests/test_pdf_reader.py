@@ -8,6 +8,21 @@ import pytest
 
 fitz = pytest.importorskip("fitz", reason="pymupdf not installed")
 
+from unittest.mock import patch
+
+# The existing test suite exercises the pymupdf fallback path.
+# When docling is installed, PdfReader uses the docling path instead.
+try:
+    import docling as _docling  # noqa: F401
+    _docling_installed = True
+except ImportError:
+    _docling_installed = False
+
+pytestmark = pytest.mark.skipif(
+    _docling_installed,
+    reason="existing tests target pymupdf fallback; skip when docling is installed",
+)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures: build temporary PDFs
