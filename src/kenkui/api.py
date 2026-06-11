@@ -95,7 +95,7 @@ except importlib.metadata.PackageNotFoundError:
     __version__ = "2.1.0"
 
 __author__ = "Sumner MacArthur"
-__license__ = "GPL-3.0"
+__license__ = "MIT"
 
 
 # ---------------------------------------------------------------------------
@@ -524,10 +524,12 @@ def set_voice_pool_enabled(voice_id: str, enabled: bool):
 def prepare_voice_preview(
     voice_id: str,
     text: str | None = None,
+    *,
+    force: bool = False,
 ) -> AudioPreviewResult:  # noqa: F821
     """Return a local playable preview path for a catalog voice."""
     from .services.voice_service import prepare_voice_preview as _prepare
-    return _prepare(voice_id, text=text)
+    return _prepare(voice_id, text=text, force=force)
 
 
 def import_custom_voice(
