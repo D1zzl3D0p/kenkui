@@ -566,7 +566,7 @@ def test_litellm_attribution_warns_when_dialogue_quote_count_is_low(monkeypatch,
         ]
     )
 
-    with caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.litellm"):
+    with caplog.at_level(logging.INFO, logger="kenkui.nlp.providers.litellm"):
         adapter.attribute_chapter(chapter, roster)
 
     assert any("returned 1/2 dialogue quotes" in r.message for r in caplog.records)
@@ -617,7 +617,7 @@ def test_litellm_attribution_retries_missing_chunk_quotes(monkeypatch, caplog):
         ]
     )
 
-    with caplog.at_level(logging.WARNING, logger="kenkui.nlp.providers.litellm"):
+    with caplog.at_level(logging.INFO, logger="kenkui.nlp.providers.litellm"):
         result = adapter.attribute_chapter(chapter, roster)
 
     speakers = {item.quote_id: item.speaker for item in result.attributions}
@@ -918,3 +918,22 @@ def test_no_resolver_call_when_review_model_is_empty(monkeypatch):
     adapter.attribute_chapter(chapter, roster)
 
     assert len(calls) == 1
+
+
+def test_missing_quote_retry_logs_at_info_not_warning(monkeypatch):
+    """Retry-on-missing-quotes messages must be INFO, not WARNING."""
+    import inspect
+    from kenkui.nlp.providers.litellm import LiteLLMAttributionAdapter
+    src = inspect.getsource(LiteLLMAttributionAdapter)
+    assert "_logger.info(" in src, (
+        "Expected at least one INFO-level log call in LiteLLMAttributionAdapter source"
+    )
+    # Specifically check the retry-start message uses info
+    lines = src.splitlines()
+    for i, line in enumerate(lines):
+        if "retrying %d missing quote" in line:
+            # Find the _logger call on or before this line
+            context = "\n".join(lines[max(0, i-2):i+1])
+            assert "_logger.info" in context, (
+                f"'retrying missing quotes' log should be INFO, not WARNING. Context: {context}"
+            )

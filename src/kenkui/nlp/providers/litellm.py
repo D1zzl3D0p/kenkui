@@ -912,7 +912,7 @@ class LiteLLMAttributionAdapter:
             missing = [q for q in chunk_quotes if q.id not in attributed]
             if not missing:
                 return
-            _logger.warning(
+            _logger.info(
                 "LiteLLMAttributionAdapter: chapter %r chunk %d/%d — retrying %d missing quote(s)",
                 chapter_label,
                 chunk_idx,
@@ -994,7 +994,7 @@ class LiteLLMAttributionAdapter:
                         returned = len(attributed)
                         expected = len(chunk_quotes)
                         if returned < expected:
-                            _logger.warning(
+                            _logger.info(
                                 "LiteLLMAttributionAdapter: chapter %r chunk %d.%d/%d — "
                                 "LLM returned %d/%d quotes (missing %d)",
                                 chapter_label,
@@ -1062,7 +1062,7 @@ class LiteLLMAttributionAdapter:
                 returned = len(attributed)
                 expected = len(dialogue_quotes)
                 if returned < expected:
-                    _logger.warning(
+                    _logger.info(
                         "LiteLLMAttributionAdapter: chapter %r — LLM returned %d/%d dialogue quotes (missing %d)",
                         chapter_label,
                         returned,
