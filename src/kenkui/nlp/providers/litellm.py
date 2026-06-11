@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from kenkui.analytics import ChapterAttributionRecord, append_chapter_attribution
 from kenkui.config import inject_provider_env_vars, load_provider_credentials
 from kenkui.models import Chapter
 from kenkui.nlp import _count_mentions, book_hash, cache_roster, get_cached_roster
@@ -1101,6 +1102,23 @@ class LiteLLMAttributionAdapter:
             )
 
         _normalize_attributed(all_attributions)
+
+        append_chapter_attribution(ChapterAttributionRecord(
+            book_hash="",
+            chapter=str(chapter_label),
+            provider=self._provider,
+            model=self._config.attribution_model,
+            review_model=(self._config.review_model or "").strip(),
+            quotes_total=len(quotes),
+            quotes_attributed=sum(
+                1 for i in all_attributions.values() if i.speaker not in ("Unknown", "NARRATOR")
+            ),
+            quotes_unknown=sum(
+                1 for i in all_attributions.values() if i.speaker == "Unknown"
+            ),
+            retries=0,
+            duration_seconds=0.0,
+        ))
 
         return AttributionResult(attributions=list(all_attributions.values()))
 

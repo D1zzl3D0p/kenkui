@@ -107,3 +107,75 @@ def analytics_path() -> Path:
 def now_utc() -> str:
     """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(UTC).isoformat()
+
+
+@dataclass
+class ChapterAttributionRecord:
+    # ── Required ─────────────────────────────────────────────────────────────
+    book_hash: str
+    chapter: str
+    provider: str
+    model: str
+    quotes_total: int
+    quotes_attributed: int
+    quotes_unknown: int
+    retries: int
+    duration_seconds: float
+
+    # ── Auto-generated ───────────────────────────────────────────────────────
+    record_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    started_at: str = field(default_factory=now_utc)
+    event: str = "chapter_attributed"
+
+    # ── Optional ─────────────────────────────────────────────────────────────
+    review_model: str = ""
+    llm_api_calls: int = 0
+
+
+def append_chapter_attribution(
+    record: "ChapterAttributionRecord",
+    path: Path | None = None,
+) -> None:
+    """Append one ChapterAttributionRecord to the analytics JSONL file. Never raises."""
+    target = path or _analytics_path()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(json.dumps(asdict(record), ensure_ascii=False) + "\n")
+    except Exception as exc:
+        _logger.debug("Chapter analytics write failed (non-fatal): %s", exc)
+
+
+def load_chapter_attributions(path: Path | None = None) -> list["ChapterAttributionRecord"]:
+    """Load all ChapterAttributionRecord objects from the analytics JSONL file."""
+    target = path or _analytics_path()
+    if not target.exists():
+        return []
+    records: list[ChapterAttributionRecord] = []
+    with open(target, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if data.get("event") == "chapter_attributed":
+                    valid_keys = ChapterAttributionRecord.__dataclass_fields__
+                    records.append(ChapterAttributionRecord(**{
+                        k: v for k, v in data.items() if k in valid_keys
+                    }))
+            except Exception:
+                continue
+    return records
+
+
+__all__ = [
+    "StageRecord",
+    "ChapterAttributionRecord",
+    "append_record",
+    "append_chapter_attribution",
+    "load_records",
+    "load_chapter_attributions",
+    "analytics_path",
+    "now_utc",
+]
