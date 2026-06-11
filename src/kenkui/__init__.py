@@ -7,3 +7,5 @@ from .api import __all__ as __all__
 from .api import __author__ as __author__
 from .api import __license__ as __license__
 from .api import __version__ as __version__
+
+__license__ = "MIT"
