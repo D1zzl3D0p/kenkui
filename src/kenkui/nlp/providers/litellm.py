@@ -143,7 +143,14 @@ def _remote_context_tokens(model: str) -> int:
     configured = os.environ.get("KENKUI_NLP_REMOTE_CONTEXT_TOKENS")
     if configured is not None:
         return _env_int("KENKUI_NLP_REMOTE_CONTEXT_TOKENS", _DEFAULT_REMOTE_CONTEXT_TOKENS)
-
+    try:
+        import litellm.utils as _lu
+        info = _lu.get_model_info(model)
+        tokens = info.get("max_input_tokens") or info.get("max_tokens")
+        if isinstance(tokens, int) and tokens > 0:
+            return tokens
+    except Exception:
+        pass
     model_norm = model.lower()
     if "microsoft/phi-4" in model_norm or model_norm.endswith("phi-4"):
         return 16384

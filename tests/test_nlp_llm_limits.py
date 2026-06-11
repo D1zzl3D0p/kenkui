@@ -145,3 +145,67 @@ class TestTruncationWarningIncludesEvalCount:
         assert any(r.levelno >= logging.WARNING for r in caplog.records), (
             "A truncation WARNING must fire even when eval_count is absent from response."
         )
+
+
+def test_remote_context_tokens_uses_model_info(monkeypatch):
+    """_remote_context_tokens should use litellm model info when available."""
+    import sys
+    import types
+    from kenkui.nlp.providers.litellm import _remote_context_tokens
+
+    fake_info = {"max_input_tokens": 131072, "max_output_tokens": 4096}
+    fake_lu = types.ModuleType("litellm.utils")
+    fake_lu.get_model_info = lambda model, **kw: fake_info
+    fake_litellm = types.ModuleType("litellm")
+
+    original_lu = sys.modules.get("litellm.utils")
+    original_ll = sys.modules.get("litellm")
+    sys.modules["litellm"] = fake_litellm
+    sys.modules["litellm.utils"] = fake_lu
+    try:
+        monkeypatch.delenv("KENKUI_NLP_REMOTE_CONTEXT_TOKENS", raising=False)
+        result = _remote_context_tokens("anthropic/claude-sonnet-4-6")
+    finally:
+        if original_lu is None:
+            sys.modules.pop("litellm.utils", None)
+        else:
+            sys.modules["litellm.utils"] = original_lu
+        if original_ll is None:
+            sys.modules.pop("litellm", None)
+        else:
+            sys.modules["litellm"] = original_ll
+
+    assert result == 131072
+
+
+def test_remote_context_tokens_falls_back_on_unknown_model(monkeypatch):
+    """_remote_context_tokens falls back to default when model info unavailable."""
+    import sys
+    import types
+    from kenkui.nlp.providers.litellm import _remote_context_tokens, _DEFAULT_REMOTE_CONTEXT_TOKENS
+
+    def _raise(*a, **kw):
+        raise Exception("unknown model")
+
+    fake_lu = types.ModuleType("litellm.utils")
+    fake_lu.get_model_info = _raise
+    fake_litellm = types.ModuleType("litellm")
+
+    original_lu = sys.modules.get("litellm.utils")
+    original_ll = sys.modules.get("litellm")
+    sys.modules["litellm"] = fake_litellm
+    sys.modules["litellm.utils"] = fake_lu
+    try:
+        monkeypatch.delenv("KENKUI_NLP_REMOTE_CONTEXT_TOKENS", raising=False)
+        result = _remote_context_tokens("ollama/some-unknown-model")
+    finally:
+        if original_lu is None:
+            sys.modules.pop("litellm.utils", None)
+        else:
+            sys.modules["litellm.utils"] = original_lu
+        if original_ll is None:
+            sys.modules.pop("litellm", None)
+        else:
+            sys.modules["litellm"] = original_ll
+
+    assert result == _DEFAULT_REMOTE_CONTEXT_TOKENS
