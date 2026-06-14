@@ -7,7 +7,6 @@ import re
 import shutil
 import subprocess
 import time
-import warnings
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -305,13 +304,6 @@ def _load_annotated_chapters(
         chapters = [ch for ch in chapters if ch.index in idx_set]
 
     return sorted(chapters, key=lambda c: c.index)
-
-
-# Suppress ALL warnings by default (verbose mode will re-enable them)
-warnings.filterwarnings("ignore")
-warnings.filterwarnings("ignore", message=".*characters could not be decoded.*")
-warnings.filterwarnings("ignore", message=".*looks like.*")
-warnings.filterwarnings("ignore", message=".*surrogate.*")
 
 
 class LogSink:
