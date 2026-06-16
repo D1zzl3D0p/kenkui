@@ -107,7 +107,7 @@ def test_get_attribution_provider_openrouter_uses_litellm_adapter():
 
 def test_non_local_extraction_mode_without_hook_raises():
     config = NLPConfig(extraction_tool=ExtractionTool.OLLAMA, extraction_mode=NlpExecutionMode.MODAL)
-    with pytest.raises(NotImplementedError, match="kenkui-server"):
+    with pytest.raises(NotImplementedError, match="registered kenkui NLP extension"):
         factory_extraction(config)
 
 
@@ -116,7 +116,7 @@ def test_non_local_attribution_mode_without_hook_raises():
         attribution_tool=AttributionTool.OLLAMA,
         attribution_mode=AttributionExecutionMode.MODAL,
     )
-    with pytest.raises(NotImplementedError, match="kenkui-server"):
+    with pytest.raises(NotImplementedError, match="registered kenkui NLP extension"):
         factory_attribution(config)
 
 

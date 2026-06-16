@@ -49,8 +49,8 @@ def register_nlp_extension(
 ) -> None:
     """Register server-side factories for non-LOCAL execution modes.
 
-    Called once at process startup by kenkui-server. Each callable receives an
-    NLPConfig and returns a provider or None (None = delegate to kenkui LOCAL logic).
+    Called once at process startup by the HTTP runtime. Each callable receives
+    an NLPConfig and returns a provider or None (None = delegate to kenkui LOCAL logic).
     """
     global _ExtractionExt, _AttributionExt
     _ExtractionExt, _AttributionExt = extraction, attribution
@@ -95,8 +95,8 @@ def get_extraction_provider(config: NLPConfig) -> ExtractionProvider:
                 return result
         else:
             raise NotImplementedError(
-                f"NLP extraction mode {config.extraction_mode!r} requires kenkui-server. "
-                "Install kenkui-server and call register_nlp_extension() at startup."
+                f"NLP extraction mode {config.extraction_mode!r} requires a registered "
+                "kenkui NLP extension. Call register_nlp_extension() at startup."
             )
     adapter = _make_extraction_adapter(config)
     return LocalExtractionProvider(adapter)
@@ -111,8 +111,8 @@ def get_attribution_provider(config: NLPConfig) -> AttributionProvider:
                 return result
         else:
             raise NotImplementedError(
-                f"NLP attribution mode {config.attribution_mode!r} requires kenkui-server. "
-                "Install kenkui-server and call register_nlp_extension() at startup."
+                f"NLP attribution mode {config.attribution_mode!r} requires a registered "
+                "kenkui NLP extension. Call register_nlp_extension() at startup."
             )
     adapter = _make_attribution_adapter(config)
     return LocalAttributionProvider(adapter)

@@ -110,3 +110,27 @@ def test_http_adapter_uses_service_contract(tmp_path, monkeypatch):
     body = response.json()
     assert body["api_version"] == "v1"
     assert "local-queue" in body["capabilities"]
+
+
+def test_kenkui_cli_serve_runs_http_server(monkeypatch):
+    from kenkui import cli
+
+    calls = []
+    monkeypatch.setattr(cli, "run_server", lambda host, port, reload: calls.append((host, port, reload)))
+    monkeypatch.setattr("sys.argv", ["kenkui", "serve"])
+
+    cli.main()
+
+    assert calls == [("127.0.0.1", 45365, False)]
+
+
+def test_openapi_export_uses_app_schema(capsys):
+    pytest.importorskip("fastapi")
+
+    from kenkui.server.openapi import main
+
+    main()
+    body = capsys.readouterr().out
+
+    assert '"openapi"' in body
+    assert '"/v1/health"' in body

@@ -77,10 +77,9 @@ ok = kenkui.run_job(proc)
 `kenkui` is the reusable core. It owns parsing, config models, NLP/cache logic,
 voice selection, rendering workers, post-processing, and public dataclasses.
 
-External clients own user interaction, HTTP routes, queues, deployment policy,
-notifications, and remote execution. `kentui` is the interactive terminal client.
-`kenkui-server` can wrap this library as a local or remote service without moving
-server policy into this package.
+External clients own user interaction, deployment policy, notifications, and
+remote execution. `kenkui` also exposes the local HTTP API used by GUI clients.
+`kentui` is the interactive terminal client.
 
 ---
 
