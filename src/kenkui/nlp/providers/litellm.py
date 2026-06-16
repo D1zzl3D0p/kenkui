@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -17,7 +19,13 @@ from pydantic import BaseModel, ValidationError
 from kenkui.analytics import ChapterAttributionRecord, append_chapter_attribution
 from kenkui.config import inject_provider_env_vars, load_provider_credentials
 from kenkui.models import Chapter
-from kenkui.nlp import _count_mentions, book_hash, cache_roster, get_cached_roster
+from kenkui.nlp import (
+    _count_mentions,
+    absorb_roster_speaker,
+    book_hash,
+    cache_roster,
+    get_cached_roster,
+)
 from kenkui.nlp.llm import _is_eof_truncation, _try_recover_truncated_json
 from kenkui.nlp.models import (
     AttributionItem,
@@ -49,6 +57,8 @@ _QUOTE_ATTR_RE = re.compile(r'(hint|guess|pronoun)="([^"]+)"')
 _OPENROUTER_REASONING_EFFORT_ENV = "KENKUI_NLP_OPENROUTER_REASONING_EFFORT"
 _OPENROUTER_REASONING_EFFORT_DEFAULT = "minimal"
 _OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
+_OPENROUTER_CACHE_CONTROL_MODELS = ("claude", "gemini", "minimax", "glm", "z-ai")
+_OPENROUTER_CACHE_TTLS = {"1h"}
 
 
 def _run_coroutine_sync(coro):
@@ -108,6 +118,46 @@ def _openrouter_reasoning_body(model: str) -> dict[str, object]:
             "exclude": True,
         },
     }
+
+
+def _openrouter_supports_cache_control(model: str) -> bool:
+    model_norm = model.lower().removeprefix("openrouter/")
+    return any(token in model_norm for token in _OPENROUTER_CACHE_CONTROL_MODELS)
+
+
+def _openrouter_cache_control(ttl: str = "") -> dict[str, str]:
+    cache_control = {"type": "ephemeral"}
+    ttl = ttl.strip().lower()
+    if ttl in _OPENROUTER_CACHE_TTLS:
+        cache_control["ttl"] = ttl
+    elif ttl:
+        _logger.warning(
+            "Ignoring invalid KENKUI_NLP_OPENROUTER_PROMPT_CACHE_TTL=%r; expected one of %s",
+            ttl,
+            ", ".join(sorted(_OPENROUTER_CACHE_TTLS)),
+        )
+    return cache_control
+
+
+def _openrouter_session_id(*, runtime_model: str, stable_block: str, schema_name: str) -> str:
+    digest = hashlib.sha256(
+        f"{runtime_model}\n{schema_name}\n{stable_block}".encode()
+    ).hexdigest()[:24]
+    return f"kenkui-attr-{digest}"
+
+
+def _openrouter_extra_body_with_session(
+    provider: str,
+    runtime_model: str,
+    session_id: str | None,
+) -> dict[str, object]:
+    extra_body = _openrouter_extra_body(provider)
+    if not extra_body:
+        return extra_body
+    extra_body.update(_openrouter_reasoning_body(runtime_model))
+    if session_id:
+        extra_body["session_id"] = session_id
+    return extra_body
 
 
 def _litellm_model(provider: str, model: str) -> str:
@@ -289,6 +339,19 @@ def _schema_for_provider(provider: str, schema: type[BaseModel]) -> dict[str, An
     return json_schema
 
 
+def _messages_prompt_chars(messages: list[dict[str, object]]) -> int:
+    total = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    total += len(block["text"])
+    return total
+
+
 def _litellm_completion_kwargs(
     *,
     provider: str,
@@ -297,10 +360,12 @@ def _litellm_completion_kwargs(
     schema_name: str,
     json_schema: dict[str, Any],
     max_tokens: int | None,
+    messages: list[dict[str, object]] | None = None,
+    openrouter_session_id: str | None = None,
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "model": runtime_model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages or [{"role": "user", "content": prompt}],
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -311,14 +376,88 @@ def _litellm_completion_kwargs(
         },
     }
     if _is_openrouter_provider(provider):
-        extra_body = _openrouter_extra_body(provider)
-        extra_body.update(_openrouter_reasoning_body(runtime_model))
-        kwargs["extra_body"] = extra_body
+        kwargs["extra_body"] = _openrouter_extra_body_with_session(
+            provider,
+            runtime_model,
+            openrouter_session_id,
+        )
     else:
         kwargs["temperature"] = 0
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     return kwargs
+
+
+@dataclass
+class _LLMUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    cache_write_tokens: int = 0
+    api_calls: int = 0
+    cost: float = 0.0
+
+    def copy(self) -> _LLMUsage:
+        return _LLMUsage(
+            prompt_tokens=self.prompt_tokens,
+            completion_tokens=self.completion_tokens,
+            cached_prompt_tokens=self.cached_prompt_tokens,
+            cache_write_tokens=self.cache_write_tokens,
+            api_calls=self.api_calls,
+            cost=self.cost,
+        )
+
+    def add(self, other: _LLMUsage) -> None:
+        self.prompt_tokens += other.prompt_tokens
+        self.completion_tokens += other.completion_tokens
+        self.cached_prompt_tokens += other.cached_prompt_tokens
+        self.cache_write_tokens += other.cache_write_tokens
+        self.api_calls += other.api_calls
+        self.cost += other.cost
+
+    def delta_since(self, before: _LLMUsage) -> _LLMUsage:
+        return _LLMUsage(
+            prompt_tokens=self.prompt_tokens - before.prompt_tokens,
+            completion_tokens=self.completion_tokens - before.completion_tokens,
+            cached_prompt_tokens=self.cached_prompt_tokens - before.cached_prompt_tokens,
+            cache_write_tokens=self.cache_write_tokens - before.cache_write_tokens,
+            api_calls=self.api_calls - before.api_calls,
+            cost=self.cost - before.cost,
+        )
+
+
+def _usage_number(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
+
+
+def _usage_float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _usage_details(usage: object) -> object:
+    return _get_attr_or_key(usage, "prompt_tokens_details") or {}
+
+
+def _usage_metrics(response: object) -> _LLMUsage:
+    usage = _get_attr_or_key(response, "usage") or {}
+    details = _usage_details(usage)
+    cost = _usage_float(_get_attr_or_key(usage, "cost"))
+    hidden = _get_attr_or_key(response, "_hidden_params")
+    if isinstance(hidden, dict):
+        headers = hidden.get("additional_headers")
+        if isinstance(headers, dict):
+            cost = max(cost, _usage_float(headers.get("llm_provider-x-litellm-response-cost")))
+    return _LLMUsage(
+        prompt_tokens=_usage_number(_get_attr_or_key(usage, "prompt_tokens")),
+        completion_tokens=_usage_number(_get_attr_or_key(usage, "completion_tokens")),
+        cached_prompt_tokens=_usage_number(_get_attr_or_key(details, "cached_tokens")),
+        cache_write_tokens=_usage_number(_get_attr_or_key(details, "cache_write_tokens")),
+        api_calls=1,
+        cost=cost,
+    )
 
 
 def _get_attr_or_key(value: object, key: str) -> object:
@@ -385,6 +524,7 @@ class LiteLLMClient:
         self.provider = provider
         self.model = model
         self.runtime_model = _litellm_model(provider, model)
+        self.usage = _LLMUsage()
 
     def _completion_kwargs(
         self,
@@ -392,14 +532,17 @@ class LiteLLMClient:
         schema: type[BaseModel],
         *,
         max_tokens: int | None = None,
+        messages: list[dict[str, object]] | None = None,
+        openrouter_session_id: str | None = None,
     ) -> dict[str, object]:
         json_schema = _schema_for_provider(self.provider, schema)
+        prompt_chars = _messages_prompt_chars(messages) if messages is not None else len(prompt)
         _logger.debug(
             "LiteLLMClient.generate: provider=%s model=%s schema=%s prompt_chars=%d max_tokens=%s schema_defs=%d",
             self.provider,
             self.runtime_model,
             schema.__name__,
-            len(prompt),
+            prompt_chars,
             max_tokens,
             len(json_schema.get("$defs", {})) if isinstance(json_schema, dict) else 0,
         )
@@ -410,10 +553,26 @@ class LiteLLMClient:
             schema_name=schema.__name__,
             json_schema=json_schema,
             max_tokens=max_tokens,
+            messages=messages,
+            openrouter_session_id=openrouter_session_id,
         )
 
-    def generate(self, prompt: str, schema: type[T], *, max_tokens: int | None = None) -> T:
-        return _run_coroutine_sync(self.generate_async(prompt, schema, max_tokens=max_tokens))
+    def generate(
+        self,
+        prompt: str,
+        schema: type[T],
+        *,
+        max_tokens: int | None = None,
+        messages: list[dict[str, object]] | None = None,
+        openrouter_session_id: str | None = None,
+    ) -> T:
+        return _run_coroutine_sync(self.generate_async(
+            prompt,
+            schema,
+            max_tokens=max_tokens,
+            messages=messages,
+            openrouter_session_id=openrouter_session_id,
+        ))
 
     async def generate_async(
         self,
@@ -421,11 +580,19 @@ class LiteLLMClient:
         schema: type[T],
         *,
         max_tokens: int | None = None,
+        messages: list[dict[str, object]] | None = None,
+        openrouter_session_id: str | None = None,
     ) -> T:
         import litellm
 
         last_exc: Exception | None = None
-        kwargs = self._completion_kwargs(prompt, schema, max_tokens=max_tokens)
+        kwargs = self._completion_kwargs(
+            prompt,
+            schema,
+            max_tokens=max_tokens,
+            messages=messages,
+            openrouter_session_id=openrouter_session_id,
+        )
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 if hasattr(litellm, "acompletion"):
@@ -464,6 +631,7 @@ class LiteLLMClient:
                         _sanitize_litellm_error(exc),
                     )
                 raise
+            self.usage.add(_usage_metrics(response))
             raw = _message_content(response)
             if not raw:
                 last_exc = ConnectionError(
@@ -574,6 +742,7 @@ class LiteLLMExtractionAdapter:
             book_path=book_path,
             provider=self._provider,
             model=self._config.extraction_model,
+            openrouter_discovery_concurrency=self._config.openrouter_discovery_concurrency,
         )
 
         mention_counts = _count_mentions(roster, full_text)
@@ -802,7 +971,11 @@ class LiteLLMAttributionAdapter:
         slug_to_pronoun = {c.slug: c.gender for c in roster.characters}
         static_block = _build_attribution_static_block(roster)
         llm = LiteLLMClient(self._provider, self._config.attribution_model)
-        schema = _attribution_schema(self._config.attribution_review_confidence)
+        review_model = (self._config.review_model or "").strip()
+        review_threshold = max(0, int(getattr(self._config, "confidence_threshold", 0) or 0))
+        schema = _attribution_schema(
+            self._config.attribution_review_confidence or review_threshold > 0
+        )
         max_quotes_per_call = self._config.attribution_max_quotes_per_call
         known_slugs = {c.slug for c in roster.characters}
         known_names = {c.canonical_name: c.slug for c in roster.characters}
@@ -815,17 +988,62 @@ class LiteLLMAttributionAdapter:
             annotated_text = annotate_chapter(paras, dq, alias_to_slug, slug_to_pronoun)
             return f"{static_block}\n\n{_build_attribution_dynamic_block(annotated_text)}"
 
+        def _attribution_messages(
+            client: LiteLLMClient,
+            dynamic_block: str,
+            schema_for_call: type[AttributionResultWire | AttributionResultConfidenceWire],
+        ) -> tuple[list[dict[str, object]] | None, str | None]:
+            if not _is_openrouter_provider(client.provider):
+                return None, None
+            session_id = _openrouter_session_id(
+                runtime_model=client.runtime_model,
+                stable_block=static_block,
+                schema_name=schema_for_call.__name__,
+            )
+            if not _openrouter_supports_cache_control(client.runtime_model):
+                return None, session_id
+            cache_block = _openrouter_cache_control(
+                getattr(self._config, "openrouter_prompt_cache_ttl", "") or ""
+            )
+            return [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": static_block, "cache_control": cache_block},
+                        {"type": "text", "text": f"\n\n{dynamic_block}"},
+                    ],
+                }
+            ], session_id
+
+        chapter_usage = _LLMUsage()
+
         async def _attribute_single(
             paras: list[str],
             dq: list[Quote],
             *,
             client: LiteLLMClient = llm,
             prompt: str | None = None,
+            schema_for_call: type[AttributionResultWire | AttributionResultConfidenceWire] = schema,
         ) -> dict[int, AttributionItem]:
+            messages: list[dict[str, object]] | None = None
+            openrouter_session_id: str | None = None
             if prompt is None:
-                prompt = _prompt_for(paras, dq)
+                annotated_text = annotate_chapter(paras, dq, alias_to_slug, slug_to_pronoun)
+                dynamic_block = _build_attribution_dynamic_block(annotated_text)
+                prompt = f"{static_block}\n\n{dynamic_block}"
+                messages, openrouter_session_id = _attribution_messages(
+                    client,
+                    dynamic_block,
+                    schema_for_call,
+                )
             else:
+                dynamic_block = prompt
                 prompt = f"{static_block}\n\n{prompt}"
+                messages, openrouter_session_id = _attribution_messages(
+                    client,
+                    dynamic_block,
+                    schema_for_call,
+                )
             if not dq:
                 return {}
             prompt_tokens, context_tokens, max_tokens = _remote_attribution_call_budget(
@@ -841,44 +1059,76 @@ class LiteLLMAttributionAdapter:
                 max_tokens,
                 len(dq),
             )
-            result = await client.generate_async(prompt, schema, max_tokens=max_tokens)
+            before_usage = client.usage.copy()
+            result = await client.generate_async(
+                prompt,
+                schema_for_call,
+                max_tokens=max_tokens,
+                messages=messages,
+                openrouter_session_id=openrouter_session_id,
+            )
+            chapter_usage.add(client.usage.delta_since(before_usage))
             return {item.quote_id: item for item in attribution_wire_to_full(result).attributions}
 
         def _normalize_attributed(attributed: dict[int, AttributionItem]) -> None:
+            nonlocal known_slugs
             for item in attributed.values():
                 if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
                     item.speaker = known_names.get(item.speaker, slugify(item.speaker))
                 if item.speaker not in {"NARRATOR", "Unknown"} and item.speaker not in known_slugs:
-                    _logger.warning(
-                        "LiteLLMAttributionAdapter: speaker %r not in roster; using Unknown",
+                    item.speaker = absorb_roster_speaker(
+                        roster,
                         item.speaker,
+                        chapter_index=getattr(chapter, "index", None),
                     )
-                    item.speaker = "Unknown"
+            known_slugs = {c.slug for c in roster.characters}
 
-        async def _resolve_suspicious(
+        def _review_candidates(
+            paras: list[str],
+            dq: list[Quote],
+            attributed: dict[int, AttributionItem],
+        ) -> list[Quote]:
+            suspicious = _suspicious_attributions(paras, dq, attributed, full_metadata, roster)
+            if review_threshold <= 0:
+                return suspicious
+            low_confidence = [
+                q for q in dq
+                if q.id in attributed and attributed[q.id].confidence < review_threshold
+            ]
+            combined: list[Quote] = []
+            seen: set[int] = set()
+            for q in suspicious + low_confidence:
+                if q.id in seen:
+                    continue
+                seen.add(q.id)
+                combined.append(q)
+            return combined
+
+        async def _resolve_review_candidates(
             paras: list[str],
             dq: list[Quote],
             attributed: dict[int, AttributionItem],
         ) -> None:
-            review_model = (self._config.review_model or "").strip()
             if not review_model:
                 _apply_local_attribution_heuristics(attributed, full_metadata, roster)
                 return
-            suspicious = _suspicious_attributions(paras, dq, attributed, full_metadata, roster)
-            if not suspicious:
+            candidates = _review_candidates(paras, dq, attributed)
+            if not candidates:
                 return
             resolver = LiteLLMClient(self._provider, review_model)
-            for batch in _quote_capped_windows(paras, suspicious, max_quotes_per_call or _MISSING_RETRY_BATCH_SIZE):
+            resolver_schema = _attribution_schema(False)
+            for batch in _quote_capped_windows(paras, candidates, max_quotes_per_call or _MISSING_RETRY_BATCH_SIZE):
                 batch_paras, batch_quotes = batch
                 annotated = annotate_chapter(batch_paras, batch_quotes, alias_to_slug, slug_to_pronoun)
                 base_lines = [
                     f"- q={q.id} base={attributed.get(q.id).speaker if attributed.get(q.id) else 'Missing'} "
+                    f"conf={attributed.get(q.id).confidence if attributed.get(q.id) else 'Missing'} "
                     f"metadata={full_metadata.get(q.id, {})}"
                     for q in batch_quotes
                 ]
                 prompt = (
-                    "Resolve suspicious speaker attributions.\n"
-                    "Use the local context, base label, hint/guess/pronoun metadata, and roster.\n"
+                    "Resolve speaker attributions that still need review.\n"
+                    "Use the local context, base label, confidence, hint/guess/pronoun metadata, and roster.\n"
                     "Return only known roster slugs, NARRATOR, or Unknown. Prefer hint= unless local evidence "
                     "clearly supports another speaker. Use pronoun= only to reject incompatible speakers.\n\n"
                     f"BASE LABELS:\n{chr(10).join(base_lines)}\n\n"
@@ -890,6 +1140,7 @@ class LiteLLMAttributionAdapter:
                         batch_quotes,
                         client=resolver,
                         prompt=prompt,
+                        schema_for_call=resolver_schema,
                     )
                 except Exception as resolve_exc:
                     _logger.warning(
@@ -1021,7 +1272,7 @@ class LiteLLMAttributionAdapter:
                                 chunk_total=len(chunks),
                             )
                         _normalize_attributed(attributed)
-                        await _resolve_suspicious(call_paras, chunk_quotes, attributed)
+                        await _resolve_review_candidates(call_paras, chunk_quotes, attributed)
                         all_attributions.update(attributed)
                     except Exception as chunk_exc:
                         _logger.debug(
@@ -1085,7 +1336,7 @@ class LiteLLMAttributionAdapter:
                         chunk_total=1,
                     )
                 _normalize_attributed(attributed)
-                await _resolve_suspicious(clean_paragraphs, dialogue_quotes, attributed)
+                await _resolve_review_candidates(clean_paragraphs, dialogue_quotes, attributed)
                 all_attributions.update(attributed)
             except Exception as exc:
                 _logger.debug(
@@ -1118,6 +1369,12 @@ class LiteLLMAttributionAdapter:
             ),
             retries=0,
             duration_seconds=0.0,
+            llm_api_calls=chapter_usage.api_calls,
+            llm_prompt_tokens=chapter_usage.prompt_tokens,
+            llm_completion_tokens=chapter_usage.completion_tokens,
+            llm_cached_prompt_tokens=chapter_usage.cached_prompt_tokens,
+            llm_cache_write_tokens=chapter_usage.cache_write_tokens,
+            llm_cost=chapter_usage.cost,
         ))
 
         return AttributionResult(attributions=list(all_attributions.values()))
@@ -1129,5 +1386,8 @@ __all__ = [
     "LiteLLMExtractionAdapter",
     "_litellm_model",
     "_remote_attribution_call_budget",
+    "_openrouter_session_id",
+    "_openrouter_supports_cache_control",
     "_remote_context_tokens",
+    "_usage_metrics",
 ]

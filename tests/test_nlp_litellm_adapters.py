@@ -22,8 +22,11 @@ from kenkui.nlp.providers.litellm import (
     LiteLLMClient,
     _litellm_model,
     _openrouter_extra_body,
+    _openrouter_session_id,
+    _openrouter_supports_cache_control,
     _remote_attribution_call_budget,
     _remote_context_tokens,
+    _usage_metrics,
 )
 from kenkui.nlp_config import NLPConfig
 
@@ -96,6 +99,133 @@ def test_litellm_attribution_uses_completion_without_ollama(monkeypatch):
     assert calls[0]["model"] == "openrouter/openai/gpt-4.1-mini"
     assert calls[0]["messages"][0]["role"] == "user"
     assert calls[0]["response_format"]["type"] == "json_schema"
+
+
+def test_openrouter_openai_attribution_uses_session_without_cache_control(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "jane"}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," Jane said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+    ])
+
+    adapter.attribute_chapter(chapter, roster)
+
+    assert calls[0]["extra_body"]["provider"]["require_parameters"] is True
+    assert calls[0]["extra_body"]["session_id"].startswith("kenkui-attr-")
+    assert isinstance(calls[0]["messages"][0]["content"], str)
+    assert "cache_control" not in calls[0]["messages"][0]
+
+
+def test_openrouter_cache_control_model_sends_stable_block_as_cached_content(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "jane"}]})}}]}
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="anthropic/claude-3.5-sonnet",
+        openrouter_prompt_cache_ttl="1h",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=['"Hello," Jane said.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+    ])
+
+    adapter.attribute_chapter(chapter, roster)
+
+    content = calls[0]["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert content[0]["text"].startswith("You are a literary analyst")
+    assert content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in content[1]
+    assert "[QUOTE:0" in content[1]["text"]
+    assert calls[0]["extra_body"]["session_id"].startswith("kenkui-attr-")
+
+
+def test_openrouter_cache_helpers_are_model_and_schema_stable():
+    assert _openrouter_supports_cache_control("openrouter/anthropic/claude-3.5-sonnet")
+    assert _openrouter_supports_cache_control("openrouter/google/gemini-2.5-flash")
+    assert not _openrouter_supports_cache_control("openrouter/openai/gpt-4.1-mini")
+
+    first = _openrouter_session_id(
+        runtime_model="openrouter/openai/gpt-4.1-mini",
+        stable_block="roster",
+        schema_name="AttributionResultWire",
+    )
+    assert first == _openrouter_session_id(
+        runtime_model="openrouter/openai/gpt-4.1-mini",
+        stable_block="roster",
+        schema_name="AttributionResultWire",
+    )
+    assert first != _openrouter_session_id(
+        runtime_model="openrouter/openai/gpt-4.1-mini",
+        stable_block="roster changed",
+        schema_name="AttributionResultWire",
+    )
+    assert first != _openrouter_session_id(
+        runtime_model="openrouter/openai/gpt-4.1-mini",
+        stable_block="roster",
+        schema_name="AttributionResultConfidenceWire",
+    )
+
+
+def test_litellm_usage_metrics_extract_cache_counts_and_cost():
+    response = {
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 12,
+            "cost": 0.001,
+            "prompt_tokens_details": {
+                "cached_tokens": 64,
+                "cache_write_tokens": 32,
+            },
+        }
+    }
+
+    usage = _usage_metrics(response)
+
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 12
+    assert usage.cached_prompt_tokens == 64
+    assert usage.cache_write_tokens == 32
+    assert usage.api_calls == 1
+    assert usage.cost == 0.001
+
+
+def test_litellm_usage_metrics_accept_object_shaped_usage():
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            prompt_tokens=90,
+            completion_tokens=9,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=48, cache_write_tokens=16),
+        ),
+        _hidden_params={
+            "additional_headers": {"llm_provider-x-litellm-response-cost": "0.004"}
+        },
+    )
+
+    usage = _usage_metrics(response)
+
+    assert usage.prompt_tokens == 90
+    assert usage.completion_tokens == 9
+    assert usage.cached_prompt_tokens == 48
+    assert usage.cache_write_tokens == 16
+    assert usage.cost == 0.004
 
 
 def test_litellm_wire_schemas_forbid_additional_properties():
@@ -896,6 +1026,53 @@ def test_review_model_resolves_only_suspicious_quotes(monkeypatch):
     assert "[QUOTE:1" not in calls[1]["messages"][0]["content"]
 
 
+def test_review_model_resolves_low_confidence_quotes(monkeypatch):
+    calls = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs)
+        if kwargs["model"] == "openrouter/reviewer":
+            return {"choices": [{"message": {"content": json.dumps({"a": [{"q": 0, "s": "jane"}]})}}]}
+        return {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "a": [
+                            {"q": 0, "s": "bob", "c": 2},
+                            {"q": 1, "s": "bob", "c": 5},
+                        ]
+                    })
+                }
+            }]
+        }
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    adapter = LiteLLMAttributionAdapter(NLPConfig(
+        attribution_tool=AttributionTool.OPENROUTER,
+        attribution_model="openai/gpt-4.1-mini",
+        attribution_review_confidence=True,
+        confidence_threshold=4,
+        review_model="reviewer",
+    ))
+    chapter = Chapter(index=0, title="Ch 1", paragraphs=[
+        '"Hello," Jane said to Bob.',
+        '"Fine," Bob said.',
+    ])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane", canonical_name="Jane", aliases=["Jane"], gender="she/her"),
+        CharacterRecord(slug="bob", canonical_name="Bob", aliases=["Bob"], gender="he/him"),
+    ])
+
+    result = adapter.attribute_chapter(chapter, roster)
+
+    speakers = {item.quote_id: item.speaker for item in result.attributions}
+    assert speakers[0] == "jane"
+    assert len(calls) == 2
+    assert "[QUOTE:0" in calls[1]["messages"][0]["content"]
+    assert "[QUOTE:1" not in calls[1]["messages"][0]["content"]
+
+
 def test_no_resolver_call_when_review_model_is_empty(monkeypatch):
     calls = []
 
@@ -923,6 +1100,7 @@ def test_no_resolver_call_when_review_model_is_empty(monkeypatch):
 def test_missing_quote_retry_logs_at_info_not_warning(monkeypatch):
     """Retry-on-missing-quotes messages must be INFO, not WARNING."""
     import inspect
+
     from kenkui.nlp.providers.litellm import LiteLLMAttributionAdapter
     src = inspect.getsource(LiteLLMAttributionAdapter)
     assert "_logger.info(" in src, (

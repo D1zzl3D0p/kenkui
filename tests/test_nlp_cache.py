@@ -12,10 +12,13 @@ from kenkui.nlp._cache import (
     CacheMeta,
     _cache_filename,
     _model_slug,
+    clear_checkpoints,
     delete_cache,
     get_cache,
+    get_chapter_checkpoint,
     list_caches,
     put_cache,
+    put_chapter_checkpoint,
 )
 from kenkui.nlp.models import CharacterRecord, CharacterRoster
 
@@ -78,6 +81,65 @@ class TestPutAndGetCache:
         with patch("kenkui.nlp.book_hash", _fake_hash):
             result = get_cache(FAKE_BOOK, "extraction", "ollama", "llama3.2", cache_dir=tmp_path)
         assert result is None
+
+
+class TestChapterCheckpoints:
+    def test_roundtrip_verifies_chapter_fingerprint(self, tmp_path):
+        chapter = Chapter(index=1, title="One", paragraphs=["Alice spoke."])
+        changed = Chapter(index=1, title="One", paragraphs=["Alice shouted."])
+
+        with patch("kenkui.nlp.book_hash", _fake_hash):
+            put_chapter_checkpoint(
+                {"value": 1},
+                FAKE_BOOK,
+                chapter,
+                step="attribution",
+                tool="openrouter",
+                model="model/a",
+                cache_dir=tmp_path,
+            )
+            cached = get_chapter_checkpoint(
+                FAKE_BOOK,
+                chapter,
+                step="attribution",
+                tool="openrouter",
+                model="model/a",
+                cache_dir=tmp_path,
+            )
+            stale = get_chapter_checkpoint(
+                FAKE_BOOK,
+                changed,
+                step="attribution",
+                tool="openrouter",
+                model="model/a",
+                cache_dir=tmp_path,
+            )
+
+        assert cached == {"value": 1}
+        assert stale is None
+
+    def test_clear_checkpoints_removes_matching_tree(self, tmp_path):
+        chapter = Chapter(index=1, title="One", paragraphs=["Alice spoke."])
+
+        with patch("kenkui.nlp.book_hash", _fake_hash):
+            path = put_chapter_checkpoint(
+                {"value": 1},
+                FAKE_BOOK,
+                chapter,
+                step="attribution",
+                tool="openrouter",
+                model="model/a",
+                cache_dir=tmp_path,
+            )
+            clear_checkpoints(
+                FAKE_BOOK,
+                step="attribution",
+                tool="openrouter",
+                model="model/a",
+                cache_dir=tmp_path,
+            )
+
+        assert not path.exists()
 
     def test_get_returns_none_on_corrupt_json(self, tmp_path):
         with patch("kenkui.nlp.book_hash", _fake_hash):

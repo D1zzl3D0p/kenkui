@@ -48,9 +48,12 @@ class NLPConfig(BaseSettings):
 
     # Cloud attribution concurrency
     openrouter_attribution_concurrency: int = 4
+    openrouter_discovery_concurrency: int = 4
+    openrouter_prompt_cache_ttl: str = ""
     attribution_max_quotes_per_call: int = 0
     attribution_review_confidence: bool = False
     review_model: str = ""
+    confidence_threshold: int = 0
 
     @field_validator("openrouter_attribution_concurrency", mode="before")
     @classmethod
@@ -61,6 +64,21 @@ class NLPConfig(BaseSettings):
             return 4
         return min(32, max(1, value))
 
+    @field_validator("openrouter_discovery_concurrency", mode="before")
+    @classmethod
+    def _clamp_openrouter_discovery_concurrency(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return min(32, max(1, value))
+
+    @field_validator("openrouter_prompt_cache_ttl", mode="before")
+    @classmethod
+    def _normalize_openrouter_prompt_cache_ttl(cls, v: Any) -> str:
+        value = str(v or "").strip().lower()
+        return value if value == "1h" else ""
+
     @field_validator("attribution_max_quotes_per_call", mode="before")
     @classmethod
     def _clamp_attribution_max_quotes_per_call(cls, v: Any) -> int:
@@ -69,6 +87,15 @@ class NLPConfig(BaseSettings):
         except (TypeError, ValueError):
             return 0
         return max(0, value)
+
+    @field_validator("confidence_threshold", mode="before")
+    @classmethod
+    def _clamp_confidence_threshold(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return min(5, max(0, value))
 
     @classmethod
     def from_app_config(cls, config: AppConfig) -> NLPConfig:
@@ -129,6 +156,9 @@ class NLPConfig(BaseSettings):
         attribution_max_quotes = getattr(config, "nlp_attribution_max_quotes_per_call", 0)
         attribution_review_confidence = getattr(config, "nlp_attribution_review_confidence", False)
         review_model = getattr(config, "nlp_review_model", "") or ""
+        openrouter_discovery_concurrency = getattr(config, "nlp_openrouter_discovery_concurrency", 4)
+        openrouter_prompt_cache_ttl = getattr(config, "nlp_openrouter_prompt_cache_ttl", "")
+        confidence_threshold = getattr(config, "nlp_confidence_threshold", 0)
 
         return cls(
             extraction_tool=extraction_tool,
@@ -139,8 +169,11 @@ class NLPConfig(BaseSettings):
             attribution_mode=attribution_mode,
             attribution_model=attribution_model,
             ollama_url=ollama_url,
+            openrouter_discovery_concurrency=openrouter_discovery_concurrency,
+            openrouter_prompt_cache_ttl=openrouter_prompt_cache_ttl,
             openrouter_attribution_concurrency=openrouter_concurrency,
             attribution_max_quotes_per_call=attribution_max_quotes,
             attribution_review_confidence=attribution_review_confidence,
             review_model=review_model if isinstance(review_model, str) else "",
+            confidence_threshold=confidence_threshold,
         )

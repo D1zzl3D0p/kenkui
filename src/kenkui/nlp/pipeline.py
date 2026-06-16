@@ -26,7 +26,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kenkui.nlp import _attribution_to_segments, book_hash
-from kenkui.nlp._cache import get_cache, put_cache
+from kenkui.nlp._cache import (
+    clear_checkpoints,
+    get_cache,
+    get_chapter_checkpoint,
+    put_cache,
+    put_chapter_checkpoint,
+)
 from kenkui.nlp._filters import _PRONOUNS
 from kenkui.nlp._retry import with_retry
 from kenkui.nlp.models import _SPEAKER_SENTINELS
@@ -70,6 +76,31 @@ def _format_attribution_jobs(
             f"  [{position:>{width}}/{total}] running  {_chapter_label(chapter)} - {status}"
         )
     return "\n".join(lines)
+
+
+def _store_attribution_checkpoint(
+    *,
+    book_path: Path,
+    chapter: Chapter,
+    attr_result: object,
+    tool: str,
+    model: str,
+) -> None:
+    try:
+        put_chapter_checkpoint(
+            {"attribution_result": attr_result.model_dump()},
+            book_path,
+            chapter,
+            step="attribution",
+            tool=tool,
+            model=model,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "Could not write attribution checkpoint for chapter %s: %s",
+            getattr(chapter, "index", "?"),
+            exc,
+        )
 
 
 async def _with_retry_async(
@@ -283,6 +314,9 @@ class NLPPipeline:
         tool = self._config.extraction_tool.value
         model = self._config.extraction_model
 
+        if not use_cache:
+            clear_checkpoints(book_path, step="extraction", tool=tool, model=model)
+
         # Cache read
         if use_cache:
             cached = get_cache(book_path, step="extraction", tool=tool, model=model)
@@ -344,6 +378,10 @@ class NLPPipeline:
                 tool=tool,
                 model=model,
             )
+            cached = get_cache(book_path, step="extraction", tool=tool, model=model)
+            if cached is None:
+                raise OSError("extraction cache verification failed")
+            CharacterRoster.model_validate(cached)
         except Exception:
             pass  # Cache write failure is non-fatal
 
@@ -373,9 +411,13 @@ class NLPPipeline:
 
         from kenkui.models import CharacterInfo, NLPResult
         from kenkui.models import CharacterRecord as AppCharacterRecord
+        from kenkui.nlp.models import AttributionResult
 
         tool = self._config.attribution_tool.value
         model = self._config.attribution_model
+
+        if not use_cache:
+            clear_checkpoints(book_path, step="attribution", tool=tool, model=model)
 
         # Cache read
         if use_cache:
@@ -404,36 +446,70 @@ class NLPPipeline:
 
         signal.signal(signal.SIGTERM, _sigterm_handler)
         try:
-            attribution_counts: dict[str, int] = defaultdict(int)
-            attributed_chapters = []
-
             async_attr = getattr(self._attribution, "attribute_chapter_async", None)
             if tool == "openrouter" and inspect.iscoroutinefunction(async_attr):
                 chapter_results = _run_coroutine_sync(
-                    self._attribute_chapters_async(chapters, roster, progress_callback)
+                    self._attribute_chapters_async(
+                        book_path,
+                        chapters,
+                        roster,
+                        progress_callback,
+                        use_cache=use_cache,
+                        tool=tool,
+                        model=model,
+                    )
                 )
             else:
-                chapter_results = [
-                    (
-                        chapter,
-                        with_retry(
-                            self._attribution.attribute_chapter,
-                            max_attempts=self._config.retry_max_attempts,
-                            backoff_base=self._config.retry_backoff_base,
-                        )(chapter, roster, progress_callback=_adapt),
+                chapter_results = []
+                for chapter in chapters:
+                    cached_payload = (
+                        get_chapter_checkpoint(
+                            book_path,
+                            chapter,
+                            step="attribution",
+                            tool=tool,
+                            model=model,
+                        )
+                        if use_cache
+                        else None
                     )
-                    for chapter in chapters
-                ]
+                    if cached_payload is not None:
+                        chapter_results.append(
+                            (
+                                chapter,
+                                AttributionResult.model_validate(
+                                    cached_payload["attribution_result"]
+                                ),
+                            )
+                        )
+                        _adapt(chapter.title or f"Chapter {chapter.index}")
+                        continue
 
-            for chapter, attr_result in chapter_results:
-                segments = _attribution_to_segments(chapter, attr_result, roster)
-                attributed_chapters.append(_replace(chapter, segments=segments))
-
-                for item in attr_result.attributions:
-                    if item.speaker and item.speaker not in _SPEAKER_SENTINELS:
-                        attribution_counts[_slugify(item.speaker)] += 1
+                    attr_result = with_retry(
+                        self._attribution.attribute_chapter,
+                        max_attempts=self._config.retry_max_attempts,
+                        backoff_base=self._config.retry_backoff_base,
+                    )(chapter, roster, progress_callback=_adapt)
+                    _store_attribution_checkpoint(
+                        book_path=book_path,
+                        chapter=chapter,
+                        attr_result=attr_result,
+                        tool=tool,
+                        model=model,
+                    )
+                    chapter_results.append((chapter, attr_result))
         finally:
             signal.signal(signal.SIGTERM, _orig_sigterm)
+
+        attribution_counts: dict[str, int] = defaultdict(int)
+        attributed_chapters = []
+        for chapter, attr_result in chapter_results:
+            segments = _attribution_to_segments(chapter, attr_result, roster)
+            attributed_chapters.append(_replace(chapter, segments=segments))
+
+            for item in attr_result.attributions:
+                if item.speaker and item.speaker not in _SPEAKER_SENTINELS:
+                    attribution_counts[_slugify(item.speaker)] += 1
 
         # Build CharacterInfo with quote_count
         characters: list[CharacterInfo] = []
@@ -458,6 +534,11 @@ class NLPPipeline:
                 tool=tool,
                 model=model,
             )
+            cached = get_cache(book_path, step="attribution", tool=tool, model=model)
+            if cached is None:
+                raise OSError("attribution cache verification failed")
+            NLPResult.from_dict(cached)
+            clear_checkpoints(book_path, step="attribution", tool=tool, model=model)
         except Exception:
             pass  # Cache write failure is non-fatal
 
@@ -465,10 +546,17 @@ class NLPPipeline:
 
     async def _attribute_chapters_async(
         self,
+        book_path: Path,
         chapters: list[Chapter],
         roster: CharacterRoster,
         progress_callback: Callable[[int, str], None] | None,
+        *,
+        use_cache: bool,
+        tool: str,
+        model: str,
     ) -> list[tuple[Chapter, object]]:
+        from kenkui.nlp.models import AttributionResult
+
         async_attr = getattr(self._attribution, "attribute_chapter_async", None)
         if not inspect.iscoroutinefunction(async_attr):
             raise TypeError("Attribution provider does not expose async chapter attribution")
@@ -490,6 +578,25 @@ class NLPPipeline:
 
         async def _attribute_one(position: int, chapter: Chapter) -> tuple[Chapter, object]:
             nonlocal completed
+            cached_payload = (
+                get_chapter_checkpoint(
+                    book_path,
+                    chapter,
+                    step="attribution",
+                    tool=tool,
+                    model=model,
+                )
+                if use_cache
+                else None
+            )
+            if cached_payload is not None:
+                completed += 1
+                _emit_snapshot()
+                return (
+                    chapter,
+                    AttributionResult.model_validate(cached_payload["attribution_result"]),
+                )
+
             async with semaphore:
                 active[position] = (chapter, "queued")
                 _emit_snapshot()
@@ -508,12 +615,29 @@ class NLPPipeline:
                 )
                 completed += 1
                 active.pop(position, None)
+                _store_attribution_checkpoint(
+                    book_path=book_path,
+                    chapter=chapter,
+                    attr_result=result,
+                    tool=tool,
+                    model=model,
+                )
                 _emit_snapshot()
                 return chapter, result
 
-        return await asyncio.gather(
-            *(_attribute_one(position, chapter) for position, chapter in enumerate(chapters, start=1))
-        )
+        tasks = [
+            asyncio.create_task(_attribute_one(position, chapter))
+            for position, chapter in enumerate(chapters, start=1)
+        ]
+        results: list[tuple[Chapter, object]] = []
+        try:
+            for task in asyncio.as_completed(tasks):
+                results.append(await task)
+        except Exception:
+            for task in tasks:
+                task.cancel()
+            raise
+        return sorted(results, key=lambda item: getattr(item[0], "index", 0))
 
     # ------------------------------------------------------------------
     # run

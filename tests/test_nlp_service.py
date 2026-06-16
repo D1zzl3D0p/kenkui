@@ -128,6 +128,32 @@ def test_fast_scan_uses_config_nlp_model(tmp_path):
     mock_nlp_cfg_cls.from_app_config.assert_called_once_with(mock_config)
 
 
+def test_fast_scan_openrouter_discovery_override_reaches_nlp_config(tmp_path):
+    from kenkui.models import AppConfig
+
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+
+    mock_reader = MagicMock()
+    mock_reader.get_chapters.return_value = [Chapter(index=0, title="Ch", paragraphs=["t"])]
+    mock_pipeline = _make_mock_pipeline()
+    mock_config = AppConfig()
+
+    with (
+        patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
+        patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
+        patch("kenkui.services.nlp_service.NLPConfig") as mock_nlp_cfg_cls,
+        patch("kenkui.services.nlp_service.get_cached_roster", return_value=None),
+        patch("kenkui.services.nlp_service.cache_roster"),
+        patch("kenkui.services.nlp_service.book_hash", return_value="abc123"),
+        patch("kenkui.services.nlp_service.load_app_config", return_value=mock_config),
+    ):
+        fast_scan(str(fake_epub), nlp_model=None, openrouter_discovery_concurrency=5)
+
+    passed_config = mock_nlp_cfg_cls.from_app_config.call_args.args[0]
+    assert passed_config.nlp_openrouter_discovery_concurrency == 5
+
+
 def test_fast_scan_progress_callback_receives_int_and_str(tmp_path):
     """Progress callback should receive (int, str) tuples at key milestones."""
     fake_epub = tmp_path / "book.epub"
@@ -184,6 +210,13 @@ def test_fast_scan_progress_event_callback_uses_chapter_units(tmp_path):
     events = []
     mock_pipeline = _make_mock_pipeline()
 
+    def _extract_side_effect(*_args, **kwargs):
+        kwargs["step_callback"]("Block 1/2")
+        kwargs["step_callback"]("Block 2/2")
+        return _make_mock_roster()
+
+    mock_pipeline.extract.side_effect = _extract_side_effect
+
     with (
         patch("kenkui.services.nlp_service.get_reader", return_value=mock_reader),
         patch("kenkui.services.nlp_service.NLPPipeline", return_value=mock_pipeline),
@@ -194,19 +227,14 @@ def test_fast_scan_progress_event_callback_uses_chapter_units(tmp_path):
     ):
         fast_scan(str(fake_epub), nlp_model="llama3.2", progress_event_callback=events.append)
 
-    assert [event.stage for event in events] == [
-        "nlp_extraction",
-        "nlp_extraction",
-        "nlp_extraction",
-        "nlp_extraction",
-    ]
+    assert [event.stage for event in events] == ["nlp_extraction", "nlp_extraction", "nlp_extraction"]
     assert all(event.unit == "chapters" for event in events)
-    assert [event.status for event in events] == ["started", "advanced", "advanced", "completed"]
-    assert [event.completed_units for event in events] == [0, 1, 1, 2]
+    assert [event.status for event in events] == ["started", "advanced", "completed"]
+    assert [event.completed_units for event in events] == [0, 1, 2]
     assert all(event.total_units == 2 for event in events)
 
 
-def test_fast_scan_accepts_pipeline_percent_message_progress(tmp_path):
+def test_fast_scan_ignores_unstructured_extraction_messages_for_event_progress(tmp_path):
     fake_epub = tmp_path / "book.epub"
     fake_epub.write_bytes(b"fake")
 
@@ -232,7 +260,7 @@ def test_fast_scan_accepts_pipeline_percent_message_progress(tmp_path):
     ):
         fast_scan(str(fake_epub), nlp_model="llama3.2", progress_event_callback=events.append)
 
-    assert "Building character roster" in [event.message for event in events]
+    assert "Building character roster" not in [event.message for event in events]
 
 
 # ---------------------------------------------------------------------------
@@ -360,12 +388,14 @@ def test_full_analysis_attribution_review_overrides_reach_nlp_config(tmp_path):
     ):
         full_analysis(
             str(fake_epub),
+            openrouter_discovery_concurrency=6,
             attribution_max_quotes_per_call=20,
             attribution_review_confidence=True,
             review_model="reviewer",
         )
 
     passed_config = mock_nlp_cfg_cls.from_app_config.call_args.args[0]
+    assert passed_config.nlp_openrouter_discovery_concurrency == 6
     assert passed_config.nlp_attribution_max_quotes_per_call == 20
     assert passed_config.nlp_attribution_review_confidence is True
     assert passed_config.nlp_review_model == "reviewer"
@@ -413,7 +443,7 @@ def test_full_analysis_progress_callback_receives_int_and_str(tmp_path):
         assert percents[i] >= percents[i - 1]
 
 
-def test_full_analysis_accepts_pipeline_percent_message_progress(tmp_path):
+def test_full_analysis_ignores_unstructured_extraction_messages_for_event_progress(tmp_path):
     fake_epub = tmp_path / "book.epub"
     fake_epub.write_bytes(b"fake")
 
@@ -445,7 +475,7 @@ def test_full_analysis_accepts_pipeline_percent_message_progress(tmp_path):
             extraction_progress_event_callback=events.append,
         )
 
-    assert "Building character roster" in [event.message for event in events]
+    assert "Building character roster" not in [event.message for event in events]
 
 
 def test_full_analysis_attribution_progress_event_callback_uses_chapter_units(tmp_path):

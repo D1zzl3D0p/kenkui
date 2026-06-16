@@ -42,12 +42,14 @@ class TestNLPConfigDefaults:
     def test_default_openrouter_attribution_concurrency(self):
         cfg = NLPConfig()
         assert cfg.openrouter_attribution_concurrency == 4
+        assert cfg.openrouter_discovery_concurrency == 4
 
     def test_default_attribution_review_options(self):
         cfg = NLPConfig()
         assert cfg.attribution_max_quotes_per_call == 0
         assert cfg.attribution_review_confidence is False
         assert cfg.review_model == ""
+        assert cfg.confidence_threshold == 0
 
 
 class TestNLPConfigFromEnv:
@@ -81,6 +83,11 @@ class TestNLPConfigFromEnv:
         cfg = NLPConfig()
         assert cfg.openrouter_attribution_concurrency == 9
 
+    def test_openrouter_discovery_concurrency_from_env(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_OPENROUTER_DISCOVERY_CONCURRENCY", "7")
+        cfg = NLPConfig()
+        assert cfg.openrouter_discovery_concurrency == 7
+
     def test_openrouter_attribution_concurrency_is_clamped(self, monkeypatch):
         monkeypatch.setenv("KENKUI_NLP_OPENROUTER_ATTRIBUTION_CONCURRENCY", "99")
         cfg = NLPConfig()
@@ -99,6 +106,11 @@ class TestNLPConfigFromEnv:
         monkeypatch.setenv("KENKUI_NLP_ATTRIBUTION_MAX_QUOTES_PER_CALL", "-3")
         cfg = NLPConfig()
         assert cfg.attribution_max_quotes_per_call == 0
+
+    def test_confidence_threshold_is_clamped(self, monkeypatch):
+        monkeypatch.setenv("KENKUI_NLP_CONFIDENCE_THRESHOLD", "9")
+        cfg = NLPConfig()
+        assert cfg.confidence_threshold == 5
 
 
 class TestExtractionToolEnum:
@@ -155,9 +167,13 @@ class TestNLPConfigFromAppConfig:
 
     def test_openrouter_concurrency_maps_from_app_config(self):
         from kenkui.models import AppConfig
-        app_cfg = AppConfig.from_dict({"nlp_openrouter_attribution_concurrency": 12})
+        app_cfg = AppConfig.from_dict({
+            "nlp_openrouter_attribution_concurrency": 12,
+            "nlp_openrouter_discovery_concurrency": 7,
+        })
         nlp_cfg = NLPConfig.from_app_config(app_cfg)
         assert nlp_cfg.openrouter_attribution_concurrency == 12
+        assert nlp_cfg.openrouter_discovery_concurrency == 7
 
     def test_attribution_review_options_map_from_app_config(self):
         from kenkui.models import AppConfig
@@ -165,11 +181,13 @@ class TestNLPConfigFromAppConfig:
             "nlp_attribution_max_quotes_per_call": 5,
             "nlp_attribution_review_confidence": True,
             "nlp_review_model": "reviewer",
+            "nlp_confidence_threshold": 3,
         })
         nlp_cfg = NLPConfig.from_app_config(app_cfg)
         assert nlp_cfg.attribution_max_quotes_per_call == 5
         assert nlp_cfg.attribution_review_confidence is True
         assert nlp_cfg.review_model == "reviewer"
+        assert nlp_cfg.confidence_threshold == 3
 
     def test_attribution_provider_override(self):
         from kenkui.models import AppConfig

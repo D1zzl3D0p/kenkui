@@ -237,6 +237,7 @@ def full_analysis(
     discovery_method: str | None = None,
     attribution_provider: str | None = None,
     attribution_model: str | None = None,
+    openrouter_discovery_concurrency: int | None = None,
     openrouter_attribution_concurrency: int | None = None,
     attribution_max_quotes_per_call: int | None = None,
     attribution_review_confidence: bool | None = None,
@@ -286,6 +287,7 @@ def full_analysis(
         discovery_method=discovery_method,
         attribution_provider=attribution_provider,
         attribution_model=attribution_model,
+        openrouter_discovery_concurrency=openrouter_discovery_concurrency,
         openrouter_attribution_concurrency=openrouter_attribution_concurrency,
         attribution_max_quotes_per_call=attribution_max_quotes_per_call,
         attribution_review_confidence=attribution_review_confidence,
@@ -304,6 +306,7 @@ def fast_scan(
     book_slug: str | None = None,
     nlp_provider: str | None = None,
     discovery_method: str | None = None,
+    openrouter_discovery_concurrency: int | None = None,
     use_cache: bool = True,
 ) -> FastScanResult:  # noqa: F821
     """Run Stage 1-2 NLP (entity detection + character clustering).
@@ -334,6 +337,7 @@ def fast_scan(
         book_slug=book_slug,
         nlp_provider=nlp_provider,
         discovery_method=discovery_method,
+        openrouter_discovery_concurrency=openrouter_discovery_concurrency,
         use_cache=use_cache,
     )
 
@@ -354,6 +358,7 @@ def attribute_only(
     attribution_max_quotes_per_call: int | None = None,
     attribution_review_confidence: bool | None = None,
     review_model: str | None = None,
+    use_cache: bool = True,
 ) -> NLPResult:
     """Run speaker attribution against an already discovered roster."""
     from .services.nlp_service import attribute_only as _attribute_only
@@ -372,6 +377,7 @@ def attribute_only(
         attribution_max_quotes_per_call=attribution_max_quotes_per_call,
         attribution_review_confidence=attribution_review_confidence,
         review_model=review_model,
+        use_cache=use_cache,
     )
 
 

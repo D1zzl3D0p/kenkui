@@ -188,8 +188,8 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
         segs = {s.index: s for s in chapters[0].segments}
         assert segs[6].speaker == "Some Name"
 
-    def test_non_roster_speaker_remapped_to_unknown_when_roster_available(self, tmp_path):
-        """Stale annotated role speakers are not promoted into renderable cast keys."""
+    def test_non_roster_speaker_added_to_roster_when_roster_available(self, tmp_path):
+        """Annotated cache speakers missing from the roster remain assignable."""
         from kenkui.models import CharacterInfo, FastScanResult
         from kenkui.nlp.models import CharacterRecord, CharacterRoster
         from kenkui.parsing import _load_annotated_chapters
@@ -217,7 +217,14 @@ class TestLoadAnnotatedChaptersSpeakerSlugNormalization:
         segs = {s.index: s for s in chapters[0].segments}
 
         assert segs[0].speaker == "darrow"
-        assert segs[7].speaker == "Unknown"
+        assert segs[7].speaker == "fisherman"
+
+        updated = json.loads(roster_cache.read_text(encoding="utf-8"))
+        result = FastScanResult.from_dict(updated["roster_data"])
+        absorbed = result.roster.by_slug("fisherman")
+        assert absorbed is not None
+        assert absorbed.canonical_name == "Fisherman"
+        assert any(c.character_id == "fisherman" for c in result.characters)
 
 
 class TestWarnUnresolvableSpeakers:

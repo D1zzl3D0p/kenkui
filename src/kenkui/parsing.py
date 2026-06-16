@@ -284,7 +284,19 @@ def _load_annotated_chapters(
     chapters = [Chapter.from_dict(ch) for ch in data.get("chapters", [])]
 
     roster_slugs = _load_roster_slugs(roster_cache_path)
+    roster_raw: dict | None = None
+    roster_result = None
+    if roster_cache_path:
+        try:
+            from .models import FastScanResult
+
+            roster_raw = json.loads(Path(roster_cache_path).read_text(encoding="utf-8"))
+            roster_result = FastScanResult.from_dict(roster_raw.get("roster_data") or roster_raw)
+        except Exception:
+            roster_raw = None
+            roster_result = None
     warn = log or logger.warning
+    roster_changed = False
 
     for chapter in chapters:
         if chapter.segments:
@@ -293,11 +305,38 @@ def _load_annotated_chapters(
                     original = seg.speaker
                     seg.speaker = _slugify(seg.speaker)
                     if roster_slugs and seg.speaker not in roster_slugs:
-                        warn(
-                            f"Annotated cache speaker {original!r} is not in roster; "
-                            "remapping to 'Unknown'"
+                        if roster_result is None:
+                            warn(
+                                f"Annotated cache speaker {original!r} is not in roster; "
+                                "keeping speaker because roster cache could not be updated"
+                            )
+                            continue
+                        from .models import CharacterRecord as AppCharacterRecord
+                        from .nlp import absorb_roster_speaker
+
+                        seg.speaker = absorb_roster_speaker(
+                            roster_result.roster,
+                            seg.speaker,
+                            chapter_index=chapter.index,
                         )
-                        seg.speaker = "Unknown"
+                        if not any(c.character_id == seg.speaker for c in roster_result.characters):
+                            rec = roster_result.roster.by_slug(seg.speaker)
+                            if rec is not None:
+                                roster_result.characters.append(
+                                    AppCharacterRecord.from_nlp(rec).to_character_info()
+                                )
+                        roster_slugs.add(seg.speaker)
+                        roster_changed = True
+
+    if roster_changed and roster_cache_path and roster_raw is not None and roster_result is not None:
+        if "roster_data" in roster_raw:
+            roster_raw["roster_data"] = roster_result.to_dict()
+        else:
+            roster_raw = roster_result.to_dict()
+        Path(roster_cache_path).write_text(
+            json.dumps(roster_raw, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     if included_indices:
         idx_set = set(included_indices)
@@ -428,7 +467,7 @@ class AudioBuilder:
         self,
         chapters: list[Chapter],
         output_file: Path,
-        chapter_batch_info: dict[str, tuple[int, int]],
+        chapter_batch_info: list[tuple[int, int, bool]],
         total_batches: int,
         total_chars: int,
     ) -> bool:
@@ -490,9 +529,7 @@ class AudioBuilder:
 
             _tts_start = now_utc()
             t0 = time.monotonic()
-            results = self._process_chapters(
-                chapters, chapter_batch_info, total_batches, total_chars
-            )
+            results = self._process_chapters(chapters, total_batches, total_chars)
             _tts_dur = time.monotonic() - t0
             logger.info("Phase 'processing' completed in %.1fs", _tts_dur)
             append_record(StageRecord(
@@ -605,7 +642,6 @@ class AudioBuilder:
     def _process_chapters(
         self,
         chapters: list[Chapter],
-        chapter_batch_info: dict[str, tuple[int, int]],
         total_batches: int,
         total_chars: int,
     ) -> list[AudioResult]:
@@ -671,8 +707,7 @@ class AudioBuilder:
                 if self.pause_check is not None and self.pause_check():
                     self.was_paused = True
                     break
-                info = chapter_batch_info.get(ch.title, (0, 0, idx == 0))
-                is_first = bool(info[2]) if len(info) > 2 else (idx == 0)
+                is_first = idx == 0
                 fut = pool.submit(
                     worker_process_chapter,
                     ch,
@@ -934,14 +969,14 @@ class AudioBuilder:
 
         from .workers import get_batch_info
 
-        chapter_batch_info = {}
+        chapter_batch_info = []
         for idx, ch in enumerate(chapters):
             is_first = idx == 0
             batch_count, total_chars = get_batch_info(ch, is_first_chapter=is_first)
-            chapter_batch_info[ch.title] = (batch_count, total_chars, is_first)
+            chapter_batch_info.append((batch_count, total_chars, is_first))
 
-        total_batches = sum(info[0] for info in chapter_batch_info.values())
-        total_chars = sum(info[1] for info in chapter_batch_info.values())
+        total_batches = sum(info[0] for info in chapter_batch_info)
+        total_chars = sum(info[1] for info in chapter_batch_info)
 
         if self.cfg.output_path and self.cfg.output_path.suffix:
             output_file = self.cfg.output_path

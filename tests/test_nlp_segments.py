@@ -437,11 +437,8 @@ class TestAttributionToSegmentsRosterValidation:
 
     # --- Regression: LLM hallucination ('computer') ---
 
-    def test_hallucinated_slug_computer_remapped_to_unknown(self):
-        """'computer' is not a character; LLM hallucination must become 'Unknown'.
-
-        Regression: speaker 'computer' has no voice mapping — will use narrator fallback
-        """
+    def test_hallucinated_slug_computer_is_absorbed_into_roster(self):
+        """Out-of-roster non-sentinel speakers are added to the roster."""
         para = '"Access granted," the computer said.'
         roster = _make_real_roster("darrow", "sevro", "screwface")
         segments = self._run(
@@ -450,20 +447,13 @@ class TestAttributionToSegmentsRosterValidation:
             roster,
         )
         speakers = {s.speaker for s in segments}
-        assert "computer" not in speakers, (
-            f"Hallucinated slug 'computer' must be remapped, not kept: {speakers}"
-        )
-        assert "Unknown" in speakers, (
-            f"Hallucinated slug must become 'Unknown': {speakers}"
-        )
+        assert "computer" in speakers
+        assert roster.by_slug("computer") is not None
 
     # --- Regression: short-form alias ('screw' for 'screwface') ---
 
-    def test_unregistered_alias_screw_remapped_to_unknown(self):
-        """'screw' is a short form of 'screwface' not in the alias list → 'Unknown'.
-
-        Regression: speaker 'screw' has no voice mapping — will use narrator fallback
-        """
+    def test_unregistered_alias_screw_is_absorbed_into_roster(self):
+        """Unregistered non-sentinel aliases are kept as assignable speakers."""
         para = '"Move," Screw said.'
         roster = _make_real_roster("screwface")  # 'screw' is not a registered slug
         segments = self._run(
@@ -472,20 +462,14 @@ class TestAttributionToSegmentsRosterValidation:
             roster,
         )
         speakers = {s.speaker for s in segments}
-        assert "screw" not in speakers, (
-            f"Unregistered alias 'screw' must be remapped, not kept: {speakers}"
-        )
-        assert "Unknown" in speakers, (
-            f"Unregistered alias must become 'Unknown': {speakers}"
-        )
+        assert "screw" in speakers
+        assert roster.by_slug("screw") is not None
 
     # --- Regression: roster truncation ('screwface' dropped by LLM truncation) ---
 
-    def test_slug_from_truncated_roster_remapped_to_unknown(self):
+    def test_slug_from_truncated_roster_is_absorbed(self):
         """If 'screwface' was dropped from the roster by LLM truncation, attribution
-        may return it anyway (hallucination).  It must be caught and remapped.
-
-        Regression: speaker 'screwface' has no voice mapping — will use narrator fallback
+        may return it anyway. It should be restored to the roster.
         """
         para = '"Die," Screwface said.'
         # Roster does NOT contain 'screwface' — simulates truncated roster
@@ -496,12 +480,8 @@ class TestAttributionToSegmentsRosterValidation:
             roster,
         )
         speakers = {s.speaker for s in segments}
-        assert "screwface" not in speakers, (
-            f"Slug from truncated roster must be caught: {speakers}"
-        )
-        assert "Unknown" in speakers, (
-            f"Slug from truncated roster must become 'Unknown': {speakers}"
-        )
+        assert "screwface" in speakers
+        assert roster.by_slug("screwface") is not None
 
     # --- Sentinels must not be touched ---
 

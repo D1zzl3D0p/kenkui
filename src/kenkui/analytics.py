@@ -64,7 +64,10 @@ class StageRecord:
     # ── LLM API usage (populated from LiteLLM response when available) ───────
     llm_prompt_tokens: int = 0
     llm_completion_tokens: int = 0
+    llm_cached_prompt_tokens: int = 0
+    llm_cache_write_tokens: int = 0
     llm_api_calls: int = 0
+    llm_cost: float = 0.0
 
     # ── Cache ────────────────────────────────────────────────────────────────
     cache_hit: bool = False
@@ -130,10 +133,15 @@ class ChapterAttributionRecord:
     # ── Optional ─────────────────────────────────────────────────────────────
     review_model: str = ""
     llm_api_calls: int = 0
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_cached_prompt_tokens: int = 0
+    llm_cache_write_tokens: int = 0
+    llm_cost: float = 0.0
 
 
 def append_chapter_attribution(
-    record: "ChapterAttributionRecord",
+    record: ChapterAttributionRecord,
     path: Path | None = None,
 ) -> None:
     """Append one ChapterAttributionRecord to the analytics JSONL file. Never raises."""
@@ -146,7 +154,7 @@ def append_chapter_attribution(
         _logger.debug("Chapter analytics write failed (non-fatal): %s", exc)
 
 
-def load_chapter_attributions(path: Path | None = None) -> list["ChapterAttributionRecord"]:
+def load_chapter_attributions(path: Path | None = None) -> list[ChapterAttributionRecord]:
     """Load all ChapterAttributionRecord objects from the analytics JSONL file."""
     target = path or _analytics_path()
     if not target.exists():

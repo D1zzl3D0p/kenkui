@@ -7,7 +7,7 @@ import sys
 from unittest.mock import MagicMock, patch
 
 from kenkui.models import AttributionTool, Chapter, CharacterInfo, NLPResult
-from kenkui.nlp.models import CharacterRecord, CharacterRoster
+from kenkui.nlp.models import AttributionItem, AttributionResult, CharacterRecord, CharacterRoster
 from kenkui.nlp.pipeline import NLPJob, NLPJobStatus, NLPPipeline, ValidationResult
 from kenkui.nlp_config import NLPConfig
 
@@ -147,12 +147,13 @@ def test_pipeline_extract_skips_cache_when_disabled(tmp_path):
     chapters = [_make_chapter()]
 
     with (
-        patch("kenkui.nlp.pipeline.get_cache") as mock_get,
+        patch("kenkui.nlp.pipeline.get_cache", return_value=roster.model_dump()) as mock_get,
         patch("kenkui.nlp.pipeline.put_cache"),
     ):
         result = pipeline.extract(book_path, chapters, use_cache=False)
 
-    mock_get.assert_not_called()
+    assert mock_get.call_count == 1
+    pipeline._extraction.build_roster.assert_called_once()
     # The filter wraps a new object; check by value not identity.
     assert isinstance(result, CharacterRoster)
     assert result.characters == roster.characters
@@ -308,15 +309,65 @@ def test_pipeline_attribute_skips_cache_when_disabled(tmp_path):
     chapters = [_make_chapter()]
 
     with (
-        patch("kenkui.nlp.pipeline.get_cache") as mock_get,
+        patch(
+            "kenkui.nlp.pipeline.get_cache",
+            return_value=NLPResult(characters=[], chapters=[], book_hash="deadbeef").to_dict(),
+        ) as mock_get,
         patch("kenkui.nlp.pipeline.put_cache"),
         patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
         patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
     ):
         result = pipeline.attribute(book_path, chapters, roster, use_cache=False)
 
-    mock_get.assert_not_called()
+    assert mock_get.call_count == 1
     pipeline._attribution.attribute_chapter.assert_called_once()
+
+
+def test_pipeline_attribute_resumes_completed_chapter_checkpoint(tmp_path):
+    """A rerun should not repeat a chapter whose attribution checkpoint was written."""
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter(0), _make_chapter(1, "Chapter 2")]
+    roster = _make_roster()
+    attr_result = AttributionResult(attributions=[
+        AttributionItem(quote_id=1, speaker="jane_eyre", confidence=5),
+    ])
+
+    first = _make_pipeline()
+    first._config.retry_max_attempts = 1
+    first._attribution.attribute_chapter.side_effect = [
+        attr_result,
+        RuntimeError("late failure"),
+    ]
+
+    with (
+        patch("kenkui.nlp._cache._get_cache_dir", return_value=tmp_path / "cache"),
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+        patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+    ):
+        try:
+            first.attribute(book_path, chapters, roster, use_cache=True)
+        except RuntimeError:
+            pass
+
+    assert first._attribution.attribute_chapter.call_count == 2
+
+    second = _make_pipeline()
+    second._config.retry_max_attempts = 1
+    second._attribution.attribute_chapter.return_value = attr_result
+    with (
+        patch("kenkui.nlp._cache._get_cache_dir", return_value=tmp_path / "cache"),
+        patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+        patch("kenkui.nlp.pipeline.put_cache"),
+        patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+        patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+    ):
+        result = second.attribute(book_path, chapters, roster, use_cache=True)
+
+    assert isinstance(result, NLPResult)
+    second._attribution.attribute_chapter.assert_called_once()
+    assert second._attribution.attribute_chapter.call_args.args[0].index == 1
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +648,31 @@ class TestExtractPronounFiltering:
 # ---------------------------------------------------------------------------
 # Attribution count slug normalization tests (Fix 5)
 # ---------------------------------------------------------------------------
+
+
+def test_attribution_to_segments_absorbs_missing_roster_speaker():
+    from kenkui.nlp import _attribution_to_segments
+    from kenkui.nlp.models import AttributionItem, AttributionResult
+
+    chapter = Chapter(index=3, title="Three", paragraphs=['"Hello," said Mara.'])
+    roster = CharacterRoster(characters=[
+        CharacterRecord(slug="jane_eyre", canonical_name="Jane Eyre", aliases=["Jane"], gender="she/her"),
+    ])
+    attr_result = AttributionResult(attributions=[
+        AttributionItem(quote_id=0, speaker="mara_voss", confidence=4),
+    ])
+
+    segments = _attribution_to_segments(chapter, attr_result, roster)
+
+    absorbed = roster.by_slug("mara_voss")
+    assert absorbed is not None
+    assert absorbed.canonical_name == "Mara Voss"
+    assert absorbed.aliases == ["Mara Voss"]
+    assert absorbed.gender == ""
+    assert absorbed.role == "minor"
+    assert absorbed.chapters == [3]
+    assert attr_result.attributions[0].speaker == "mara_voss"
+    assert any(segment.speaker == "mara_voss" for segment in segments)
 
 
 class TestAttributionCountSlugNormalization:

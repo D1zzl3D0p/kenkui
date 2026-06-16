@@ -11,10 +11,12 @@ Writes are atomic: write to .tmp then os.replace().
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +54,139 @@ def _get_cache_dir(cache_dir: Path | None = None) -> Path:
     # Lazy import to avoid circular dependency at module load time
     from kenkui.nlp import _get_config_dir  # noqa: PLC0415
     return _get_config_dir() / "nlp_cache"
+
+
+def _checkpoint_root(
+    book_path: Path,
+    *,
+    step: str,
+    tool: str,
+    model: str,
+    cache_dir: Path | None = None,
+) -> Path:
+    from kenkui.nlp import book_hash as _book_hash
+
+    bh = _book_hash(book_path)
+    return (
+        _get_cache_dir(cache_dir)
+        / "checkpoints"
+        / step
+        / f"{bh}-{tool}-{_model_slug(model)}"
+    )
+
+
+def clear_checkpoints(
+    book_path: Path,
+    *,
+    step: str,
+    tool: str,
+    model: str,
+    cache_dir: Path | None = None,
+) -> None:
+    """Remove resumable checkpoints for one book/provider/model step."""
+    root = _checkpoint_root(
+        book_path,
+        step=step,
+        tool=tool,
+        model=model,
+        cache_dir=cache_dir,
+    )
+    if root.exists():
+        shutil.rmtree(root)
+
+
+def _chapter_fingerprint(chapter: object) -> str:
+    payload = {
+        "index": getattr(chapter, "index", None),
+        "title": getattr(chapter, "title", ""),
+        "paragraphs": getattr(chapter, "paragraphs", []),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _checkpoint_filename(chapter: object) -> str:
+    index = int(getattr(chapter, "index", 0) or 0)
+    digest = re.sub(r"[^a-f0-9]", "", hashlib.sha256(
+        _chapter_fingerprint(chapter).encode("utf-8")
+    ).hexdigest())[:16]
+    return f"chapter-{index:05d}-{digest}.json"
+
+
+def get_chapter_checkpoint(
+    book_path: Path,
+    chapter: object,
+    *,
+    step: str,
+    tool: str,
+    model: str,
+    cache_dir: Path | None = None,
+) -> dict[str, Any] | None:
+    """Return a verified chapter checkpoint payload, or None."""
+    root = _checkpoint_root(
+        book_path,
+        step=step,
+        tool=tool,
+        model=model,
+        cache_dir=cache_dir,
+    )
+    path = root / _checkpoint_filename(chapter)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("chapter_index") != getattr(chapter, "index", None):
+            return None
+        if data.get("fingerprint") != _chapter_fingerprint(chapter):
+            return None
+        payload = data.get("payload")
+        return payload if isinstance(payload, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Failed to read checkpoint %s: %s", path, exc)
+        return None
+
+
+def put_chapter_checkpoint(
+    payload: dict[str, Any],
+    book_path: Path,
+    chapter: object,
+    *,
+    step: str,
+    tool: str,
+    model: str,
+    cache_dir: Path | None = None,
+) -> Path:
+    """Atomically write and verify one chapter checkpoint."""
+    root = _checkpoint_root(
+        book_path,
+        step=step,
+        tool=tool,
+        model=model,
+        cache_dir=cache_dir,
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    dest = root / _checkpoint_filename(chapter)
+    envelope = {
+        "created_at": datetime.now(tz=UTC).isoformat(),
+        "step": step,
+        "tool": tool,
+        "model": model,
+        "chapter_index": getattr(chapter, "index", None),
+        "fingerprint": _chapter_fingerprint(chapter),
+        "payload": payload,
+    }
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, dest)
+    if get_chapter_checkpoint(
+        book_path,
+        chapter,
+        step=step,
+        tool=tool,
+        model=model,
+        cache_dir=cache_dir,
+    ) is None:
+        raise OSError(f"Checkpoint verification failed for {dest}")
+    return dest
 
 
 def list_caches(

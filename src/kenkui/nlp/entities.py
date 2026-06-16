@@ -36,11 +36,13 @@ infer_gender_pronouns(canonical, aliases, text)        → str
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,6 +63,16 @@ if TYPE_CHECKING:
     from .llm import LLMClient
 
 logger = logging.getLogger(__name__)
+
+
+def _run_coroutine_sync(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 # ---------------------------------------------------------------------------
 # Word filtering constants
@@ -1175,6 +1187,7 @@ def build_roster_from_chapters_with_llm(
     book_path: Path | None = None,
     provider: str = "ollama",
     model: str = "",
+    openrouter_discovery_concurrency: int | None = None,
 ) -> CharacterRoster:
     """Build a roster from chapter-bounded LLM calls with recursive bisection."""
     from .booknlp_roster import build_roster_from_booknlp
@@ -1263,22 +1276,45 @@ def build_roster_from_chapters_with_llm(
 
     raw_characters: list[CharacterRecord] = []
     failed_sections = 0
-    for section_idx, section in enumerate(sections, start=1):
-        roster, failures = _extract_roster_section(
-            section,
-            nlp=nlp,
-            llm=llm,
-            explicit_llm=explicit_llm,
-            book_path=book_path,
-            provider=provider,
-            model=model,
-            method=method,
-            limits=limits,
+    concurrency = max(1, int(openrouter_discovery_concurrency or 4))
+
+    async def _extract_section_async(section_idx: int, section: _RosterSection) -> tuple[int, CharacterRoster, int]:
+        roster, failures = await asyncio.to_thread(
+            lambda: _extract_roster_section(
+                section,
+                nlp=nlp,
+                llm=llm,
+                explicit_llm=explicit_llm,
+                book_path=book_path,
+                provider=provider,
+                model=model,
+                method=method,
+                limits=limits,
+            )
         )
+        return section_idx, roster, failures
+
+    async def _extract_sections_async() -> list[tuple[int, CharacterRoster, int]]:
+        semaphore = asyncio.Semaphore(concurrency)
+        completed = 0
+        results: list[tuple[int, CharacterRoster, int]] = []
+
+        async def _run(section_idx: int, section: _RosterSection) -> tuple[int, CharacterRoster, int]:
+            async with semaphore:
+                return await _extract_section_async(section_idx, section)
+
+        tasks = [asyncio.create_task(_run(section_idx, section)) for section_idx, section in enumerate(sections, start=1)]
+        for completed, fut in enumerate(asyncio.as_completed(tasks), start=1):
+            result = await fut
+            results.append(result)
+            if step_callback:
+                step_callback(f"Block {completed}/{len(sections)}")
+        return results
+
+    section_results = _run_coroutine_sync(_extract_sections_async())
+    for _section_idx, roster, failures in sorted(section_results, key=lambda item: item[0]):
         raw_characters.extend(roster.characters)
         failed_sections += failures
-        if step_callback:
-            step_callback(f"Block {section_idx}/{len(sections)}")
 
     if not raw_characters and failed_sections:
         if explicit_llm:

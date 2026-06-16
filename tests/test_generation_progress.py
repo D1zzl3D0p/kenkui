@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _processing_config(tmp_path: Path):
@@ -81,6 +82,54 @@ def test_audio_builder_emits_progress_event_with_generation_context(tmp_path):
             active_chapters=(),
         )
     ]
+
+
+def test_audio_builder_totals_duplicate_chapter_titles_by_position(tmp_path, monkeypatch):
+    from kenkui.models import Chapter
+    from kenkui.parsing import AudioBuilder
+
+    chapters = [
+        Chapter(index=0, title="Chapter", paragraphs=["first"]),
+        Chapter(index=1, title="Chapter", paragraphs=["second"]),
+    ]
+    captured = {}
+
+    class FakeReader:
+        format_name = "fake"
+
+        def configure_pdf_extraction(self, options):
+            pass
+
+        def get_chapters(self):
+            return chapters
+
+        def get_metadata(self):
+            return SimpleNamespace(title="Book")
+
+    def fake_batch_info(chapter, *, is_first_chapter=False):
+        if chapter.index == 0:
+            return 1, 10
+        return 2, 20
+
+    def fake_build(self, chapters_arg, output_file, chapter_batch_info, total_batches, total_chars):
+        captured.update(
+            chapters=chapters_arg,
+            output_file=output_file,
+            chapter_batch_info=chapter_batch_info,
+            total_batches=total_batches,
+            total_chars=total_chars,
+        )
+        return True
+
+    monkeypatch.setattr("kenkui.parsing.get_reader", lambda *args, **kwargs: FakeReader())
+    monkeypatch.setattr("kenkui.workers.get_batch_info", fake_batch_info)
+    monkeypatch.setattr(AudioBuilder, "build", fake_build)
+
+    assert AudioBuilder(_processing_config(tmp_path)).run() is True
+    assert captured["chapters"] == chapters
+    assert captured["chapter_batch_info"] == [(1, 10, True), (2, 20, False)]
+    assert captured["total_batches"] == 3
+    assert captured["total_chars"] == 30
 
 
 def test_worker_malloc_env_sanitizer_only_removes_disabled_values(monkeypatch):

@@ -88,6 +88,7 @@ class AppConfig(BaseSettings):
     nlp_review_model: str = ""
     nlp_attribution_max_quotes_per_call: int = 0
     nlp_attribution_review_confidence: bool = False
+    nlp_openrouter_discovery_concurrency: int = 4
     nlp_omit_position_echo: bool = True
     nlp_omit_emotion: bool = True
     nlp_compact_roster: bool = True
@@ -119,6 +120,15 @@ class AppConfig(BaseSettings):
     @field_validator("nlp_openrouter_attribution_concurrency", mode="before")
     @classmethod
     def _clamp_openrouter_attribution_concurrency(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return min(32, max(1, value))
+
+    @field_validator("nlp_openrouter_discovery_concurrency", mode="before")
+    @classmethod
+    def _clamp_openrouter_discovery_concurrency(cls, v: Any) -> int:
         try:
             value = int(v)
         except (TypeError, ValueError):

@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 
 def test_append_chapter_attribution_writes_jsonl(tmp_path):
@@ -27,11 +26,18 @@ def test_append_chapter_attribution_writes_jsonl(tmp_path):
     assert data["quotes_attributed"] == 18
     assert data["quotes_unknown"] == 2
     assert data["retries"] == 1
+    assert data["llm_cached_prompt_tokens"] == 0
+    assert data["llm_cache_write_tokens"] == 0
+    assert data["llm_cost"] == 0.0
     assert "started_at" in data
 
 
 def test_load_chapter_attributions_returns_records(tmp_path):
-    from kenkui.analytics import ChapterAttributionRecord, append_chapter_attribution, load_chapter_attributions
+    from kenkui.analytics import (
+        ChapterAttributionRecord,
+        append_chapter_attribution,
+        load_chapter_attributions,
+    )
     path = tmp_path / "analytics.jsonl"
     r1 = ChapterAttributionRecord(
         book_hash="x", chapter="Ch 1", provider="ollama",
@@ -48,8 +54,11 @@ def test_load_chapter_attributions_returns_records(tmp_path):
 def test_load_chapter_attributions_ignores_stage_records(tmp_path):
     """load_chapter_attributions must only return chapter_attributed events."""
     from kenkui.analytics import (
-        StageRecord, append_record,
-        ChapterAttributionRecord, append_chapter_attribution, load_chapter_attributions,
+        ChapterAttributionRecord,
+        StageRecord,
+        append_chapter_attribution,
+        append_record,
+        load_chapter_attributions,
     )
     path = tmp_path / "analytics.jsonl"
     stage = StageRecord(

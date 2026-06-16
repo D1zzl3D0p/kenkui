@@ -654,6 +654,71 @@ class TestBuildRosterFromChaptersWithLLM:
         assert "Bob Bright" not in roster_calls[0].args[0]
         assert "Alice Ardent" not in roster_calls[1].args[0]
 
+    def test_chapter_sections_run_concurrently_up_to_limit(self):
+        import threading
+        import time
+
+        from kenkui.nlp.models import CanonicalMergeResult, NameNormalizationResult
+
+        chapters = [
+            Chapter(index=1, title="One", paragraphs=["Alice Ardent opened the door."]),
+            Chapter(index=2, title="Two", paragraphs=["Bob Bright closed the gate."]),
+        ]
+        llm = MagicMock()
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_generate(prompt, schema):
+            nonlocal active, max_active
+            if schema.__name__ == "CharacterRosterWire":
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                try:
+                    time.sleep(0.05)
+                    characters = []
+                    if "Alice Ardent" in prompt:
+                        characters.append(
+                            CharacterRecordWire(
+                                slug="alice_ardent",
+                                canonical_name="Alice Ardent",
+                                aliases=["Alice Ardent"],
+                            )
+                        )
+                    if "Bob Bright" in prompt:
+                        characters.append(
+                            CharacterRecordWire(
+                                slug="bob_bright",
+                                canonical_name="Bob Bright",
+                                aliases=["Bob Bright"],
+                            )
+                        )
+                    return CharacterRosterWire(characters=characters)
+                finally:
+                    with lock:
+                        active -= 1
+            if schema.__name__ == "CanonicalMergeResult":
+                return CanonicalMergeResult(merges=[])
+            if schema.__name__ == "NameNormalizationResult":
+                return NameNormalizationResult(names=[])
+            raise AssertionError(schema.__name__)
+
+        llm.generate.side_effect = fake_generate
+
+        result = build_roster_from_chapters_with_llm(
+            chapters,
+            nlp=None,
+            llm=llm,
+            method="llm",
+            provider="openrouter",
+            model="test-model",
+            openrouter_discovery_concurrency=2,
+        )
+
+        assert max_active >= 2
+        assert {g.canonical_name for g in result.characters} == {"Alice Ardent", "Bob Bright"}
+
     def test_oversized_chapter_is_bisected_before_llm_call(self, monkeypatch):
         monkeypatch.setenv("KENKUI_NLP_ROSTER_SECTION_TARGET_TOKENS", "1200")
         filler = "plain filler words " * 120

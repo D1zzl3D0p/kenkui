@@ -281,6 +281,9 @@ def cache_result(
     if model:
         data.setdefault("model", model)
     _atomic_write(cache_file, json.dumps(data, ensure_ascii=False, indent=2))
+    verified = get_cached_result(book_path, provider=provider, model=model)
+    if verified is None:
+        raise OSError(f"NLP cache verification failed for {cache_file}")
     logger.debug("NLP cache written: %s", cache_file)
     return cache_file
 
@@ -768,6 +771,79 @@ def _count_mentions(roster: CharacterRoster, full_text: str) -> dict[str, int]:
     return counts
 
 
+def _readable_name_from_slug(slug: str) -> str:
+    parts = [part for part in slug.replace("-", "_").split("_") if part]
+    return " ".join(part.capitalize() for part in parts) or slug
+
+
+def absorb_roster_speaker(
+    roster: CharacterRoster,
+    speaker: str,
+    *,
+    chapter_index: int | None = None,
+) -> str:
+    """Ensure a non-sentinel attributed speaker exists in *roster*."""
+    from kenkui.nlp.models import CharacterRecord
+
+    if not speaker or speaker in _SPEAKER_SENTINELS:
+        return speaker
+
+    slug = _slugify(speaker)
+    if not slug:
+        return "Unknown"
+
+    existing = roster.by_slug(slug)
+    if existing is not None:
+        if chapter_index is not None and chapter_index not in existing.chapters:
+            existing.chapters.append(chapter_index)
+            existing.chapters.sort()
+        return slug
+
+    canonical_name = _readable_name_from_slug(slug)
+    aliases = [canonical_name]
+    raw_alias = speaker.strip()
+    if raw_alias and raw_alias not in aliases and raw_alias != slug:
+        aliases.append(raw_alias)
+    roster.characters.append(
+        CharacterRecord(
+            slug=slug,
+            canonical_name=canonical_name,
+            aliases=aliases,
+            gender="",
+            role="minor",
+            chapters=[] if chapter_index is None else [chapter_index],
+        )
+    )
+    logger.warning(
+        "Chapter %s: speaker %r not in roster; adding roster character %r",
+        "?" if chapter_index is None else chapter_index,
+        speaker,
+        slug,
+    )
+    return slug
+
+
+def absorb_attribution_speakers(
+    roster: CharacterRoster,
+    attributions,
+    *,
+    chapter_index: int | None = None,
+) -> None:
+    """Normalize attribution speakers and append out-of-roster speakers."""
+    for item in attributions:
+        if not item.speaker or item.speaker in _SPEAKER_SENTINELS:
+            continue
+        item.speaker = _slugify(item.speaker)
+        if item.speaker in _PRONOUNS:
+            item.speaker = "NARRATOR"
+            continue
+        item.speaker = absorb_roster_speaker(
+            roster,
+            item.speaker,
+            chapter_index=chapter_index,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Fast scan entry point (Stage 1-2 only)
 # ---------------------------------------------------------------------------
@@ -781,6 +857,7 @@ def run_fast_scan(
     progress_callback: Callable[[str], None] | None = None,
     step_callback: Callable[[str], None] | None = None,
     method: str = "auto",
+    openrouter_discovery_concurrency: int | None = None,
 ) -> FastScanResult:
     """Run Stage 1-2 only: quote extraction + entity clustering + mention counting.
 
@@ -839,6 +916,7 @@ def run_fast_scan(
         book_path=book_path,
         provider="ollama",
         model=nlp_model,
+        openrouter_discovery_concurrency=openrouter_discovery_concurrency,
     )
 
     char_names = ", ".join(g.canonical_name for g in roster.characters[:8])
@@ -948,7 +1026,6 @@ def run_attribution(
         for alias in group.aliases:
             alias_to_canonical[alias.lower()] = group.canonical_name
     canonical_to_slug = {group.canonical_name: group.slug for group in roster.characters}
-    roster_slugs = {group.slug for group in roster.characters}
 
     roster_aliases: dict[str, list[str]] = {
         group.canonical_name: group.aliases for group in roster.characters
@@ -1017,14 +1094,12 @@ def run_attribution(
                     item.speaker = canonical_to_slug.get(item.speaker, _slugify(item.speaker))
                     if item.speaker in _PRONOUNS:
                         item.speaker = "NARRATOR"
-                    elif item.speaker not in roster_slugs:
-                        logger.warning(
-                            "Chapter %d: speaker %r not in roster (roster size=%d) — remapping to 'Unknown'",
-                            chapter.index,
+                    else:
+                        item.speaker = absorb_roster_speaker(
+                            roster,
                             item.speaker,
-                            len(roster_slugs),
+                            chapter_index=chapter.index,
                         )
-                        item.speaker = "Unknown"
 
             segments = _build_segments(clean_paras, quotes, all_attributions)
 
@@ -1065,6 +1140,7 @@ def run_analysis(
     book_path: Path,
     nlp_model: str,
     progress_callback: Callable[[str], None] | None = None,
+    openrouter_discovery_concurrency: int | None = None,
     confidence_threshold: int = 0,
     review_model: str = "",
 ) -> NLPResult:
@@ -1091,6 +1167,7 @@ def run_analysis(
         nlp_model=nlp_model,
         use_cache=True,
         progress_callback=_cb,
+        openrouter_discovery_concurrency=openrouter_discovery_concurrency,
     )
 
     # Stage 3-4: attribution (may use full NLP cache)
@@ -1348,31 +1425,11 @@ def _attribution_to_segments(
             _spk = _slugify(_spk)
         resolved_in_order.append(_spk)
 
-    # Normalize all speaker strings to slugs, then remap pronoun slugs to NARRATOR.
-    # Both steps are run in a single pass; slug-before-remap ordering is preserved.
-    for item in attributions.values():
-        if item.speaker and item.speaker not in _SPEAKER_SENTINELS:
-            item.speaker = _slugify(item.speaker)
-        if item.speaker and item.speaker in _PRONOUNS:
-            item.speaker = "NARRATOR"
-
-    # Validate: remap any speaker slug not in the roster to "Unknown".
-    # Catches LLM hallucinations ('computer'), short-form aliases not in the
-    # alias list ('screw' for 'screwface'), and slugs dropped when the roster
-    # response was truncated. "Unknown" is handled by narrator-voice fallback.
-    roster_slugs = {c.slug for c in roster.characters}
-    for item in attributions.values():
-        if (
-            item.speaker
-            and item.speaker not in _SPEAKER_SENTINELS
-            and item.speaker not in roster_slugs
-        ):
-            logger.warning(
-                "Chapter %d: speaker %r not in roster (roster size=%d) — "
-                "remapping to 'Unknown'",
-                chapter.index, item.speaker, len(roster_slugs),
-            )
-            item.speaker = "Unknown"
+    absorb_attribution_speakers(
+        roster,
+        attributions.values(),
+        chapter_index=chapter.index,
+    )
 
     return _build_segments(clean_paragraphs, quotes, attributions)
 
@@ -1437,6 +1494,8 @@ __all__ = [
     "cache_chunk_roster",
     "get_cached_roster_section",
     "cache_roster_section",
+    "absorb_attribution_speakers",
+    "absorb_roster_speaker",
     "RosterCacheMeta",
     "CACHE_DIR",
     "book_hash",
