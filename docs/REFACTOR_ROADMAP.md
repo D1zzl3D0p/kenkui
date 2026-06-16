@@ -12,6 +12,8 @@ This roadmap tracks the library-core cleanup only.
 - Removed interactive HuggingFace setup prompts from the core library path.
 - Made Ruff a passing repository gate with scoped ignores for unrelated legacy
   style choices.
+- Added a canonical in-process application service API with optional FastAPI
+  transport adapter.
 
 ## Next Work
 
@@ -26,11 +28,14 @@ This roadmap tracks the library-core cleanup only.
 - Replace remaining direct `print()` calls in core rendering/readers with
   logging or callbacks.
 - Expand no-interactive-I/O tests beyond HuggingFace auth.
+- Refactor downstream clients such as `kentui` to use the kenkui-owned
+  application service/builder rather than duplicating job assembly.
+- Move any still-needed Modal execution behavior behind registered execution
+  providers instead of baking deployment policy into core routes.
 
 ## Non-Goals
 
 - No in-repo CLI.
-- No in-repo FastAPI server.
 - No remote execution implementation.
 - No cloud auth, billing, benchmarking, scheduler, or farm orchestration.
 - No behavior-changing cache migrations without explicit tests.
@@ -41,4 +46,3 @@ This roadmap tracks the library-core cleanup only.
 - `python -m pytest -q`
 - Unit tests must avoid real network calls, real model downloads, and heavy audio
   synthesis unless marked as integration or slow.
-

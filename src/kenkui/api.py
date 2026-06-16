@@ -31,17 +31,31 @@ from .models import (
     AppConfig,
     AttributionTool,
     AudioResult,
+    BookParseRequest,
+    BookParseResponse,
     Chapter,
+    ChapterFilterRequest,
+    ChapterFilterResponse,
     ChapterPreset,
     ChapterSelection,
     CharacterInfo,
+    ConfigResponse,
     ExtractionTool,
     FastScanResult,
+    HealthResponse,
+    JobCreateRequest,
+    JobResponse,
     NarrationMode,
     NLPResult,
+    OkResponse,
     PostProcessingConfig,
     ProcessingConfig,
+    QueueResponse,
     Segment,
+    StatusResponse,
+    TaskResponse,
+    VoiceListResponse,
+    VoiceResponse,
 )
 from .nlp_config import NLPConfig
 from .parsing import AudioBuilder
@@ -67,7 +81,10 @@ from .series import (
 from .series import (
     save_series as save_local_series,
 )
+from .services.application_service import KenkuiService, get_service, reset_service
 from .services.auth_service import HFAuthStatus, HFLoginResult
+from .services.execution_service import register_tts_execution_provider
+from .services.job_service import build_processing_config
 from .services.openrouter_service import OpenRouterModel, search_openrouter_models
 from .services.series_service import (
     ListSeriesResult,
@@ -771,6 +788,21 @@ __all__ = [
     "Chapter",
     "Segment",
     "AudioResult",
+    "HealthResponse",
+    "JobCreateRequest",
+    "JobResponse",
+    "QueueResponse",
+    "ConfigResponse",
+    "StatusResponse",
+    "TaskResponse",
+    "OkResponse",
+    "BookParseRequest",
+    "BookParseResponse",
+    "ChapterFilterRequest",
+    "ChapterFilterResponse",
+    "VoiceListResponse",
+    "VoiceResponse",
+    "KenkuiService",
     # Multi-voice / NLP
     "NLPResult",
     "CharacterInfo",
@@ -782,6 +814,7 @@ __all__ = [
     # Ebook reading
     "EpubReader",
     "AudioBuilder",
+    "build_processing_config",
     # Chapter handling
     "ChapterTags",
     "ChapterClassifier",
@@ -857,6 +890,9 @@ __all__ = [
     "HFLoginResult",
     "OpenRouterModel",
     "search_openrouter_models",
+    "get_service",
+    "reset_service",
+    "register_tts_execution_provider",
     "ProviderCredentials",
     "CONFIG_DIR",
     "CACHE_DIR",
