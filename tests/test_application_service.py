@@ -6,7 +6,13 @@ import pytest
 
 from kenkui.models import AppConfig, ChapterPreset, ChapterSelection, JobConfig, JobStatus
 from kenkui.models.api import JobCreateRequest
-from kenkui.services.application_service import KenkuiService, job_create_request_to_config
+from kenkui.progress import ChapterProgress, ProgressEvent
+from kenkui.services.application_service import (
+    KenkuiService,
+    _progress_update_from_args,
+    job_create_request_to_config,
+)
+from kenkui.services.execution_service import ExecutionOutcome
 from kenkui.services.job_service import build_processing_config
 
 
@@ -92,6 +98,64 @@ def test_application_service_resets_stale_processing_jobs(tmp_path):
     restored = KenkuiService(queue_file=queue_file)
 
     assert restored.get_job_item(item.id).status == JobStatus.PENDING
+
+
+def test_progress_update_accepts_structured_event():
+    progress, chapter, eta = _progress_update_from_args(
+        ProgressEvent(
+            stage="tts_synthesis",
+            status="advanced",
+            completed_units=25,
+            total_units=100,
+            unit="chars",
+            active_chapters=(ChapterProgress(index=2, title="Chapter 2"),),
+        )
+    )
+
+    assert progress == 25
+    assert chapter == "Chapter 2"
+    assert eta == 0
+
+
+def test_progress_update_accepts_legacy_shapes():
+    assert _progress_update_from_args(40, "Chapter 4", 90) == (40.0, "Chapter 4", 90)
+    assert _progress_update_from_args(55, "Attributing") == (55.0, "Attributing", 0)
+    assert _progress_update_from_args("Preparing") == (0.0, "Preparing", 0)
+
+
+def test_queue_processing_accepts_legacy_three_argument_progress(tmp_path, monkeypatch):
+    class LegacyProgressProvider:
+        def execute(
+            self,
+            *,
+            item,
+            cfg,
+            app_config,
+            progress_callback,
+            metadata_callback,
+            pause_check,
+        ):
+            del item, cfg, app_config, pause_check
+            progress_callback(33, "Legacy Chapter", 12)
+            metadata_callback(provider_status="completed")
+            return ExecutionOutcome(success=True, output_path=str(tmp_path / "book.m4b"))
+
+        def cancel(self, item):
+            del item
+
+    service = KenkuiService(queue_file=tmp_path / "queue.toml")
+    monkeypatch.setattr(
+        "kenkui.services.application_service.get_tts_execution_provider",
+        lambda item: LegacyProgressProvider(),
+    )
+    item = service.add_job(JobConfig(ebook_path=Path("book.epub")))
+
+    service._process_job(item)
+
+    assert item.status == JobStatus.COMPLETED
+    assert item.progress == 100.0
+    assert item.current_chapter == ""
+    assert item.error_message == ""
 
 
 def test_http_adapter_uses_service_contract(tmp_path, monkeypatch):

@@ -100,6 +100,28 @@ def _progress_percent(event: ProgressEvent) -> float:
     return 0.0
 
 
+def _progress_update_from_args(*args: Any) -> tuple[float, str, int]:
+    if len(args) == 1 and isinstance(args[0], ProgressEvent):
+        event = args[0]
+        title = event.message
+        if event.active_chapters:
+            title = event.active_chapters[0].title or title
+        return _progress_percent(event), title, 0
+
+    if len(args) == 3:
+        progress, chapter, eta = args
+        return float(progress or 0.0), str(chapter or ""), int(eta or 0)
+
+    if len(args) == 2:
+        progress, message = args
+        return float(progress or 0.0), str(message or ""), 0
+
+    if len(args) == 1:
+        return 0.0, str(args[0] or ""), 0
+
+    raise TypeError(f"Unsupported progress callback payload: {args!r}")
+
+
 def _chapter_summary(chapter: Any) -> ChapterSummaryModel:
     tags = chapter.tags
     if dataclasses.is_dataclass(tags):
@@ -459,7 +481,7 @@ class KenkuiService:
                 item=item,
                 cfg=cfg,
                 app_config=self._app_config,
-                progress_callback=lambda event: self.update_progress_from_event(item.id, event),
+                progress_callback=self._progress_callback_for_job(item.id),
                 metadata_callback=lambda **fields: self.update_job_metadata(item.id, **fields),
                 pause_check=lambda: self._pause_requested,
             )
@@ -490,11 +512,16 @@ class KenkuiService:
             logger.exception("Job %s failed: %s", item.id, exc)
             self.fail_job(item.id, str(exc))
 
+    def _progress_callback_for_job(self, job_id: str):
+        def progress_callback(*args: Any) -> None:
+            progress, current_chapter, eta_seconds = _progress_update_from_args(*args)
+            self.update_progress(job_id, progress, current_chapter, eta_seconds)
+
+        return progress_callback
+
     def update_progress_from_event(self, job_id: str, event: ProgressEvent) -> None:
-        title = event.message
-        if event.active_chapters:
-            title = event.active_chapters[0].title or title
-        self.update_progress(job_id, _progress_percent(event), title, 0)
+        progress, current_chapter, eta_seconds = _progress_update_from_args(event)
+        self.update_progress(job_id, progress, current_chapter, eta_seconds)
 
     def update_progress(self, job_id: str, progress: float, current_chapter: str, eta_seconds: int) -> None:
         with self._lock:
@@ -915,4 +942,3 @@ __all__ = [
     "job_create_request_to_config",
     "reset_service",
 ]
-
