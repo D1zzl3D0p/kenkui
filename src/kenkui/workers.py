@@ -22,6 +22,7 @@ import logging
 import math
 import multiprocessing
 import os
+import re
 import traceback
 from pathlib import Path
 
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 FIRST_CHAPTER_BATCH_SIZE = 250  # Smaller → more frequent ETA updates
 DEFAULT_BATCH_SIZE = 800  # Larger → fewer TTS calls, better throughput
+UNBOUNDED_TTS_MAX_TOKENS = 100_000
 
 
 _DISABLED_MALLOC_VALUES = {"", "0", "false", "no", "off", "disable", "disabled"}
@@ -63,6 +65,34 @@ def _sanitize_disabled_malloc_debug_env() -> None:
 # Keyed by (temp, lsd_decode_steps, noise_clamp) so different quality settings
 # each get their own cached model instance.
 _model_cache: dict[tuple, object] = {}
+_logged_tts_max_tokens_pids: set[int] = set()
+
+
+def _effective_tts_max_tokens(config_dict: dict) -> int:
+    try:
+        configured = int(config_dict.get("tts_max_tokens_per_chunk", 0) or 0)
+    except (TypeError, ValueError):
+        configured = 0
+    return configured if configured > 0 else UNBOUNDED_TTS_MAX_TOKENS
+
+
+def _uses_unbounded_tts_chunks(config_dict: dict) -> bool:
+    return _effective_tts_max_tokens(config_dict) == UNBOUNDED_TTS_MAX_TOKENS
+
+
+def _log_tts_max_tokens_once(pid: int, max_tokens: int, log_message) -> None:
+    if pid in _logged_tts_max_tokens_pids:
+        return
+    _logged_tts_max_tokens_pids.add(pid)
+    log_message(f"[Worker {pid}] Pocket max_tokens per generation: {max_tokens}")
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, math.ceil(len(text.split()) * 1.3))
+
+
+def _text_preview(text: str, limit: int = 120) -> str:
+    return " ".join(text.split())[:limit]
 
 
 def _get_or_load_model(
@@ -165,13 +195,21 @@ def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[in
         ``(batch_count, total_characters)``
     """
     if chapter.segments:
-        renderable = [s for s in chapter.segments if not s.is_scene_break]
-        total_chars = sum(len(s.text) for s in renderable)
-        return len(renderable), total_chars
-    batch_size = FIRST_CHAPTER_BATCH_SIZE if is_first_chapter else DEFAULT_BATCH_SIZE
-    batches = batch_text(chapter.paragraphs, max_chars=batch_size)
+        batches = [
+            part
+            for s in chapter.segments
+            if not s.is_scene_break
+            for part in _split_paragraph_text(s.text)
+        ]
+        total_chars = sum(len(b) for b in batches)
+        return len(batches), total_chars
+    batches = [p for p in chapter.paragraphs if p.strip()]
     total_chars = sum(len(b) for b in batches)
     return len(batches), total_chars
+
+
+def _split_paragraph_text(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"\n\s*\n+", text) if part.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +228,7 @@ def _render_chapter_title_audio(
     pause_after_ms: int,
     intra_segment_ms: int,
     apostrophe_mode: str,
+    max_tokens: int,
 ) -> AudioSegment:
     """Render a chapter title as audio with configurable silence.
 
@@ -211,6 +250,9 @@ def _render_chapter_title_audio(
             total_batches,
             frames_after_eos=0,
             apostrophe_mode=apostrophe_mode,
+            max_tokens=max_tokens,
+            chapter_title=title,
+            speaker="chapter_title",
         )
         if seg_audio is not None:
             audio += seg_audio
@@ -345,6 +387,8 @@ def _process_chapter_inner(
             eos_threshold=config_dict.get("eos_threshold", -4.0),
         )
 
+        tts_max_tokens = _effective_tts_max_tokens(config_dict)
+        _log_tts_max_tokens_once(pid, tts_max_tokens, log_message)
         apostrophe_mode = ApostropheMode(config_dict.get("apostrophe_mode", "expand_contractions"))
 
         # ── Multi-voice path (NLP segments present and non-empty) ────────
@@ -370,7 +414,10 @@ def _process_chapter_inner(
         batch_size = FIRST_CHAPTER_BATCH_SIZE if is_first_chapter else DEFAULT_BATCH_SIZE
         sub_groups = _split_at_scene_breaks(chapter.paragraphs)
         # Pre-calculate totals across all sub-groups for progress reporting
-        all_batches = [batch_text(g, max_chars=batch_size) for g in sub_groups]
+        if _uses_unbounded_tts_chunks(config_dict):
+            all_batches = [[p for p in g if p.strip()] for g in sub_groups]
+        else:
+            all_batches = [batch_text(g, max_chars=batch_size) for g in sub_groups]
         total_batches = sum(len(b) for b in all_batches)
         total_chars = sum(len(b) for batches in all_batches for b in batches)
         log_message(
@@ -402,6 +449,7 @@ def _process_chapter_inner(
                 pause_after_ms=pause_after_title_ms,
                 intra_segment_ms=config_dict.get("pause_chapter_title_segment_ms", 600),
                 apostrophe_mode=apostrophe_mode,
+                max_tokens=tts_max_tokens,
             )
 
         fae = config_dict.get("frames_after_eos")
@@ -421,6 +469,9 @@ def _process_chapter_inner(
                     total_batches,
                     frames_after_eos=batch_fae,
                     apostrophe_mode=apostrophe_mode,
+                    max_tokens=tts_max_tokens,
+                    chapter_title=chapter.title,
+                    speaker=voice_name,
                 )
                 if audio_seg is not None:
                     if autogain_enabled:
@@ -520,7 +571,11 @@ def _render_multi_voice(
                     f"(tried: {[voice_name] + fallback_voices})"
                 ) from primary_exc
 
-    total_segments = len(segments)
+    use_unbounded_chunks = _uses_unbounded_tts_chunks(config_dict)
+    total_segments = sum(
+        1 if seg.is_scene_break else len(_split_paragraph_text(seg.text) if use_unbounded_chunks else [seg.text])
+        for seg in segments
+    )
     queue.put(
         (
             "START",
@@ -542,6 +597,8 @@ def _render_multi_voice(
     autogain_enabled = bool(pp.get("autogain", True)) if pp.get("enabled", True) else False
     autogain_target_db = float(pp.get("autogain_target_lufs", -23.0))
     fae_cfg = config_dict.get("frames_after_eos")
+    tts_max_tokens = _effective_tts_max_tokens(config_dict)
+    _log_tts_max_tokens_once(pid, tts_max_tokens, log_message)
 
     # Build initial audio with chapter title if enabled
     initial_audio = AudioSegment.empty()
@@ -558,35 +615,47 @@ def _render_multi_voice(
             pause_after_ms=pause_after_title_ms,
             intra_segment_ms=config_dict.get("pause_chapter_title_segment_ms", 600),
             apostrophe_mode=apostrophe_mode,
+            max_tokens=tts_max_tokens,
         )
 
     # Render each segment with its speaker's voice state
     rendered: dict[int, tuple[AudioSegment, str]] = {}
+    completed_units = 0
     for seg_idx, seg in enumerate(segments):
         if seg.is_scene_break:
             rendered[seg.index] = (AudioSegment.silent(duration=pause_scene_break_ms), "")
-            queue.put(("UPDATE", pid, 1, seg_idx + 1, total_segments, 0))
+            completed_units += 1
+            queue.put(("UPDATE", pid, 1, completed_units, total_segments, 0))
             continue
         voice_state = speaker_states[seg.speaker]
-        seg_fae = fae_cfg if fae_cfg is not None else max(3, len(seg.text) // 150)
-        audio_seg = _render_text(
-            model,
-            voice_state,
-            seg.text,
-            log_message,
-            pid,
-            seg_idx,
-            total_segments,
-            frames_after_eos=seg_fae,
-            apostrophe_mode=apostrophe_mode,
-        )
-        if audio_seg is not None and autogain_enabled:
-            audio_seg = _autogain_segment(audio_seg, autogain_target_db)
-        rendered[seg.index] = (
-            audio_seg if audio_seg is not None else AudioSegment.empty(),
-            seg.text,
-        )
-        queue.put(("UPDATE", pid, 1, seg_idx + 1, total_segments, len(seg.text)))
+        parts = _split_paragraph_text(seg.text) if use_unbounded_chunks else [seg.text]
+        combined = AudioSegment.empty()
+        for part_idx, part in enumerate(parts):
+            seg_fae = fae_cfg if fae_cfg is not None else max(3, len(part) // 150)
+            audio_seg = _render_text(
+                model,
+                voice_state,
+                part,
+                log_message,
+                pid,
+                seg_idx,
+                total_segments,
+                frames_after_eos=seg_fae,
+                apostrophe_mode=apostrophe_mode,
+                max_tokens=tts_max_tokens,
+                chapter_title=chapter.title,
+                speaker=seg.speaker,
+                segment_index=seg_idx,
+            )
+            if audio_seg is not None and autogain_enabled:
+                audio_seg = _autogain_segment(audio_seg, autogain_target_db)
+            if audio_seg is not None:
+                combined += audio_seg
+                if part_idx < len(parts) - 1:
+                    combined += _pause_for_segment(pause_line_ms, part)
+            completed_units += 1
+            queue.put(("UPDATE", pid, 1, completed_units, total_segments, len(part)))
+        rendered[seg.index] = (combined, seg.text)
 
     # Reassemble in original index order
     full_audio = initial_audio
@@ -636,6 +705,10 @@ def _render_text(
     total_batches: int,
     frames_after_eos: int = 0,
     apostrophe_mode: ApostropheMode | None = None,
+    max_tokens: int = UNBOUNDED_TTS_MAX_TOKENS,
+    chapter_title: str = "",
+    speaker: str = "",
+    segment_index: int | None = None,
 ) -> AudioSegment | None:
     """Generate audio for one text batch, retrying once on failure.
 
@@ -662,11 +735,21 @@ def _render_text(
                 voice_state,
                 text,
                 frames_after_eos=frames_after_eos,
+                max_tokens=max_tokens,
             )
             seg = _tensor_to_audio(tensor, model.sample_rate)
             if seg is not None:
                 return seg
-            log_message(f"  ✗ Empty tensor on attempt {attempt + 1}")
+            token_estimate = _estimate_tokens(text)
+            if token_estimate > 50:
+                log_message(
+                    "  ✗ Empty tensor on attempt "
+                    f"{attempt + 1}: chapter={chapter_title!r} speaker={speaker or 'unknown'!r} "
+                    f"segment={segment_index if segment_index is not None else batch_idx} "
+                    f"tokens~{token_estimate} preview={_text_preview(text)!r}"
+                )
+            else:
+                log_message(f"  ✗ Empty tensor on attempt {attempt + 1}")
         except Exception as exc:
             log_message(f"  ✗ Attempt {attempt + 1} failed: {exc}")
             if attempt == 1:
@@ -713,4 +796,5 @@ __all__ = [
     "_is_scene_break",
     "_split_at_scene_breaks",
     "_autogain_segment",
+    "UNBOUNDED_TTS_MAX_TOKENS",
 ]

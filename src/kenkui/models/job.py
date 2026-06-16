@@ -43,6 +43,7 @@ class JobConfig:
     job_lsd_decode_steps: int | None = None
     job_noise_clamp: float | None = None
     job_eos_threshold: float | None = None
+    job_tts_max_tokens_per_chunk: int | None = None
     job_m4b_bitrate: str | None = None
     job_pause_line_ms: int | None = None
     job_pause_chapter_ms: int | None = None
@@ -92,6 +93,7 @@ class JobConfig:
             "job_lsd_decode_steps",
             "job_noise_clamp",
             "job_eos_threshold",
+            "job_tts_max_tokens_per_chunk",
             "job_m4b_bitrate",
             "job_pause_line_ms",
             "job_pause_chapter_ms",
@@ -139,6 +141,7 @@ class JobConfig:
             job_lsd_decode_steps=data.get("job_lsd_decode_steps"),
             job_noise_clamp=data.get("job_noise_clamp"),
             job_eos_threshold=data.get("job_eos_threshold"),
+            job_tts_max_tokens_per_chunk=data.get("job_tts_max_tokens_per_chunk"),
             job_m4b_bitrate=data.get("job_m4b_bitrate"),
             job_pause_line_ms=data.get("job_pause_line_ms"),
             job_pause_chapter_ms=data.get("job_pause_chapter_ms"),
@@ -160,5 +163,4 @@ class JobConfig:
             job_attribution_provider=data.get("job_attribution_provider"),
             job_attribution_model=data.get("job_attribution_model"),
         )
-
 

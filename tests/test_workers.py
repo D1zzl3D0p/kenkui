@@ -31,6 +31,7 @@ from kenkui.voice_registry import VoiceCatalogEntry
 from kenkui.workers import (
     DEFAULT_BATCH_SIZE,
     FIRST_CHAPTER_BATCH_SIZE,
+    UNBOUNDED_TTS_MAX_TOKENS,
     _finalise_chapter,
     _get_or_load_model,
     _render_multi_voice,
@@ -281,6 +282,39 @@ class TestRenderText:
         _, kwargs = model.generate_audio.call_args
         assert kwargs.get("frames_after_eos") == 0
 
+    def test_default_unbounded_max_tokens_passed(self):
+        model = self._make_model()
+        voice_state = MagicMock()
+        _render_text(model, voice_state, "Hello.", _noop_log, 1, 0, 1)
+        _, kwargs = model.generate_audio.call_args
+        assert kwargs.get("max_tokens") == UNBOUNDED_TTS_MAX_TOKENS
+
+    def test_finite_max_tokens_passed(self):
+        model = self._make_model()
+        voice_state = MagicMock()
+        _render_text(model, voice_state, "Hello.", _noop_log, 1, 0, 1, max_tokens=50)
+        _, kwargs = model.generate_audio.call_args
+        assert kwargs.get("max_tokens") == 50
+
+    def test_long_empty_tensor_logs_context(self):
+        model = self._make_model(tensor=torch.zeros(0))
+        voice_state = MagicMock()
+        logged: list[str] = []
+        text = " ".join(["word"] * 60)
+        _render_text(
+            model,
+            voice_state,
+            text,
+            logged.append,
+            1,
+            3,
+            10,
+            chapter_title="Chapter X",
+            speaker="narrator",
+            segment_index=7,
+        )
+        assert any("Chapter X" in msg and "narrator" in msg and "tokens~" in msg for msg in logged)
+
     def test_log_message_called_with_batch_info(self):
         model = self._make_model()
         voice_state = MagicMock()
@@ -411,6 +445,35 @@ class TestRenderMultiVoice:
         assert result is not None
         assert isinstance(result, AudioResult)
         # generate_audio called once per segment
+        assert model.generate_audio.call_count == 2
+
+    def test_same_speaker_long_segment_renders_once_in_paragraph_mode(self):
+        text = " ".join(["word"] * 90) + "."
+        segs = self._make_segments([(text, "narrator", 0)])
+        chapter = Chapter(index=0, title="Ch 0", paragraphs=[], segments=segs)
+        model = self._make_model()
+        queue = self._make_queue()
+        with (
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = _render_multi_voice(chapter, model, {"speak_chapter_titles": False}, Path(td), queue, 1, _noop_log)
+        assert result is not None
+        assert model.generate_audio.call_count == 1
+        _, kwargs = model.generate_audio.call_args
+        assert kwargs["max_tokens"] == UNBOUNDED_TTS_MAX_TOKENS
+
+    def test_merged_narrator_text_splits_on_paragraph_boundary(self):
+        segs = self._make_segments([("First paragraph.\n\nSecond paragraph.", "narrator", 0)])
+        chapter = Chapter(index=0, title="Ch 0", paragraphs=[], segments=segs)
+        model = self._make_model()
+        queue = self._make_queue()
+        with (
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = _render_multi_voice(chapter, model, {"speak_chapter_titles": False}, Path(td), queue, 1, _noop_log)
+        assert result is not None
         assert model.generate_audio.call_count == 2
 
     def test_multiple_speakers_load_voice_state_once_each(self):
@@ -673,9 +736,14 @@ class TestWorkerProcessChapter:
         return model
 
     def test_successful_single_voice_returns_audio_result(self):
-        chapter = _make_chapter(["Hello world."], index=0)
+        chapter = _make_chapter(["Hello world.", "Second paragraph."], index=0)
         queue = self._make_queue()
-        config = {"voice": "alba", "pause_line_ms": 0, "pause_chapter_ms": 0}
+        config = {
+            "voice": "alba",
+            "pause_line_ms": 0,
+            "pause_chapter_ms": 0,
+            "speak_chapter_titles": False,
+        }
         model = self._make_model()
         with (
             patch("kenkui.workers._get_or_load_model", return_value=model),
@@ -685,6 +753,29 @@ class TestWorkerProcessChapter:
             result = worker_process_chapter(chapter, config, Path(td), queue)
         assert result is not None
         assert isinstance(result, AudioResult)
+        assert model.generate_audio.call_count == 2
+
+    def test_single_voice_finite_token_cap_uses_legacy_batches(self):
+        chapter = _make_chapter(["Hello world.", "Second paragraph."], index=0)
+        queue = self._make_queue()
+        config = {
+            "voice": "alba",
+            "pause_line_ms": 0,
+            "pause_chapter_ms": 0,
+            "speak_chapter_titles": False,
+            "tts_max_tokens_per_chunk": 50,
+        }
+        model = self._make_model()
+        with (
+            patch("kenkui.workers._get_or_load_model", return_value=model),
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = worker_process_chapter(chapter, config, Path(td), queue)
+        assert result is not None
+        assert model.generate_audio.call_count == 1
+        _, kwargs = model.generate_audio.call_args
+        assert kwargs["max_tokens"] == 50
 
     def test_successful_multi_voice_returns_audio_result(self):
         segs = [

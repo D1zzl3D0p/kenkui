@@ -295,6 +295,14 @@ class TestProcessingConfigMultiVoice:
         assert cfg.pdf_drop_notes is False
         assert cfg.pdf_drop_asides is False
 
+    def test_tts_max_tokens_per_chunk_default_is_unbounded(self):
+        cfg = self._make_cfg()
+        assert cfg.tts_max_tokens_per_chunk == 0
+
+    def test_tts_max_tokens_per_chunk_stored(self):
+        cfg = self._make_cfg(tts_max_tokens_per_chunk=50)
+        assert cfg.tts_max_tokens_per_chunk == 50
+
     def test_speaker_voices_stored(self):
         voices = {"NARRATOR": "alba", "HOLMES-0": "jean"}
         cfg = self._make_cfg(speaker_voices=voices)

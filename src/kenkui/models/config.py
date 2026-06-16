@@ -70,6 +70,7 @@ class AppConfig(BaseSettings):
     noise_clamp: float | None = None
     eos_threshold: float = -4.0
     frames_after_eos: int | None = None
+    tts_max_tokens_per_chunk: int = 0
     pdf_drop_code_blocks: bool = False
     pdf_drop_notes: bool = False
     pdf_drop_asides: bool = False
@@ -127,6 +128,15 @@ class AppConfig(BaseSettings):
     @field_validator("nlp_attribution_max_quotes_per_call", mode="before")
     @classmethod
     def _clamp_nlp_attribution_max_quotes_per_call(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, value)
+
+    @field_validator("tts_max_tokens_per_chunk", mode="before")
+    @classmethod
+    def _clamp_tts_max_tokens_per_chunk(cls, v: Any) -> int:
         try:
             value = int(v)
         except (TypeError, ValueError):

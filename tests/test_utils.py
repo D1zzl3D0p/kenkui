@@ -402,6 +402,17 @@ def test_job_config_eos_threshold_override():
     assert job.job_eos_threshold == -2.5
 
 
+def test_job_config_tts_max_tokens_per_chunk_round_trip():
+    from pathlib import Path
+
+    from kenkui.models import JobConfig
+    job = JobConfig(ebook_path=Path("book.epub"), job_tts_max_tokens_per_chunk=50)
+    d = job.to_dict()
+    assert d["job_tts_max_tokens_per_chunk"] == 50
+    job2 = JobConfig.from_dict(d)
+    assert job2.job_tts_max_tokens_per_chunk == 50
+
+
 def test_job_config_post_processing_enabled_override():
     from pathlib import Path
 

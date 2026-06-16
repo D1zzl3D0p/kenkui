@@ -649,6 +649,7 @@ class AudioBuilder:
             "noise_clamp": self.cfg.noise_clamp,
             "eos_threshold": self.cfg.eos_threshold,
             "frames_after_eos": self.cfg.frames_after_eos,
+            "tts_max_tokens_per_chunk": self.cfg.tts_max_tokens_per_chunk,
             # Multi-voice: character id → voice name mapping
             "speaker_voices": _migrate_speaker_voices_keys(self.cfg.speaker_voices),
             # Chapter-voice mode: str(chapter_index) → voice name
