@@ -4,15 +4,15 @@ This file is the working contract for AI agents editing this repository.
 
 ## Product Direction
 
-`kenkui` is the reusable Python library core for ebook-to-audiobook conversion.
-Interactive clients such as `kentui` and service wrappers such as `kenkui-server`
-should consume this package instead of living inside this repository.
+`kenkui` is the reusable Python library and canonical local HTTP runtime for
+ebook-to-audiobook conversion. Interactive clients such as `kentui` and `kengui`
+should consume this package instead of maintaining separate service wrappers.
 
 - The library owns ebook parsing, chapter filtering, config models, NLP pipeline
-  orchestration, voice catalog logic, rendering, workers, post-processing, and
-  cache schemas.
-- Clients own transport, queueing, screens, prompts, notifications, API servers,
-  and deployment-specific policy.
+  orchestration, voice catalog logic, rendering, workers, post-processing, cache
+  schemas, queueing, and the local HTTP API contract.
+- Clients own screens, prompts, notifications, shell integration, and
+  deployment-specific policy.
 - Local execution is the only built-in execution path today.
 - Remote execution remains an extension hook for external packages; do not add
   cloud auth, billing, farm scheduling, or remote runtime concerns here.
@@ -62,8 +62,8 @@ The main library flow is:
 
 ## Layer Rules
 
-- Keep transport and UI out of this repository. Do not add prompts, terminal
-  flows, HTTP route handlers, or queue dashboards to core modules.
+- Keep UI out of this repository. Do not add prompts, terminal flows, screens,
+  or queue dashboards to core modules.
 - Put reusable decisions in services or domain modules, not facades.
 - Keep `api.py` and `__init__.py` thin.
 - Keep worker entry points subprocess-safe and free of hidden client state.
@@ -108,7 +108,7 @@ services. Mark real model/network/audio-heavy tests as integration or slow.
 - Reuse existing dataclasses, enums, and service functions before adding new
   abstractions.
 - Keep structural moves backed by focused tests and `ruff`.
-- Do not couple external clients (`kentui`, `kenkui-server`) back into the core.
+- Do not couple external clients (`kentui`, `kengui`) back into the core.
 - When splitting modules, preserve stable import paths with package re-exports
   where practical.
 - When the user asks for implementation, commit completed code changes after

@@ -62,7 +62,7 @@ class ProcessingConfig:
     post_processing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
     # Chapter indices to include when loading from annotated cache.
     # An empty list means "include all chapters in the cache file".
-    # Set by WorkerServer._build_config() / Processor._build_config() from
+    # Set by job_service.build_processing_config() / Processor._build_config() from
     # JobConfig.chapter_selection.included so that multi-voice jobs respect
     # the user's chapter selection without needing a runtime-injected attribute.
     _included_indices: list[int] = field(default_factory=list)

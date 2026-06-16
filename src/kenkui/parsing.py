@@ -240,7 +240,7 @@ def _warn_unresolvable_speakers(
 class AnnotatedChaptersCacheMissError(Exception):
     """Raised when annotated_chapters_path is set but the file does not exist.
 
-    The WorkerServer catches this and marks the job with a CACHE_MISS sentinel
+    The queue service catches this and marks the job with a CACHE_MISS sentinel
     so the UI can offer the user a recovery choice (re-analyse or fall back to
     single-voice).
     """
