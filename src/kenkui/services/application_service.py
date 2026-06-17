@@ -52,6 +52,7 @@ from kenkui.models.api import (
     OkResponse,
     ProviderCredentialListResponse,
     ProviderCredentialStatus,
+    ProviderModelListResponse,
     QueueResponse,
     RosterCandidateListResponse,
     RosterCandidateModel,
@@ -70,6 +71,10 @@ from kenkui.models.api import (
 from kenkui.progress import ProgressEvent
 from kenkui.services.execution_service import get_tts_execution_provider
 from kenkui.services.job_service import build_processing_config
+from kenkui.services.provider_service import list_provider_models as _list_provider_models
+from kenkui.services.provider_service import (
+    validate_provider_credentials as _validate_provider_credentials,
+)
 from kenkui.services.task_service import Task, TaskRegistry, TaskRunner, TaskType
 from kenkui.utils import ApostropheMode
 
@@ -80,6 +85,7 @@ SERVICE_VERSION = "0.1.0"
 QUEUE_FILE = CONFIG_DIR / "queue.toml"
 LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
 PROVIDER_NAMES = ("anthropic", "openai", "google", "openrouter")
+MODEL_PROVIDER_NAMES = PROVIDER_NAMES + ("ollama",)
 
 
 def _strip_none(obj: object) -> object:
@@ -456,6 +462,19 @@ class KenkuiService:
             ):
                 os.environ.pop(standard_var, None)
         return OkResponse()
+
+    def list_provider_models(self, provider: str) -> ProviderModelListResponse:
+        provider = provider.lower().strip()
+        if provider not in MODEL_PROVIDER_NAMES:
+            raise KeyError(provider)
+        return _list_provider_models(provider)
+
+    def test_provider_credentials(self, provider: str) -> OkResponse:
+        provider = provider.lower().strip()
+        if provider not in PROVIDER_NAMES:
+            raise KeyError(provider)
+        credentials = load_provider_credentials()
+        return _validate_provider_credentials(provider, credentials=credentials)
 
     def add_job(self, job: JobConfig) -> QueueItem:
         with self._lock:

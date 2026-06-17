@@ -160,6 +160,11 @@ class ProviderCredentialUpdateRequest(BaseModel):
     default_model: str | None = None
 
 
+class ProviderModelListResponse(BaseModel):
+    provider: str
+    models: list[str]
+
+
 class VoiceResponse(BaseModel):
     name: str
     source: str

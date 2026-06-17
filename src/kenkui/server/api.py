@@ -34,6 +34,7 @@ from kenkui.models import (
     ProviderCredentialListResponse,
     ProviderCredentialStatus,
     ProviderCredentialUpdateRequest,
+    ProviderModelListResponse,
     QueueResponse,
     RosterCandidateListResponse,
     SeriesListResponse,
@@ -240,6 +241,14 @@ def create_app():
     def list_provider_credentials():
         return get_service().list_provider_credentials()
 
+    @app.get("/provider-models/{provider}", response_model=ProviderModelListResponse)
+    @app.get("/v1/provider-models/{provider}", response_model=ProviderModelListResponse)
+    def list_provider_models(provider: str):
+        try:
+            return get_service().list_provider_models(provider)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Provider not found: {provider}") from exc
+
     @app.put("/provider-credentials/{provider}", response_model=ProviderCredentialStatus)
     @app.put("/v1/provider-credentials/{provider}", response_model=ProviderCredentialStatus)
     def update_provider_credentials(provider: str, request: ProviderCredentialUpdateRequest):
@@ -259,6 +268,18 @@ def create_app():
             return get_service().delete_provider_credentials(provider)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Provider not found: {provider}") from exc
+
+    @app.post("/provider-credentials/{provider}/test", response_model=OkResponse)
+    @app.post("/v1/provider-credentials/{provider}/test", response_model=OkResponse)
+    def test_provider_credentials(provider: str):
+        try:
+            return get_service().test_provider_credentials(provider)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Provider not found: {provider}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.post("/books/parse", response_model=BookParseResponse)
     @app.post("/v1/books/parse", response_model=BookParseResponse)

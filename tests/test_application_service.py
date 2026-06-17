@@ -446,6 +446,42 @@ def test_http_adapter_exposes_config_patch_and_provider_credentials(tmp_path, mo
         assert "openrouter" not in stored
 
 
+def test_http_adapter_exposes_provider_models_and_credential_test(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from kenkui.server import api
+
+    service = KenkuiService(queue_file=tmp_path / "http-queue.toml")
+    monkeypatch.setattr(api, "get_service", lambda: service)
+    monkeypatch.setattr(
+        "kenkui.services.application_service._list_provider_models",
+        lambda provider: {"provider": provider, "models": ["gpt-4o", "gpt-4o-mini"]},
+    )
+    monkeypatch.setattr(
+        "kenkui.services.application_service.load_provider_credentials",
+        lambda: {
+            "openai": ProviderCredentials(api_key="sk-file-secret", default_model="gpt-4o"),
+        },
+    )
+    monkeypatch.setattr(
+        "kenkui.services.application_service._validate_provider_credentials",
+        lambda provider, credentials=None: {"status": "ok", "message": f"{provider} ok"},
+    )
+
+    with TestClient(api.create_app()) as client:
+        models_response = client.get("/v1/provider-models/openai")
+        assert models_response.status_code == 200
+        assert models_response.json() == {
+            "provider": "openai",
+            "models": ["gpt-4o", "gpt-4o-mini"],
+        }
+
+        test_response = client.post("/v1/provider-credentials/openai/test")
+        assert test_response.status_code == 200
+        assert test_response.json()["status"] == "ok"
+
+
 def test_application_service_full_analysis_task_result_shape(tmp_path, monkeypatch):
     import kenkui.nlp as nlp_module
     import kenkui.services.nlp_service as nlp_service
