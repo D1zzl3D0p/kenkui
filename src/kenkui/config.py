@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import tomli_w
+from cryptography.fernet import Fernet, InvalidToken
 from pydantic_settings import TomlConfigSettingsSource
 
 from .models import AppConfig
@@ -69,7 +70,7 @@ def _kenkui_state_dir() -> Path:
 
 
 # Public constants — callers import these directly.
-# CONFIG_DIR: user configuration files (config.toml, credentials.toml, series/)
+# CONFIG_DIR: user configuration files (config.toml, credentials.enc, series/)
 # CACHE_DIR:  regeneratable cache data (nlp_cache/, book_cache.json, booknlp_cache/)
 # STATE_DIR:  persistent runtime state (logs, analytics.jsonl)
 CONFIG_DIR = _kenkui_config_dir()
@@ -115,51 +116,6 @@ _PROVIDER_ENV_VARS = {
     "openrouter": "OPENROUTER_API_KEY",
 }
 
-CREDENTIALS_PATH = CONFIG_DIR / "credentials.toml"
-
-
-def load_provider_credentials(
-    path: Path | None = None,
-) -> dict[str, ProviderCredentials]:
-    """Load provider credentials from *path* (defaults to CONFIG_DIR/credentials.toml).
-
-    Returns an empty dict if the file does not exist.
-    """
-    target = path or CREDENTIALS_PATH
-    if not target.exists():
-        return {}
-    try:
-        data = tomllib.loads(target.read_text(encoding="utf-8"))
-        providers = data.get("providers", {})
-        return {
-            name: ProviderCredentials(
-                api_key=cfg.get("api_key", ""),
-                default_model=cfg.get("default_model", ""),
-            )
-            for name, cfg in providers.items()
-        }
-    except Exception:
-        return {}
-
-
-def save_provider_credentials(
-    credentials: dict[str, ProviderCredentials],
-    path: Path | None = None,
-) -> Path:
-    """Write provider credentials to *path* with 0o600 permissions."""
-    target = path or CREDENTIALS_PATH
-    target.parent.mkdir(parents=True, exist_ok=True)
-    data = {
-        "providers": {
-            name: {"api_key": creds.api_key, "default_model": creds.default_model}
-            for name, creds in credentials.items()
-        }
-    }
-    target.write_bytes(tomli_w.dumps(data).encode("utf-8"))
-    target.chmod(0o600)
-    return target
-
-
 _KENKUI_PROVIDER_ENV_VARS = {
     "anthropic": "KENKUI_ANTHROPIC_API_KEY",
     "openai": "KENKUI_OPENAI_API_KEY",
@@ -167,17 +123,131 @@ _KENKUI_PROVIDER_ENV_VARS = {
     "openrouter": "KENKUI_OPENROUTER_API_KEY",
 }
 
+LEGACY_CREDENTIALS_PATH = CONFIG_DIR / "credentials.toml"
+CREDENTIALS_PATH = CONFIG_DIR / "credentials.enc"
+CREDENTIALS_KEY_PATH = CONFIG_DIR / "credentials.key"
+
+
+def _credentials_key_path(path: Path, key_path: Path | None) -> Path:
+    if key_path is not None:
+        return Path(key_path)
+    if path == CREDENTIALS_PATH:
+        return CREDENTIALS_KEY_PATH
+    return path.with_suffix(".key")
+
+
+def _load_or_create_credentials_key(key_path: Path) -> bytes:
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    if key_path.exists():
+        key = key_path.read_bytes()
+        try:
+            key_path.chmod(0o600)
+        except OSError:
+            pass
+        return key
+    key = Fernet.generate_key()
+    key_path.write_bytes(key)
+    key_path.chmod(0o600)
+    return key
+
+
+def _provider_credentials_to_toml(credentials: dict[str, ProviderCredentials]) -> bytes:
+    data = {
+        "providers": {
+            name: {"api_key": creds.api_key, "default_model": creds.default_model}
+            for name, creds in credentials.items()
+        }
+    }
+    return tomli_w.dumps(data).encode("utf-8")
+
+
+def _provider_credentials_from_toml(raw: bytes | str) -> dict[str, ProviderCredentials]:
+    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    data = tomllib.loads(text)
+    providers = data.get("providers", {})
+    if not isinstance(providers, dict):
+        return {}
+    return {
+        str(name): ProviderCredentials(
+            api_key=str(cfg.get("api_key", "")),
+            default_model=str(cfg.get("default_model", "")),
+        )
+        for name, cfg in providers.items()
+        if isinstance(cfg, dict)
+    }
+
+
+def _load_plaintext_provider_credentials(
+    path: Path,
+) -> tuple[dict[str, ProviderCredentials], bool]:
+    try:
+        return _provider_credentials_from_toml(path.read_text(encoding="utf-8")), True
+    except Exception:
+        return {}, False
+
+
+def load_provider_credentials(
+    path: Path | None = None,
+    key_path: Path | None = None,
+    legacy_path: Path | None = None,
+) -> dict[str, ProviderCredentials]:
+    """Load encrypted provider credentials.
+
+    Credentials are encrypted with a local Fernet key. This is dev-grade
+    at-rest protection against casual plaintext inspection, not OS keychain
+    security: anyone with the local account and both files can decrypt them.
+
+    A legacy plaintext ``credentials.toml`` is migrated once when loading the
+    default encrypted path.
+    """
+    target = Path(path) if path is not None else CREDENTIALS_PATH
+    key_target = _credentials_key_path(target, key_path)
+    legacy_target = legacy_path
+    if legacy_target is None and target == CREDENTIALS_PATH:
+        legacy_target = LEGACY_CREDENTIALS_PATH
+    elif legacy_target is None:
+        legacy_target = target.with_suffix(".toml")
+
+    if not target.exists():
+        if legacy_target is not None and legacy_target.exists():
+            credentials, loaded = _load_plaintext_provider_credentials(legacy_target)
+            if loaded:
+                save_provider_credentials(credentials, target, key_target)
+                legacy_target.unlink(missing_ok=True)
+                return credentials
+        return {}
+    try:
+        key = _load_or_create_credentials_key(key_target)
+        decrypted = Fernet(key).decrypt(target.read_bytes())
+        return _provider_credentials_from_toml(decrypted)
+    except (InvalidToken, ValueError, OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def save_provider_credentials(
+    credentials: dict[str, ProviderCredentials],
+    path: Path | None = None,
+    key_path: Path | None = None,
+) -> Path:
+    """Write encrypted provider credentials to *path* with 0o600 permissions."""
+    target = Path(path) if path is not None else CREDENTIALS_PATH
+    key_target = _credentials_key_path(target, key_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    key = _load_or_create_credentials_key(key_target)
+    target.write_bytes(Fernet(key).encrypt(_provider_credentials_to_toml(credentials)))
+    target.chmod(0o600)
+    return target
+
 
 def inject_provider_env_vars(credentials: dict[str, ProviderCredentials]) -> None:
     """Set provider API keys as environment variables for LiteLLM.
 
-    KENKUI_*_API_KEY env vars take precedence over credentials.toml so the
+    Environment variables take precedence over encrypted credentials so the
     app is fully 12-factor: secrets can live entirely in the environment.
     """
     for provider_name, standard_var in _PROVIDER_ENV_VARS.items():
         kenkui_var = _KENKUI_PROVIDER_ENV_VARS.get(provider_name, "")
-        # Prefer KENKUI_* env var, fall back to credentials.toml
-        key = os.environ.get(kenkui_var, "")
+        key = os.environ.get(kenkui_var, "") or os.environ.get(standard_var, "")
         if not key and provider_name in credentials:
             key = credentials[provider_name].api_key
         if key:

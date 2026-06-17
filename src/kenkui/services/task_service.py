@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -10,6 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class TaskStatus(str, Enum):
@@ -21,6 +24,7 @@ class TaskStatus(str, Enum):
 
 class TaskType(str, Enum):
     FAST_SCAN = "fast_scan"
+    FULL_ANALYSIS = "full_analysis"
     AUDITION = "audition"
     VOICE_DOWNLOAD = "voice_download"
     VOICE_FETCH = "voice_fetch"
@@ -50,6 +54,7 @@ class TaskRegistry:
         task = Task(task_id=str(uuid.uuid4()), type=task_type)
         with self._lock:
             self._tasks[task.task_id] = task
+        logger.info("task created task_id=%s type=%s", task.task_id, task.type.value)
         return task
 
     def get(self, task_id: str) -> Task | None:
@@ -72,6 +77,7 @@ class TaskRegistry:
                 task.progress = 100
                 task.message = "Done"
                 task.result = result
+        logger.info("task completed task_id=%s", task_id)
 
     def fail(self, task_id: str, error: str) -> None:
         with self._lock:
@@ -80,6 +86,7 @@ class TaskRegistry:
                 task.status = TaskStatus.FAILED
                 task.message = "Failed"
                 task.error = error
+        logger.error("task failed task_id=%s error=%s", task_id, error)
 
     def evict_stale(self) -> None:
         cutoff = time.time() - self._ttl
@@ -107,6 +114,7 @@ class TaskRunner:
                 result = fn(**kwargs)
                 self._registry.complete(task.task_id, result)
             except Exception as exc:
+                logger.exception("task execution failed task_id=%s type=%s", task.task_id, task.type.value)
                 self._registry.fail(task.task_id, str(exc))
 
         self._executor.submit(_run)
@@ -123,4 +131,3 @@ __all__ = [
     "TaskStatus",
     "TaskType",
 ]
-

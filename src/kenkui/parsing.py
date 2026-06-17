@@ -433,7 +433,9 @@ class AudioBuilder:
         self._current_chapter = ""
         self._book_hash = ""
         self.pause_check: Callable[[], bool] | None = None
+        self.cancel_check: Callable[[], bool] | None = None
         self.was_paused: bool = False
+        self.was_cancelled: bool = False
 
     def _emit_progress(
         self,
@@ -476,6 +478,8 @@ class AudioBuilder:
         self._total_batches = total_batches
         self._completed_batches = 0
         self._completed_tts_units = 0
+        self.was_paused = False
+        self.was_cancelled = False
         self._emit_progress(
             "tts_synthesis",
             "started",
@@ -546,6 +550,11 @@ class AudioBuilder:
                 narration_mode=_narration_mode,
                 chars_per_second=_book_char_count / _tts_dur if _tts_dur > 0 else 0.0,
             ))
+
+            if self.was_cancelled:
+                logger.info("Audiobook build cancelled before completion.")
+                self._emit_progress("tts_synthesis", "cancelled", "Synthesis cancelled")
+                return False
 
             if not results:
                 logger.error("No results generated. Aborting.")
@@ -707,6 +716,9 @@ class AudioBuilder:
                 if self.pause_check is not None and self.pause_check():
                     self.was_paused = True
                     break
+                if self.cancel_check is not None and self.cancel_check():
+                    self.was_cancelled = True
+                    break
                 is_first = idx == 0
                 fut = pool.submit(
                     worker_process_chapter,
@@ -721,6 +733,9 @@ class AudioBuilder:
             while True:
                 while not queue.empty():
                     try:
+                        if self.cancel_check is not None and self.cancel_check():
+                            self.was_cancelled = True
+                            break
                         msg = queue.get_nowait()
                         event, pid = msg[0], msg[1]
                         if event == "START":
@@ -804,6 +819,13 @@ class AudioBuilder:
                                 worker_logs.pop(0)
                     except Exception:
                         break
+
+                if self.was_cancelled:
+                    if pool is not None:
+                        for proc in pool._processes.values():
+                            proc.terminate()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                    return []
 
                 if all(f.done() for f in futures) and not worker_state and queue.empty():
                     break

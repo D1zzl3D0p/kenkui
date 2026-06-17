@@ -27,7 +27,7 @@ from pathlib import Path
 from .config import STATE_DIR
 
 LOG_DIR: Path = STATE_DIR
-LOG_FORMAT = "%(asctime)s [%(process)d] %(name)s %(levelname)s %(message)s"
+LOG_FORMAT = "%(asctime)s [%(process)d:%(threadName)s] %(name)s %(levelname)s %(message)s"
 LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB per file
 LOG_BACKUP_COUNT = 2  # keep 2 rotated backups
 

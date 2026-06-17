@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from kenkui.models import (
     AuditionRequest,
+    BookAnalyzeRequest,
     BookParseRequest,
     BookParseResponse,
     BookScanRequest,
@@ -27,6 +31,9 @@ from kenkui.models import (
     NarratorRecommendationRequest,
     NarratorRecommendationResponse,
     OkResponse,
+    ProviderCredentialListResponse,
+    ProviderCredentialStatus,
+    ProviderCredentialUpdateRequest,
     QueueResponse,
     RosterCandidateListResponse,
     SeriesListResponse,
@@ -45,10 +52,20 @@ from kenkui.models import (
 )
 from kenkui.services.application_service import get_service
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app):
+    service = get_service()
+    logger.info(
+        "Server startup queue_file=%s queue_items=%d cors_origins=%d",
+        service.queue_file,
+        len(service.all_items),
+        len(service.app_config.cors_origins),
+    )
     yield
+    logger.info("Server shutdown")
     get_service().shutdown()
 
 
@@ -68,6 +85,38 @@ def create_app():
         allow_headers=["*"],
         allow_credentials=False,
     )
+
+    @app.middleware("http")
+    async def log_requests(request, call_next):
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+        started = time.perf_counter()
+        response = None
+        try:
+            response = await call_next(request)
+            return response
+        except Exception:
+            logger.exception(
+                "HTTP request failed request_id=%s method=%s path=%s client=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                request.client.host if request.client else "",
+            )
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            status = response.status_code if response is not None else 500
+            logger.info(
+                "HTTP request request_id=%s method=%s path=%s status=%s duration_ms=%.1f client=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                status,
+                duration_ms,
+                request.client.host if request.client else "",
+            )
+            if response is not None:
+                response.headers["X-Request-Id"] = request_id
 
     @app.get("/health", response_model=HealthResponse)
     @app.get("/v1/health", response_model=HealthResponse)
@@ -95,8 +144,16 @@ def create_app():
     @app.delete("/queue/{job_id}", response_model=OkResponse)
     @app.delete("/v1/queue/{job_id}", response_model=OkResponse)
     def remove_job(job_id: str):
-        if not get_service().remove_job(job_id):
-            raise HTTPException(status_code=400, detail="Cannot remove job")
+        service = get_service()
+        item = service.get_job_item(job_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if item.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+            if not service.remove_job(job_id):
+                raise HTTPException(status_code=400, detail="Cannot remove job")
+        else:
+            if not service.cancel_job(job_id):
+                raise HTTPException(status_code=400, detail="Cannot cancel job")
         return OkResponse()
 
     @app.post("/queue/{job_id}/start")
@@ -109,14 +166,16 @@ def create_app():
     @app.post("/queue/{job_id}/stop")
     @app.post("/v1/queue/{job_id}/stop")
     def stop_job(job_id: str):
-        service = get_service()
-        item = service.get_job_item(job_id)
-        if item is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        service.stop_processing()
-        item.status = JobStatus.CANCELLED
-        service._save()
-        return {"status": "stopped", "job_id": job_id}
+        if not get_service().cancel_job(job_id):
+            raise HTTPException(status_code=400, detail="Cannot cancel job")
+        return {"status": "cancelled", "job_id": job_id}
+
+    @app.post("/queue/{job_id}/cancel", response_model=OkResponse)
+    @app.post("/v1/queue/{job_id}/cancel", response_model=OkResponse)
+    def cancel_job(job_id: str):
+        if not get_service().cancel_job(job_id):
+            raise HTTPException(status_code=400, detail="Cannot cancel job")
+        return OkResponse()
 
     @app.post("/queue/{job_id}/pause", response_model=OkResponse)
     @app.post("/v1/queue/{job_id}/pause", response_model=OkResponse)
@@ -163,7 +222,43 @@ def create_app():
     @app.put("/config", response_model=OkResponse)
     @app.put("/v1/config", response_model=OkResponse)
     def update_config(config_data: dict):
-        return get_service().update_config(config_data)
+        try:
+            return get_service().update_config(config_data)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/config", response_model=ConfigResponse)
+    @app.patch("/v1/config", response_model=ConfigResponse)
+    def patch_config(config_data: dict):
+        try:
+            return get_service().patch_config(config_data)
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/provider-credentials", response_model=ProviderCredentialListResponse)
+    @app.get("/v1/provider-credentials", response_model=ProviderCredentialListResponse)
+    def list_provider_credentials():
+        return get_service().list_provider_credentials()
+
+    @app.put("/provider-credentials/{provider}", response_model=ProviderCredentialStatus)
+    @app.put("/v1/provider-credentials/{provider}", response_model=ProviderCredentialStatus)
+    def update_provider_credentials(provider: str, request: ProviderCredentialUpdateRequest):
+        try:
+            return get_service().update_provider_credentials(
+                provider,
+                api_key=request.api_key,
+                default_model=request.default_model,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Provider not found: {provider}") from exc
+
+    @app.delete("/provider-credentials/{provider}", response_model=OkResponse)
+    @app.delete("/v1/provider-credentials/{provider}", response_model=OkResponse)
+    def delete_provider_credentials(provider: str):
+        try:
+            return get_service().delete_provider_credentials(provider)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Provider not found: {provider}") from exc
 
     @app.post("/books/parse", response_model=BookParseResponse)
     @app.post("/v1/books/parse", response_model=BookParseResponse)
@@ -190,6 +285,18 @@ def create_app():
             request.ebook_path,
             nlp_model=request.nlp_model,
             nlp_provider=request.nlp_provider,
+        )
+
+    @app.post("/books/analyze", response_model=TaskResponse, status_code=202)
+    @app.post("/v1/books/analyze", response_model=TaskResponse, status_code=202)
+    def analyze_book(request: BookAnalyzeRequest):
+        return get_service().analyze_book(
+            request.ebook_path,
+            nlp_model=request.nlp_model,
+            nlp_provider=request.nlp_provider,
+            discovery_method=request.discovery_method,
+            attribution_provider=request.attribution_provider,
+            attribution_model=request.attribution_model,
         )
 
     @app.get("/voices", response_model=VoiceListResponse)
@@ -391,8 +498,4 @@ def create_app():
 
     return app
 
-
-try:
-    app = create_app()
-except RuntimeError:
-    app = None
+app = None

@@ -135,6 +135,31 @@ class BookScanRequest(BaseModel):
     nlp_provider: str | None = None
 
 
+class BookAnalyzeRequest(BaseModel):
+    ebook_path: str
+    nlp_model: str | None = None
+    nlp_provider: str | None = None
+    discovery_method: str | None = None
+    attribution_provider: str | None = None
+    attribution_model: str | None = None
+
+
+class ProviderCredentialStatus(BaseModel):
+    provider: str
+    configured: bool
+    default_model: str = ""
+    masked_key_hint: str = ""
+
+
+class ProviderCredentialListResponse(BaseModel):
+    providers: list[ProviderCredentialStatus]
+
+
+class ProviderCredentialUpdateRequest(BaseModel):
+    api_key: str | None = None
+    default_model: str | None = None
+
+
 class VoiceResponse(BaseModel):
     name: str
     source: str
@@ -303,4 +328,3 @@ class CastResponse(BaseModel):
     book_name: str
     narration_mode: str
     cast: list[CastEntry]
-

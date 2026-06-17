@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import threading
 import time
 import tomllib
@@ -14,7 +15,13 @@ from typing import Any
 
 import tomli_w
 
-from kenkui.config import CONFIG_DIR
+from kenkui.config import (
+    CONFIG_DIR,
+    ProviderCredentials,
+    inject_provider_env_vars,
+    load_provider_credentials,
+    save_provider_credentials,
+)
 from kenkui.models import (
     AppConfig,
     AttributionExecutionMode,
@@ -43,6 +50,8 @@ from kenkui.models.api import (
     MultivoiceStatusResponse,
     NarratorRecommendationResponse,
     OkResponse,
+    ProviderCredentialListResponse,
+    ProviderCredentialStatus,
     QueueResponse,
     RosterCandidateListResponse,
     RosterCandidateModel,
@@ -70,6 +79,7 @@ API_VERSION = "v1"
 SERVICE_VERSION = "0.1.0"
 QUEUE_FILE = CONFIG_DIR / "queue.toml"
 LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
+PROVIDER_NAMES = ("anthropic", "openai", "google", "openrouter")
 
 
 def _strip_none(obj: object) -> object:
@@ -90,6 +100,24 @@ def _model_dict(value: Any) -> dict[str, Any] | None:
     if hasattr(value, "__dict__"):
         return dict(value.__dict__)
     return {"value": str(value)}
+
+
+def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge_dict(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _masked_key_hint(api_key: str) -> str:
+    if not api_key:
+        return ""
+    if len(api_key) <= 8:
+        return f"{api_key[:2]}...{api_key[-2:]}"
+    return f"{api_key[:4]}...{api_key[-4:]}"
 
 
 def _progress_percent(event: ProgressEvent) -> float:
@@ -191,6 +219,23 @@ def job_create_request_to_config(request: JobCreateRequest) -> JobConfig:
     )
 
 
+def _job_summary(job: JobConfig, *, job_id: str | None = None, status: str | None = None) -> str:
+    parts = [
+        f"job_id={job_id}" if job_id else None,
+        f"status={status}" if status else None,
+        f"ebook_path={job.ebook_path}",
+        f"output_path={job.output_path}" if job.output_path else None,
+        f"voice={job.voice or ''}",
+        f"tts_mode={job.tts_execution_mode.value}",
+        f"narration_mode={job.narration_mode.value}",
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _queue_item_summary(item: QueueItem) -> str:
+    return _job_summary(item.job, job_id=item.id, status=item.status.value)
+
+
 class KenkuiService:
     """In-process API boundary shared by local clients and HTTP adapters."""
 
@@ -210,6 +255,7 @@ class KenkuiService:
         self._processing_thread: threading.Thread | None = None
         self._running = False
         self._pause_requested = False
+        self._cancel_requested_job_id: str | None = None
         self.task_registry = TaskRegistry()
         self.task_runner = TaskRunner(self.task_registry, max_workers=task_workers)
         from kenkui.services.book_cache import BookCache
@@ -226,6 +272,11 @@ class KenkuiService:
                 self._items = [QueueItem.from_dict(d) for d in data.get("items", [])]
                 if "app_config" in data:
                     self._app_config = AppConfig.from_dict(data.get("app_config", {}))
+                logger.info(
+                    "Loaded queue file path=%s items=%d",
+                    self.queue_file,
+                    len(self._items),
+                )
             except Exception as exc:
                 logger.warning("Could not load queue file %s: %s", self.queue_file, exc)
         self._reset_stale_processing()
@@ -239,6 +290,11 @@ class KenkuiService:
                 self.queue_file.parent.mkdir(parents=True, exist_ok=True)
                 self.queue_file.write_bytes(tomli_w.dumps(_strip_none(data)).encode("utf-8"))
             self.legacy_queue_file.unlink(missing_ok=True)
+            logger.info(
+                "Migrated legacy queue file from=%s to=%s",
+                self.legacy_queue_file,
+                self.queue_file,
+            )
         except Exception as exc:
             logger.warning("Could not migrate legacy queue yaml: %s", exc)
 
@@ -266,6 +322,13 @@ class KenkuiService:
 
     @property
     def current_item(self) -> QueueItem | None:
+        with self._lock:
+            current = next((i for i in self._items if i.status == JobStatus.PROCESSING), None)
+            if current is not None:
+                return current
+            return next((i for i in self._items if i.status == JobStatus.PAUSED), None)
+
+    def _processing_item(self) -> QueueItem | None:
         with self._lock:
             return next((i for i in self._items if i.status == JobStatus.PROCESSING), None)
 
@@ -313,6 +376,87 @@ class KenkuiService:
         self.app_config = AppConfig.from_dict(config_data)
         return OkResponse()
 
+    def patch_config(self, config_patch: dict[str, Any]) -> ConfigResponse:
+        merged = _merge_dict(self._app_config.to_dict(), config_patch)
+        self.app_config = AppConfig.from_dict(merged)
+        return self.get_config()
+
+    def _provider_env_key(self, provider: str) -> str:
+        from kenkui.config import _KENKUI_PROVIDER_ENV_VARS, _PROVIDER_ENV_VARS
+
+        return os.environ.get(_KENKUI_PROVIDER_ENV_VARS.get(provider, ""), "") or os.environ.get(
+            _PROVIDER_ENV_VARS.get(provider, ""),
+            "",
+        )
+
+    def _provider_credential_status(
+        self,
+        provider: str,
+        credentials: dict[str, ProviderCredentials] | None = None,
+    ) -> ProviderCredentialStatus:
+        credentials = credentials if credentials is not None else load_provider_credentials()
+        stored = credentials.get(provider)
+        api_key = self._provider_env_key(provider) or (stored.api_key if stored else "")
+        return ProviderCredentialStatus(
+            provider=provider,
+            configured=bool(api_key),
+            default_model=stored.default_model if stored else "",
+            masked_key_hint=_masked_key_hint(api_key),
+        )
+
+    def list_provider_credentials(self) -> ProviderCredentialListResponse:
+        credentials = load_provider_credentials()
+        return ProviderCredentialListResponse(
+            providers=[
+                self._provider_credential_status(provider, credentials)
+                for provider in PROVIDER_NAMES
+            ]
+        )
+
+    def update_provider_credentials(
+        self,
+        provider: str,
+        *,
+        api_key: str | None = None,
+        default_model: str | None = None,
+    ) -> ProviderCredentialStatus:
+        provider = provider.lower().strip()
+        if provider not in PROVIDER_NAMES:
+            raise KeyError(provider)
+        credentials = load_provider_credentials()
+        current = credentials.get(provider, ProviderCredentials(api_key="", default_model=""))
+        next_api_key = current.api_key
+        if api_key is not None and api_key.strip():
+            next_api_key = api_key.strip()
+        next_default_model = current.default_model if default_model is None else default_model.strip()
+        credentials[provider] = ProviderCredentials(
+            api_key=next_api_key,
+            default_model=next_default_model,
+        )
+        save_provider_credentials(credentials)
+        inject_provider_env_vars(credentials)
+        return self._provider_credential_status(provider, credentials)
+
+    def delete_provider_credentials(self, provider: str) -> OkResponse:
+        provider = provider.lower().strip()
+        if provider not in PROVIDER_NAMES:
+            raise KeyError(provider)
+        credentials = load_provider_credentials()
+        removed = credentials.pop(provider, None)
+        save_provider_credentials(credentials)
+        if removed is not None:
+            from kenkui.config import _KENKUI_PROVIDER_ENV_VARS, _PROVIDER_ENV_VARS
+
+            standard_var = _PROVIDER_ENV_VARS.get(provider, "")
+            kenkui_var = _KENKUI_PROVIDER_ENV_VARS.get(provider, "")
+            if (
+                standard_var
+                and not os.environ.get(kenkui_var, "")
+                and os.environ.get(standard_var, "") == removed.api_key
+            ):
+                os.environ.pop(standard_var, None)
+        return OkResponse()
+
     def add_job(self, job: JobConfig) -> QueueItem:
         with self._lock:
             item = QueueItem(
@@ -323,7 +467,8 @@ class KenkuiService:
             )
             self._items.append(item)
             self._save()
-            return item
+        logger.info("Queued %s", _queue_item_summary(item))
+        return item
 
     def add_job_from_request(self, request: JobCreateRequest) -> JobResponse:
         return self.job_response(self.add_job(job_create_request_to_config(request)))
@@ -340,17 +485,69 @@ class KenkuiService:
         with self._lock:
             for i, item in enumerate(self._items):
                 if item.id == job_id:
-                    if item.status == JobStatus.PROCESSING:
+                    if item.status not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                        logger.info("Refused queue removal job_id=%s status=%s", item.id, item.status.value)
                         return False
                     self._items.pop(i)
                     self._save()
+                    logger.info("Removed queued job job_id=%s status=%s", item.id, item.status.value)
                     return True
         return False
 
+    def cancel_job(self, job_id: str) -> bool:
+        provider = None
+        item: QueueItem | None = None
+        with self._lock:
+            item = self.get_job_item(job_id)
+            if item is None:
+                return False
+            if item.status == JobStatus.CANCELLED:
+                return True
+            if item.status == JobStatus.PROCESSING:
+                self._cancel_requested_job_id = item.id
+                self._pause_requested = False
+                item.provider_status = "cancelling"
+                self._save()
+                try:
+                    provider = get_tts_execution_provider(item)
+                except Exception as exc:
+                    logger.warning("Could not load provider for cancel job %s: %s", item.id, exc)
+                    provider = None
+            elif item.status == JobStatus.PAUSED:
+                item.status = JobStatus.CANCELLED
+                item.current_chapter = ""
+                item.error_message = ""
+                item.provider_status = "cancelled"
+                item.completed_at = time.time()
+                self._save()
+                logger.info("Cancelled paused job job_id=%s", job_id)
+                return True
+            elif item.status == JobStatus.PENDING:
+                item.status = JobStatus.CANCELLED
+                item.current_chapter = ""
+                item.error_message = ""
+                item.provider_status = "cancelled"
+                item.completed_at = time.time()
+                self._save()
+                logger.info("Cancelled queued job job_id=%s", job_id)
+                return True
+            else:
+                return False
+        if provider is not None and item is not None:
+            try:
+                provider.cancel(item)
+            except Exception as exc:
+                logger.warning("Could not cancel provider job %s: %s", item.id, exc)
+            else:
+                logger.info("Requested cancel for current job job_id=%s", item.id)
+        return True
+
     def clear_all_jobs(self) -> OkResponse:
         with self._lock:
+            removed = len(self._items)
             self._items = []
             self._save()
+        logger.info("Cleared queue removed=%d", removed)
         return OkResponse()
 
     def queue(self) -> QueueResponse:
@@ -387,6 +584,7 @@ class KenkuiService:
 
     def _reset_stale_processing(self) -> None:
         changed = False
+        reset_ids: list[str] = []
         with self._lock:
             for item in self._items:
                 if item.status == JobStatus.PROCESSING:
@@ -395,8 +593,11 @@ class KenkuiService:
                     item.current_chapter = ""
                     item.error_message = ""
                     changed = True
+                    reset_ids.append(item.id)
             if changed:
                 self._save()
+        if reset_ids:
+            logger.warning("Reset stale processing jobs job_ids=%s", ",".join(reset_ids))
 
     def _next_pending(self) -> QueueItem | None:
         with self._lock:
@@ -404,13 +605,14 @@ class KenkuiService:
 
     def start_job(self, job_id: str) -> bool:
         item = self.get_job_item(job_id)
-        if item is None or self.is_running:
+        if item is None or item.status != JobStatus.PENDING or self.is_running:
             return False
         with self._lock:
             item.status = JobStatus.PROCESSING
             item.started_at = time.time()
             self._current_id = item.id
             self._save()
+        logger.info("Started queued job %s", _queue_item_summary(item))
         self.start_processing()
         return True
 
@@ -420,18 +622,25 @@ class KenkuiService:
         self._running = True
         self._processing_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._processing_thread.start()
+        logger.info("Processing loop started current_job=%s pending=%d", self._current_id or "", len(self.pending_items))
         return True
 
     def stop_processing(self) -> None:
-        current = self.current_item
+        current = self._processing_item()
         if current is not None:
+            with self._lock:
+                self._cancel_requested_job_id = current.id
+                self._pause_requested = False
             try:
                 get_tts_execution_provider(current).cancel(current)
             except Exception as exc:
                 logger.warning("Could not cancel provider job %s: %s", current.id, exc)
+            else:
+                logger.info("Requested cancel for current job job_id=%s", current.id)
         self._running = False
         if self._processing_thread:
             self._processing_thread.join(timeout=5)
+        logger.info("Processing loop stopped current_job=%s", current.id if current else "")
 
     def pause_job(self, job_id: str) -> bool:
         with self._lock:
@@ -439,7 +648,8 @@ class KenkuiService:
             if item is None or item.status != JobStatus.PROCESSING:
                 return False
             self._pause_requested = True
-            return True
+        logger.info("Pause requested job_id=%s", job_id)
+        return True
 
     def resume_job(self, job_id: str) -> bool:
         with self._lock:
@@ -448,12 +658,15 @@ class KenkuiService:
                 return False
             item.status = JobStatus.PENDING
             self._pause_requested = False
+            self._cancel_requested_job_id = None
             self._save()
+        logger.info("Resumed job job_id=%s", job_id)
         self.start_processing()
         return True
 
     def _process_loop(self) -> None:
         try:
+            logger.info("Processing loop running")
             while self._running:
                 item = self._next_pending()
                 if item is None:
@@ -462,16 +675,29 @@ class KenkuiService:
                     item.status = JobStatus.PROCESSING
                     item.started_at = time.time()
                     self._current_id = item.id
+                    self._cancel_requested_job_id = None
                     self._save()
+                logger.info("Dequeued job %s", _queue_item_summary(item))
                 self._process_job(item)
+                if item.status == JobStatus.PAUSED:
+                    break
         finally:
             self._running = False
             self._current_id = None
+            logger.info("Processing loop idle")
 
     def _process_job(self, item: QueueItem) -> None:
+        started_at = time.time()
         try:
             cfg = build_processing_config(item.job, self._app_config)
             provider = get_tts_execution_provider(item)
+            logger.info(
+                "Processing job job_id=%s provider=%s output_path=%s voice=%s",
+                item.id,
+                item.execution_provider,
+                cfg.output_path,
+                cfg.voice,
+            )
             self.update_job_metadata(
                 item.id,
                 execution_provider=item.job.tts_execution_mode.value,
@@ -484,12 +710,27 @@ class KenkuiService:
                 progress_callback=self._progress_callback_for_job(item.id),
                 metadata_callback=lambda **fields: self.update_job_metadata(item.id, **fields),
                 pause_check=lambda: self._pause_requested,
+                cancel_check=lambda: self._cancel_requested_job_id == item.id,
             )
+            if outcome.cancelled or self._cancel_requested_job_id == item.id:
+                with self._lock:
+                    item.status = JobStatus.CANCELLED
+                    item.current_chapter = ""
+                    item.error_message = ""
+                    item.provider_status = outcome.provider_status or "cancelled"
+                    item.completed_at = time.time()
+                    self._pause_requested = False
+                    self._cancel_requested_job_id = None
+                    self._save()
+                logger.info("Job cancelled job_id=%s duration_s=%.1f", item.id, time.time() - started_at)
+                return
             if outcome.paused:
                 with self._lock:
                     item.status = JobStatus.PAUSED
                     self._pause_requested = False
+                    self._cancel_requested_job_id = None
                     self._save()
+                logger.info("Job paused job_id=%s duration_s=%.1f", item.id, time.time() - started_at)
                 return
             self.update_job_metadata(
                 item.id,
@@ -506,8 +747,21 @@ class KenkuiService:
             if outcome.success:
                 output_path = outcome.output_path or str(cfg.output_path / f"{item.job.name}.m4b")
                 self.complete_job(item.id, output_path)
+                logger.info(
+                    "Job completed job_id=%s output_path=%s duration_s=%.1f",
+                    item.id,
+                    output_path,
+                    time.time() - started_at,
+                )
             else:
                 self.fail_job(item.id, outcome.error_message or "Conversion failed")
+                logger.warning(
+                    "Job failed job_id=%s provider_status=%s duration_s=%.1f error=%s",
+                    item.id,
+                    outcome.provider_status or "",
+                    time.time() - started_at,
+                    outcome.error_message or "Conversion failed",
+                )
         except Exception as exc:
             logger.exception("Job %s failed: %s", item.id, exc)
             self.fail_job(item.id, str(exc))
@@ -531,6 +785,13 @@ class KenkuiService:
                 item.current_chapter = current_chapter
                 item.eta_seconds = eta_seconds
                 self._save()
+        logger.debug(
+            "Job progress job_id=%s progress=%.1f chapter=%s eta_seconds=%s",
+            job_id,
+            progress,
+            current_chapter,
+            eta_seconds,
+        )
 
     def update_job_metadata(self, job_id: str, **fields) -> None:
         with self._lock:
@@ -555,6 +816,7 @@ class KenkuiService:
                 item.output_path = output_path
                 item.completed_at = time.time()
                 self._save()
+        logger.info("Marked job completed job_id=%s output_path=%s", job_id, output_path)
 
     def fail_job(self, job_id: str, error: str) -> None:
         with self._lock:
@@ -563,11 +825,20 @@ class KenkuiService:
                 item.status = JobStatus.FAILED
                 item.error_message = error
                 self._save()
+        logger.warning("Marked job failed job_id=%s error=%s", job_id, error)
 
     def parse_book(self, ebook_path: str) -> BookParseResponse:
         from kenkui.services.book_service import parse_book
 
+        logger.info("Parsing ebook ebook_path=%s", ebook_path)
         result = parse_book(ebook_path, self.book_cache)
+        logger.info(
+            "Parsed ebook ebook_path=%s book_hash=%s chapters=%d words=%d",
+            ebook_path,
+            result.book_hash,
+            result.total_chapters,
+            result.total_word_count,
+        )
         return BookParseResponse(
             book_hash=result.book_hash,
             metadata=result.metadata,
@@ -583,7 +854,20 @@ class KenkuiService:
     ) -> ChapterFilterResponse:
         from kenkui.services.book_service import filter_chapters
 
+        logger.info(
+            "Filtering chapters book_hash=%s preset=%s included=%d excluded=%d",
+            book_hash,
+            chapter_selection.preset.value,
+            len(chapter_selection.included or []),
+            len(chapter_selection.excluded or []),
+        )
         result = filter_chapters(book_hash, chapter_selection, self.book_cache)
+        logger.info(
+            "Filtered chapters book_hash=%s included=%d estimated_words=%d",
+            book_hash,
+            len(result.included_indices),
+            result.estimated_word_count,
+        )
         return ChapterFilterResponse(
             included_indices=result.included_indices,
             chapter_count=result.chapter_count,
@@ -600,6 +884,124 @@ class KenkuiService:
             ebook_path=ebook_path,
             nlp_model=nlp_model,
             nlp_provider=nlp_provider,
+        )
+        logger.info(
+            "Submitted scan task task_id=%s ebook_path=%s provider=%s model=%s",
+            task.task_id,
+            ebook_path,
+            nlp_provider or self._app_config.nlp_provider,
+            nlp_model or self._app_config.nlp_model,
+        )
+        return self.task_response(task)
+
+    def _run_full_analysis(
+        self,
+        *,
+        ebook_path: str,
+        nlp_model: str | None = None,
+        nlp_provider: str | None = None,
+        discovery_method: str | None = None,
+        attribution_provider: str | None = None,
+        attribution_model: str | None = None,
+        progress_callback=None,
+    ) -> dict[str, Any]:
+        from kenkui.nlp import attribution_cache_path, get_cached_result, list_cached_rosters
+        from kenkui.services.nlp_service import full_analysis
+
+        ebook = Path(ebook_path)
+        request_attribution_provider = attribution_provider if attribution_provider is not None else nlp_provider
+        request_attribution_model = attribution_model if attribution_model is not None else nlp_model
+        effective_extraction_provider = nlp_provider or self._app_config.nlp_provider
+        effective_extraction_model = nlp_model or self._app_config.nlp_model
+        effective_attribution_provider = (
+            request_attribution_provider
+            or self._app_config.nlp_attribution_provider
+            or effective_extraction_provider
+        )
+        effective_attribution_model = (
+            request_attribution_model
+            or self._app_config.nlp_attribution_model
+            or effective_extraction_model
+        )
+        cache_hit = (
+            get_cached_result(
+                ebook,
+                provider=effective_attribution_provider,
+                model=effective_attribution_model,
+            )
+            is not None
+        )
+
+        def _extraction_progress(percent: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(int(percent * 0.45), f"Discovery: {message}")
+
+        def _attribution_progress(percent: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(45 + int(percent * 0.55), f"Attribution: {message}")
+
+        result = full_analysis(
+            ebook_path=ebook_path,
+            nlp_model=nlp_model,
+            nlp_provider=nlp_provider,
+            discovery_method=discovery_method,
+            attribution_provider=request_attribution_provider,
+            attribution_model=request_attribution_model,
+            extraction_progress_callback=_extraction_progress,
+            attribution_progress_callback=_attribution_progress,
+        )
+        annotated_path = attribution_cache_path(
+            ebook,
+            provider=effective_attribution_provider,
+            model=effective_attribution_model,
+        )
+        roster_cache_path = None
+        for meta in list_cached_rosters(ebook):
+            if (
+                meta.provider == effective_extraction_provider
+                and meta.model == effective_extraction_model
+                and (discovery_method is None or meta.method == discovery_method)
+            ):
+                roster_cache_path = str(meta.path)
+                break
+        return {
+            "characters": [character.to_dict() for character in result.characters],
+            "book_hash": result.book_hash,
+            "annotated_chapters_path": str(annotated_path),
+            "roster_cache_path": roster_cache_path,
+            "nlp_provider": effective_extraction_provider,
+            "nlp_model": effective_extraction_model,
+            "attribution_provider": effective_attribution_provider,
+            "attribution_model": effective_attribution_model,
+            "cache_status": "hit" if cache_hit else "miss",
+        }
+
+    def analyze_book(
+        self,
+        ebook_path: str,
+        *,
+        nlp_model: str | None = None,
+        nlp_provider: str | None = None,
+        discovery_method: str | None = None,
+        attribution_provider: str | None = None,
+        attribution_model: str | None = None,
+    ) -> TaskResponse:
+        task = self.task_runner.submit(
+            TaskType.FULL_ANALYSIS,
+            self._run_full_analysis,
+            ebook_path=ebook_path,
+            nlp_model=nlp_model,
+            nlp_provider=nlp_provider,
+            discovery_method=discovery_method,
+            attribution_provider=attribution_provider,
+            attribution_model=attribution_model,
+        )
+        logger.info(
+            "Submitted analysis task task_id=%s ebook_path=%s provider=%s model=%s",
+            task.task_id,
+            ebook_path,
+            nlp_provider or self._app_config.nlp_provider,
+            nlp_model or self._app_config.nlp_model,
         )
         return self.task_response(task)
 

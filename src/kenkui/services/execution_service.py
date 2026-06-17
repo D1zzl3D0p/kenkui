@@ -18,6 +18,7 @@ class ExecutionOutcome:
     output_path: str = ""
     error_message: str = ""
     paused: bool = False
+    cancelled: bool = False
     remote_job_id: str = ""
     estimated_cost_usd: float | None = None
     actual_cost_usd: float | None = None
@@ -36,6 +37,7 @@ class TTSExecutionProvider(Protocol):
         progress_callback: Callable | None,
         metadata_callback: Callable | None,
         pause_check: Callable[[], bool] | None,
+        cancel_check: Callable[[], bool] | None,
     ) -> ExecutionOutcome: ...
 
     def cancel(self, item: QueueItem) -> None: ...
@@ -53,6 +55,7 @@ class LocalTTSProvider:
         progress_callback: Callable | None,
         metadata_callback: Callable | None,
         pause_check: Callable[[], bool] | None,
+        cancel_check: Callable[[], bool] | None,
     ) -> ExecutionOutcome:
         del item, app_config
         from kenkui.parsing import AudioBuilder
@@ -62,11 +65,14 @@ class LocalTTSProvider:
         try:
             builder = AudioBuilder(cfg, progress_callback=progress_callback)
             builder.pause_check = pause_check
+            builder.cancel_check = cancel_check
             success = builder.run()
         except Exception as exc:
             logger.exception("Local TTS execution failed: %s", exc)
             return ExecutionOutcome(success=False, error_message=str(exc), provider_status="failed")
 
+        if getattr(builder, "was_cancelled", False):
+            return ExecutionOutcome(success=False, cancelled=True, provider_status="cancelled")
         if getattr(builder, "was_paused", False):
             return ExecutionOutcome(success=False, paused=True, provider_status="paused")
         if success:
@@ -107,4 +113,3 @@ __all__ = [
     "get_tts_execution_provider",
     "register_tts_execution_provider",
 ]
-
