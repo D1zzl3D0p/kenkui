@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from kenkui.models import (
     AuditionRequest,
     BookAnalyzeRequest,
+    BookCacheCandidatesResponse,
     BookParseRequest,
     BookParseResponse,
     BookScanRequest,
@@ -307,6 +308,14 @@ def create_app():
             nlp_model=request.nlp_model,
             nlp_provider=request.nlp_provider,
         )
+
+    @app.post("/books/analyze/caches", response_model=BookCacheCandidatesResponse)
+    @app.post("/v1/books/analyze/caches", response_model=BookCacheCandidatesResponse)
+    def analyze_book_caches(request: BookAnalyzeRequest):
+        try:
+            return get_service().analysis_cache_candidates(request.ebook_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/books/analyze", response_model=TaskResponse, status_code=202)
     @app.post("/v1/books/analyze", response_model=TaskResponse, status_code=202)

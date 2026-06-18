@@ -145,6 +145,25 @@ class BookAnalyzeRequest(BaseModel):
     use_cache: bool = True
 
 
+class BookCacheCandidate(BaseModel):
+    cache_id: str
+    step: str
+    provider: str
+    model: str
+    method: str = ""
+    created_at: str = ""
+    description: str = ""
+    path: str
+    character_count: int = 0
+    chapter_count: int = 0
+    quote_count: int = 0
+
+
+class BookCacheCandidatesResponse(BaseModel):
+    book_hash: str
+    candidates: list[BookCacheCandidate]
+
+
 class ProviderCredentialStatus(BaseModel):
     provider: str
     configured: bool

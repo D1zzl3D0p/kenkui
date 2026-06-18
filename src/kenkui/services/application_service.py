@@ -926,6 +926,124 @@ class KenkuiService:
         )
         return self.task_response(task)
 
+    def analysis_cache_candidates(self, ebook_path: str) -> dict[str, Any]:
+        """List reusable NLP cache files for a book with user-facing parameters.
+
+        The GUI uses this as a preflight so cache reuse is an explicit user
+        decision rather than an invisible shortcut around local discovery and
+        attribution work.
+        """
+        import kenkui.nlp as nlp_module
+        from kenkui.nlp._cache import list_caches as _list_step_caches
+
+        ebook = Path(ebook_path)
+        if not ebook.exists():
+            raise FileNotFoundError(f"Ebook not found: {ebook_path}")
+        bh = nlp_module.book_hash(ebook)
+        cache_dir = nlp_module._get_config_dir() / "nlp_cache"
+        candidates: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def _counts(data: dict[str, Any]) -> tuple[int, int, int]:
+            raw_characters = data.get("characters")
+            raw_chapters = data.get("chapters")
+            characters = raw_characters if isinstance(raw_characters, list) else []
+            chapters = raw_chapters if isinstance(raw_chapters, list) else []
+            quote_count = sum(
+                int(item.get("quote_count") or 0)
+                for item in characters
+                if isinstance(item, dict)
+            )
+            return len(characters), len(chapters), quote_count
+
+        def _add(
+            *,
+            path: Path,
+            step: str,
+            provider: str,
+            model: str,
+            method: str = "",
+            created_at: str = "",
+            description: str = "",
+            data: dict[str, Any] | None = None,
+        ) -> None:
+            if path.name in seen:
+                return
+            seen.add(path.name)
+            character_count, chapter_count, quote_count = _counts(data or {})
+            candidates.append({
+                "cache_id": path.name,
+                "step": step,
+                "provider": provider,
+                "model": model,
+                "method": method,
+                "created_at": created_at,
+                "description": description,
+                "path": str(path),
+                "character_count": character_count,
+                "chapter_count": chapter_count,
+                "quote_count": quote_count,
+            })
+
+        for meta in _list_step_caches(ebook):
+            data = {}
+            try:
+                data = json.loads(meta.path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+            _add(
+                path=meta.path,
+                step=meta.step,
+                provider=meta.tool,
+                model=meta.model,
+                method="",
+                created_at=meta.created_at.isoformat(),
+                description=meta.description or f"{meta.step.title()} cache · {meta.tool} · {meta.model}",
+                data=data,
+            )
+
+        for meta in nlp_module.list_cached_rosters(ebook):
+            data = getattr(meta, "_data", {})
+            _add(
+                path=meta.path,
+                step="roster",
+                provider=meta.provider,
+                model=meta.model,
+                method=meta.method,
+                created_at=meta.created_at,
+                description=meta.description or f"Roster cache · {meta.method} · {meta.provider} · {meta.model}",
+                data=data,
+            )
+
+        if cache_dir.exists():
+            prefix = f"{bh}-"
+            for path in cache_dir.glob(f"{bh}-*.json"):
+                name = path.name
+                if name in seen or "-roster-" in name or "-extraction-" in name or "-attribution-" in name:
+                    continue
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                provider = str(data.get("provider") or "")
+                model = str(data.get("model") or "")
+                if not provider:
+                    stem = path.stem[len(prefix):]
+                    provider = stem.split("-", 1)[0] if stem else ""
+                created_at = str(data.get("created_at") or "")
+                _add(
+                    path=path,
+                    step="attribution",
+                    provider=provider,
+                    model=model,
+                    created_at=created_at,
+                    description=f"Full attribution cache · {provider or 'unknown'} · {model or 'unknown model'}",
+                    data=data,
+                )
+
+        candidates.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return {"book_hash": bh, "candidates": candidates}
+
     def _run_full_analysis(
         self,
         *,

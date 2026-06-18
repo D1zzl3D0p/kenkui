@@ -7,6 +7,8 @@ The package is split by domain, while this module preserves the historical
 from .api import (
     AuditionRequest,
     BookAnalyzeRequest,
+    BookCacheCandidate,
+    BookCacheCandidatesResponse,
     BookParseRequest,
     BookParseResponse,
     BookScanRequest,
@@ -79,6 +81,8 @@ __all__ = [
     "AuditionRequest",
     "AudioResult",
     "BookAnalyzeRequest",
+    "BookCacheCandidate",
+    "BookCacheCandidatesResponse",
     "BookInfo",
     "BookParseRequest",
     "BookParseResponse",

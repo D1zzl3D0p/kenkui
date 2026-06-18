@@ -444,13 +444,18 @@ class NLPPipeline:
             if progress_callback:
                 progress_callback(_pct[0], msg)
 
-        # SIGTERM handling
-        _orig_sigterm = signal.getsignal(signal.SIGTERM)
+        # SIGTERM handlers are process-global and Python only allows installing
+        # them from the main interpreter thread. Attribution normally runs in
+        # the server task-worker pool, so keep graceful CLI cancellation without
+        # breaking threaded HTTP analysis jobs.
+        should_install_sigterm_handler = threading.current_thread() is threading.main_thread()
+        _orig_sigterm = signal.getsignal(signal.SIGTERM) if should_install_sigterm_handler else None
 
         def _sigterm_handler(signum: int, frame: object) -> None:
             raise KeyboardInterrupt("SIGTERM received")
 
-        signal.signal(signal.SIGTERM, _sigterm_handler)
+        if should_install_sigterm_handler:
+            signal.signal(signal.SIGTERM, _sigterm_handler)
         try:
             async_attr = getattr(self._attribution, "attribute_chapter_async", None)
             if tool == "openrouter" and inspect.iscoroutinefunction(async_attr):
@@ -505,7 +510,8 @@ class NLPPipeline:
                     )
                     chapter_results.append((chapter, attr_result))
         finally:
-            signal.signal(signal.SIGTERM, _orig_sigterm)
+            if should_install_sigterm_handler:
+                signal.signal(signal.SIGTERM, _orig_sigterm)
 
         attribution_counts: dict[str, int] = defaultdict(int)
         attributed_chapters = []

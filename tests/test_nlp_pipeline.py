@@ -305,6 +305,38 @@ def test_pipeline_attribute_openrouter_uses_async_chapter_attribution(tmp_path):
     )
 
 
+def test_pipeline_attribute_runs_from_worker_thread(tmp_path):
+    """Task-service worker threads can run attribution without installing signal handlers."""
+    from kenkui.nlp.models import AttributionResult
+
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline._attribution.attribute_chapter.return_value = AttributionResult(attributions=[])
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+    result_holder: dict[str, object] = {}
+
+    def _run_attribute() -> None:
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+            patch("kenkui.nlp.pipeline._attribution_to_segments", return_value=[]),
+            patch("kenkui.nlp.pipeline.book_hash", return_value="deadbeef"),
+        ):
+            result_holder["result"] = pipeline.attribute(book_path, chapters, roster, use_cache=True)
+
+    thread = threading.Thread(target=_run_attribute)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    result = result_holder["result"]
+    assert isinstance(result, NLPResult)
+    pipeline._attribution.attribute_chapter.assert_called_once()
+
+
 def test_pipeline_attribute_uses_cache_when_available(tmp_path):
     """attribute() returns cached NLPResult without calling attribute_chapter."""
     pipeline = _make_pipeline()

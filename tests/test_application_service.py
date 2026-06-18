@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -535,6 +536,50 @@ def test_http_adapter_exposes_provider_models_and_credential_test(tmp_path, monk
         test_response = client.post("/v1/provider-credentials/openai/test")
         assert test_response.status_code == 200
         assert test_response.json()["status"] == "ok"
+
+
+def test_application_service_lists_analysis_cache_candidates(tmp_path, monkeypatch):
+    import kenkui.nlp as nlp_module
+
+    ebook = tmp_path / "book.epub"
+    ebook.write_text("fake", encoding="utf-8")
+    cache_dir = tmp_path / "nlp_cache"
+    cache_dir.mkdir()
+    book_hash = "abc123"
+    attribution = cache_dir / f"{book_hash}-ollama-llama3_2.json"
+    attribution.write_text(
+        json.dumps({
+            "book_hash": book_hash,
+            "provider": "ollama",
+            "model": "llama3.2",
+            "characters": [
+                {"character_id": "alice", "display_name": "Alice", "quote_count": 3, "mention_count": 5, "gender_pronoun": "she"}
+            ],
+            "chapters": [{"index": 1}],
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(nlp_module, "book_hash", lambda _ebook: book_hash)
+    monkeypatch.setattr(nlp_module, "_get_config_dir", lambda: tmp_path)
+
+    service = KenkuiService(queue_file=tmp_path / "queue.toml")
+    result = service.analysis_cache_candidates(str(ebook))
+
+    assert result["book_hash"] == book_hash
+    assert result["candidates"][0] == {
+        "cache_id": attribution.name,
+        "step": "attribution",
+        "provider": "ollama",
+        "model": "llama3.2",
+        "method": "",
+        "created_at": "",
+        "description": "Full attribution cache · ollama · llama3.2",
+        "path": str(attribution),
+        "character_count": 1,
+        "chapter_count": 1,
+        "quote_count": 3,
+    }
 
 
 def test_application_service_full_analysis_task_result_shape(tmp_path, monkeypatch):
