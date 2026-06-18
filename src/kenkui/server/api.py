@@ -318,6 +318,7 @@ def create_app():
             discovery_method=request.discovery_method,
             attribution_provider=request.attribution_provider,
             attribution_model=request.attribution_model,
+            use_cache=request.use_cache,
         )
 
     @app.get("/voices", response_model=VoiceListResponse)

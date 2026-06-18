@@ -468,6 +468,39 @@ def test_http_adapter_exposes_config_patch_and_provider_credentials(tmp_path, mo
         assert "openrouter" not in stored
 
 
+def test_http_analyze_route_forwards_use_cache_false(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from kenkui.server import api
+
+    service = KenkuiService(queue_file=tmp_path / "http-queue.toml")
+    captured: dict[str, object] = {}
+
+    def fake_analyze_book(ebook_path, **kwargs):
+        captured["ebook_path"] = ebook_path
+        captured.update(kwargs)
+        return service.task_response(
+            Task(
+                task_id="analysis-1",
+                type=TaskType.FULL_ANALYSIS,
+            )
+        )
+
+    monkeypatch.setattr(service, "analyze_book", fake_analyze_book)
+    monkeypatch.setattr(api, "get_service", lambda: service)
+
+    with TestClient(api.create_app()) as client:
+        response = client.post(
+            "/v1/books/analyze",
+            json={"ebook_path": "/books/demo.epub", "use_cache": False},
+        )
+
+    assert response.status_code == 202
+    assert captured["ebook_path"] == "/books/demo.epub"
+    assert captured["use_cache"] is False
+
+
 def test_http_adapter_exposes_provider_models_and_credential_test(tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
@@ -549,6 +582,30 @@ def test_application_service_full_analysis_task_result_shape(tmp_path, monkeypat
     assert result["attribution_provider"] == "openrouter"
     assert result["cache_status"] == "miss"
     assert progress[-1] == (100, "Attribution: Attribution complete")
+
+
+def test_application_service_full_analysis_can_bypass_cache(tmp_path, monkeypatch):
+    import kenkui.nlp as nlp_module
+    import kenkui.services.nlp_service as nlp_service
+
+    ebook = tmp_path / "book.epub"
+    ebook.write_text("fake", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_full_analysis(**kwargs):
+        captured.update(kwargs)
+        return NLPResult(characters=[], chapters=[], book_hash="bookhash")
+
+    monkeypatch.setattr(nlp_service, "full_analysis", fake_full_analysis)
+    monkeypatch.setattr(nlp_module, "get_cached_result", lambda *args, **kwargs: object())
+    monkeypatch.setattr(nlp_module, "attribution_cache_path", lambda *args, **kwargs: tmp_path / "annotated.json")
+    monkeypatch.setattr(nlp_module, "list_cached_rosters", lambda _ebook: [])
+
+    service = KenkuiService(queue_file=tmp_path / "queue.toml")
+    result = service._run_full_analysis(ebook_path=str(ebook), use_cache=False)
+
+    assert captured["use_cache"] is False
+    assert result["cache_status"] == "miss"
 
 
 def test_task_runner_logs_task_lifecycle(caplog):

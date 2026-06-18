@@ -935,6 +935,7 @@ class KenkuiService:
         discovery_method: str | None = None,
         attribution_provider: str | None = None,
         attribution_model: str | None = None,
+        use_cache: bool = True,
         progress_callback=None,
     ) -> dict[str, Any]:
         from kenkui.nlp import attribution_cache_path, get_cached_result, list_cached_rosters
@@ -955,7 +956,7 @@ class KenkuiService:
             or self._app_config.nlp_attribution_model
             or effective_extraction_model
         )
-        cache_hit = (
+        cache_hit = use_cache and (
             get_cached_result(
                 ebook,
                 provider=effective_attribution_provider,
@@ -981,6 +982,7 @@ class KenkuiService:
             attribution_model=request_attribution_model,
             extraction_progress_callback=_extraction_progress,
             attribution_progress_callback=_attribution_progress,
+            use_cache=use_cache,
         )
         annotated_path = attribution_cache_path(
             ebook,
@@ -1017,6 +1019,7 @@ class KenkuiService:
         discovery_method: str | None = None,
         attribution_provider: str | None = None,
         attribution_model: str | None = None,
+        use_cache: bool = True,
     ) -> TaskResponse:
         task = self.task_runner.submit(
             TaskType.FULL_ANALYSIS,
@@ -1027,6 +1030,7 @@ class KenkuiService:
             discovery_method=discovery_method,
             attribution_provider=attribution_provider,
             attribution_model=attribution_model,
+            use_cache=use_cache,
         )
         logger.info(
             "Submitted analysis task task_id=%s ebook_path=%s provider=%s model=%s",

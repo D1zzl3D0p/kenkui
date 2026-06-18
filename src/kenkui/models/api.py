@@ -142,6 +142,7 @@ class BookAnalyzeRequest(BaseModel):
     discovery_method: str | None = None
     attribution_provider: str | None = None
     attribution_model: str | None = None
+    use_cache: bool = True
 
 
 class ProviderCredentialStatus(BaseModel):
