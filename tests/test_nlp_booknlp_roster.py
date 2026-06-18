@@ -65,6 +65,23 @@ class TestBuildRosterFromBookNLP:
             result = build_roster_from_booknlp("some text")
         assert result is None
 
+    def test_returns_none_when_booknlp_import_raises_runtime_error(self):
+        """Torch/Transformers import-time errors should degrade like missing BookNLP."""
+        from kenkui.nlp.booknlp_roster import build_roster_from_booknlp
+
+        with patch("builtins.__import__") as mock_import:
+            real_import = __import__
+
+            def fake_import(name, *args, **kwargs):
+                if name == "booknlp.booknlp":
+                    raise RuntimeError("torch duplicate Meta kernel registration")
+                return real_import(name, *args, **kwargs)
+
+            mock_import.side_effect = fake_import
+            result = build_roster_from_booknlp("some text")
+
+        assert result is None
+
     def test_happy_path_returns_roster(self, mock_booknlp_module, tmp_path):
         from kenkui.nlp.booknlp_roster import build_roster_from_booknlp
 

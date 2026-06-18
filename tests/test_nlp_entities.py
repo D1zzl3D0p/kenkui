@@ -441,7 +441,7 @@ class TestBuildRosterWithLLM:
             {"canonical_name": "Harry Potter", "aliases": ["Harry Potter", "Harry", "Mr. Potter"]},
             {"canonical_name": "Ron Weasley", "aliases": ["Ron Weasley", "Ron"]},
         ])
-        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
+        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm, method="llm")
         canonicals = {g.canonical_name for g in result.characters}
         assert "Harry Potter" in canonicals
         assert "Ron Weasley" in canonicals
@@ -451,14 +451,18 @@ class TestBuildRosterWithLLM:
         llm = _mock_llm_roster([
             {"canonical_name": "Harry Potter", "aliases": ["Harry Potter", "Harry", "Mr. Potter"]},
         ])
-        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
+        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm, method="llm")
         assert len(result.characters) == 1
         hp = result.characters[0]
         assert hp.canonical_name == "Harry Potter"
         assert "Harry" in hp.aliases
         assert "Mr. Potter" in hp.aliases
 
-    def test_llm_failure_falls_back_to_heuristic(self):
+    def test_llm_failure_falls_back_to_heuristic(self, monkeypatch):
+        monkeypatch.setattr(
+            "kenkui.nlp.booknlp_roster.build_roster_from_booknlp",
+            lambda text: None,
+        )
         text = "Harry Potter walked in. Harry smiled."
         nlp = MagicMock()
         doc = MagicMock()
@@ -482,7 +486,7 @@ class TestBuildRosterWithLLM:
             {"canonical_name": "Harry", "aliases": ["Harry"]},
             {"canonical_name": "Gandalf", "aliases": ["Gandalf", "The Grey"]},  # not in text
         ])
-        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
+        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm, method="llm")
         canonicals = {g.canonical_name for g in result.characters}
         assert not any("Gandalf" in c for c in canonicals)
 
@@ -493,12 +497,16 @@ class TestBuildRosterWithLLM:
             {"canonical_name": "Harry Potter", "aliases": ["Harry Potter"]},
             {"canonical_name": "Harry", "aliases": ["Harry"]},
         ])
-        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm)
+        result = build_roster_with_llm(text, _mock_nlp_no_names(), llm, method="llm")
         # Heuristic should collapse these into a single canonical
         assert len(result.characters) == 1
         assert result.characters[0].canonical_name == "Harry Potter"
 
-    def test_empty_llm_roster_falls_back_to_heuristic(self):
+    def test_empty_llm_roster_falls_back_to_heuristic(self, monkeypatch):
+        monkeypatch.setattr(
+            "kenkui.nlp.booknlp_roster.build_roster_from_booknlp",
+            lambda text: None,
+        )
         text = "Harry Potter walked in."
         nlp = MagicMock()
         doc = MagicMock()

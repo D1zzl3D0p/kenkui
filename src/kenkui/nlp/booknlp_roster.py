@@ -112,6 +112,14 @@ def build_roster_from_booknlp(
     except ImportError:
         logger.info("build_roster_from_booknlp: booknlp not installed; skipping")
         return None
+    except Exception as exc:
+        # BookNLP imports a large Torch/Transformers stack. Some supported local
+        # environments can raise runtime errors during import (for example,
+        # duplicate Torch Meta-kernel registration after another test or tool has
+        # imported distributed tensor modules). Treat those as BookNLP
+        # unavailable so auto discovery can fall through to the LLM/spaCy tiers.
+        logger.warning("build_roster_from_booknlp: booknlp import failed (%s)", exc)
+        return None
 
     from .entities import _cluster_by_heuristic
     from .models import CharacterRoster

@@ -159,6 +159,13 @@ class AppConfig(BaseSettings):
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppConfig:
         """Create AppConfig from a dict only, bypassing env-var settings sources."""
+        data = dict(data)
+        if data.get("post_processing") is None:
+            # Older config files and hand-written TOML may contain an explicit
+            # `post_processing = null`. Treat that the same as an absent key so
+            # Pydantic uses the PostProcessingConfig default factory.
+            data.pop("post_processing", None)
+
         class _InitOnly(cls):  # type: ignore[valid-type]
             @classmethod
             def settings_customise_sources(
