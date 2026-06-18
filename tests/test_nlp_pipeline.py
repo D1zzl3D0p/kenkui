@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 from kenkui.models import AttributionTool, Chapter, CharacterInfo, NLPResult
@@ -116,6 +117,34 @@ def test_pipeline_extract_returns_roster(tmp_path):
     assert result.characters == roster.characters
     pipeline._extraction.build_roster.assert_called_once()
     mock_put.assert_called_once()
+
+
+def test_pipeline_extract_runs_from_worker_thread(tmp_path):
+    """Task-service worker threads can run extraction without installing signal handlers."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline._extraction.build_roster.return_value = roster
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+    chapters = [_make_chapter()]
+    result_holder: dict[str, object] = {}
+
+    def _run_extract() -> None:
+        with (
+            patch("kenkui.nlp.pipeline.get_cache", return_value=None),
+            patch("kenkui.nlp.pipeline.put_cache"),
+        ):
+            result_holder["result"] = pipeline.extract(book_path, chapters, use_cache=True)
+
+    thread = threading.Thread(target=_run_extract)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    result = result_holder["result"]
+    assert isinstance(result, CharacterRoster)
+    assert result.characters == roster.characters
 
 
 def test_pipeline_extract_uses_cache_when_available(tmp_path):

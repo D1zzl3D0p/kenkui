@@ -27,6 +27,7 @@ from kenkui.services.application_service import (
 )
 from kenkui.services.execution_service import ExecutionOutcome
 from kenkui.services.job_service import build_processing_config
+from kenkui.services.task_service import Task, TaskStatus, TaskType
 
 
 def test_job_create_request_to_config_preserves_api_fields(tmp_path):
@@ -99,6 +100,25 @@ def test_application_service_queue_contract_persists(tmp_path):
     restored = KenkuiService(queue_file=queue_file)
     assert restored.queue().items[0].id == item.id
     assert restored.get_job_item(item.id).status == JobStatus.PENDING
+
+
+def test_application_service_task_response_preserves_dict_results(tmp_path):
+    """Completed analysis tasks must expose dict payloads directly to API clients."""
+    service = KenkuiService(queue_file=tmp_path / "queue.toml")
+    task = Task(
+        task_id="analysis-1",
+        type=TaskType.FULL_ANALYSIS,
+        status=TaskStatus.COMPLETED,
+        progress=100,
+        message="Done",
+        result={"characters": [{"character_id": "alice", "display_name": "Alice"}]},
+    )
+
+    response = service.task_response(task)
+
+    assert response.result == {
+        "characters": [{"character_id": "alice", "display_name": "Alice"}]
+    }
 
 
 def test_application_service_resets_stale_processing_jobs(tmp_path):
@@ -355,6 +375,8 @@ def test_http_adapter_uses_service_contract(tmp_path, monkeypatch, caplog):
     body = response.json()
     assert body["api_version"] == "v1"
     assert "local-queue" in body["capabilities"]
+    assert "provider-models" in body["capabilities"]
+    assert "provider-credentials" in body["capabilities"]
     assert response.headers["X-Request-Id"] == "req-123"
     assert any("Server startup" in record.message for record in caplog.records)
     assert any("HTTP request request_id=req-123 method=GET path=/v1/health status=200" in record.message for record in caplog.records)

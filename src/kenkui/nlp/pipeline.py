@@ -342,13 +342,18 @@ class NLPPipeline:
             if progress_callback:
                 progress_callback(_pct[0], msg)
 
-        # SIGTERM handling
-        _orig_sigterm = signal.getsignal(signal.SIGTERM)
+        # SIGTERM handlers are process-global and Python only allows installing
+        # them from the main interpreter thread. HTTP analysis tasks run in the
+        # task-service worker pool, so preserve graceful CLI cancellation when
+        # possible without breaking server-side threaded execution.
+        should_install_sigterm_handler = threading.current_thread() is threading.main_thread()
+        _orig_sigterm = signal.getsignal(signal.SIGTERM) if should_install_sigterm_handler else None
 
         def _sigterm_handler(signum: int, frame: object) -> None:
             raise KeyboardInterrupt("SIGTERM received")
 
-        signal.signal(signal.SIGTERM, _sigterm_handler)
+        if should_install_sigterm_handler:
+            signal.signal(signal.SIGTERM, _sigterm_handler)
         try:
             roster: CharacterRoster = with_retry(
                 self._extraction.build_roster,
@@ -362,7 +367,8 @@ class NLPPipeline:
                 book_path=book_path,
             )
         finally:
-            signal.signal(signal.SIGTERM, _orig_sigterm)
+            if should_install_sigterm_handler:
+                signal.signal(signal.SIGTERM, _orig_sigterm)
 
         # Strip pronoun-slug characters produced by hallucinating LLMs
         roster = CharacterRoster(

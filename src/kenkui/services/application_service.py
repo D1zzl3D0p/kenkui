@@ -99,6 +99,11 @@ def _strip_none(obj: object) -> object:
 def _model_dict(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
+    if isinstance(value, dict):
+        # Task functions commonly return API-ready dictionaries. Preserve that
+        # shape so clients receive `result.characters` instead of a stringified
+        # wrapper like `{value: "{'characters': ...}"}`.
+        return _strip_none(value)  # type: ignore[return-value]
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     if dataclasses.is_dataclass(value):
@@ -364,7 +369,15 @@ class KenkuiService:
             version=SERVICE_VERSION,
             server_version=SERVICE_VERSION,
             api_version=API_VERSION,
-            capabilities=["local-queue", "single-voice", "multi-voice", "voices", "book-parse"],
+            capabilities=[
+                "local-queue",
+                "single-voice",
+                "multi-voice",
+                "voices",
+                "book-parse",
+                "provider-models",
+                "provider-credentials",
+            ],
         )
 
     def status(self) -> StatusResponse:
