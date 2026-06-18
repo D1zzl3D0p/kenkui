@@ -95,6 +95,12 @@ class TestPut:
         assert "cover_image" not in entry.metadata
         assert "cover_mime_type" not in entry.metadata
 
+    def test_put_exposes_cover_as_data_url(self, cache: BookCache) -> None:
+        meta = _make_metadata()
+        meta.cover_mime_type = "image/png"
+        entry = cache.put("h1", "/b.epub", meta, [_make_chapter()])
+        assert entry.metadata["cover_data_url"] == "data:image/png;base64,iVBORyBmYWtlIGltYWdlIGJ5dGVz"
+
     def test_put_stores_metadata_fields(self, cache: BookCache) -> None:
         meta = _make_metadata(title="My Novel")
         entry = cache.put("h1", "/b.epub", meta, [_make_chapter()])

@@ -7,6 +7,7 @@ re-read from the original ebook file when AudioBuilder needs it.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import json
 import time
@@ -92,13 +93,17 @@ def _entry_from_dict(d: dict) -> BookEntry:
 
 def _metadata_to_dict(metadata: EbookMetadata) -> dict:
     """Serialize EbookMetadata, explicitly excluding cover_image bytes."""
-    return {
+    result = {
         "title": metadata.title,
         "author": metadata.author,
         "language": metadata.language,
         "publisher": metadata.publisher,
         "description": metadata.description,
     }
+    if metadata.cover_image and metadata.cover_mime_type:
+        encoded_cover = base64.b64encode(metadata.cover_image).decode("ascii")
+        result["cover_data_url"] = f"data:{metadata.cover_mime_type};base64,{encoded_cover}"
+    return result
 
 
 def _word_count(chapter: Chapter) -> int:
