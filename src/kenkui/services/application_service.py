@@ -269,6 +269,8 @@ class KenkuiService:
         self._cancel_requested_job_id: str | None = None
         self.task_registry = TaskRegistry()
         self.task_runner = TaskRunner(self.task_registry, max_workers=task_workers)
+        from kenkui.services.runtime_service import register_configured_runtimes
+        register_configured_runtimes(self._app_config)
         from kenkui.services.book_cache import BookCache
 
         self.book_cache = BookCache()
@@ -1393,13 +1395,18 @@ class KenkuiService:
     def multivoice_status(self) -> MultivoiceStatusResponse:
         spacy_ok = False
         spacy_model = None
-        try:
-            import spacy.util
+        nlp_mode = getattr(self._app_config, "nlp_execution_mode", NlpExecutionMode.LOCAL)
+        if nlp_mode == NlpExecutionMode.MODAL:
+            spacy_ok = True
+            spacy_model = "modal"
+        else:
+            try:
+                import spacy.util
 
-            spacy_ok = spacy.util.is_package("en_core_web_sm")
-            spacy_model = "en_core_web_sm" if spacy_ok else None
-        except Exception:
-            pass
+                spacy_ok = spacy.util.is_package("en_core_web_sm")
+                spacy_model = "en_core_web_sm" if spacy_ok else None
+            except Exception:
+                pass
 
         ollama_ok = False
         ollama_url = None
@@ -1414,7 +1421,9 @@ class KenkuiService:
         except Exception:
             pass
 
-        if spacy_ok and ollama_ok:
+        if nlp_mode == NlpExecutionMode.MODAL:
+            message = "Multi-voice ready via Modal NLP runtime"
+        elif spacy_ok and ollama_ok:
             message = "Multi-voice ready"
         elif not spacy_ok and not ollama_ok:
             message = "spaCy and Ollama not available"

@@ -102,7 +102,15 @@ def _get_or_load_model(
     eos_threshold: float = -4.0,
 ):
     """Return a cached TTSModel, loading it on first call for this config."""
-    from pocket_tts import TTSModel
+    try:
+        from pocket_tts import TTSModel
+    except ImportError as exc:
+        from kenkui.errors import KenkuiDependencyError
+
+        raise KenkuiDependencyError(
+            "pocket-tts is required for local TTS execution. Install the local TTS "
+            "extra or select tts_execution_mode='modal'."
+        ) from exc
 
     key = (temp, lsd_decode_steps, noise_clamp, eos_threshold)
     if key not in _model_cache:

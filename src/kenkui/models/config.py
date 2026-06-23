@@ -108,9 +108,61 @@ class AppConfig(BaseSettings):
     nlp_attribution_provider: str = ""   # falls back to nlp_provider when empty
     nlp_attribution_model: str = ""      # falls back to nlp_model when empty
     nlp_openrouter_attribution_concurrency: int = 4
+    modal_enabled: bool = False
+    modal_app_name: str = "kenkui"
+    modal_environment: str = ""
+    modal_tts_gpu: str = ""
+    modal_tts_cpu: int = 1
+    modal_tts_memory_mb: int = 4096
+    modal_tts_timeout_s: int = 3600
+    modal_nlp_cpu: int = 2
+    modal_nlp_memory_mb: int = 4096
+    modal_nlp_timeout_s: int = 1800
+    modal_artifact_backend: str = "modal_volume"
+    modal_artifact_volume: str = "kenkui-artifacts"
+    modal_keep_artifacts: bool = False
     cors_origins: list[str] = Field(
         default_factory=lambda: ["tauri://localhost", "http://tauri.localhost"]
     )
+
+    @field_validator(
+        "modal_tts_cpu",
+        "modal_nlp_cpu",
+        mode="before",
+    )
+    @classmethod
+    def _clamp_modal_cpu(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, value)
+
+    @field_validator(
+        "modal_tts_memory_mb",
+        "modal_nlp_memory_mb",
+        mode="before",
+    )
+    @classmethod
+    def _clamp_modal_memory(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 512
+        return max(512, value)
+
+    @field_validator(
+        "modal_tts_timeout_s",
+        "modal_nlp_timeout_s",
+        mode="before",
+    )
+    @classmethod
+    def _clamp_modal_timeout(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 60
+        return max(60, value)
 
     @field_validator("m4b_bitrate", mode="before")
     @classmethod
