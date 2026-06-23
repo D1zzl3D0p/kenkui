@@ -1,57 +1,47 @@
 from __future__ import annotations
 
-import sys
-import types
-
 import pytest
 
-from kenkui.models import AppConfig, AttributionExecutionMode, ExtractionTool, NlpExecutionMode
-from kenkui.nlp.providers._factory import get_attribution_provider, get_extraction_provider
-from kenkui.nlp_config import NLPConfig
-from kenkui.services.execution_service import get_tts_execution_provider
-from kenkui.services.runtime_service import register_configured_runtimes
+from kenkui.models import AppConfig
+from kenkui.services import runtime_service
+from kenkui.services.runtime_service import RuntimeRegistrationError, register_configured_runtimes
 
 
-class _DummyJob:
-    tts_execution_mode = type("Mode", (), {"value": "modal"})()
+class _EntryPoints(list):
+    def select(self, *, group: str):
+        assert group == "kenkui.runtime_providers"
+        return self
 
 
-class _DummyQueueItem:
-    job = _DummyJob()
+class _EntryPoint:
+    def __init__(self, name, register):
+        self.name = name
+        self._register = register
+
+    def load(self):
+        return self._register
 
 
-@pytest.fixture(autouse=True)
-def reset_runtime_hooks(monkeypatch):
-    import kenkui.nlp.providers._factory as factory
-    import kenkui.services.execution_service as execution
+def test_disabled_runtime_registration_does_not_discover_plugins(monkeypatch):
+    def fail_entry_points():
+        raise AssertionError("runtime plugins should not be discovered when modal is disabled")
 
-    monkeypatch.setattr(factory, "_ExtractionExt", None)
-    monkeypatch.setattr(factory, "_AttributionExt", None)
-    monkeypatch.setitem(execution._TTS_PROVIDERS, "local", execution.LocalTTSProvider)
-    execution._TTS_PROVIDERS.pop("modal", None)
-    yield
-    monkeypatch.setattr(factory, "_ExtractionExt", None)
-    monkeypatch.setattr(factory, "_AttributionExt", None)
-    execution._TTS_PROVIDERS.pop("modal", None)
-
-
-def test_disabled_runtime_registration_does_not_import_modal_runtime(monkeypatch):
-    def fail_import(name, *args, **kwargs):
-        if name == "kenkui.modal_runtime":
-            raise AssertionError("modal runtime should not be imported when disabled")
-        return original_import(name, *args, **kwargs)
-
-    original_import = __import__
-    monkeypatch.setattr("builtins.__import__", fail_import)
+    monkeypatch.setattr(runtime_service, "entry_points", fail_entry_points)
 
     register_configured_runtimes(AppConfig.from_dict({"modal_enabled": False}))
 
 
-def test_enabled_runtime_registration_invokes_modal_register(monkeypatch):
+def test_enabled_runtime_registration_invokes_modal_entry_point(monkeypatch):
     calls = []
-    module = types.ModuleType("kenkui.modal_runtime")
-    module.register_modal_runtime = lambda app_config=None: calls.append(app_config)
-    monkeypatch.setitem(sys.modules, "kenkui.modal_runtime", module)
+
+    def register(app_config=None):
+        calls.append(app_config)
+
+    monkeypatch.setattr(
+        runtime_service,
+        "entry_points",
+        lambda: _EntryPoints([_EntryPoint("modal", register)]),
+    )
 
     cfg = AppConfig.from_dict({"modal_enabled": True})
     register_configured_runtimes(cfg)
@@ -59,19 +49,8 @@ def test_enabled_runtime_registration_invokes_modal_register(monkeypatch):
     assert calls == [cfg]
 
 
-def test_modal_runtime_registers_tts_and_nlp_providers():
-    from kenkui.modal_runtime import register_modal_runtime
-    from kenkui.modal_runtime.nlp import ModalAttributionProvider, ModalExtractionProvider
-    from kenkui.modal_runtime.tts import ModalTTSProvider
+def test_enabled_runtime_registration_errors_when_modal_plugin_missing(monkeypatch):
+    monkeypatch.setattr(runtime_service, "entry_points", lambda: _EntryPoints([]))
 
-    register_modal_runtime(AppConfig.from_dict({"modal_enabled": True}))
-
-    assert isinstance(get_tts_execution_provider(_DummyQueueItem()), ModalTTSProvider)
-    extraction = get_extraction_provider(
-        NLPConfig(extraction_tool=ExtractionTool.OLLAMA, extraction_mode=NlpExecutionMode.MODAL)
-    )
-    attribution = get_attribution_provider(
-        NLPConfig(attribution_mode=AttributionExecutionMode.MODAL)
-    )
-    assert isinstance(extraction, ModalExtractionProvider)
-    assert isinstance(attribution, ModalAttributionProvider)
+    with pytest.raises(RuntimeRegistrationError, match="kenkui-modal"):
+        register_configured_runtimes(AppConfig.from_dict({"modal_enabled": True}))

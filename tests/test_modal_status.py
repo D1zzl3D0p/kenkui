@@ -1,9 +1,22 @@
 from __future__ import annotations
 
-import sys
-
 from kenkui.models import AppConfig, NlpExecutionMode
+from kenkui.services import runtime_service
 from kenkui.services.application_service import KenkuiService
+
+
+class _EntryPoints(list):
+    def select(self, *, group: str):
+        assert group == "kenkui.runtime_providers"
+        return self
+
+
+class _EntryPoint:
+    name = "modal"
+
+    @staticmethod
+    def load():
+        return lambda app_config=None: None
 
 
 def test_multivoice_status_modal_mode_does_not_require_local_spacy(monkeypatch, tmp_path):
@@ -12,9 +25,7 @@ def test_multivoice_status_modal_mode_does_not_require_local_spacy(monkeypatch, 
             raise AssertionError("local spaCy should not be imported for Modal NLP status")
         return original_import(name, *args, **kwargs)
 
-    module = type(sys)("kenkui.modal_runtime")
-    module.register_modal_runtime = lambda app_config=None: None
-    monkeypatch.setitem(sys.modules, "kenkui.modal_runtime", module)
+    monkeypatch.setattr(runtime_service, "entry_points", lambda: _EntryPoints([_EntryPoint()]))
     original_import = __import__
     monkeypatch.setattr("builtins.__import__", fail_spacy_import)
 
