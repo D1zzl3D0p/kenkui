@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import queue
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 def _processing_config(tmp_path: Path):
@@ -183,3 +186,102 @@ def test_stitching_progress_events_use_millisecond_units(tmp_path, monkeypatch):
     assert [event.unit for event in advanced] == ["milliseconds", "milliseconds"]
     assert [event.completed_units for event in advanced] == [250, 1000]
     assert all(not hasattr(event, "eta_seconds") for event in advanced)
+
+
+def test_process_chapters_completion_is_driven_by_futures_not_done_messages(tmp_path, monkeypatch):
+    from kenkui.models import AudioResult, Chapter
+    from kenkui.parsing import AudioBuilder
+
+    progress_events = []
+    result = AudioResult(
+        chapter_index=0,
+        title="Chapter 1",
+        file_path=tmp_path / "chapter.wav",
+        duration_ms=1000,
+    )
+
+    class FakeFuture:
+        def done(self):
+            return True
+
+        def result(self):
+            return result
+
+    class FakePool:
+        _processes = {}
+
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+
+        def submit(self, _fn, chapter, _cfg, _temp_dir, progress_queue, is_first):
+            progress_queue.put(("START", 123, chapter.title, 1, 7, is_first, chapter.index))
+            progress_queue.put(("UPDATE", 123, 1, 1, 1, 7))
+            return FakeFuture()
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            self.shutdown_args = (wait, cancel_futures)
+
+    monkeypatch.setattr(
+        "kenkui.parsing.multiprocessing.Manager",
+        lambda: SimpleNamespace(Queue=lambda: queue.Queue()),
+    )
+    monkeypatch.setattr("kenkui.parsing.ProcessPoolExecutor", FakePool)
+    monkeypatch.setattr("kenkui.parsing.as_completed", lambda futures: list(futures))
+
+    builder = AudioBuilder(_processing_config(tmp_path), progress_callback=progress_events.append)
+    builder.temp_dir = tmp_path
+
+    results = builder._process_chapters(
+        [Chapter(index=0, title="Chapter 1", paragraphs=["hello"])],
+        total_batches=1,
+        total_chars=7,
+    )
+
+    assert results == [result]
+    assert progress_events[-1].active_chapters[0].status == "completed"
+
+
+def test_process_chapters_broken_future_result_has_chapter_context(tmp_path, monkeypatch):
+    from kenkui.models import Chapter
+    from kenkui.parsing import AudioBuilder
+
+    class FakeFuture:
+        def done(self):
+            return True
+
+        def result(self):
+            raise BrokenPipeError("closed")
+
+    class FakePool:
+        _processes = {}
+
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+
+        def submit(self, *_args, **_kwargs):
+            return FakeFuture()
+
+        def shutdown(self, wait=False, cancel_futures=True):
+            self.shutdown_args = (wait, cancel_futures)
+
+    monkeypatch.setattr(
+        "kenkui.parsing.multiprocessing.Manager",
+        lambda: SimpleNamespace(Queue=lambda: queue.Queue()),
+    )
+    monkeypatch.setattr("kenkui.parsing.ProcessPoolExecutor", FakePool)
+    monkeypatch.setattr("kenkui.parsing.as_completed", lambda futures: list(futures))
+
+    builder = AudioBuilder(_processing_config(tmp_path))
+    builder.temp_dir = tmp_path
+
+    with pytest.raises(RuntimeError) as exc_info:
+        builder._process_chapters(
+            [Chapter(index=0, title="Pipe Chapter", paragraphs=["hello"])],
+            total_batches=1,
+            total_chars=5,
+        )
+
+    message = str(exc_info.value)
+    assert "Pipe Chapter" in message
+    assert "progress pipe closed unexpectedly" in message
+    assert "workers set to 4 or fewer" in message

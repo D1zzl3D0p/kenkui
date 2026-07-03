@@ -9,6 +9,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -32,6 +33,22 @@ from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .voice_loader import load_voice
 from .workers import worker_process_chapter
+
+WORKER_RECOVERY_MESSAGE = (
+    "Synthesis failed while collecting chapter worker results. "
+    "Restart the local runtime and retry with workers set to 4 or fewer."
+)
+
+
+def _worker_failure_message(chapter_title: str, exc: BaseException) -> str:
+    prefix = f"{WORKER_RECOVERY_MESSAGE} Chapter: {chapter_title or 'unknown'}."
+    if isinstance(exc, BrokenPipeError):
+        return f"{prefix} The worker progress pipe closed unexpectedly."
+    if isinstance(exc, BrokenProcessPool):
+        return f"{prefix} A worker process exited abruptly."
+    if isinstance(exc, (EOFError, OSError)) and "Broken pipe" in str(exc):
+        return f"{prefix} The worker progress pipe closed unexpectedly."
+    return f"{prefix} Worker error: {exc}"
 
 # ---------------------------------------------------------------------------
 # Pre-flight speaker/voice validation
@@ -659,9 +676,6 @@ class AudioBuilder:
         worker_errors: list[dict] = []
         worker_logs: list[str] = []
 
-        completed_chapters = 0
-        total_chapters = len(chapters)
-
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore
 
@@ -792,7 +806,6 @@ class AudioBuilder:
                                     active_chapters=_active_chapter_progress(),
                                 )
                                 del worker_state[pid]
-                                completed_chapters += 1
                         elif event == "ERROR":
                             if pid in worker_state:
                                 worker_state[pid]["status"] = "failed"
@@ -827,11 +840,30 @@ class AudioBuilder:
                         pool.shutdown(wait=False, cancel_futures=True)
                     return []
 
-                if all(f.done() for f in futures) and not worker_state and queue.empty():
+                if all(f.done() for f in futures) and queue.empty():
+                    for state in tuple(worker_state.values()):
+                        state["status"] = "completed"
+                        state["current"] = state.get("total", 0)
+                        self._emit_progress(
+                            "tts_synthesis",
+                            "advanced",
+                            state.get("title", ""),
+                            completed_units=self._completed_tts_units,
+                            total_units=total_chars,
+                            unit="chars",
+                            active_chapters=_active_chapter_progress(),
+                        )
+                    worker_state.clear()
                     break
 
             for future in as_completed(futures):
-                res = future.result()
+                chapter = futures[future]
+                try:
+                    res = future.result()
+                except (BrokenPipeError, BrokenProcessPool, EOFError, OSError) as exc:
+                    message = _worker_failure_message(chapter.title, exc)
+                    logger.exception(message)
+                    raise RuntimeError(message) from exc
                 if res:
                     results.append(res)
 
@@ -853,9 +885,6 @@ class AudioBuilder:
                     tb = err.get("traceback", "")
                     if tb:
                         logger.error("%s", tb)
-
-        # Suppress unused variable warning — total_chapters used in loop above
-        _ = total_chapters
 
         return sorted(results, key=lambda x: x.chapter_index)
 

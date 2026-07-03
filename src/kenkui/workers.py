@@ -44,10 +44,19 @@ logger = logging.getLogger(__name__)
 
 FIRST_CHAPTER_BATCH_SIZE = 250  # Smaller → more frequent ETA updates
 DEFAULT_BATCH_SIZE = 800  # Larger → fewer TTS calls, better throughput
-UNBOUNDED_TTS_MAX_TOKENS = 100_000
+DEFAULT_TTS_MAX_TOKENS = 50
 
 
 _DISABLED_MALLOC_VALUES = {"", "0", "false", "no", "off", "disable", "disabled"}
+
+
+def _safe_queue_put(queue: multiprocessing.Queue, message: tuple) -> bool:
+    try:
+        queue.put(message)
+        return True
+    except (BrokenPipeError, EOFError, OSError) as exc:
+        logger.debug("Worker progress queue write failed: %s", exc)
+        return False
 
 
 def _sanitize_disabled_malloc_debug_env() -> None:
@@ -73,11 +82,7 @@ def _effective_tts_max_tokens(config_dict: dict) -> int:
         configured = int(config_dict.get("tts_max_tokens_per_chunk", 0) or 0)
     except (TypeError, ValueError):
         configured = 0
-    return configured if configured > 0 else UNBOUNDED_TTS_MAX_TOKENS
-
-
-def _uses_unbounded_tts_chunks(config_dict: dict) -> bool:
-    return _effective_tts_max_tokens(config_dict) == UNBOUNDED_TTS_MAX_TOKENS
+    return configured if configured > 0 else DEFAULT_TTS_MAX_TOKENS
 
 
 def _log_tts_max_tokens_once(pid: int, max_tokens: int, log_message) -> None:
@@ -207,17 +212,29 @@ def get_batch_info(chapter: Chapter, is_first_chapter: bool = False) -> tuple[in
             part
             for s in chapter.segments
             if not s.is_scene_break
-            for part in _split_paragraph_text(s.text)
+            for part in _segment_tts_parts(s.text)
         ]
         total_chars = sum(len(b) for b in batches)
         return len(batches), total_chars
-    batches = [p for p in chapter.paragraphs if p.strip()]
+    batch_size = FIRST_CHAPTER_BATCH_SIZE if is_first_chapter else DEFAULT_BATCH_SIZE
+    batches = [
+        batch
+        for group in _split_at_scene_breaks(chapter.paragraphs)
+        for batch in batch_text(group, max_chars=batch_size)
+    ]
     total_chars = sum(len(b) for b in batches)
     return len(batches), total_chars
 
 
 def _split_paragraph_text(text: str) -> list[str]:
     return [part.strip() for part in re.split(r"\n\s*\n+", text) if part.strip()]
+
+
+def _segment_tts_parts(text: str) -> list[str]:
+    parts: list[str] = []
+    for paragraph in _split_paragraph_text(text):
+        parts.extend(batch_text([paragraph], max_chars=DEFAULT_BATCH_SIZE, merge_short=False))
+    return parts
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +318,7 @@ def worker_process_chapter(
 
     def log_message(msg: str):
         if config_dict.get("verbose", False):
-            queue.put(("LOG", pid, msg))
+            _safe_queue_put(queue, ("LOG", pid, msg))
 
     # Suppress all Python-level stdout/stderr in non-verbose mode so that
     # library chatter doesn't bleed through.
@@ -365,8 +382,8 @@ def worker_process_chapter(
 
     error_msg = str(last_error) if last_error else "Unknown error after all retries"
     log_message(f"[Worker {pid}] ✗ Failed after {max_retries + 1} attempts: {error_msg}")
-    queue.put(("ERROR", pid, chapter.title, error_msg, f"Failed after {max_retries + 1} attempts"))
-    queue.put(("DONE", pid))
+    _safe_queue_put(queue, ("ERROR", pid, chapter.title, error_msg, f"Failed after {max_retries + 1} attempts"))
+    _safe_queue_put(queue, ("DONE", pid))
     return None
 
 
@@ -422,10 +439,7 @@ def _process_chapter_inner(
         batch_size = FIRST_CHAPTER_BATCH_SIZE if is_first_chapter else DEFAULT_BATCH_SIZE
         sub_groups = _split_at_scene_breaks(chapter.paragraphs)
         # Pre-calculate totals across all sub-groups for progress reporting
-        if _uses_unbounded_tts_chunks(config_dict):
-            all_batches = [[p for p in g if p.strip()] for g in sub_groups]
-        else:
-            all_batches = [batch_text(g, max_chars=batch_size) for g in sub_groups]
+        all_batches = [batch_text(g, max_chars=batch_size) for g in sub_groups]
         total_batches = sum(len(b) for b in all_batches)
         total_chars = sum(len(b) for batches in all_batches for b in batches)
         log_message(
@@ -433,7 +447,7 @@ def _process_chapter_inner(
             f"{len(sub_groups)} scene group(s), {total_batches} batches ({total_chars} chars)"
         )
 
-        queue.put(("START", pid, chapter.title, total_batches, total_chars, is_first_chapter, chapter.index))
+        _safe_queue_put(queue, ("START", pid, chapter.title, total_batches, total_chars, is_first_chapter, chapter.index))
 
         pause_line_ms = config_dict.get("pause_line_ms", 400)
         pause_scene_break_ms = config_dict.get("pause_scene_break_ms", 4000)
@@ -486,7 +500,7 @@ def _process_chapter_inner(
                         audio_seg = _autogain_segment(audio_seg, autogain_target_db)
                     full_audio += audio_seg + _pause_for_segment(pause_line_ms, batch)
                 global_batch_idx += 1
-                queue.put(("UPDATE", pid, 1, global_batch_idx, total_batches, len(batch)))
+                _safe_queue_put(queue, ("UPDATE", pid, 1, global_batch_idx, total_batches, len(batch)))
 
         return _finalise_chapter(
             chapter, full_audio, config_dict, temp_dir, queue, pid, log_message
@@ -494,14 +508,14 @@ def _process_chapter_inner(
 
     except KeyboardInterrupt:
         log_message(f"[Worker {pid}] Interrupted")
-        queue.put(("ERROR", pid, chapter.title, "KeyboardInterrupt", "Worker interrupted"))
-        queue.put(("DONE", pid))
+        _safe_queue_put(queue, ("ERROR", pid, chapter.title, "KeyboardInterrupt", "Worker interrupted"))
+        _safe_queue_put(queue, ("DONE", pid))
         return None
     except Exception as exc:
         error_text = traceback.format_exc()
         log_message(f"[Worker {pid}] ✗ {exc}\n{error_text[:400]}")
-        queue.put(("ERROR", pid, chapter.title, str(exc), error_text))
-        queue.put(("DONE", pid))
+        _safe_queue_put(queue, ("ERROR", pid, chapter.title, str(exc), error_text))
+        _safe_queue_put(queue, ("DONE", pid))
         return None
 
 
@@ -579,12 +593,12 @@ def _render_multi_voice(
                     f"(tried: {[voice_name] + fallback_voices})"
                 ) from primary_exc
 
-    use_unbounded_chunks = _uses_unbounded_tts_chunks(config_dict)
     total_segments = sum(
-        1 if seg.is_scene_break else len(_split_paragraph_text(seg.text) if use_unbounded_chunks else [seg.text])
+        1 if seg.is_scene_break else len(_segment_tts_parts(seg.text))
         for seg in segments
     )
-    queue.put(
+    _safe_queue_put(
+        queue,
         (
             "START",
             pid,
@@ -633,10 +647,10 @@ def _render_multi_voice(
         if seg.is_scene_break:
             rendered[seg.index] = (AudioSegment.silent(duration=pause_scene_break_ms), "")
             completed_units += 1
-            queue.put(("UPDATE", pid, 1, completed_units, total_segments, 0))
+            _safe_queue_put(queue, ("UPDATE", pid, 1, completed_units, total_segments, 0))
             continue
         voice_state = speaker_states[seg.speaker]
-        parts = _split_paragraph_text(seg.text) if use_unbounded_chunks else [seg.text]
+        parts = _segment_tts_parts(seg.text)
         combined = AudioSegment.empty()
         for part_idx, part in enumerate(parts):
             seg_fae = fae_cfg if fae_cfg is not None else max(3, len(part) // 150)
@@ -662,7 +676,7 @@ def _render_multi_voice(
                 if part_idx < len(parts) - 1:
                     combined += _pause_for_segment(pause_line_ms, part)
             completed_units += 1
-            queue.put(("UPDATE", pid, 1, completed_units, total_segments, len(part)))
+            _safe_queue_put(queue, ("UPDATE", pid, 1, completed_units, total_segments, len(part)))
         rendered[seg.index] = (combined, seg.text)
 
     # Reassemble in original index order
@@ -713,7 +727,7 @@ def _render_text(
     total_batches: int,
     frames_after_eos: int = 0,
     apostrophe_mode: ApostropheMode | None = None,
-    max_tokens: int = UNBOUNDED_TTS_MAX_TOKENS,
+    max_tokens: int = DEFAULT_TTS_MAX_TOKENS,
     chapter_title: str = "",
     speaker: str = "",
     segment_index: int | None = None,
@@ -777,7 +791,7 @@ def _finalise_chapter(
     """Append chapter silence, write WAV, and return AudioResult."""
     if len(full_audio) < 1000:
         log_message(f"[Worker {pid}] ✗ Audio too short ({len(full_audio)}ms), skipping")
-        queue.put(("DONE", pid))
+        _safe_queue_put(queue, ("DONE", pid))
         return None
 
     full_audio += AudioSegment.silent(duration=config_dict.get("pause_chapter_ms", 2000))
@@ -793,7 +807,7 @@ def _finalise_chapter(
         apply_chapter_effects(filename, PostProcessingConfig.from_dict(pp_data))
 
     log_message(f"[Worker {pid}] ✓ {chapter.title}: {len(full_audio)}ms saved")
-    queue.put(("DONE", pid))
+    _safe_queue_put(queue, ("DONE", pid))
     return AudioResult(chapter.index, chapter.title, filename, len(full_audio))
 
 
@@ -804,5 +818,5 @@ __all__ = [
     "_is_scene_break",
     "_split_at_scene_breaks",
     "_autogain_segment",
-    "UNBOUNDED_TTS_MAX_TOKENS",
+    "DEFAULT_TTS_MAX_TOKENS",
 ]

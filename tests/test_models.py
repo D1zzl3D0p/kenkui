@@ -142,8 +142,14 @@ class TestAppConfigRoundTrip:
         restored = AppConfig.from_dict(cfg.to_dict())
         assert restored.frames_after_eos == 10
 
-    def test_tts_max_tokens_per_chunk_default_is_unbounded(self):
-        assert AppConfig().tts_max_tokens_per_chunk == 0
+    def test_workers_default_is_memory_safe(self):
+        assert 1 <= AppConfig().workers <= 4
+
+    def test_workers_clamps_unsafe_values(self):
+        assert AppConfig.from_dict({"workers": 64}).workers == 4
+
+    def test_tts_max_tokens_per_chunk_default_is_bounded(self):
+        assert AppConfig().tts_max_tokens_per_chunk == 50
 
     def test_tts_max_tokens_per_chunk_round_trips(self):
         cfg = AppConfig(tts_max_tokens_per_chunk=50)
@@ -152,7 +158,7 @@ class TestAppConfigRoundTrip:
 
     def test_tts_max_tokens_per_chunk_clamps_negative_values(self):
         cfg = AppConfig.from_dict({"tts_max_tokens_per_chunk": -1})
-        assert cfg.tts_max_tokens_per_chunk == 0
+        assert cfg.tts_max_tokens_per_chunk == 1
 
     def test_noise_clamp_still_loads_from_legacy_config(self):
         """noise_clamp saved in old configs must still deserialize without error."""

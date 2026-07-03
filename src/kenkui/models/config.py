@@ -54,7 +54,7 @@ class AppConfig(BaseSettings):
     )
 
     name: str = "default"
-    workers: int = Field(default_factory=lambda: max(2, multiprocessing.cpu_count() - 2))
+    workers: int = Field(default_factory=lambda: min(4, max(2, multiprocessing.cpu_count() - 2)))
     verbose: bool = False
     log_path: Path | None = None
     keep_temp: bool = False
@@ -70,7 +70,7 @@ class AppConfig(BaseSettings):
     noise_clamp: float | None = None
     eos_threshold: float = -4.0
     frames_after_eos: int | None = None
-    tts_max_tokens_per_chunk: int = 0
+    tts_max_tokens_per_chunk: int = 50
     pdf_drop_code_blocks: bool = False
     pdf_drop_notes: bool = False
     pdf_drop_asides: bool = False
@@ -124,6 +124,15 @@ class AppConfig(BaseSettings):
     cors_origins: list[str] = Field(
         default_factory=lambda: ["tauri://localhost", "http://tauri.localhost"]
     )
+
+    @field_validator("workers", mode="before")
+    @classmethod
+    def _clamp_workers(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return min(4, max(2, multiprocessing.cpu_count() - 2))
+        return min(4, max(1, value))
 
     @field_validator(
         "modal_tts_cpu",
@@ -202,8 +211,8 @@ class AppConfig(BaseSettings):
         try:
             value = int(v)
         except (TypeError, ValueError):
-            return 0
-        return max(0, value)
+            return 50
+        return max(1, value)
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True)

@@ -44,7 +44,7 @@ class ProcessingConfig:
     noise_clamp: float | None = None
     eos_threshold: float = -4.0  # EOS detection threshold; higher (→0) = later cut-off
     frames_after_eos: int | None = None  # Frames after EoS (None = auto from text length)
-    tts_max_tokens_per_chunk: int = 0  # 0 = paragraph-sized/unbounded Pocket generation
+    tts_max_tokens_per_chunk: int = 50
     pdf_drop_code_blocks: bool = False
     pdf_drop_notes: bool = False
     pdf_drop_asides: bool = False

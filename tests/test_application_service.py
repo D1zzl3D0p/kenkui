@@ -134,6 +134,36 @@ def test_application_service_resets_stale_processing_jobs(tmp_path):
     assert restored.get_job_item(item.id).status == JobStatus.PENDING
 
 
+def test_application_service_retries_failed_job(tmp_path, monkeypatch):
+    service = KenkuiService(queue_file=tmp_path / "queue.toml")
+    item = service.add_job(JobConfig(ebook_path=Path("book.epub")))
+    item.status = JobStatus.FAILED
+    item.progress = 57.0
+    item.current_chapter = "Chapter 7"
+    item.eta_seconds = 99
+    item.error_message = "render failed"
+    item.output_path = "/tmp/failed.m4b"
+    item.started_at = 100.0
+    item.completed_at = 200.0
+    item.provider_status = "failed"
+    service._save()
+    started = []
+    monkeypatch.setattr(service, "start_processing", lambda: started.append(True) or True)
+
+    assert service.retry_job(item.id)
+
+    assert item.status == JobStatus.PENDING
+    assert item.progress == 0.0
+    assert item.current_chapter == ""
+    assert item.eta_seconds == 0
+    assert item.error_message == ""
+    assert item.output_path == ""
+    assert item.started_at == 0.0
+    assert item.completed_at == 0.0
+    assert item.provider_status == "retrying"
+    assert started == [True]
+
+
 def test_application_service_patch_config_merges_nested_values(tmp_path):
     service = KenkuiService(
         queue_file=tmp_path / "queue.toml",
@@ -262,6 +292,39 @@ def test_queue_processing_accepts_legacy_three_argument_progress(tmp_path, monke
     assert item.progress == 100.0
     assert item.current_chapter == ""
     assert item.error_message == ""
+
+
+def test_queue_failure_message_names_synthesis_recovery(tmp_path, monkeypatch):
+    class BrokenPipeProvider:
+        def execute(
+            self,
+            *,
+            item,
+            cfg,
+            app_config,
+            progress_callback,
+            metadata_callback,
+            pause_check,
+            cancel_check,
+        ):
+            del item, cfg, app_config, progress_callback, metadata_callback, pause_check, cancel_check
+            return ExecutionOutcome(success=False, error_message="[Errno 32] Broken pipe")
+
+        def cancel(self, item):
+            del item
+
+    service = KenkuiService(queue_file=tmp_path / "queue.toml")
+    monkeypatch.setattr(
+        "kenkui.services.application_service.get_tts_execution_provider",
+        lambda item: BrokenPipeProvider(),
+    )
+    item = service.add_job(JobConfig(ebook_path=Path("book.epub")))
+
+    service._process_job(item)
+
+    assert item.status == JobStatus.FAILED
+    assert "Synthesis failed" in item.error_message
+    assert "workers set to 4 or fewer" in item.error_message
 
 
 def test_queue_pause_keeps_job_visible_and_blocks_following_jobs(tmp_path, monkeypatch):
@@ -401,6 +464,30 @@ def test_http_adapter_exposes_cancel_and_remove_routes(tmp_path, monkeypatch):
         remove_response = client.delete(f"/v1/queue/{item.id}")
         assert remove_response.status_code == 200
         assert service.get_job_item(item.id) is None
+
+
+def test_http_adapter_exposes_retry_route(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from kenkui.server import api
+
+    service = KenkuiService(queue_file=tmp_path / "http-queue.toml")
+    monkeypatch.setattr(api, "get_service", lambda: service)
+    monkeypatch.setattr(service, "start_processing", lambda: True)
+    item = service.add_job(JobConfig(ebook_path=Path("book.epub")))
+    item.status = JobStatus.FAILED
+    item.error_message = "render failed"
+    service._save()
+
+    with TestClient(api.create_app()) as client:
+        retry_response = client.post(f"/v1/queue/{item.id}/retry")
+
+    assert retry_response.status_code == 200
+    body = retry_response.json()
+    assert body["id"] == item.id
+    assert body["status"] == "pending"
+    assert body["error_message"] == ""
 
 
 def test_http_adapter_exposes_config_patch_and_provider_credentials(tmp_path, monkeypatch):

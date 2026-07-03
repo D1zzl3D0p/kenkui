@@ -193,6 +193,17 @@ def create_app():
             raise HTTPException(status_code=400, detail="Job is not paused")
         return OkResponse()
 
+    @app.post("/queue/{job_id}/retry", response_model=JobResponse)
+    @app.post("/v1/queue/{job_id}/retry", response_model=JobResponse)
+    def retry_job(job_id: str):
+        service = get_service()
+        if not service.retry_job(job_id):
+            raise HTTPException(status_code=400, detail="Job is not failed")
+        response = service.get_job(job_id)
+        if response is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return response
+
     @app.post("/queue/start")
     @app.post("/v1/queue/start")
     def start_processing():

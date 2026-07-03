@@ -12,6 +12,23 @@ from kenkui.models import QueueItem
 logger = logging.getLogger(__name__)
 
 
+def actionable_tts_error_message(error: object) -> str:
+    text = str(error).strip()
+    if not text and isinstance(error, BaseException):
+        text = error.__class__.__name__
+    if isinstance(error, BrokenPipeError) or "Broken pipe" in text:
+        return (
+            "Synthesis failed because a chapter worker pipe closed unexpectedly. "
+            "Restart the local runtime and retry with workers set to 4 or fewer."
+        )
+    if "process pool" in text.lower() or "worker process" in text.lower():
+        return (
+            "Synthesis failed because a chapter worker process exited unexpectedly. "
+            "Restart the local runtime and retry with workers set to 4 or fewer."
+        )
+    return f"Synthesis failed: {text}"
+
+
 @dataclass
 class ExecutionOutcome:
     success: bool
@@ -69,7 +86,11 @@ class LocalTTSProvider:
             success = builder.run()
         except Exception as exc:
             logger.exception("Local TTS execution failed: %s", exc)
-            return ExecutionOutcome(success=False, error_message=str(exc), provider_status="failed")
+            return ExecutionOutcome(
+                success=False,
+                error_message=actionable_tts_error_message(exc),
+                provider_status="failed",
+            )
 
         if getattr(builder, "was_cancelled", False):
             return ExecutionOutcome(success=False, cancelled=True, provider_status="cancelled")
@@ -77,7 +98,11 @@ class LocalTTSProvider:
             return ExecutionOutcome(success=False, paused=True, provider_status="paused")
         if success:
             return ExecutionOutcome(success=True, output_path=str(cfg.output_path), provider_status="completed")
-        return ExecutionOutcome(success=False, error_message="Conversion failed", provider_status="failed")
+        return ExecutionOutcome(
+            success=False,
+            error_message="Synthesis failed: no audiobook output was produced.",
+            provider_status="failed",
+        )
 
     def cancel(self, item: QueueItem) -> None:
         del item

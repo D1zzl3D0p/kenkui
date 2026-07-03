@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib.metadata
 import json
 import logging
 import os
@@ -69,7 +70,10 @@ from kenkui.models.api import (
     VoiceResponse,
 )
 from kenkui.progress import ProgressEvent
-from kenkui.services.execution_service import get_tts_execution_provider
+from kenkui.services.execution_service import (
+    actionable_tts_error_message,
+    get_tts_execution_provider,
+)
 from kenkui.services.job_service import build_processing_config
 from kenkui.services.provider_service import list_provider_models as _list_provider_models
 from kenkui.services.provider_service import (
@@ -81,7 +85,10 @@ from kenkui.utils import ApostropheMode
 logger = logging.getLogger(__name__)
 
 API_VERSION = "v1"
-SERVICE_VERSION = "0.1.0"
+try:
+    SERVICE_VERSION = importlib.metadata.version("kenkui")
+except importlib.metadata.PackageNotFoundError:
+    SERVICE_VERSION = "0.0.0+unknown"
 QUEUE_FILE = CONFIG_DIR / "queue.toml"
 LEGACY_QUEUE_FILE = CONFIG_DIR / "queue.yaml"
 PROVIDER_NAMES = ("anthropic", "openai", "google", "openrouter")
@@ -698,6 +705,35 @@ class KenkuiService:
         self.start_processing()
         return True
 
+    def retry_job(self, job_id: str) -> bool:
+        with self._lock:
+            item = self.get_job_item(job_id)
+            if item is None or item.status != JobStatus.FAILED:
+                return False
+            item.status = JobStatus.PENDING
+            item.progress = 0.0
+            item.current_chapter = ""
+            item.eta_seconds = 0
+            item.error_message = ""
+            item.output_path = ""
+            item.started_at = 0.0
+            item.completed_at = 0.0
+            item.execution_provider = item.job.tts_execution_mode.value
+            item.remote_job_id = ""
+            item.estimated_cost_usd = None
+            item.actual_cost_usd = None
+            item.cost_status = CostStatus.NONE
+            item.artifact_uri = ""
+            item.artifact_source = ""
+            item.provider_status = "retrying"
+            self._pause_requested = False
+            if self._cancel_requested_job_id == item.id:
+                self._cancel_requested_job_id = None
+            self._save()
+        logger.info("Retrying failed job job_id=%s", job_id)
+        self.start_processing()
+        return True
+
     def _process_loop(self) -> None:
         try:
             logger.info("Processing loop running")
@@ -788,17 +824,20 @@ class KenkuiService:
                     time.time() - started_at,
                 )
             else:
-                self.fail_job(item.id, outcome.error_message or "Conversion failed")
+                failure_message = actionable_tts_error_message(
+                    outcome.error_message or "Conversion failed"
+                )
+                self.fail_job(item.id, failure_message)
                 logger.warning(
                     "Job failed job_id=%s provider_status=%s duration_s=%.1f error=%s",
                     item.id,
                     outcome.provider_status or "",
                     time.time() - started_at,
-                    outcome.error_message or "Conversion failed",
+                    failure_message,
                 )
         except Exception as exc:
             logger.exception("Job %s failed: %s", item.id, exc)
-            self.fail_job(item.id, str(exc))
+            self.fail_job(item.id, actionable_tts_error_message(exc))
 
     def _progress_callback_for_job(self, job_id: str):
         def progress_callback(*args: Any) -> None:

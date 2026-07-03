@@ -55,6 +55,10 @@ class TestBatchTextSplitting:
                 len(chunk) <= 50 or "." in chunk
             )  # each chunk is at most one sentence
 
+    def test_hard_splits_single_oversized_sentence(self):
+        result = batch_text(["A" * 121], max_chars=50)
+        assert [len(chunk) for chunk in result] == [50, 50, 21]
+
     def test_long_paragraphs_flushed_before_merge(self):
         """A long paragraph should be emitted separately, not merged with next short one."""
         long = "A" * 900 + "."

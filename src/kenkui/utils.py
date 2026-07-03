@@ -58,19 +58,27 @@ def batch_text(
         chunks: list[str] = []
         current: list[str] = []
         current_len = 0
+
+        def _append_chunk(chunk: str) -> None:
+            if len(chunk) <= max_chars:
+                chunks.append(chunk)
+                return
+            for start in range(0, len(chunk), max_chars):
+                chunks.append(chunk[start : start + max_chars].strip())
+
         for sentence in sentences:
             slen = len(sentence)
             sep = 1 if current else 0
             if current_len + sep + slen > max_chars:
                 if current:
-                    chunks.append(" ".join(current))
+                    _append_chunk(" ".join(current))
                 current = [sentence]
                 current_len = slen
             else:
                 current.append(sentence)
                 current_len += sep + slen
         if current:
-            chunks.append(" ".join(current))
+            _append_chunk(" ".join(current))
         return chunks
 
     for para in paragraphs:

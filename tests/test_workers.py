@@ -30,12 +30,13 @@ from kenkui.voice_loader import load_voice
 from kenkui.voice_registry import VoiceCatalogEntry
 from kenkui.workers import (
     DEFAULT_BATCH_SIZE,
+    DEFAULT_TTS_MAX_TOKENS,
     FIRST_CHAPTER_BATCH_SIZE,
-    UNBOUNDED_TTS_MAX_TOKENS,
     _finalise_chapter,
     _get_or_load_model,
     _render_multi_voice,
     _render_text,
+    _safe_queue_put,
     _tensor_to_audio,
     get_batch_info,
     worker_process_chapter,
@@ -48,6 +49,13 @@ def _make_chapter(paragraphs: list[str], index: int = 0) -> Chapter:
         title=f"Chapter {index}",
         paragraphs=paragraphs,
     )
+
+
+def test_safe_queue_put_tolerates_broken_progress_pipe():
+    queue = MagicMock()
+    queue.put.side_effect = BrokenPipeError("closed")
+
+    assert _safe_queue_put(queue, ("UPDATE", 1)) is False
 
 
 # ---------------------------------------------------------------------------
@@ -282,12 +290,12 @@ class TestRenderText:
         _, kwargs = model.generate_audio.call_args
         assert kwargs.get("frames_after_eos") == 0
 
-    def test_default_unbounded_max_tokens_passed(self):
+    def test_default_bounded_max_tokens_passed(self):
         model = self._make_model()
         voice_state = MagicMock()
         _render_text(model, voice_state, "Hello.", _noop_log, 1, 0, 1)
         _, kwargs = model.generate_audio.call_args
-        assert kwargs.get("max_tokens") == UNBOUNDED_TTS_MAX_TOKENS
+        assert kwargs.get("max_tokens") == DEFAULT_TTS_MAX_TOKENS
 
     def test_finite_max_tokens_passed(self):
         model = self._make_model()
@@ -461,7 +469,7 @@ class TestRenderMultiVoice:
         assert result is not None
         assert model.generate_audio.call_count == 1
         _, kwargs = model.generate_audio.call_args
-        assert kwargs["max_tokens"] == UNBOUNDED_TTS_MAX_TOKENS
+        assert kwargs["max_tokens"] == DEFAULT_TTS_MAX_TOKENS
 
     def test_merged_narrator_text_splits_on_paragraph_boundary(self):
         segs = self._make_segments([("First paragraph.\n\nSecond paragraph.", "narrator", 0)])
@@ -753,9 +761,9 @@ class TestWorkerProcessChapter:
             result = worker_process_chapter(chapter, config, Path(td), queue)
         assert result is not None
         assert isinstance(result, AudioResult)
-        assert model.generate_audio.call_count == 2
+        assert model.generate_audio.call_count == 1
 
-    def test_single_voice_finite_token_cap_uses_legacy_batches(self):
+    def test_single_voice_explicit_token_cap_is_forwarded(self):
         chapter = _make_chapter(["Hello world.", "Second paragraph."], index=0)
         queue = self._make_queue()
         config = {
