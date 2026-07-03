@@ -151,6 +151,7 @@ def test_remote_context_tokens_uses_model_info(monkeypatch):
     """_remote_context_tokens should use litellm model info when available."""
     import sys
     import types
+
     from kenkui.nlp.providers.litellm import _remote_context_tokens
 
     fake_info = {"max_input_tokens": 131072, "max_output_tokens": 4096}
@@ -182,7 +183,8 @@ def test_remote_context_tokens_falls_back_on_unknown_model(monkeypatch):
     """_remote_context_tokens falls back to default when model info unavailable."""
     import sys
     import types
-    from kenkui.nlp.providers.litellm import _remote_context_tokens, _DEFAULT_REMOTE_CONTEXT_TOKENS
+
+    from kenkui.nlp.providers.litellm import _DEFAULT_REMOTE_CONTEXT_TOKENS, _remote_context_tokens
 
     def _raise(*a, **kw):
         raise Exception("unknown model")

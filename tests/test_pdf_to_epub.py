@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -156,8 +155,9 @@ class TestChapterExtraction:
 
     def test_section_headers_become_chapter_boundaries(self, tmp_path):
         """SectionHeaderItems create new chapters; TextItems become paragraphs."""
-        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
         from ebooklib import epub as epub_lib
+
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
 
         pdf = _make_pdf(tmp_path / "book.pdf")
         Label = _mock_docling_label()
@@ -187,8 +187,9 @@ class TestChapterExtraction:
 
     def test_no_section_headers_yields_single_chapter(self, tmp_path):
         """When there are no headers, all text goes into one chapter."""
-        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
         from ebooklib import epub as epub_lib
+
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
 
         pdf = _make_pdf(tmp_path / "book.pdf")
         Label = _mock_docling_label()
@@ -211,8 +212,9 @@ class TestChapterExtraction:
 
     def test_tables_footnotes_and_code_are_skipped(self, tmp_path):
         """TABLE, FOOTNOTE, CODE items must not appear in chapter text."""
-        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
         from ebooklib import epub as epub_lib
+
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
 
         pdf = _make_pdf(tmp_path / "book.pdf")
         Label = _mock_docling_label()
@@ -245,8 +247,9 @@ class TestChapterExtraction:
 
     def test_consecutive_section_headers_preserve_all_titles(self, tmp_path):
         """A section header with no content before next header is not silently dropped."""
-        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
         from ebooklib import epub as epub_lib
+
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
 
         pdf = _make_pdf(tmp_path / "book.pdf")
         Label = _mock_docling_label()
@@ -274,8 +277,9 @@ class TestChapterExtraction:
 
     def test_list_items_are_included_as_paragraphs(self, tmp_path):
         """LIST_ITEM label is treated as regular paragraph content."""
-        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
         from ebooklib import epub as epub_lib
+
+        from kenkui.readers._pdf_to_epub import PdfToEpubConverter
 
         pdf = _make_pdf(tmp_path / "book.pdf")
         Label = _mock_docling_label()

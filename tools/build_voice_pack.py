@@ -17,12 +17,12 @@ from typing import Any
 
 import scipy.io.wavfile
 
-from kenkui.voice_registry import PREVIEW_TEXT, VoiceCatalogEntry, validate_manifest
 from kenkui.voice_compiler import (
     DEFAULT_VOICE_PACK_LANGUAGE,
     compile_audio_prompt_source,
     migrate_voice_asset,
 )
+from kenkui.voice_registry import PREVIEW_TEXT, VoiceCatalogEntry, validate_manifest
 
 
 def _hash_file(path: Path) -> str:

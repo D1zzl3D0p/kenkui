@@ -451,7 +451,7 @@ class TestPdfReaderDoclingPath:
 
     def test_get_chapters_delegates_to_epub_reader(self, tmp_path):
         """PdfReader.get_chapters() calls EpubReader.get_chapters() on docling path."""
-        import warnings
+
         from kenkui.readers.pdf import PdfReader
 
         pdf = _make_pdf(tmp_path / "book.pdf")

@@ -8,11 +8,10 @@ The generated EPUB is written alongside the source PDF for inspection.
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import uuid
 from pathlib import Path
-
-import html as _html
 
 import fitz
 from ebooklib import epub
@@ -81,9 +80,9 @@ _TEXT_LABEL_NAMES = {
 def _require_docling():
     """Lazy-import docling components, raising ImportError if not installed."""
     try:
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling_core.types.doc import DocItemLabel
     except ImportError as exc:
         raise ImportError(

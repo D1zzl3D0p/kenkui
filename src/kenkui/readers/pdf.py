@@ -86,15 +86,15 @@ class PdfReader(EbookReader):
         # Import EpubReader here rather than at module top to avoid a circular import
         # (readers/__init__.py imports both epub and pdf modules).
         # Import PdfToEpubConverter lazily since _pdf_to_epub imports docling at call time.
-        from .epub import EpubReader
         from ._pdf_to_epub import PdfToEpubConverter
+        from .epub import EpubReader
 
         epub_path = PdfToEpubConverter().convert(self.filepath, force_ocr=self._force_ocr)
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             self._epub_reader = EpubReader(epub_path, verbose=self.verbose)
 
-    def _ensure_epub_reader(self) -> "_EpubReader":
+    def _ensure_epub_reader(self) -> _EpubReader:
         if self._epub_reader is None:
             self._init_docling_reader()
         return self._epub_reader
@@ -103,6 +103,7 @@ class PdfReader(EbookReader):
 
     def _init_pymupdf(self, filepath: Path, verbose: bool) -> None:
         import fitz
+
         from ._pdf_extract import PdfTextExtractor
 
         try:
