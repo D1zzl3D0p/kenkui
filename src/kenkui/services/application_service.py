@@ -9,12 +9,9 @@ import logging
 import os
 import threading
 import time
-import tomllib
 import uuid
 from pathlib import Path
 from typing import Any
-
-import tomli_w
 
 from kenkui.config import (
     CONFIG_DIR,
@@ -79,6 +76,7 @@ from kenkui.services.provider_service import list_provider_models as _list_provi
 from kenkui.services.provider_service import (
     validate_provider_credentials as _validate_provider_credentials,
 )
+from kenkui.services.queue_manager import QueueManager, _queue_item_summary
 from kenkui.services.task_coordinator import TaskCoordinator
 from kenkui.services.task_service import Task, TaskRegistry, TaskRunner, TaskType
 from kenkui.utils import ApostropheMode
@@ -239,23 +237,6 @@ def job_create_request_to_config(request: JobCreateRequest) -> JobConfig:
     )
 
 
-def _job_summary(job: JobConfig, *, job_id: str | None = None, status: str | None = None) -> str:
-    parts = [
-        f"job_id={job_id}" if job_id else None,
-        f"status={status}" if status else None,
-        f"ebook_path={job.ebook_path}",
-        f"output_path={job.output_path}" if job.output_path else None,
-        f"voice={job.voice or ''}",
-        f"tts_mode={job.tts_execution_mode.value}",
-        f"narration_mode={job.narration_mode.value}",
-    ]
-    return " ".join(part for part in parts if part)
-
-
-def _queue_item_summary(item: QueueItem) -> str:
-    return _job_summary(item.job, job_id=item.id, status=item.status.value)
-
-
 class KenkuiService:
     """In-process API boundary shared by local clients and HTTP adapters."""
 
@@ -266,23 +247,26 @@ class KenkuiService:
         app_config: AppConfig | None = None,
         task_workers: int = 4,
     ) -> None:
-        self.queue_file = queue_file
-        self.legacy_queue_file = queue_file.with_suffix(".yaml")
-        self._items: list[QueueItem] = []
+        self._queue = QueueManager(
+            queue_file=queue_file,
+            app_config=app_config or AppConfig(),
+        )
+        # Shared reentrant lock: the queue and the job-orchestration flags below
+        # were historically mutated atomically under one RLock. JobExecutor and
+        # this facade therefore share the QueueManager lock rather than adding a
+        # second lock (which would create a lock-ordering hazard).
+        self._lock = self._queue.lock
         self._current_id: str | None = None
-        self._app_config = app_config or AppConfig()
-        self._lock = threading.RLock()
         self._processing_thread: threading.Thread | None = None
         self._running = False
         self._pause_requested = False
         self._cancel_requested_job_id: str | None = None
         self._tasks = TaskCoordinator(max_workers=task_workers)
         from kenkui.services.runtime_service import register_configured_runtimes
-        register_configured_runtimes(self._app_config)
+        register_configured_runtimes(self._queue.app_config)
         from kenkui.services.book_cache import BookCache
 
         self.book_cache = BookCache()
-        self._load()
 
     @property
     def task_registry(self) -> TaskRegistry:
@@ -292,58 +276,27 @@ class KenkuiService:
     def task_runner(self) -> TaskRunner:
         return self._tasks.runner
 
-    def _load(self) -> None:
-        if not self.queue_file.exists() and self.legacy_queue_file.exists():
-            self._migrate_yaml_to_toml()
-        if self.queue_file.exists():
-            try:
-                data = tomllib.loads(self.queue_file.read_text(encoding="utf-8"))
-                self._items = [QueueItem.from_dict(d) for d in data.get("items", [])]
-                if "app_config" in data:
-                    self._app_config = AppConfig.from_dict(data.get("app_config", {}))
-                logger.info(
-                    "Loaded queue file path=%s items=%d",
-                    self.queue_file,
-                    len(self._items),
-                )
-            except Exception as exc:
-                logger.warning("Could not load queue file %s: %s", self.queue_file, exc)
-        self._reset_stale_processing()
-
-    def _migrate_yaml_to_toml(self) -> None:
-        try:
-            import yaml
-
-            data = yaml.safe_load(self.legacy_queue_file.read_text())
-            if data:
-                self.queue_file.parent.mkdir(parents=True, exist_ok=True)
-                self.queue_file.write_bytes(tomli_w.dumps(_strip_none(data)).encode("utf-8"))
-            self.legacy_queue_file.unlink(missing_ok=True)
-            logger.info(
-                "Migrated legacy queue file from=%s to=%s",
-                self.legacy_queue_file,
-                self.queue_file,
-            )
-        except Exception as exc:
-            logger.warning("Could not migrate legacy queue yaml: %s", exc)
+    @property
+    def queue_file(self) -> Path:
+        return self._queue.queue_file
 
     def _save(self) -> None:
-        raw = {
-            "items": [item.to_dict() for item in self._items],
-            "app_config": self._app_config.to_dict(),
-        }
-        self.queue_file.parent.mkdir(parents=True, exist_ok=True)
-        self.queue_file.write_bytes(tomli_w.dumps(_strip_none(raw)).encode("utf-8"))
+        self._queue.save()
+
+    def _reset_stale_processing(self) -> None:
+        self._queue.reset_stale_processing()
+
+    @property
+    def _app_config(self) -> AppConfig:
+        return self._queue.app_config
 
     @property
     def app_config(self) -> AppConfig:
-        return self._app_config
+        return self._queue.app_config
 
     @app_config.setter
     def app_config(self, config: AppConfig) -> None:
-        with self._lock:
-            self._app_config = config
-            self._save()
+        self._queue.app_config = config
 
     @property
     def is_running(self) -> bool:
@@ -351,35 +304,26 @@ class KenkuiService:
 
     @property
     def current_item(self) -> QueueItem | None:
-        with self._lock:
-            current = next((i for i in self._items if i.status == JobStatus.PROCESSING), None)
-            if current is not None:
-                return current
-            return next((i for i in self._items if i.status == JobStatus.PAUSED), None)
+        return self._queue.current_item
 
     def _processing_item(self) -> QueueItem | None:
-        with self._lock:
-            return next((i for i in self._items if i.status == JobStatus.PROCESSING), None)
+        return self._queue.processing_item()
 
     @property
     def pending_items(self) -> list[QueueItem]:
-        with self._lock:
-            return [i for i in self._items if i.status == JobStatus.PENDING]
+        return self._queue.pending_items
 
     @property
     def completed_items(self) -> list[QueueItem]:
-        with self._lock:
-            return [i for i in self._items if i.status == JobStatus.COMPLETED]
+        return self._queue.completed_items
 
     @property
     def failed_items(self) -> list[QueueItem]:
-        with self._lock:
-            return [i for i in self._items if i.status == JobStatus.FAILED]
+        return self._queue.failed_items
 
     @property
     def all_items(self) -> list[QueueItem]:
-        with self._lock:
-            return list(self._items)
+        return self._queue.all_items
 
     def health(self) -> HealthResponse:
         return HealthResponse(
@@ -508,41 +452,26 @@ class KenkuiService:
         return _validate_provider_credentials(provider, credentials=credentials)
 
     def add_job(self, job: JobConfig) -> QueueItem:
-        with self._lock:
-            item = QueueItem(
-                id=str(uuid.uuid4())[:8],
-                job=job,
-                status=JobStatus.PENDING,
-                execution_provider=job.tts_execution_mode.value,
-            )
-            self._items.append(item)
-            self._save()
-        logger.info("Queued %s", _queue_item_summary(item))
-        return item
+        item = QueueItem(
+            id=str(uuid.uuid4())[:8],
+            job=job,
+            status=JobStatus.PENDING,
+            execution_provider=job.tts_execution_mode.value,
+        )
+        return self._queue.add(item)
 
     def add_job_from_request(self, request: JobCreateRequest) -> JobResponse:
         return self.job_response(self.add_job(job_create_request_to_config(request)))
 
     def get_job_item(self, job_id: str) -> QueueItem | None:
-        with self._lock:
-            return next((i for i in self._items if i.id == job_id), None)
+        return self._queue.get(job_id)
 
     def get_job(self, job_id: str) -> JobResponse | None:
         item = self.get_job_item(job_id)
         return self.job_response(item) if item else None
 
     def remove_job(self, job_id: str) -> bool:
-        with self._lock:
-            for i, item in enumerate(self._items):
-                if item.id == job_id:
-                    if item.status not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
-                        logger.info("Refused queue removal job_id=%s status=%s", item.id, item.status.value)
-                        return False
-                    self._items.pop(i)
-                    self._save()
-                    logger.info("Removed queued job job_id=%s status=%s", item.id, item.status.value)
-                    return True
-        return False
+        return self._queue.remove(job_id)
 
     def cancel_job(self, job_id: str) -> bool:
         provider = None
@@ -593,11 +522,7 @@ class KenkuiService:
         return True
 
     def clear_all_jobs(self) -> OkResponse:
-        with self._lock:
-            removed = len(self._items)
-            self._items = []
-            self._save()
-        logger.info("Cleared queue removed=%d", removed)
+        self._queue.clear_all()
         return OkResponse()
 
     def queue(self) -> QueueResponse:
@@ -632,26 +557,8 @@ class KenkuiService:
             provider_status=item.provider_status,
         )
 
-    def _reset_stale_processing(self) -> None:
-        changed = False
-        reset_ids: list[str] = []
-        with self._lock:
-            for item in self._items:
-                if item.status == JobStatus.PROCESSING:
-                    item.status = JobStatus.PENDING
-                    item.progress = 0.0
-                    item.current_chapter = ""
-                    item.error_message = ""
-                    changed = True
-                    reset_ids.append(item.id)
-            if changed:
-                self._save()
-        if reset_ids:
-            logger.warning("Reset stale processing jobs job_ids=%s", ",".join(reset_ids))
-
     def _next_pending(self) -> QueueItem | None:
-        with self._lock:
-            return next((i for i in self._items if i.status == JobStatus.PENDING), None)
+        return self._queue.next_pending()
 
     def start_job(self, job_id: str) -> bool:
         item = self.get_job_item(job_id)
@@ -860,54 +767,16 @@ class KenkuiService:
         self.update_progress(job_id, progress, current_chapter, eta_seconds)
 
     def update_progress(self, job_id: str, progress: float, current_chapter: str, eta_seconds: int) -> None:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is not None:
-                item.progress = progress
-                item.current_chapter = current_chapter
-                item.eta_seconds = eta_seconds
-                self._save()
-        logger.debug(
-            "Job progress job_id=%s progress=%.1f chapter=%s eta_seconds=%s",
-            job_id,
-            progress,
-            current_chapter,
-            eta_seconds,
-        )
+        self._queue.update_progress(job_id, progress, current_chapter, eta_seconds)
 
     def update_job_metadata(self, job_id: str, **fields) -> None:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is None:
-                return
-            for key, value in fields.items():
-                if value is None:
-                    continue
-                if key == "cost_status" and not isinstance(value, CostStatus):
-                    value = CostStatus(str(value))
-                setattr(item, key, value)
-            self._save()
+        self._queue.update_job_metadata(job_id, **fields)
 
     def complete_job(self, job_id: str, output_path: str = "") -> None:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is not None:
-                item.status = JobStatus.COMPLETED
-                item.progress = 100.0
-                item.current_chapter = ""
-                item.output_path = output_path
-                item.completed_at = time.time()
-                self._save()
-        logger.info("Marked job completed job_id=%s output_path=%s", job_id, output_path)
+        self._queue.complete(job_id, output_path)
 
     def fail_job(self, job_id: str, error: str) -> None:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is not None:
-                item.status = JobStatus.FAILED
-                item.error_message = error
-                self._save()
-        logger.warning("Marked job failed job_id=%s error=%s", job_id, error)
+        self._queue.fail(job_id, error)
 
     def parse_book(self, ebook_path: str) -> BookParseResponse:
         from kenkui.services.book_service import parse_book

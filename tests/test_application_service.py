@@ -230,7 +230,9 @@ def test_application_service_logs_queue_and_job_lifecycle(tmp_path, monkeypatch,
         lambda item: SuccessfulProvider(),
     )
 
-    with caplog.at_level(logging.INFO, logger="kenkui.services.application_service"):
+    # Queue-lifecycle logs now originate from the extracted kenkui.services
+    # submodules (queue_manager / job_executor), so capture the package logger.
+    with caplog.at_level(logging.INFO, logger="kenkui.services"):
         item = service.add_job(
             JobConfig(
                 ebook_path=tmp_path / "book.epub",
