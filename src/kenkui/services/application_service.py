@@ -79,6 +79,7 @@ from kenkui.services.provider_service import list_provider_models as _list_provi
 from kenkui.services.provider_service import (
     validate_provider_credentials as _validate_provider_credentials,
 )
+from kenkui.services.task_coordinator import TaskCoordinator
 from kenkui.services.task_service import Task, TaskRegistry, TaskRunner, TaskType
 from kenkui.utils import ApostropheMode
 
@@ -275,14 +276,21 @@ class KenkuiService:
         self._running = False
         self._pause_requested = False
         self._cancel_requested_job_id: str | None = None
-        self.task_registry = TaskRegistry()
-        self.task_runner = TaskRunner(self.task_registry, max_workers=task_workers)
+        self._tasks = TaskCoordinator(max_workers=task_workers)
         from kenkui.services.runtime_service import register_configured_runtimes
         register_configured_runtimes(self._app_config)
         from kenkui.services.book_cache import BookCache
 
         self.book_cache = BookCache()
         self._load()
+
+    @property
+    def task_registry(self) -> TaskRegistry:
+        return self._tasks.registry
+
+    @property
+    def task_runner(self) -> TaskRunner:
+        return self._tasks.runner
 
     def _load(self) -> None:
         if not self.queue_file.exists() and self.legacy_queue_file.exists():
@@ -952,7 +960,7 @@ class KenkuiService:
     def scan_book(self, ebook_path: str, nlp_model: str | None = None, nlp_provider: str | None = None) -> TaskResponse:
         from kenkui.services.nlp_service import fast_scan
 
-        task = self.task_runner.submit(
+        task = self._tasks.submit(
             TaskType.FAST_SCAN,
             fast_scan,
             ebook_path=ebook_path,
@@ -1181,7 +1189,7 @@ class KenkuiService:
         attribution_model: str | None = None,
         use_cache: bool = True,
     ) -> TaskResponse:
-        task = self.task_runner.submit(
+        task = self._tasks.submit(
             TaskType.FULL_ANALYSIS,
             self._run_full_analysis,
             ebook_path=ebook_path,
@@ -1213,7 +1221,7 @@ class KenkuiService:
         )
 
     def get_task(self, task_id: str) -> TaskResponse | None:
-        task = self.task_registry.get(task_id)
+        task = self._tasks.get(task_id)
         return self.task_response(task) if task else None
 
     def list_voices(
@@ -1519,7 +1527,7 @@ class KenkuiService:
 
     def shutdown(self) -> None:
         self.stop_processing()
-        self.task_runner.shutdown(wait=False)
+        self._tasks.shutdown(wait=False)
 
 
 _service: KenkuiService | None = None
