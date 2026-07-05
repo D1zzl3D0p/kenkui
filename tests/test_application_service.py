@@ -165,7 +165,7 @@ def test_application_service_retries_failed_job(tmp_path, monkeypatch):
     item.provider_status = "failed"
     service._save()
     started = []
-    monkeypatch.setattr(service, "start_processing", lambda: started.append(True) or True)
+    monkeypatch.setattr(service._jobs, "start_processing", lambda: started.append(True) or True)
 
     assert service.retry_job(item.id)
 
@@ -493,7 +493,7 @@ def test_http_adapter_exposes_retry_route(tmp_path, monkeypatch):
 
     service = KenkuiService(queue_file=tmp_path / "http-queue.toml")
     monkeypatch.setattr(api, "get_service", lambda: service)
-    monkeypatch.setattr(service, "start_processing", lambda: True)
+    monkeypatch.setattr(service._jobs, "start_processing", lambda: True)
     item = service.add_job(JobConfig(ebook_path=Path("book.epub")))
     item.status = JobStatus.FAILED
     item.error_message = "render failed"

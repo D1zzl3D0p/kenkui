@@ -7,8 +7,6 @@ import importlib.metadata
 import json
 import logging
 import os
-import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -25,7 +23,6 @@ from kenkui.models import (
     AttributionExecutionMode,
     ChapterSelection,
     CharacterInfo,
-    CostStatus,
     JobConfig,
     JobStatus,
     NarrationMode,
@@ -68,15 +65,14 @@ from kenkui.models.api import (
 )
 from kenkui.progress import ProgressEvent
 from kenkui.services.execution_service import (
-    actionable_tts_error_message,
     get_tts_execution_provider,
 )
-from kenkui.services.job_service import build_processing_config
+from kenkui.services.job_executor import JobExecutor, progress_update_from_args
 from kenkui.services.provider_service import list_provider_models as _list_provider_models
 from kenkui.services.provider_service import (
     validate_provider_credentials as _validate_provider_credentials,
 )
-from kenkui.services.queue_manager import QueueManager, _queue_item_summary
+from kenkui.services.queue_manager import QueueManager
 from kenkui.services.task_coordinator import TaskCoordinator
 from kenkui.services.task_service import Task, TaskRegistry, TaskRunner, TaskType
 from kenkui.utils import ApostropheMode
@@ -137,34 +133,9 @@ def _masked_key_hint(api_key: str) -> str:
     return f"{api_key[:4]}...{api_key[-4:]}"
 
 
-def _progress_percent(event: ProgressEvent) -> float:
-    if event.total_units:
-        return max(0.0, min(100.0, (event.completed_units / event.total_units) * 100.0))
-    if event.status == "completed":
-        return 100.0
-    return 0.0
-
-
-def _progress_update_from_args(*args: Any) -> tuple[float, str, int]:
-    if len(args) == 1 and isinstance(args[0], ProgressEvent):
-        event = args[0]
-        title = event.message
-        if event.active_chapters:
-            title = event.active_chapters[0].title or title
-        return _progress_percent(event), title, 0
-
-    if len(args) == 3:
-        progress, chapter, eta = args
-        return float(progress or 0.0), str(chapter or ""), int(eta or 0)
-
-    if len(args) == 2:
-        progress, message = args
-        return float(progress or 0.0), str(message or ""), 0
-
-    if len(args) == 1:
-        return 0.0, str(args[0] or ""), 0
-
-    raise TypeError(f"Unsupported progress callback payload: {args!r}")
+# Re-exported for backwards compatibility; the canonical implementation now
+# lives in kenkui.services.job_executor.
+_progress_update_from_args = progress_update_from_args
 
 
 def _chapter_summary(chapter: Any) -> ChapterSummaryModel:
@@ -256,11 +227,10 @@ class KenkuiService:
         # this facade therefore share the QueueManager lock rather than adding a
         # second lock (which would create a lock-ordering hazard).
         self._lock = self._queue.lock
-        self._current_id: str | None = None
-        self._processing_thread: threading.Thread | None = None
-        self._running = False
-        self._pause_requested = False
-        self._cancel_requested_job_id: str | None = None
+        self._jobs = JobExecutor(
+            queue=self._queue,
+            resolve_provider=lambda item: get_tts_execution_provider(item),
+        )
         self._tasks = TaskCoordinator(max_workers=task_workers)
         from kenkui.services.runtime_service import register_configured_runtimes
         register_configured_runtimes(self._queue.app_config)
@@ -300,7 +270,21 @@ class KenkuiService:
 
     @property
     def is_running(self) -> bool:
-        return self._running
+        return self._jobs.running
+
+    @property
+    def _running(self) -> bool:
+        return self._jobs.running
+
+    @_running.setter
+    def _running(self, value: bool) -> None:
+        self._jobs.running = value
+
+    def _process_job(self, item: QueueItem) -> None:
+        self._jobs.process_job(item)
+
+    def _process_loop(self) -> None:
+        self._jobs.process_loop()
 
     @property
     def current_item(self) -> QueueItem | None:
@@ -474,52 +458,7 @@ class KenkuiService:
         return self._queue.remove(job_id)
 
     def cancel_job(self, job_id: str) -> bool:
-        provider = None
-        item: QueueItem | None = None
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is None:
-                return False
-            if item.status == JobStatus.CANCELLED:
-                return True
-            if item.status == JobStatus.PROCESSING:
-                self._cancel_requested_job_id = item.id
-                self._pause_requested = False
-                item.provider_status = "cancelling"
-                self._save()
-                try:
-                    provider = get_tts_execution_provider(item)
-                except Exception as exc:
-                    logger.warning("Could not load provider for cancel job %s: %s", item.id, exc)
-                    provider = None
-            elif item.status == JobStatus.PAUSED:
-                item.status = JobStatus.CANCELLED
-                item.current_chapter = ""
-                item.error_message = ""
-                item.provider_status = "cancelled"
-                item.completed_at = time.time()
-                self._save()
-                logger.info("Cancelled paused job job_id=%s", job_id)
-                return True
-            elif item.status == JobStatus.PENDING:
-                item.status = JobStatus.CANCELLED
-                item.current_chapter = ""
-                item.error_message = ""
-                item.provider_status = "cancelled"
-                item.completed_at = time.time()
-                self._save()
-                logger.info("Cancelled queued job job_id=%s", job_id)
-                return True
-            else:
-                return False
-        if provider is not None and item is not None:
-            try:
-                provider.cancel(item)
-            except Exception as exc:
-                logger.warning("Could not cancel provider job %s: %s", item.id, exc)
-            else:
-                logger.info("Requested cancel for current job job_id=%s", item.id)
-        return True
+        return self._jobs.cancel_job(job_id)
 
     def clear_all_jobs(self) -> OkResponse:
         self._queue.clear_all()
@@ -557,210 +496,23 @@ class KenkuiService:
             provider_status=item.provider_status,
         )
 
-    def _next_pending(self) -> QueueItem | None:
-        return self._queue.next_pending()
-
     def start_job(self, job_id: str) -> bool:
-        item = self.get_job_item(job_id)
-        if item is None or item.status != JobStatus.PENDING or self.is_running:
-            return False
-        with self._lock:
-            item.status = JobStatus.PROCESSING
-            item.started_at = time.time()
-            self._current_id = item.id
-            self._save()
-        logger.info("Started queued job %s", _queue_item_summary(item))
-        self.start_processing()
-        return True
+        return self._jobs.start_job(job_id)
 
     def start_processing(self) -> bool:
-        if self._running:
-            return False
-        self._running = True
-        self._processing_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self._processing_thread.start()
-        logger.info("Processing loop started current_job=%s pending=%d", self._current_id or "", len(self.pending_items))
-        return True
+        return self._jobs.start_processing()
 
     def stop_processing(self) -> None:
-        current = self._processing_item()
-        if current is not None:
-            with self._lock:
-                self._cancel_requested_job_id = current.id
-                self._pause_requested = False
-            try:
-                get_tts_execution_provider(current).cancel(current)
-            except Exception as exc:
-                logger.warning("Could not cancel provider job %s: %s", current.id, exc)
-            else:
-                logger.info("Requested cancel for current job job_id=%s", current.id)
-        self._running = False
-        if self._processing_thread:
-            self._processing_thread.join(timeout=5)
-        logger.info("Processing loop stopped current_job=%s", current.id if current else "")
+        self._jobs.stop_processing()
 
     def pause_job(self, job_id: str) -> bool:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is None or item.status != JobStatus.PROCESSING:
-                return False
-            self._pause_requested = True
-        logger.info("Pause requested job_id=%s", job_id)
-        return True
+        return self._jobs.pause_job(job_id)
 
     def resume_job(self, job_id: str) -> bool:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is None or item.status != JobStatus.PAUSED:
-                return False
-            item.status = JobStatus.PENDING
-            self._pause_requested = False
-            self._cancel_requested_job_id = None
-            self._save()
-        logger.info("Resumed job job_id=%s", job_id)
-        self.start_processing()
-        return True
+        return self._jobs.resume_job(job_id)
 
     def retry_job(self, job_id: str) -> bool:
-        with self._lock:
-            item = self.get_job_item(job_id)
-            if item is None or item.status != JobStatus.FAILED:
-                return False
-            item.status = JobStatus.PENDING
-            item.progress = 0.0
-            item.current_chapter = ""
-            item.eta_seconds = 0
-            item.error_message = ""
-            item.output_path = ""
-            item.started_at = 0.0
-            item.completed_at = 0.0
-            item.execution_provider = item.job.tts_execution_mode.value
-            item.remote_job_id = ""
-            item.estimated_cost_usd = None
-            item.actual_cost_usd = None
-            item.cost_status = CostStatus.NONE
-            item.artifact_uri = ""
-            item.artifact_source = ""
-            item.provider_status = "retrying"
-            self._pause_requested = False
-            if self._cancel_requested_job_id == item.id:
-                self._cancel_requested_job_id = None
-            self._save()
-        logger.info("Retrying failed job job_id=%s", job_id)
-        self.start_processing()
-        return True
-
-    def _process_loop(self) -> None:
-        try:
-            logger.info("Processing loop running")
-            while self._running:
-                item = self._next_pending()
-                if item is None:
-                    break
-                with self._lock:
-                    item.status = JobStatus.PROCESSING
-                    item.started_at = time.time()
-                    self._current_id = item.id
-                    self._cancel_requested_job_id = None
-                    self._save()
-                logger.info("Dequeued job %s", _queue_item_summary(item))
-                self._process_job(item)
-                if item.status == JobStatus.PAUSED:
-                    break
-        finally:
-            self._running = False
-            self._current_id = None
-            logger.info("Processing loop idle")
-
-    def _process_job(self, item: QueueItem) -> None:
-        started_at = time.time()
-        try:
-            cfg = build_processing_config(item.job, self._app_config)
-            provider = get_tts_execution_provider(item)
-            logger.info(
-                "Processing job job_id=%s provider=%s output_path=%s voice=%s",
-                item.id,
-                item.execution_provider,
-                cfg.output_path,
-                cfg.voice,
-            )
-            self.update_job_metadata(
-                item.id,
-                execution_provider=item.job.tts_execution_mode.value,
-                provider_status="starting",
-            )
-            outcome = provider.execute(
-                item=item,
-                cfg=cfg,
-                app_config=self._app_config,
-                progress_callback=self._progress_callback_for_job(item.id),
-                metadata_callback=lambda **fields: self.update_job_metadata(item.id, **fields),
-                pause_check=lambda: self._pause_requested,
-                cancel_check=lambda: self._cancel_requested_job_id == item.id,
-            )
-            if outcome.cancelled or self._cancel_requested_job_id == item.id:
-                with self._lock:
-                    item.status = JobStatus.CANCELLED
-                    item.current_chapter = ""
-                    item.error_message = ""
-                    item.provider_status = outcome.provider_status or "cancelled"
-                    item.completed_at = time.time()
-                    self._pause_requested = False
-                    self._cancel_requested_job_id = None
-                    self._save()
-                logger.info("Job cancelled job_id=%s duration_s=%.1f", item.id, time.time() - started_at)
-                return
-            if outcome.paused:
-                with self._lock:
-                    item.status = JobStatus.PAUSED
-                    self._pause_requested = False
-                    self._cancel_requested_job_id = None
-                    self._save()
-                logger.info("Job paused job_id=%s duration_s=%.1f", item.id, time.time() - started_at)
-                return
-            self.update_job_metadata(
-                item.id,
-                remote_job_id=outcome.remote_job_id,
-                estimated_cost_usd=outcome.estimated_cost_usd,
-                actual_cost_usd=outcome.actual_cost_usd,
-                cost_status="final"
-                if outcome.actual_cost_usd is not None
-                else ("estimated" if outcome.estimated_cost_usd is not None else "none"),
-                artifact_uri=outcome.artifact_uri,
-                artifact_source=outcome.artifact_source,
-                provider_status=outcome.provider_status or ("completed" if outcome.success else "failed"),
-            )
-            if outcome.success:
-                output_path = outcome.output_path or str(cfg.output_path / f"{item.job.name}.m4b")
-                self.complete_job(item.id, output_path)
-                logger.info(
-                    "Job completed job_id=%s output_path=%s duration_s=%.1f",
-                    item.id,
-                    output_path,
-                    time.time() - started_at,
-                )
-            else:
-                failure_message = actionable_tts_error_message(
-                    outcome.error_message or "Conversion failed"
-                )
-                self.fail_job(item.id, failure_message)
-                logger.warning(
-                    "Job failed job_id=%s provider_status=%s duration_s=%.1f error=%s",
-                    item.id,
-                    outcome.provider_status or "",
-                    time.time() - started_at,
-                    failure_message,
-                )
-        except Exception as exc:
-            logger.exception("Job %s failed: %s", item.id, exc)
-            self.fail_job(item.id, actionable_tts_error_message(exc))
-
-    def _progress_callback_for_job(self, job_id: str):
-        def progress_callback(*args: Any) -> None:
-            progress, current_chapter, eta_seconds = _progress_update_from_args(*args)
-            self.update_progress(job_id, progress, current_chapter, eta_seconds)
-
-        return progress_callback
+        return self._jobs.retry_job(job_id)
 
     def update_progress_from_event(self, job_id: str, event: ProgressEvent) -> None:
         progress, current_chapter, eta_seconds = _progress_update_from_args(event)
