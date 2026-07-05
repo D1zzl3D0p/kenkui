@@ -812,6 +812,57 @@ def test_kenkui_cli_serve_runs_http_server(monkeypatch):
     assert calls == [("127.0.0.1", 45365, False)]
 
 
+def test_register_runtimes_uses_pre_load_config_not_persisted_config(tmp_path, monkeypatch):
+    """Regression: register_configured_runtimes must receive the injected/default
+    AppConfig, not the config loaded from the persisted queue file.
+
+    Before the fix, QueueManager was constructed first (running load() which
+    could overwrite app_config from queue.toml) and THEN register_configured_runtimes
+    was called with the post-load config.  A persisted queue.toml with
+    modal_enabled=True would therefore cause RuntimeRegistrationError at
+    construction even when the caller passed a safe AppConfig().
+    """
+    import tomli_w
+
+    # Write a persisted queue.toml with modal_enabled=True in app_config.
+    queue_file = tmp_path / "queue.toml"
+    persisted_config = AppConfig(modal_enabled=True)
+    queue_file.write_bytes(
+        tomli_w.dumps({"items": [], "app_config": persisted_config.to_dict()}).encode()
+    )
+
+    # Monkeypatch register_configured_runtimes and record the argument it receives.
+    recorded: list[AppConfig] = []
+
+    def fake_register(cfg: AppConfig) -> None:
+        recorded.append(cfg)
+
+    monkeypatch.setattr(
+        "kenkui.services.runtime_service.register_configured_runtimes",
+        fake_register,
+    )
+    # Also patch the import inside application_service.__init__ which does a
+    # local `from kenkui.services.runtime_service import register_configured_runtimes`.
+    import kenkui.services.runtime_service as rts
+    monkeypatch.setattr(rts, "register_configured_runtimes", fake_register)
+
+    # Inject a plain AppConfig (modal_enabled=False — the safe, pre-load config).
+    injected = AppConfig()
+    assert not injected.modal_enabled
+
+    service = KenkuiService(queue_file=queue_file, app_config=injected)
+
+    # register_configured_runtimes should have been called exactly once with the
+    # injected config (modal_enabled=False), not the persisted config (modal_enabled=True).
+    assert len(recorded) == 1, f"Expected 1 call, got {len(recorded)}"
+    assert recorded[0].modal_enabled is False, (
+        f"register_configured_runtimes received modal_enabled={recorded[0].modal_enabled!r}; "
+        "expected False (the pre-load injected config)"
+    )
+    # Sanity: the post-load queue config does carry the persisted value.
+    assert service.app_config.modal_enabled is True
+
+
 def test_openapi_export_uses_app_schema(capsys, tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
 

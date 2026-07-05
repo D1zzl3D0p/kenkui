@@ -218,6 +218,14 @@ class KenkuiService:
         app_config: AppConfig | None = None,
         task_workers: int = 4,
     ) -> None:
+        # Register runtimes against the injected/default config BEFORE loading
+        # the queue file.  QueueManager.load() may overwrite app_config from a
+        # persisted queue.toml (e.g. one with modal_enabled=True), which would
+        # cause RuntimeRegistrationError at construction for previously-valid
+        # states.  The original KenkuiService semantics were: register first,
+        # then load — preserve that ordering here.
+        from kenkui.services.runtime_service import register_configured_runtimes
+        register_configured_runtimes(app_config or AppConfig())
         self._queue = QueueManager(
             queue_file=queue_file,
             app_config=app_config or AppConfig(),
@@ -232,8 +240,6 @@ class KenkuiService:
             resolve_provider=lambda item: get_tts_execution_provider(item),
         )
         self._tasks = TaskCoordinator(max_workers=task_workers)
-        from kenkui.services.runtime_service import register_configured_runtimes
-        register_configured_runtimes(self._queue.app_config)
         from kenkui.services.book_cache import BookCache
 
         self.book_cache = BookCache()
