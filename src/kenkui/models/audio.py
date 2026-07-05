@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..utils import ApostropheMode
-from .config import PostProcessingConfig
+from .config import NumberNormalizationConfig, PostProcessingConfig
 
 if TYPE_CHECKING:
     from ..chapter_filter import FilterOperation
@@ -67,6 +67,9 @@ class ProcessingConfig:
     # the user's chapter selection without needing a runtime-injected attribute.
     _included_indices: list[int] = field(default_factory=list)
     apostrophe_mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS
+    number_normalization: NumberNormalizationConfig = field(
+        default_factory=NumberNormalizationConfig
+    )
 
     @property
     def epub_path(self) -> Path:

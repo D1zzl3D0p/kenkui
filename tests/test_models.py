@@ -12,6 +12,7 @@ from kenkui.models import (
     CharacterInfo,
     CostStatus,
     NLPResult,
+    NumberNormalizationConfig,
     Segment,
     TTSExecutionMode,
 )
@@ -82,11 +83,30 @@ class TestAppConfigRoundTrip:
         assert cfg.m4b_bitrate == "96k"
         assert cfg.default_voice == "alba"
         assert cfg.default_chapter_preset == "content-only"
+        assert cfg.number_normalization.phone_numbers_mode.value == "grouped_digits"
+        assert cfg.number_normalization.identifiers_mode.value == "digits"
 
     def test_nlp_model_round_trip(self):
         cfg = AppConfig(nlp_model="phi3:mini")
         restored = AppConfig.from_dict(cfg.to_dict())
         assert restored.nlp_model == "phi3:mini"
+
+    def test_number_normalization_round_trip(self):
+        cfg = AppConfig(
+            number_normalization=NumberNormalizationConfig(
+                phone_numbers_mode="raw",
+                identifiers_mode="words",
+                identifier_min_digits=10,
+            )
+        )
+        restored = AppConfig.from_dict(cfg.to_dict())
+        assert restored.number_normalization.phone_numbers_mode.value == "raw"
+        assert restored.number_normalization.identifiers_mode.value == "words"
+        assert restored.number_normalization.identifier_min_digits == 10
+
+    def test_number_normalization_clamps_identifier_min_digits(self):
+        cfg = AppConfig.from_dict({"number_normalization": {"identifier_min_digits": 0}})
+        assert cfg.number_normalization.identifier_min_digits == 1
 
     def test_openrouter_attribution_concurrency_round_trip(self):
         cfg = AppConfig(nlp_openrouter_attribution_concurrency=12)

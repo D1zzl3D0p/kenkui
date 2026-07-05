@@ -211,7 +211,7 @@ def job_create_request_to_config(request: JobCreateRequest) -> JobConfig:
         job_lsd_decode_steps=request.job_lsd_decode_steps,
         job_noise_clamp=request.job_noise_clamp,
         job_eos_threshold=request.job_eos_threshold,
-        job_tts_max_tokens_per_chunk=None,
+        job_tts_max_tokens_per_chunk=request.job_tts_max_tokens_per_chunk,
         job_m4b_bitrate=request.job_m4b_bitrate,
         job_pause_line_ms=request.job_pause_line_ms,
         job_pause_chapter_ms=request.job_pause_chapter_ms,
@@ -222,6 +222,7 @@ def job_create_request_to_config(request: JobCreateRequest) -> JobConfig:
         job_apostrophe_mode=ApostropheMode(request.job_apostrophe_mode)
         if request.job_apostrophe_mode
         else None,
+        job_number_normalization=request.job_number_normalization,
         job_post_processing_enabled=request.job_post_processing_enabled,
         job_nlp_execution_mode=NlpExecutionMode(request.job_nlp_execution_mode)
         if request.job_nlp_execution_mode

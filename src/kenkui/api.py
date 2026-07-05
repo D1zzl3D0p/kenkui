@@ -47,6 +47,8 @@ from .models import (
     JobResponse,
     NarrationMode,
     NLPResult,
+    NumberNormalizationConfig,
+    NumberNormalizationMode,
     OkResponse,
     PostProcessingConfig,
     ProcessingConfig,
@@ -811,6 +813,8 @@ __all__ = [
     "KenkuiService",
     # Multi-voice / NLP
     "NLPResult",
+    "NumberNormalizationConfig",
+    "NumberNormalizationMode",
     "CharacterInfo",
     "NarrationMode",
     # NLP pipeline config and tool enums

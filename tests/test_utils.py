@@ -121,7 +121,7 @@ class TestNormalizeBitrate:
 # normalize_for_tts
 # ---------------------------------------------------------------------------
 
-from kenkui.utils import normalize_for_tts
+from kenkui.utils import normalize_for_tts, normalize_numbers_for_tts
 
 
 class TestNormalizeForTts:
@@ -205,6 +205,45 @@ class TestNormalizeForTts:
 
     def test_empty_string(self):
         assert normalize_for_tts("") == ""
+
+
+class TestNormalizeNumbersForTts:
+    def test_comma_cardinal_to_words(self):
+        assert normalize_numbers_for_tts("There were 100,000 people.") == (
+            "There were one hundred thousand people."
+        )
+
+    def test_long_identifier_to_digits(self):
+        assert normalize_numbers_for_tts("Call id 3495992019.") == (
+            "Call id three four nine five nine nine two zero one nine."
+        )
+
+    def test_phone_number_to_grouped_digits(self):
+        assert normalize_numbers_for_tts("Dial 801-999-9999 now.") == (
+            "Dial eight zero one, nine nine nine, nine nine nine nine now."
+        )
+
+    def test_raw_phone_mode_protects_against_cardinal_fallback(self):
+        result = normalize_numbers_for_tts(
+            "Dial 801-999-9999 now.",
+            {"phone_numbers_mode": "raw"},
+        )
+        assert result == "Dial 801-999-9999 now."
+
+    def test_raw_decimal_mode_protects_against_cardinal_fallback(self):
+        result = normalize_numbers_for_tts(
+            "The value was 3.14 exactly.",
+            {"decimals_mode": "raw"},
+        )
+        assert result == "The value was 3.14 exactly."
+
+    def test_decimal_and_percent_to_words(self):
+        assert normalize_numbers_for_tts("Use 3.14 for 25%.") == (
+            "Use three point one four for twenty five percent."
+        )
+
+    def test_ordinal_to_words(self):
+        assert normalize_numbers_for_tts("She finished 21st.") == "She finished twenty first."
 
 
 # ---------------------------------------------------------------------------

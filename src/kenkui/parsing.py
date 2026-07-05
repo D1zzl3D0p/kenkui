@@ -716,6 +716,7 @@ class AudioBuilder:
             # Audio post-processing effects chain
             "post_processing": self.cfg.post_processing.to_dict(),
             "apostrophe_mode": self.cfg.apostrophe_mode.value,
+            "number_normalization": self.cfg.number_normalization.to_dict(),
         }
 
         pool: ProcessPoolExecutor | None = None

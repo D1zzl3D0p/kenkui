@@ -14,6 +14,7 @@ from .common import (
     TTSExecutionMode,
     _migrate_speaker_voices_keys,
 )
+from .config import NumberNormalizationConfig
 
 
 @dataclass
@@ -52,6 +53,7 @@ class JobConfig:
     job_pause_after_chapter_title_ms: int | None = None
     job_frames_after_eos: int | None = None
     job_apostrophe_mode: ApostropheMode | None = None
+    job_number_normalization: NumberNormalizationConfig | None = None
     job_post_processing_enabled: bool | None = None
     job_nlp_execution_mode: NlpExecutionMode | None = None
     job_attribution_execution_mode: AttributionExecutionMode | None = None
@@ -102,6 +104,7 @@ class JobConfig:
             "job_pause_after_chapter_title_ms",
             "job_frames_after_eos",
             "job_apostrophe_mode",
+            "job_number_normalization",
             "job_post_processing_enabled",
             "job_nlp_execution_mode",
             "job_attribution_execution_mode",
@@ -111,7 +114,12 @@ class JobConfig:
         ):
             val = getattr(self, key)
             if val is not None:
-                d[key] = val.value if isinstance(val, Enum) else val
+                if isinstance(val, Enum):
+                    d[key] = val.value
+                elif hasattr(val, "to_dict"):
+                    d[key] = val.to_dict()
+                else:
+                    d[key] = val
         return d
 
     @classmethod
@@ -152,6 +160,11 @@ class JobConfig:
             job_apostrophe_mode=ApostropheMode(data["job_apostrophe_mode"])
             if data.get("job_apostrophe_mode")
             else None,
+            job_number_normalization=NumberNormalizationConfig.from_dict(
+                data["job_number_normalization"]
+            )
+            if data.get("job_number_normalization") is not None
+            else None,
             job_post_processing_enabled=data.get("job_post_processing_enabled"),
             job_nlp_execution_mode=NlpExecutionMode(data["job_nlp_execution_mode"])
             if data.get("job_nlp_execution_mode")
@@ -163,4 +176,3 @@ class JobConfig:
             job_attribution_provider=data.get("job_attribution_provider"),
             job_attribution_model=data.get("job_attribution_model"),
         )
-

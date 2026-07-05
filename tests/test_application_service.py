@@ -17,6 +17,7 @@ from kenkui.models import (
     JobConfig,
     JobStatus,
     NLPResult,
+    NumberNormalizationConfig,
     PostProcessingConfig,
 )
 from kenkui.models.api import JobCreateRequest
@@ -44,6 +45,11 @@ def test_job_create_request_to_config_preserves_api_fields(tmp_path):
         speaker_voices={"NARRATOR": "alba", "alice": "clara"},
         job_pause_line_ms=1200,
         job_apostrophe_mode="always_remove",
+        job_tts_max_tokens_per_chunk=75,
+        job_number_normalization=NumberNormalizationConfig(
+            phone_numbers_mode="raw",
+            identifier_min_digits=10,
+        ),
     )
 
     job = job_create_request_to_config(req)
@@ -55,6 +61,10 @@ def test_job_create_request_to_config_preserves_api_fields(tmp_path):
     assert job.speaker_voices["alice"] == "clara"
     assert job.job_pause_line_ms == 1200
     assert job.job_apostrophe_mode.value == "always_remove"
+    assert job.job_tts_max_tokens_per_chunk == 75
+    assert job.job_number_normalization is not None
+    assert job.job_number_normalization.phone_numbers_mode.value == "raw"
+    assert job.job_number_normalization.identifier_min_digits == 10
 
 
 def test_build_processing_config_is_shared_job_boundary(tmp_path):
@@ -69,8 +79,14 @@ def test_build_processing_config_is_shared_job_boundary(tmp_path):
         speaker_voices={"NARRATOR": "clara"},
         job_m4b_bitrate="64",
         job_post_processing_enabled=False,
+        job_number_normalization=NumberNormalizationConfig(identifiers_mode="raw"),
     )
-    app_config = AppConfig(default_voice="alba", workers=3, pause_line_ms=900)
+    app_config = AppConfig(
+        default_voice="alba",
+        workers=3,
+        pause_line_ms=900,
+        number_normalization=NumberNormalizationConfig(identifiers_mode="digits"),
+    )
 
     cfg = build_processing_config(job, app_config)
 
@@ -83,6 +99,7 @@ def test_build_processing_config_is_shared_job_boundary(tmp_path):
     assert cfg.chapter_filters[0].value == "2"
     assert cfg._included_indices == [2]
     assert cfg.post_processing.enabled is False
+    assert cfg.number_normalization.identifiers_mode.value == "raw"
 
 
 def test_application_service_queue_contract_persists(tmp_path):

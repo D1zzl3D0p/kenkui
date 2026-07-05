@@ -23,6 +23,7 @@ from kenkui.models import (
     CharacterInfo,
     JobConfig,
     NarrationMode,
+    NumberNormalizationConfig,
     ProcessingConfig,
     Segment,
     TTSExecutionMode,
@@ -208,11 +209,14 @@ class TestJobConfigMultiVoice:
             narration_mode=NarrationMode.MULTI,
             speaker_voices={"alice_0": "cosette"},
             annotated_chapters_path=Path("/tmp/my_cache.json"),
+            job_number_normalization=NumberNormalizationConfig(cardinals_mode="raw"),
         )
         restored = JobConfig.from_dict(original.to_dict())
         assert restored.narration_mode == NarrationMode.MULTI
         assert restored.speaker_voices == {"alice_0": "cosette"}
         assert restored.annotated_chapters_path == Path("/tmp/my_cache.json")
+        assert restored.job_number_normalization is not None
+        assert restored.job_number_normalization.cardinals_mode.value == "raw"
 
     def test_backward_compat_missing_multi_voice_fields(self):
         """Old JobConfig dicts without narration_mode/speaker_voices should load."""
@@ -302,6 +306,10 @@ class TestProcessingConfigMultiVoice:
     def test_tts_max_tokens_per_chunk_stored(self):
         cfg = self._make_cfg(tts_max_tokens_per_chunk=50)
         assert cfg.tts_max_tokens_per_chunk == 50
+
+    def test_number_normalization_default_is_present(self):
+        cfg = self._make_cfg()
+        assert cfg.number_normalization.cardinals_mode.value == "words"
 
     def test_speaker_voices_stored(self):
         voices = {"NARRATOR": "alba", "HOLMES-0": "jean"}

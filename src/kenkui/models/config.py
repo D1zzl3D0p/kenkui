@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ..utils import ApostropheMode
+from ..utils import ApostropheMode, NumberNormalizationMode
 from .common import AttributionExecutionMode, NlpExecutionMode, _normalize_bitrate
 
 
@@ -42,6 +42,34 @@ class PostProcessingConfig(BaseModel):
     @classmethod
     def from_dict(cls, data: dict) -> PostProcessingConfig:
         return cls.model_validate(data)
+
+
+class NumberNormalizationConfig(BaseModel):
+    """TTS number normalization modes by category."""
+
+    phone_numbers_mode: NumberNormalizationMode = NumberNormalizationMode.GROUPED_DIGITS
+    identifiers_mode: NumberNormalizationMode = NumberNormalizationMode.DIGITS
+    cardinals_mode: NumberNormalizationMode = NumberNormalizationMode.WORDS
+    decimals_mode: NumberNormalizationMode = NumberNormalizationMode.WORDS
+    ordinals_mode: NumberNormalizationMode = NumberNormalizationMode.WORDS
+    percentages_mode: NumberNormalizationMode = NumberNormalizationMode.WORDS
+    identifier_min_digits: int = 7
+
+    @field_validator("identifier_min_digits", mode="before")
+    @classmethod
+    def _clamp_identifier_min_digits(cls, v: Any) -> int:
+        try:
+            value = int(v)
+        except (TypeError, ValueError):
+            return 7
+        return max(1, value)
+
+    def to_dict(self) -> dict:
+        return self.model_dump(mode="json", exclude_none=True)
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> NumberNormalizationConfig:
+        return cls.model_validate(data or {})
 
 
 class AppConfig(BaseSettings):
@@ -98,6 +126,9 @@ class AppConfig(BaseSettings):
     credits_acknowledgements: str = ""
     credits_license: str = ""
     apostrophe_mode: ApostropheMode = ApostropheMode.EXPAND_CONTRACTIONS
+    number_normalization: NumberNormalizationConfig = Field(
+        default_factory=NumberNormalizationConfig
+    )
     post_processing: PostProcessingConfig = Field(default_factory=PostProcessingConfig)
     server_host: str = "127.0.0.1"
     server_port: int = 45365
@@ -226,6 +257,8 @@ class AppConfig(BaseSettings):
             # `post_processing = null`. Treat that the same as an absent key so
             # Pydantic uses the PostProcessingConfig default factory.
             data.pop("post_processing", None)
+        if data.get("number_normalization") is None:
+            data.pop("number_normalization", None)
 
         class _InitOnly(cls):  # type: ignore[valid-type]
             @classmethod

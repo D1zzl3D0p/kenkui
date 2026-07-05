@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .book import ChapterSelection
+from .config import NumberNormalizationConfig
 
 
 class OkResponse(BaseModel):
@@ -41,6 +42,7 @@ class JobCreateRequest(BaseModel):
     job_lsd_decode_steps: int | None = None
     job_noise_clamp: float | None = None
     job_eos_threshold: float | None = None
+    job_tts_max_tokens_per_chunk: int | None = None
     job_post_processing_enabled: bool | None = None
     job_m4b_bitrate: str | None = None
     job_pause_line_ms: int | None = None
@@ -50,6 +52,7 @@ class JobCreateRequest(BaseModel):
     job_pause_after_chapter_title_ms: int | None = None
     job_frames_after_eos: int | None = None
     job_apostrophe_mode: str | None = None
+    job_number_normalization: NumberNormalizationConfig | None = None
     job_nlp_execution_mode: str | None = None
     job_attribution_execution_mode: str | None = None
     job_character_discovery_method: str | None = None

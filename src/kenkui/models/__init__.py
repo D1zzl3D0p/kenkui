@@ -4,6 +4,7 @@ The package is split by domain, while this module preserves the historical
 ``kenkui.models`` import path for applications and serialized cache loaders.
 """
 
+from ..utils import NumberNormalizationMode
 from .api import (
     AuditionRequest,
     BookAnalyzeRequest,
@@ -69,7 +70,7 @@ from .common import (
     _migrate_speaker_voices_keys,
     _normalize_bitrate,
 )
-from .config import AppConfig, PostProcessingConfig
+from .config import AppConfig, NumberNormalizationConfig, PostProcessingConfig
 from .job import JobConfig
 from .nlp import Chapter, FastScanResult, NLPResult, Segment
 from .queue import QueueItem
@@ -118,6 +119,8 @@ __all__ = [
     "NarratorRecommendationRequest",
     "NarratorRecommendationResponse",
     "NLPResult",
+    "NumberNormalizationConfig",
+    "NumberNormalizationMode",
     "NlpExecutionMode",
     "OkResponse",
     "PostProcessingConfig",

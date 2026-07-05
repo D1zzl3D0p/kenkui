@@ -121,9 +121,92 @@ class ApostropheMode(str, Enum):
     EXPAND_CONTRACTIONS = "expand_contractions"
 
 
+class NumberNormalizationMode(str, Enum):
+    """Controls how a number category is rendered before TTS."""
+
+    RAW = "raw"
+    WORDS = "words"
+    DIGITS = "digits"
+    GROUPED_DIGITS = "grouped_digits"
+
+
 # ---------------------------------------------------------------------------
 # TTS text normalization
 # ---------------------------------------------------------------------------
+
+_DIGIT_WORDS = {
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+    "8": "eight",
+    "9": "nine",
+}
+
+_DEFAULT_NUMBER_NORMALIZATION = {
+    "phone_numbers_mode": NumberNormalizationMode.GROUPED_DIGITS.value,
+    "identifiers_mode": NumberNormalizationMode.DIGITS.value,
+    "cardinals_mode": NumberNormalizationMode.WORDS.value,
+    "decimals_mode": NumberNormalizationMode.WORDS.value,
+    "ordinals_mode": NumberNormalizationMode.WORDS.value,
+    "percentages_mode": NumberNormalizationMode.WORDS.value,
+    "identifier_min_digits": 7,
+}
+
+_PHONE_RE = re.compile(r"(?<!\d)(\d{3})[-. ](\d{3})[-. ](\d{4})(?!\d)")
+_PERCENT_RE = re.compile(r"(?<![\w.])([+-]?\d+(?:,\d{3})*(?:\.\d+)?)\s*%(?!\w)")
+_DECIMAL_RE = re.compile(r"(?<![\w.])([+-]?\d+(?:,\d{3})*)\.(\d+)(?![\w.])")
+_ORDINAL_RE = re.compile(r"(?<![\w.])([+-]?\d+(?:,\d{3})*)(st|nd|rd|th)(?!\w)", re.I)
+_CARDINAL_RE = re.compile(r"(?<![\w.])([+-]?(?:\d{1,3}(?:,\d{3})+|\d+))(?!\w)")
+
+_ONES = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+)
+_TENS = (
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+)
+_SCALES = ("", "thousand", "million", "billion", "trillion")
+_IRREGULAR_ORDINALS = {
+    "one": "first",
+    "two": "second",
+    "three": "third",
+    "five": "fifth",
+    "eight": "eighth",
+    "nine": "ninth",
+    "twelve": "twelfth",
+}
 
 _ALL_CONTRACTIONS_MAP: dict[str, str] = {
     # n't forms (superset of _NONT_MAP)
@@ -212,6 +295,196 @@ def _expand_all_contraction(m: re.Match) -> str:
     if token[0].isupper():
         return expansion[0].upper() + expansion[1:]
     return expansion
+
+
+def _number_normalization_value(config: object | None, key: str):
+    if config is None:
+        return _DEFAULT_NUMBER_NORMALIZATION[key]
+    if isinstance(config, dict):
+        return config.get(key, _DEFAULT_NUMBER_NORMALIZATION[key])
+    return getattr(config, key, _DEFAULT_NUMBER_NORMALIZATION[key])
+
+
+def _number_mode(config: object | None, key: str) -> NumberNormalizationMode:
+    value = _number_normalization_value(config, key)
+    if isinstance(value, NumberNormalizationMode):
+        return value
+    try:
+        return NumberNormalizationMode(str(value))
+    except ValueError:
+        return NumberNormalizationMode(_DEFAULT_NUMBER_NORMALIZATION[key])
+
+
+def _identifier_min_digits(config: object | None) -> int:
+    try:
+        value = int(_number_normalization_value(config, "identifier_min_digits"))
+    except (TypeError, ValueError):
+        value = int(_DEFAULT_NUMBER_NORMALIZATION["identifier_min_digits"])
+    return max(1, value)
+
+
+def _clean_number_token(token: str) -> str:
+    return token.replace(",", "")
+
+
+def _digits_to_words(text: str) -> str:
+    return " ".join(_DIGIT_WORDS[ch] for ch in text if ch.isdigit())
+
+
+def _fallback_cardinal(value: int) -> str:
+    if value < 0:
+        return "minus " + _fallback_cardinal(abs(value))
+    if value < 20:
+        return _ONES[value]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        return _TENS[tens] if ones == 0 else f"{_TENS[tens]} {_ONES[ones]}"
+    if value < 1000:
+        hundreds, rest = divmod(value, 100)
+        head = f"{_ONES[hundreds]} hundred"
+        return head if rest == 0 else f"{head} {_fallback_cardinal(rest)}"
+
+    parts: list[str] = []
+    scale_index = 0
+    remaining = value
+    while remaining and scale_index < len(_SCALES):
+        remaining, chunk = divmod(remaining, 1000)
+        if chunk:
+            scale = _SCALES[scale_index]
+            words = _fallback_cardinal(chunk)
+            parts.append(f"{words} {scale}".strip())
+        scale_index += 1
+    if remaining:
+        return str(value)
+    return " ".join(reversed(parts))
+
+
+def _engine_cardinal(token: str) -> str:
+    value = int(_clean_number_token(token))
+    try:
+        import inflect
+
+        words = inflect.engine().number_to_words(value, andword="")
+    except Exception:
+        words = _fallback_cardinal(value)
+    return str(words).replace("-", " ").replace(",", "").strip()
+
+
+def _fallback_ordinal(token: str) -> str:
+    words = _engine_cardinal(token)
+    head, sep, tail = words.rpartition(" ")
+    target = tail if sep else words
+    if target in _IRREGULAR_ORDINALS:
+        ordinal = _IRREGULAR_ORDINALS[target]
+    elif target.endswith("y"):
+        ordinal = target[:-1] + "ieth"
+    else:
+        ordinal = target + "th"
+    return f"{head} {ordinal}".strip() if sep else ordinal
+
+
+def _engine_ordinal(token: str) -> str:
+    value = int(_clean_number_token(token))
+    try:
+        import inflect
+
+        words = inflect.engine().number_to_words(inflect.engine().ordinal(value), andword="")
+    except Exception:
+        words = _fallback_ordinal(token)
+    return str(words).replace("-", " ").replace(",", "").strip()
+
+
+def _decimal_to_words(integer: str, fraction: str) -> str:
+    return f"{_engine_cardinal(integer)} point {_digits_to_words(fraction)}"
+
+
+def normalize_numbers_for_tts(text: str, config: object | None = None) -> str:
+    """Normalize number-like spans for TTS according to *config*.
+
+    The function protects each matched span with a placeholder as it goes, so a
+    category set to ``raw`` is still shielded from later, lower-priority rules.
+    """
+    if not text:
+        return text
+
+    replacements: list[str] = []
+
+    def protect(value: str) -> str:
+        marker = f"\x00KENKUI_NUM_{len(replacements)}\x00"
+        replacements.append(value)
+        return marker
+
+    def replace_phone(match: re.Match) -> str:
+        original = match.group(0)
+        mode = _number_mode(config, "phone_numbers_mode")
+        if mode == NumberNormalizationMode.RAW:
+            return protect(original)
+        groups = match.groups()
+        if mode == NumberNormalizationMode.WORDS:
+            return protect(_engine_cardinal("".join(groups)))
+        return protect(", ".join(_digits_to_words(group) for group in groups))
+
+    def replace_percent(match: re.Match) -> str:
+        original = match.group(0)
+        mode = _number_mode(config, "percentages_mode")
+        if mode == NumberNormalizationMode.RAW:
+            return protect(original)
+        number = match.group(1)
+        if mode in {NumberNormalizationMode.DIGITS, NumberNormalizationMode.GROUPED_DIGITS}:
+            spoken = _digits_to_words(number)
+        elif "." in number:
+            integer, fraction = _clean_number_token(number).split(".", 1)
+            spoken = _decimal_to_words(integer, fraction)
+        else:
+            spoken = _engine_cardinal(number)
+        return protect(f"{spoken} percent")
+
+    def replace_decimal(match: re.Match) -> str:
+        original = match.group(0)
+        mode = _number_mode(config, "decimals_mode")
+        if mode == NumberNormalizationMode.RAW:
+            return protect(original)
+        integer, fraction = match.groups()
+        if mode in {NumberNormalizationMode.DIGITS, NumberNormalizationMode.GROUPED_DIGITS}:
+            return protect(_digits_to_words(_clean_number_token(integer) + fraction))
+        return protect(_decimal_to_words(integer, fraction))
+
+    def replace_ordinal(match: re.Match) -> str:
+        original = match.group(0)
+        mode = _number_mode(config, "ordinals_mode")
+        if mode == NumberNormalizationMode.RAW:
+            return protect(original)
+        number = match.group(1)
+        if mode in {NumberNormalizationMode.DIGITS, NumberNormalizationMode.GROUPED_DIGITS}:
+            return protect(_digits_to_words(number))
+        return protect(_engine_ordinal(number))
+
+    def replace_cardinal(match: re.Match) -> str:
+        original = match.group(0)
+        digits = _clean_number_token(match.group(1)).lstrip("+-")
+        if len(digits) >= _identifier_min_digits(config):
+            mode = _number_mode(config, "identifiers_mode")
+            if mode == NumberNormalizationMode.RAW:
+                return protect(original)
+            if mode == NumberNormalizationMode.WORDS:
+                return protect(_engine_cardinal(match.group(1)))
+            return protect(_digits_to_words(digits))
+
+        mode = _number_mode(config, "cardinals_mode")
+        if mode == NumberNormalizationMode.RAW:
+            return protect(original)
+        if mode in {NumberNormalizationMode.DIGITS, NumberNormalizationMode.GROUPED_DIGITS}:
+            return protect(_digits_to_words(digits))
+        return protect(_engine_cardinal(match.group(1)))
+
+    normalized = _PHONE_RE.sub(replace_phone, text)
+    normalized = _PERCENT_RE.sub(replace_percent, normalized)
+    normalized = _DECIMAL_RE.sub(replace_decimal, normalized)
+    normalized = _ORDINAL_RE.sub(replace_ordinal, normalized)
+    normalized = _CARDINAL_RE.sub(replace_cardinal, normalized)
+    for index, value in enumerate(replacements):
+        normalized = normalized.replace(f"\x00KENKUI_NUM_{index}\x00", value)
+    return normalized
 
 
 _TERMINAL_PUNCT = frozenset(".!?…\u2026")
@@ -367,10 +640,12 @@ def clean_text(text: str) -> str:
 
 __all__ = [
     "ApostropheMode",
+    "NumberNormalizationMode",
     "batch_text",
     "clean_text",
     "ensure_terminal_punct",
     "extract_epub_cover",
+    "normalize_numbers_for_tts",
     "normalize_for_tts",
     "sanitize_filename",
 ]

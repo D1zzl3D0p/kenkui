@@ -113,7 +113,10 @@ def build_processing_config(job: JobConfig, app_config) -> ProcessingConfig:
         noise_clamp=_resolve(job.job_noise_clamp, app_config.noise_clamp),
         eos_threshold=_resolve(job.job_eos_threshold, app_config.eos_threshold),
         frames_after_eos=_resolve(job.job_frames_after_eos, app_config.frames_after_eos),
-        tts_max_tokens_per_chunk=app_config.tts_max_tokens_per_chunk,
+        tts_max_tokens_per_chunk=_resolve(
+            job.job_tts_max_tokens_per_chunk,
+            app_config.tts_max_tokens_per_chunk,
+        ),
         pdf_drop_code_blocks=app_config.pdf_drop_code_blocks,
         pdf_drop_notes=app_config.pdf_drop_notes,
         pdf_drop_asides=app_config.pdf_drop_asides,
@@ -131,6 +134,10 @@ def build_processing_config(job: JobConfig, app_config) -> ProcessingConfig:
         ),
         _included_indices=included_indices,
         apostrophe_mode=_resolve(job.job_apostrophe_mode, app_config.apostrophe_mode),
+        number_normalization=_resolve(
+            job.job_number_normalization,
+            app_config.number_normalization,
+        ),
     )
 
 
@@ -169,6 +176,9 @@ def build_job_kwargs_from_state(state: dict[str, Any]) -> dict[str, Any]:
         kwargs["job_nlp_model"] = job_nlp_model
     if pp_enabled_override is not None:
         kwargs["job_post_processing_enabled"] = pp_enabled_override
+    number_normalization = state.get("job_number_normalization")
+    if number_normalization is not None:
+        kwargs["job_number_normalization"] = number_normalization
     job_nlp_execution_mode = state.get("job_nlp_execution_mode")
     if job_nlp_execution_mode is not None:
         from kenkui.models import NlpExecutionMode

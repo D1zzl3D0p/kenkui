@@ -785,6 +785,69 @@ class TestWorkerProcessChapter:
         _, kwargs = model.generate_audio.call_args
         assert kwargs["max_tokens"] == 50
 
+    def test_single_voice_normalizes_numbers_before_tts(self):
+        chapter = _make_chapter(["Call 801-999-9999 about 100,000 units."], index=0)
+        queue = self._make_queue()
+        config = {
+            "voice": "alba",
+            "pause_line_ms": 0,
+            "pause_chapter_ms": 0,
+            "speak_chapter_titles": False,
+        }
+        model = self._make_model()
+        with (
+            patch("kenkui.workers._get_or_load_model", return_value=model),
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = worker_process_chapter(chapter, config, Path(td), queue)
+        assert result is not None
+        spoken = model.generate_audio.call_args.args[1]
+        assert "eight zero one, nine nine nine, nine nine nine nine" in spoken
+        assert "one hundred thousand units" in spoken
+
+    def test_raw_number_mode_reaches_tts_unchanged(self):
+        chapter = _make_chapter(["Call 801-999-9999."], index=0)
+        queue = self._make_queue()
+        config = {
+            "voice": "alba",
+            "pause_line_ms": 0,
+            "pause_chapter_ms": 0,
+            "speak_chapter_titles": False,
+            "number_normalization": {"phone_numbers_mode": "raw"},
+        }
+        model = self._make_model()
+        with (
+            patch("kenkui.workers._get_or_load_model", return_value=model),
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = worker_process_chapter(chapter, config, Path(td), queue)
+        assert result is not None
+        spoken = model.generate_audio.call_args.args[1]
+        assert "801-999-9999" in spoken
+
+    def test_chapter_title_normalizes_numbers_before_tts(self):
+        chapter = _make_chapter(["Body."], index=0)
+        chapter.title = "Chapter 21"
+        queue = self._make_queue()
+        config = {
+            "voice": "alba",
+            "pause_line_ms": 0,
+            "pause_chapter_ms": 0,
+            "speak_chapter_titles": True,
+        }
+        model = self._make_model()
+        with (
+            patch("kenkui.workers._get_or_load_model", return_value=model),
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = worker_process_chapter(chapter, config, Path(td), queue)
+        assert result is not None
+        title_text = model.generate_audio.call_args_list[0].args[1]
+        assert title_text == "Chapter twenty one."
+
     def test_successful_multi_voice_returns_audio_result(self):
         segs = [
             Segment("Narration.", "narrator", 0),
@@ -802,6 +865,22 @@ class TestWorkerProcessChapter:
             result = worker_process_chapter(chapter, config, Path(td), queue)
         assert result is not None
         assert isinstance(result, AudioResult)
+
+    def test_multi_voice_normalizes_segment_numbers_before_tts(self):
+        segs = [Segment("Code 3495992019.", "narrator", 0)]
+        chapter = Chapter(index=1, title="", paragraphs=[], segments=segs)
+        queue = self._make_queue()
+        config = {"pause_line_ms": 0, "pause_chapter_ms": 0, "speak_chapter_titles": False}
+        model = self._make_model()
+        with (
+            patch("kenkui.workers._get_or_load_model", return_value=model),
+            patch("kenkui.workers.load_voice", return_value="alba"),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            result = worker_process_chapter(chapter, config, Path(td), queue)
+        assert result is not None
+        spoken = model.generate_audio.call_args.args[1]
+        assert spoken == "Code three four nine five nine nine two zero one nine."
 
     def test_failure_sends_error_and_done_to_queue(self):
         """When all retries are exhausted an ERROR then DONE message must appear."""

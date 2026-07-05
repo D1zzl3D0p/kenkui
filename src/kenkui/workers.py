@@ -33,7 +33,13 @@ from .models import AudioResult, Chapter, Segment, _migrate_speaker_voices_keys
 from .nlp.models import _SPEAKER_SENTINELS
 from .nlp.models import slugify as _slugify
 from .text_rules import is_scene_break, split_at_scene_breaks
-from .utils import ApostropheMode, batch_text, ensure_terminal_punct, normalize_for_tts
+from .utils import (
+    ApostropheMode,
+    batch_text,
+    ensure_terminal_punct,
+    normalize_for_tts,
+    normalize_numbers_for_tts,
+)
 from .voice_loader import load_voice_conditioning_source as load_voice
 
 logger = logging.getLogger(__name__)
@@ -253,6 +259,7 @@ def _render_chapter_title_audio(
     pause_after_ms: int,
     intra_segment_ms: int,
     apostrophe_mode: str,
+    number_normalization: dict | None,
     max_tokens: int,
 ) -> AudioSegment:
     """Render a chapter title as audio with configurable silence.
@@ -275,6 +282,7 @@ def _render_chapter_title_audio(
             total_batches,
             frames_after_eos=0,
             apostrophe_mode=apostrophe_mode,
+            number_normalization=number_normalization,
             max_tokens=max_tokens,
             chapter_title=title,
             speaker="chapter_title",
@@ -415,6 +423,7 @@ def _process_chapter_inner(
         tts_max_tokens = _effective_tts_max_tokens(config_dict)
         _log_tts_max_tokens_once(pid, tts_max_tokens, log_message)
         apostrophe_mode = ApostropheMode(config_dict.get("apostrophe_mode", "expand_contractions"))
+        number_normalization = config_dict.get("number_normalization")
 
         # ── Multi-voice path (NLP segments present and non-empty) ────────
         if chapter.segments:
@@ -471,6 +480,7 @@ def _process_chapter_inner(
                 pause_after_ms=pause_after_title_ms,
                 intra_segment_ms=config_dict.get("pause_chapter_title_segment_ms", 600),
                 apostrophe_mode=apostrophe_mode,
+                number_normalization=number_normalization,
                 max_tokens=tts_max_tokens,
             )
 
@@ -491,6 +501,7 @@ def _process_chapter_inner(
                     total_batches,
                     frames_after_eos=batch_fae,
                     apostrophe_mode=apostrophe_mode,
+                    number_normalization=number_normalization,
                     max_tokens=tts_max_tokens,
                     chapter_title=chapter.title,
                     speaker=voice_name,
@@ -621,6 +632,7 @@ def _render_multi_voice(
     fae_cfg = config_dict.get("frames_after_eos")
     tts_max_tokens = _effective_tts_max_tokens(config_dict)
     _log_tts_max_tokens_once(pid, tts_max_tokens, log_message)
+    number_normalization = config_dict.get("number_normalization")
 
     # Build initial audio with chapter title if enabled
     initial_audio = AudioSegment.empty()
@@ -637,6 +649,7 @@ def _render_multi_voice(
             pause_after_ms=pause_after_title_ms,
             intra_segment_ms=config_dict.get("pause_chapter_title_segment_ms", 600),
             apostrophe_mode=apostrophe_mode,
+            number_normalization=number_normalization,
             max_tokens=tts_max_tokens,
         )
 
@@ -664,6 +677,7 @@ def _render_multi_voice(
                 total_segments,
                 frames_after_eos=seg_fae,
                 apostrophe_mode=apostrophe_mode,
+                number_normalization=number_normalization,
                 max_tokens=tts_max_tokens,
                 chapter_title=chapter.title,
                 speaker=seg.speaker,
@@ -727,6 +741,7 @@ def _render_text(
     total_batches: int,
     frames_after_eos: int = 0,
     apostrophe_mode: ApostropheMode | None = None,
+    number_normalization: dict | None = None,
     max_tokens: int = DEFAULT_TTS_MAX_TOKENS,
     chapter_title: str = "",
     speaker: str = "",
@@ -751,6 +766,7 @@ def _render_text(
             # Expand n't contractions so TTS pronounces them correctly.
             effective_mode = apostrophe_mode if apostrophe_mode is not None else ApostropheMode.EXPAND_CONTRACTIONS
             text = normalize_for_tts(text, mode=effective_mode)
+            text = normalize_numbers_for_tts(text, config=number_normalization)
             text = ensure_terminal_punct(text)
             log_message(f"  Batch {batch_idx + 1}/{total_batches}: {text[:80]}…")
             tensor = model.generate_audio(
