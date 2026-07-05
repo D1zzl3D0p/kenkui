@@ -68,7 +68,8 @@ def _load_character_genders(roster_cache_path: Path | None) -> dict[str, str]:
             for c in result.characters
             if c.gender_pronoun
         }
-    except Exception:
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        logger.warning("Could not load character genders from roster cache: %s", exc, exc_info=True)
         return {}
 
 
@@ -83,7 +84,8 @@ def _load_roster_slugs(roster_cache_path: Path | None) -> set[str]:
         slugs = {c.slug for c in result.roster.characters}
         slugs.update(_slugify(c.character_id) for c in result.characters)
         return {s for s in slugs if s}
-    except Exception:
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        logger.warning("Could not load roster slugs from roster cache: %s", exc, exc_info=True)
         return set()
 
 
@@ -309,7 +311,8 @@ def _load_annotated_chapters(
 
             roster_raw = json.loads(Path(roster_cache_path).read_text(encoding="utf-8"))
             roster_result = FastScanResult.from_dict(roster_raw.get("roster_data") or roster_raw)
-        except Exception:
+        except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+            logger.warning("Could not load roster cache for speaker normalization: %s", exc, exc_info=True)
             roster_raw = None
             roster_result = None
     warn = log or logger.warning
@@ -525,12 +528,14 @@ class AudioBuilder:
         from .nlp import book_hash as _nlp_book_hash
         try:
             _book_hash = _nlp_book_hash(self.cfg.ebook_path)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not compute book hash for analytics: %s", exc, exc_info=True)
             _book_hash = ""
         self._book_hash = _book_hash
         try:
             _book_title = self._reader.get_metadata().title or "" if self._reader is not None else ""
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not read book title for analytics: %s", exc, exc_info=True)
             _book_title = ""
 
         with self._managed_temp_dir():
@@ -831,7 +836,8 @@ class AudioBuilder:
                             worker_logs.append(f"[{pid}] {msg[2]}")
                             if len(worker_logs) > 20:
                                 worker_logs.pop(0)
-                    except Exception:
+                    except (IndexError, KeyError, ValueError, TypeError) as exc:
+                        logger.warning("Malformed worker queue message; aborting queue drain: %s", exc, exc_info=True)
                         break
 
                 if self.was_cancelled:
