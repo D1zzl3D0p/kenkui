@@ -19,13 +19,13 @@ import signal
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kenkui.nlp import _attribution_to_segments, book_hash
+from kenkui.nlp._async import run_coroutine_sync as _run_coroutine_sync
 from kenkui.nlp._cache import (
     clear_checkpoints,
     get_cache,
@@ -44,16 +44,6 @@ if TYPE_CHECKING:
     from kenkui.nlp_config import NLPConfig
 
 _logger = logging.getLogger(__name__)
-
-
-def _run_coroutine_sync(coro):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(asyncio.run, coro).result()
 
 
 def _chapter_label(chapter: Chapter) -> str:

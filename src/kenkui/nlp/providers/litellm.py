@@ -8,7 +8,6 @@ import logging
 import os
 import re
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +25,7 @@ from kenkui.nlp import (
     cache_roster,
     get_cached_roster,
 )
+from kenkui.nlp._async import run_coroutine_sync as _run_coroutine_sync
 from kenkui.nlp.llm import _is_eof_truncation, _try_recover_truncated_json
 from kenkui.nlp.models import (
     AttributionItem,
@@ -59,17 +59,6 @@ _OPENROUTER_REASONING_EFFORT_DEFAULT = "minimal"
 _OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high"}
 _OPENROUTER_CACHE_CONTROL_MODELS = ("claude", "gemini", "minimax", "glm", "z-ai")
 _OPENROUTER_CACHE_TTLS = {"1h"}
-
-
-def _run_coroutine_sync(coro):
-    """Run an async LiteLLM call from the synchronous library API."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(asyncio.run, coro).result()
 
 
 def _openrouter_extra_body(provider: str) -> dict[str, object]:
