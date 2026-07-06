@@ -375,19 +375,26 @@ def _hash_file(path: Path) -> str:
 
 
 class VoiceCatalog:
-    """Lazy manifest-backed catalog."""
+    """Lazy manifest-backed catalog.
+
+    The ``voices`` property returns an immutable ``tuple`` snapshot loaded once
+    on first access and cached until :meth:`invalidate` is called.  All
+    :class:`VoiceCatalogEntry` objects are ``frozen=True`` dataclasses, so the
+    entire structure is deeply immutable between invalidations.
+    """
 
     def __init__(self, *, data_dir: Path | None = None) -> None:
         self.data_dir = data_dir or voice_data_dir()
-        self._voices: list[VoiceCatalogEntry] | None = None
+        self._voices: tuple[VoiceCatalogEntry, ...] | None = None
 
     @property
-    def voices(self) -> list[VoiceCatalogEntry]:
+    def voices(self) -> tuple[VoiceCatalogEntry, ...]:
+        """Return an immutable snapshot of all catalog entries."""
         if self._voices is None:
             self._voices = self._load()
         return self._voices
 
-    def _load(self) -> list[VoiceCatalogEntry]:
+    def _load(self) -> tuple[VoiceCatalogEntry, ...]:
         entries = builtin_catalog_entries()
         for path in _manifest_paths(self.data_dir):
             if path.exists():
@@ -414,7 +421,7 @@ class VoiceCatalog:
             entries = self._merge_entries(entries, load_manifest(custom_manifest))
 
         _validate_unique_voice_ids(entries, source="voice catalog")
-        return entries
+        return tuple(entries)
 
     @staticmethod
     def _merge_entries(
@@ -544,14 +551,39 @@ class VoiceCatalog:
         self._voices = None
 
 
-_catalog: VoiceCatalog | None = None
+class _CatalogRef:
+    """Container for the module-level catalog singleton.
+
+    Encapsulates mutation so that ``get_catalog()`` never writes a bare module
+    global.  :func:`_reset_catalog` is the explicit injection seam for tests.
+    """
+
+    def __init__(self) -> None:
+        self._instance: VoiceCatalog | None = None
+
+    def get(self) -> VoiceCatalog:
+        if self._instance is None:
+            self._instance = VoiceCatalog()
+        return self._instance
+
+    def reset(self) -> None:
+        self._instance = None
+
+
+_CATALOG_REF = _CatalogRef()
 
 
 def get_catalog() -> VoiceCatalog:
-    global _catalog
-    if _catalog is None:
-        _catalog = VoiceCatalog()
-    return _catalog
+    return _CATALOG_REF.get()
+
+
+def _reset_catalog() -> None:
+    """Reset the module-level catalog singleton.
+
+    Intended for tests and tooling that need a clean slate between runs.
+    Production code should call :meth:`VoiceCatalog.invalidate` instead.
+    """
+    _CATALOG_REF.reset()
 
 
 def get_registry() -> VoiceCatalog:
@@ -579,6 +611,7 @@ __all__ = [
     "bundled_voice_manifest_path",
     "get_catalog",
     "get_registry",
+    "_reset_catalog",
     "load_manifest",
     "preview_cache_dir",
     "validate_manifest",
