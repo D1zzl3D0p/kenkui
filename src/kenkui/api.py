@@ -27,6 +27,7 @@ from .config import (
     save_provider_credentials,
 )
 from .huggingface_auth import is_custom_voice
+from .model_names import normalize_model_for_provider
 from .models import (
     AppConfig,
     AttributionTool,
@@ -106,6 +107,13 @@ from .services.series_service import (
 )
 from .utils import ApostropheMode
 from .voice_loader import load_voice
+from .voice_metadata import (
+    voice_excluded,
+    voice_id,
+    voice_label,
+    voice_source,
+    voice_source_group,
+)
 from .workers import worker_process_chapter
 
 try:
@@ -687,6 +695,12 @@ def book_hash(book_path: str | Path) -> str:
     return _book_hash(Path(book_path))
 
 
+def nlp_cache_dir() -> Path:
+    """Return the canonical directory where NLP cache files are stored."""
+    from .nlp import CACHE_DIR as _NLP_CACHE_DIR
+    return _NLP_CACHE_DIR
+
+
 def list_cached_rosters(book_path: str | Path):
     """Return cached roster metadata entries for an ebook path."""
     from .nlp import list_cached_rosters as _list_cached_rosters
@@ -908,8 +922,17 @@ __all__ = [
     "CACHE_DIR",
     "load_provider_credentials",
     "save_provider_credentials",
+    # Model-name normalization
+    "normalize_model_for_provider",
+    # Voice metadata formatting
+    "voice_id",
+    "voice_source",
+    "voice_source_group",
+    "voice_excluded",
+    "voice_label",
     # NLP cache API
     "book_hash",
+    "nlp_cache_dir",
     "list_cached_rosters",
     "get_cached_nlp_result",
     "cache_nlp_result",
