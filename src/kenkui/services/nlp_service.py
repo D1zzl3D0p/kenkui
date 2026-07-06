@@ -129,6 +129,282 @@ def _extraction_step_count(method: str) -> int:
     return 4       # worst-case upper bound for auto/llm paths
 
 
+def _compute_fast_scan_result(
+    *,
+    ebook: Path,
+    ebook_hash: str,
+    chapters: list,
+    series_roster,
+    series_slug: str | None,
+    book_slug: str | None,
+    pipeline,
+    discovery_method: str,
+    provider_name: str,
+    model_name: str,
+    book_title: str,
+    book_char_count: int,
+    progress_callback: Callable[[int, str], None] | None,
+    progress_event_callback: Callable[[ProgressEvent], None] | None,
+) -> FastScanResult:
+    """Pure extraction computation — build a FastScanResult with no cache writes.
+
+    All NLP cache persistence is the caller's responsibility.  Analytics records
+    (``append_record``) are written here because they track computation timing, not
+    cached results.
+    """
+    chapter_total = len(chapters)
+    total = _extraction_step_count(discovery_method)
+    tracker = ProgressTracker(total, progress_callback)
+    if progress_callback:
+        progress_callback(0, "Starting extraction")
+    _emit_nlp_progress(
+        progress_event_callback,
+        stage="nlp_extraction",
+        status="started",
+        message="Starting character discovery",
+        completed_units=0,
+        total_units=chapter_total,
+        provider=provider_name,
+        model=model_name,
+        book_hash_value=ebook_hash,
+    )
+
+    extraction_completed = 0.0
+
+    def _extraction_message(_pct: int, msg: str) -> None:
+        del _pct, msg
+
+    def _extraction_step(msg: str) -> None:
+        nonlocal extraction_completed
+        tracker.advance(msg)
+        completed = _completed_extraction_units(msg, extraction_completed, chapter_total)
+        if completed <= extraction_completed:
+            return
+        extraction_completed = completed
+        _emit_nlp_progress(
+            progress_event_callback,
+            stage="nlp_extraction",
+            status="advanced",
+            message=_chapter_progress_message(chapters, extraction_completed, chapter_total),
+            completed_units=extraction_completed,
+            total_units=chapter_total,
+            provider=provider_name,
+            model=model_name,
+            book_hash_value=ebook_hash,
+        )
+
+    _extract_start = now_utc()
+    _t0 = time.monotonic()
+    roster = pipeline.extract(
+        book_path=ebook,
+        chapters=chapters,
+        series_roster=series_roster,
+        progress_callback=_extraction_message,
+        step_callback=_extraction_step,
+        use_cache=False,  # nlp_service manages its own roster cache
+    )
+    _extract_dur = time.monotonic() - _t0
+
+    append_record(StageRecord(
+        stage="nlp_extraction",
+        started_at=_extract_start,
+        duration_seconds=_extract_dur,
+        success=True,
+        book_hash=ebook_hash,
+        book_title=book_title,
+        book_char_count=book_char_count,
+        chapter_count=len(chapters),
+        provider=provider_name,
+        model=model_name,
+        cache_hit=False,
+    ))
+
+    # Update series roster with newly discovered characters.
+    if series_slug and book_slug:
+        from kenkui.services.series_service import update_roster as _update_roster
+        _update_roster(series_slug, roster, book_slug)
+
+    characters: list[CharacterInfo] = [
+        AppCharacterRecord.from_nlp(rec).to_character_info()
+        for rec in roster.characters
+    ]
+    characters.sort(key=lambda c: c.mention_count or c.quote_count, reverse=True)
+
+    result = FastScanResult(
+        roster=roster,
+        characters=characters,
+        book_hash=ebook_hash,
+    )
+
+    if progress_callback:
+        progress_callback(100, "Extraction complete")
+    _emit_nlp_progress(
+        progress_event_callback,
+        stage="nlp_extraction",
+        status="completed",
+        message="Character discovery complete",
+        completed_units=chapter_total,
+        total_units=chapter_total,
+        provider=provider_name,
+        model=model_name,
+        book_hash_value=ebook_hash,
+    )
+
+    return result
+
+
+def _compute_attribution_result(
+    *,
+    ebook: Path,
+    ebook_hash: str,
+    chapters: list,
+    roster,
+    pipeline,
+    attr_provider_name: str,
+    attribution_model_name: str,
+    chapter_total: int,
+    attribution_progress_callback: Callable[[int, str], None] | None,
+    attribution_progress_event_callback: Callable[[ProgressEvent], None] | None,
+    attrib_tracker: ProgressTracker,
+) -> NLPResult:
+    """Pure attribution computation for ``full_analysis`` — no cache writes.
+
+    Supports both the openrouter async path (``pipeline.attribute``) and the
+    chapter-by-chapter path used by all other providers.  All NLP cache
+    persistence is the caller's responsibility.
+    """
+    attributed_chapters = []
+    attribution_counts: dict[str, int] = defaultdict(int)
+
+    if (attr_provider_name or "").lower() == "openrouter":
+        last_completed = 0.0
+
+        def _attribution_message(pct: int, msg: str) -> None:
+            nonlocal last_completed
+            if attribution_progress_callback:
+                attribution_progress_callback(pct, msg)
+            last_completed = _completed_attribution_units(msg, last_completed)
+            _emit_nlp_progress(
+                attribution_progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=msg,
+                completed_units=last_completed,
+                total_units=chapter_total,
+                provider=attr_provider_name or "",
+                model=attribution_model_name,
+                book_hash_value=ebook_hash,
+            )
+
+        result: NLPResult = pipeline.attribute(
+            book_path=ebook,
+            chapters=chapters,
+            roster=roster,
+            progress_callback=_attribution_message,
+            use_cache=False,
+        )
+    else:
+        for done, chapter in enumerate(chapters, start=1):
+            attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
+            segments = _attribution_to_segments(chapter, attr_result, roster)
+            attributed_chapters.append(_replace(chapter, segments=segments))
+            for item in attr_result.attributions:
+                if item.speaker not in ("NARRATOR", "Unknown"):
+                    attribution_counts[item.speaker] += 1
+            attrib_tracker.advance(chapter.title or f"Chapter {chapter.index}")
+            _emit_nlp_progress(
+                attribution_progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
+                completed_units=done,
+                total_units=chapter_total,
+                provider=attr_provider_name or "",
+                model=attribution_model_name,
+                book_hash_value=ebook_hash,
+            )
+
+        characters: list[CharacterInfo] = []
+        for rec in roster.characters:
+            ci = AppCharacterRecord.from_nlp(rec).to_character_info()
+            ci.quote_count = attribution_counts.get(rec.slug, 0)
+            characters.append(ci)
+        characters.sort(key=lambda c: c.prominence, reverse=True)
+
+        result = NLPResult(
+            characters=characters,
+            chapters=attributed_chapters,
+            book_hash=ebook_hash,
+        )
+
+    return result
+
+
+def _compute_attribute_only_result(
+    *,
+    ebook: Path,
+    ebook_hash: str,
+    chapters: list,
+    roster,
+    pipeline,
+    effective_provider: str,
+    effective_model: str,
+    chapter_total: int,
+    progress_callback: Callable[[int, str], None] | None,
+    progress_event_callback: Callable[[ProgressEvent], None] | None,
+    use_cache: bool,
+) -> NLPResult:
+    """Pure attribution computation for ``attribute_only`` — no cache writes.
+
+    All NLP cache persistence is the caller's responsibility.
+    """
+    last_completed = 0.0
+
+    def _attribution_message(pct: int, msg: str) -> None:
+        nonlocal last_completed
+        if progress_callback:
+            progress_callback(pct, msg)
+        parsed_completed = _completed_attribution_units(msg, last_completed)
+        if parsed_completed == last_completed:
+            last_completed = min(chapter_total, last_completed + 1)
+        else:
+            last_completed = parsed_completed
+        _emit_nlp_progress(
+            progress_event_callback,
+            stage="nlp_attribution",
+            status="advanced",
+            message=msg,
+            completed_units=last_completed,
+            total_units=chapter_total,
+            provider=effective_provider or "",
+            model=effective_model,
+            book_hash_value=ebook_hash,
+        )
+
+    result: NLPResult = pipeline.attribute(
+        book_path=ebook,
+        chapters=chapters,
+        roster=roster,
+        progress_callback=_attribution_message,
+        use_cache=use_cache,
+    )
+    if last_completed <= 0:
+        for done, chapter in enumerate(chapters, start=1):
+            _emit_nlp_progress(
+                progress_event_callback,
+                stage="nlp_attribution",
+                status="advanced",
+                message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
+                completed_units=done,
+                total_units=chapter_total,
+                provider=effective_provider or "",
+                model=effective_model,
+                book_hash_value=ebook_hash,
+            )
+
+    return result
+
+
 def fast_scan(
     ebook_path: str,
     nlp_model: str | None = None,
@@ -236,24 +512,6 @@ def fast_scan(
     except Exception:
         _book_title = ""
 
-    _method = _discovery_method
-    total = _extraction_step_count(_method)
-    tracker = ProgressTracker(total, progress_callback)
-    if progress_callback:
-        progress_callback(0, "Starting extraction")
-    chapter_total = len(chapters)
-    _emit_nlp_progress(
-        progress_event_callback,
-        stage="nlp_extraction",
-        status="started",
-        message="Starting character discovery",
-        completed_units=0,
-        total_units=chapter_total,
-        provider=provider_name,
-        model=model_name,
-        book_hash_value=ebook_hash,
-    )
-
     # Fetch existing series roster before extraction so providers can inject it.
     series_roster = None
     if series_slug:
@@ -262,92 +520,32 @@ def fast_scan(
 
     nlp_config = NLPConfig.from_app_config(cfg)
     pipeline = NLPPipeline(nlp_config)
-    extraction_completed = 0.0
 
-    def _extraction_message(_pct: int, msg: str) -> None:
-        del _pct, msg
-
-    def _extraction_step(msg: str) -> None:
-        nonlocal extraction_completed
-        tracker.advance(msg)
-        completed = _completed_extraction_units(msg, extraction_completed, chapter_total)
-        if completed <= extraction_completed:
-            return
-        extraction_completed = completed
-        _emit_nlp_progress(
-            progress_event_callback,
-            stage="nlp_extraction",
-            status="advanced",
-            message=_chapter_progress_message(chapters, extraction_completed, chapter_total),
-            completed_units=extraction_completed,
-            total_units=chapter_total,
-            provider=provider_name,
-            model=model_name,
-            book_hash_value=ebook_hash,
-        )
-
-    _extract_start = now_utc()
-    _t0 = time.monotonic()
-    roster = pipeline.extract(
-        book_path=Path(ebook_path),
+    # Pure computation — no cache writes inside.
+    result = _compute_fast_scan_result(
+        ebook=ebook,
+        ebook_hash=ebook_hash,
         chapters=chapters,
         series_roster=series_roster,
-        progress_callback=_extraction_message,
-        step_callback=_extraction_step,
-        use_cache=False,  # nlp_service handles its own roster cache above
-    )
-    _extract_dur = time.monotonic() - _t0
-
-    append_record(StageRecord(
-        stage="nlp_extraction",
-        started_at=_extract_start,
-        duration_seconds=_extract_dur,
-        success=True,
-        book_hash=ebook_hash,
+        series_slug=series_slug,
+        book_slug=book_slug,
+        pipeline=pipeline,
+        discovery_method=_discovery_method,
+        provider_name=provider_name,
+        model_name=model_name,
         book_title=_book_title,
         book_char_count=_book_char_count,
-        chapter_count=len(chapters),
-        provider=provider_name,
-        model=model_name,
-        cache_hit=False,
-    ))
-
-    # Update series roster with newly discovered characters.
-    if series_slug and book_slug:
-        from kenkui.services.series_service import update_roster as _update_roster
-        _update_roster(series_slug, roster, book_slug)
-
-    characters: list[CharacterInfo] = [
-        AppCharacterRecord.from_nlp(rec).to_character_info()
-        for rec in roster.characters
-    ]
-    characters.sort(key=lambda c: c.mention_count or c.quote_count, reverse=True)
-
-    result = FastScanResult(
-        roster=roster,
-        characters=characters,
-        book_hash=ebook_hash,
+        progress_callback=progress_callback,
+        progress_event_callback=progress_event_callback,
     )
+
+    # Explicit persist at the orchestration boundary.
     cache_roster(
         result,
         Path(ebook_path),
         method=_discovery_method,
         provider=cfg.nlp_provider,
         model=cfg.nlp_model,
-    )
-
-    if progress_callback:
-        progress_callback(100, "Extraction complete")
-    _emit_nlp_progress(
-        progress_event_callback,
-        stage="nlp_extraction",
-        status="completed",
-        message="Character discovery complete",
-        completed_units=chapter_total,
-        total_units=chapter_total,
-        provider=provider_name,
-        model=model_name,
-        book_hash_value=ebook_hash,
     )
 
     return result
@@ -635,74 +833,26 @@ def full_analysis(
         book_hash_value=ebook_hash,
     )
 
-    attribution_counts: dict[str, int] = defaultdict(int)
-    attributed_chapters = []
-
     _attrib_start = now_utc()
     _t1 = time.monotonic()
 
-    if (_attr_provider_name or "").lower() == "openrouter":
-        last_completed = 0.0
-
-        def _attribution_message(pct: int, msg: str) -> None:
-            nonlocal last_completed
-            if attribution_progress_callback:
-                attribution_progress_callback(pct, msg)
-            last_completed = _completed_attribution_units(msg, last_completed)
-            _emit_nlp_progress(
-                attribution_progress_event_callback,
-                stage="nlp_attribution",
-                status="advanced",
-                message=msg,
-                completed_units=last_completed,
-                total_units=chapter_total,
-                provider=_attr_provider_name or "",
-                model=attribution_model_name,
-                book_hash_value=ebook_hash,
-            )
-
-        result = pipeline.attribute(
-            book_path=ebook,
-            chapters=chapters,
-            roster=roster,
-            progress_callback=_attribution_message,
-            use_cache=False,
-        )
-    else:
-        for done, chapter in enumerate(chapters, start=1):
-            attr_result = pipeline._attribution.attribute_chapter(chapter, roster, progress_callback=None)
-            segments = _attribution_to_segments(chapter, attr_result, roster)
-            attributed_chapters.append(_replace(chapter, segments=segments))
-            for item in attr_result.attributions:
-                if item.speaker not in ("NARRATOR", "Unknown"):
-                    attribution_counts[item.speaker] += 1
-            attrib_tracker.advance(chapter.title or f"Chapter {chapter.index}")
-            _emit_nlp_progress(
-                attribution_progress_event_callback,
-                stage="nlp_attribution",
-                status="advanced",
-                message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
-                completed_units=done,
-                total_units=chapter_total,
-                provider=_attr_provider_name or "",
-                model=attribution_model_name,
-                book_hash_value=ebook_hash,
-            )
-
-        # Build CharacterInfo list with both mention_count and quote_count.
-        characters: list[CharacterInfo] = []
-        for rec in roster.characters:
-            ci = AppCharacterRecord.from_nlp(rec).to_character_info()
-            ci.quote_count = attribution_counts.get(rec.slug, 0)
-            characters.append(ci)
-        characters.sort(key=lambda c: c.prominence, reverse=True)
-
-        result = NLPResult(
-            characters=characters,
-            chapters=attributed_chapters,
-            book_hash=ebook_hash,
-        )
+    # Pure computation — no cache writes inside.
+    result = _compute_attribution_result(
+        ebook=ebook,
+        ebook_hash=ebook_hash,
+        chapters=chapters,
+        roster=roster,
+        pipeline=pipeline,
+        attr_provider_name=_attr_provider_name or "",
+        attribution_model_name=attribution_model_name,
+        chapter_total=chapter_total,
+        attribution_progress_callback=attribution_progress_callback,
+        attribution_progress_event_callback=attribution_progress_event_callback,
+        attrib_tracker=attrib_tracker,
+    )
     _attrib_dur = time.monotonic() - _t1
+
+    # Explicit persist at the orchestration boundary.
     cache_result(
         result,
         Path(ebook_path),
@@ -824,50 +974,22 @@ def attribute_only(
         book_hash_value=ebook_hash,
     )
 
-    last_completed = 0.0
-
-    def _attribution_message(pct: int, msg: str) -> None:
-        nonlocal last_completed
-        if progress_callback:
-            progress_callback(pct, msg)
-        parsed_completed = _completed_attribution_units(msg, last_completed)
-        if parsed_completed == last_completed:
-            last_completed = min(chapter_total, last_completed + 1)
-        else:
-            last_completed = parsed_completed
-        _emit_nlp_progress(
-            progress_event_callback,
-            stage="nlp_attribution",
-            status="advanced",
-            message=msg,
-            completed_units=last_completed,
-            total_units=chapter_total,
-            provider=_effective_provider or "",
-            model=_effective_model,
-            book_hash_value=ebook_hash,
-        )
-
-    result = pipeline.attribute(
-        book_path=ebook,
+    # Pure computation — no cache writes inside.
+    result = _compute_attribute_only_result(
+        ebook=ebook,
+        ebook_hash=ebook_hash,
         chapters=chapters,
         roster=roster,
-        progress_callback=_attribution_message,
+        pipeline=pipeline,
+        effective_provider=_effective_provider or "",
+        effective_model=_effective_model,
+        chapter_total=chapter_total,
+        progress_callback=progress_callback,
+        progress_event_callback=progress_event_callback,
         use_cache=use_cache,
     )
-    if last_completed <= 0:
-        for done, chapter in enumerate(chapters, start=1):
-            _emit_nlp_progress(
-                progress_event_callback,
-                stage="nlp_attribution",
-                status="advanced",
-                message=f"Attributing [{done}/{chapter_total}] {_chapter_label(chapter)}",
-                completed_units=done,
-                total_units=chapter_total,
-                provider=_effective_provider or "",
-                model=_effective_model,
-                book_hash_value=ebook_hash,
-            )
 
+    # Explicit persist at the orchestration boundary.
     cache_result(
         result,
         Path(ebook_path),

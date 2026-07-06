@@ -673,3 +673,328 @@ def test_attribute_only_openrouter_forwards_async_attribution_progress(tmp_path)
 def test_full_analysis_real_pipeline():
     """Placeholder: full pipeline test requiring spaCy + Ollama."""
     # Would test: real epub file → full NLP pipeline → NLPResult with characters and quotes
+
+
+# ---------------------------------------------------------------------------
+# Pure compute function tests (QP-12: no cache/filesystem needed)
+# ---------------------------------------------------------------------------
+
+
+from kenkui.services.nlp_service import (  # noqa: E402
+    ProgressTracker,
+    _compute_attribute_only_result,
+    _compute_attribution_result,
+    _compute_fast_scan_result,
+)
+
+
+def _fake_ebook(tmp_path) -> tuple:
+    """Return (ebook_path, ebook_hash_mock) for a fake epub."""
+    fake_epub = tmp_path / "book.epub"
+    fake_epub.write_bytes(b"fake")
+    return fake_epub, "abc123"
+
+
+def _two_chapters():
+    return [
+        Chapter(index=0, title="Ch 1", paragraphs=["text1"]),
+        Chapter(index=1, title="Ch 2", paragraphs=["text2"]),
+    ]
+
+
+# --- _compute_fast_scan_result ---
+
+
+def test_compute_fast_scan_result_returns_fast_scan_result(tmp_path):
+    """_compute_fast_scan_result must return FastScanResult without touching cache."""
+    from kenkui.models import FastScanResult
+
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+
+    with patch("kenkui.services.nlp_service.cache_roster") as mock_cache_roster:
+        result = _compute_fast_scan_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            series_roster=None,
+            series_slug=None,
+            book_slug=None,
+            pipeline=mock_pipeline,
+            discovery_method="spacy",
+            provider_name="ollama",
+            model_name="llama3.2",
+            book_title="Test Book",
+            book_char_count=100,
+            progress_callback=None,
+            progress_event_callback=None,
+        )
+
+    assert isinstance(result, FastScanResult)
+    mock_cache_roster.assert_not_called()
+
+
+def test_compute_fast_scan_result_no_cache_roster_call(tmp_path):
+    """_compute_fast_scan_result must never call cache_roster — even with callbacks."""
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+    events = []
+
+    with patch("kenkui.services.nlp_service.cache_roster") as mock_cache_roster:
+        _compute_fast_scan_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            series_roster=None,
+            series_slug=None,
+            book_slug=None,
+            pipeline=mock_pipeline,
+            discovery_method="spacy",
+            provider_name="ollama",
+            model_name="llama3.2",
+            book_title="Test Book",
+            book_char_count=100,
+            progress_callback=lambda p, m: None,
+            progress_event_callback=events.append,
+        )
+
+    mock_cache_roster.assert_not_called()
+
+
+def test_compute_fast_scan_result_emits_started_and_completed_events(tmp_path):
+    """_compute_fast_scan_result should emit started + completed progress events."""
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+    events = []
+
+    _compute_fast_scan_result(
+        ebook=fake_epub,
+        ebook_hash=ebook_hash,
+        chapters=chapters,
+        series_roster=None,
+        series_slug=None,
+        book_slug=None,
+        pipeline=mock_pipeline,
+        discovery_method="spacy",
+        provider_name="ollama",
+        model_name="llama3.2",
+        book_title="Test Book",
+        book_char_count=100,
+        progress_callback=None,
+        progress_event_callback=events.append,
+    )
+
+    statuses = [e.status for e in events]
+    assert "started" in statuses
+    assert "completed" in statuses
+    assert all(e.stage == "nlp_extraction" for e in events)
+
+
+def test_compute_fast_scan_result_sorts_characters_by_mention_count(tmp_path):
+    """Characters should be sorted descending by mention_count."""
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    rec_a = _make_mock_nlp_record(slug="alice", canonical="Alice", mentions=10)
+    rec_b = _make_mock_nlp_record(slug="bob", canonical="Bob", mentions=50)
+    mock_pipeline = _make_mock_pipeline(roster=_make_mock_roster([rec_a, rec_b]))
+
+    result = _compute_fast_scan_result(
+        ebook=fake_epub,
+        ebook_hash=ebook_hash,
+        chapters=chapters,
+        series_roster=None,
+        series_slug=None,
+        book_slug=None,
+        pipeline=mock_pipeline,
+        discovery_method="spacy",
+        provider_name="ollama",
+        model_name="llama3.2",
+        book_title="Test Book",
+        book_char_count=100,
+        progress_callback=None,
+        progress_event_callback=None,
+    )
+
+    mention_counts = [c.mention_count for c in result.characters]
+    assert mention_counts == sorted(mention_counts, reverse=True)
+
+
+# --- _compute_attribution_result ---
+
+
+def test_compute_attribution_result_returns_nlp_result(tmp_path):
+    """_compute_attribution_result must return NLPResult without calling cache_result."""
+    from kenkui.models import NLPResult
+
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+    attrib_tracker = ProgressTracker(total=len(chapters), callback=None)
+
+    with patch("kenkui.services.nlp_service.cache_result") as mock_cache_result:
+        result = _compute_attribution_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            roster=_make_mock_roster(),
+            pipeline=mock_pipeline,
+            attr_provider_name="ollama",
+            attribution_model_name="llama3.2",
+            chapter_total=len(chapters),
+            attribution_progress_callback=None,
+            attribution_progress_event_callback=None,
+            attrib_tracker=attrib_tracker,
+        )
+
+    assert isinstance(result, NLPResult)
+    mock_cache_result.assert_not_called()
+
+
+def test_compute_attribution_result_no_cache_result_call(tmp_path):
+    """_compute_attribution_result must never call cache_result — even with openrouter."""
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+    attrib_tracker = ProgressTracker(total=len(chapters), callback=None)
+
+    def _attribute_side_effect(*_args, **kwargs):
+        return mock_pipeline.attribute.return_value
+
+    mock_pipeline.attribute.side_effect = _attribute_side_effect
+
+    with patch("kenkui.services.nlp_service.cache_result") as mock_cache_result:
+        _compute_attribution_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            roster=_make_mock_roster(),
+            pipeline=mock_pipeline,
+            attr_provider_name="openrouter",
+            attribution_model_name="openai/gpt-4.1-mini",
+            chapter_total=len(chapters),
+            attribution_progress_callback=None,
+            attribution_progress_event_callback=None,
+            attrib_tracker=attrib_tracker,
+        )
+
+    mock_cache_result.assert_not_called()
+
+
+def test_compute_attribution_result_non_openrouter_builds_character_list(tmp_path):
+    """Non-openrouter path should produce NLPResult with characters from roster."""
+    from kenkui.models import NLPResult
+
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    rec = _make_mock_nlp_record(slug="jane_eyre", canonical="Jane Eyre", mentions=5)
+    mock_roster = _make_mock_roster([rec])
+    mock_pipeline = _make_mock_pipeline(roster=mock_roster)
+    attrib_tracker = ProgressTracker(total=len(chapters), callback=None)
+
+    with patch("kenkui.services.nlp_service._attribution_to_segments", return_value=[]):
+        result = _compute_attribution_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            roster=mock_roster,
+            pipeline=mock_pipeline,
+            attr_provider_name="ollama",
+            attribution_model_name="llama3.2",
+            chapter_total=len(chapters),
+            attribution_progress_callback=None,
+            attribution_progress_event_callback=None,
+            attrib_tracker=attrib_tracker,
+        )
+
+    assert isinstance(result, NLPResult)
+    assert len(result.characters) == 1
+
+
+# --- _compute_attribute_only_result ---
+
+
+def test_compute_attribute_only_result_returns_nlp_result(tmp_path):
+    """_compute_attribute_only_result must return NLPResult without calling cache_result."""
+    from kenkui.models import NLPResult
+
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+    # pipeline.attribute must return a real NLPResult so isinstance check passes
+    mock_pipeline.attribute.return_value = NLPResult(characters=[], chapters=[], book_hash=ebook_hash)
+
+    with patch("kenkui.services.nlp_service.cache_result") as mock_cache_result:
+        result = _compute_attribute_only_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            roster=_make_mock_roster(),
+            pipeline=mock_pipeline,
+            effective_provider="ollama",
+            effective_model="llama3.2",
+            chapter_total=len(chapters),
+            progress_callback=None,
+            progress_event_callback=None,
+            use_cache=False,
+        )
+
+    assert isinstance(result, NLPResult)
+    mock_cache_result.assert_not_called()
+
+
+def test_compute_attribute_only_result_no_cache_result_call(tmp_path):
+    """_compute_attribute_only_result must never call cache_result — cache is caller's job."""
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+
+    with patch("kenkui.services.nlp_service.cache_result") as mock_cache_result:
+        _compute_attribute_only_result(
+            ebook=fake_epub,
+            ebook_hash=ebook_hash,
+            chapters=chapters,
+            roster=_make_mock_roster(),
+            pipeline=mock_pipeline,
+            effective_provider="ollama",
+            effective_model="llama3.2",
+            chapter_total=len(chapters),
+            progress_callback=None,
+            progress_event_callback=None,
+            use_cache=False,
+        )
+
+    mock_cache_result.assert_not_called()
+
+
+def test_compute_attribute_only_result_emits_started_and_completed(tmp_path):
+    """_compute_attribute_only_result should emit attribution progress events."""
+    fake_epub, ebook_hash = _fake_ebook(tmp_path)
+    chapters = _two_chapters()
+    mock_pipeline = _make_mock_pipeline()
+    events = []
+
+    def _attribute_side_effect(*_args, **kwargs):
+        kwargs["progress_callback"](10, "Attribution jobs [1/2]")
+        return mock_pipeline.attribute.return_value
+
+    mock_pipeline.attribute.side_effect = _attribute_side_effect
+
+    _compute_attribute_only_result(
+        ebook=fake_epub,
+        ebook_hash=ebook_hash,
+        chapters=chapters,
+        roster=_make_mock_roster(),
+        pipeline=mock_pipeline,
+        effective_provider="ollama",
+        effective_model="llama3.2",
+        chapter_total=len(chapters),
+        progress_callback=None,
+        progress_event_callback=events.append,
+        use_cache=False,
+    )
+
+    assert any(e.status == "advanced" for e in events)
+    assert all(e.stage == "nlp_attribution" for e in events)
