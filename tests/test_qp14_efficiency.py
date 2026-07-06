@@ -1,8 +1,8 @@
-"""QP14 efficiency tests — written BEFORE implementation (TDD).
+"""QP14 efficiency tests — property tests of the new implementation.
 
 Part 1: Co-occurrence precompute in _auto_assign_unmapped_speakers
-  - Pin current assignment results on a deterministic fixture.
-  - After optimization, identical results must be produced.
+  - Verify assignment semantics on deterministic fixtures.
+  - Optimised implementation must produce identical results.
 
 Part 2: Adaptive exponential backoff in _process_chapters polling loop
   - Inject a fake sleep and fake clock so no real time elapses.
@@ -12,8 +12,9 @@ Part 2: Adaptive exponential backoff in _process_chapters polling loop
 
 from __future__ import annotations
 
+import queue as _queue
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from kenkui.models import Chapter, Segment
 
@@ -245,10 +246,10 @@ class TestPollingBackoff:
             assert delays[i] >= delays[i - 1], f"Delay decreased at i={i}: {delays}"
 
     def test_delay_is_capped(self):
-        """Delay never exceeds 0.5 s regardless of how large idle_count is."""
+        """Delay never exceeds 0.2 s regardless of how large idle_count is."""
         from kenkui.parsing import _poll_backoff_delay
         for idle_count in [1, 10, 50, 100, 1000]:
-            assert _poll_backoff_delay(idle_count) <= 0.5
+            assert _poll_backoff_delay(idle_count) <= 0.2
 
     def test_zero_idle_count_returns_zero_or_min(self):
         """idle_count=0 is not expected to be called but must not crash."""
@@ -263,3 +264,147 @@ class TestPollingBackoff:
         d5 = _poll_backoff_delay(idle_count=5)
         # Exponential growth means d5 >> 5 * d1 (at least 3× the linear expectation).
         assert d5 >= 3 * d1
+
+
+# ---------------------------------------------------------------------------
+# Part 3 — Drain-loop integration: backoff wiring inside _run_drain_loop
+# ---------------------------------------------------------------------------
+
+
+class _FakeQueue:
+    """Minimal queue stand-in: yields pre-loaded messages then stays empty."""
+
+    def __init__(self, messages=()):
+        self._msgs = list(messages)
+
+    def empty(self):
+        return not self._msgs
+
+    def get_nowait(self):
+        if not self._msgs:
+            raise _queue.Empty
+        return self._msgs.pop(0)
+
+
+class _CountdownFuture:
+    """Fake future that reports done() after *done_after* calls to done()."""
+
+    def __init__(self, done_after: int):
+        self._remaining = done_after
+
+    def done(self):
+        if self._remaining > 0:
+            self._remaining -= 1
+            return False
+        return True
+
+
+class _FakeTracker:
+    def __init__(self):
+        self.messages: list = []
+
+    def process_message(self, msg):
+        self.messages.append(msg)
+
+    def finalize_completed(self):
+        pass
+
+    def log_errors(self):
+        pass
+
+
+def _make_drain_builder():
+    """Return a minimal AudioBuilder wired for drain-loop tests (no real config)."""
+    from kenkui.parsing import AudioBuilder
+
+    b = AudioBuilder.__new__(AudioBuilder)
+    b.was_cancelled = False
+    b.cancel_check = None
+    return b
+
+
+class TestDrainLoopBackoff:
+    """Integration test: verify backoff wiring inside AudioBuilder._run_drain_loop.
+
+    No real sleeps — time.sleep is patched throughout.
+    """
+
+    def test_idle_iterations_increment_delay(self):
+        """(a) Each idle iteration sleeps with the delay returned by _poll_backoff_delay."""
+        from kenkui.parsing import _poll_backoff_delay
+
+        builder = _make_drain_builder()
+        # done_after=2: done() returns False on calls 1 and 2, True on call 3.
+        # Loop: iter1 sleep(delay(1)) → done() False; iter2 sleep(delay(2)) → done()
+        # False; iter3 sleep(delay(3)) → done() True → break. Exactly 3 sleeps.
+        futures = {_CountdownFuture(done_after=2): None}
+        tracker = _FakeTracker()
+        fq = _FakeQueue()  # always empty
+
+        with patch("kenkui.parsing.time.sleep") as mock_sleep:
+            builder._run_drain_loop(fq, futures, tracker)
+
+        assert mock_sleep.call_count == 3
+        expected = [
+            call(_poll_backoff_delay(1)),
+            call(_poll_backoff_delay(2)),
+            call(_poll_backoff_delay(3)),
+        ]
+        assert mock_sleep.call_args_list == expected
+
+    def test_drained_message_resets_idle_counter(self):
+        """(b) A drained message resets idle_iters; next sleep is back to minimum."""
+        from unittest.mock import Mock
+
+        from kenkui.parsing import _poll_backoff_delay
+
+        builder = _make_drain_builder()
+
+        # Drive the loop through exactly 4 outer iterations:
+        #   iter1: queue empty → sleep(delay(1))  → done() False (short-circuits)
+        #   iter2: queue empty → sleep(delay(2))  → done() False (short-circuits)
+        #   iter3: queue has msg → drain (no sleep) → done() False (short-circuits)
+        #   iter4: queue empty → sleep(delay(1))  → done() True → queue.empty() → break
+        #
+        # empty() short-circuit note: the final `all(done) and queue.empty()` only
+        # calls queue.empty() when all futures are already done.  Iterations 1-3 all
+        # short-circuit at done()=False, so empty() is NOT called at end of those iters.
+        fq = Mock()
+        fq.empty.side_effect = [
+            True,   # iter1 inner-while → empty, skip drain
+            True,   # iter2 inner-while → empty, skip drain
+            False,  # iter3 inner-while → not empty, enter drain
+            True,   # iter3 inner-while after get → empty, exit drain
+            True,   # iter4 inner-while → empty, skip drain
+            True,   # iter4 final check (done()=True, so this is evaluated) → break
+        ]
+        fq.get_nowait.return_value = "msg"
+
+        # done_after=3: returns False on calls 1,2,3 then True on call 4.
+        futures = {_CountdownFuture(done_after=3): None}
+        tracker = _FakeTracker()
+
+        with patch("kenkui.parsing.time.sleep") as mock_sleep:
+            builder._run_drain_loop(fq, futures, tracker)
+
+        expected = [
+            call(_poll_backoff_delay(1)),  # iter1
+            call(_poll_backoff_delay(2)),  # iter2
+            call(_poll_backoff_delay(1)),  # iter4: reset after drain in iter3
+        ]
+        assert mock_sleep.call_args_list == expected
+        assert tracker.messages == ["msg"]
+
+    def test_no_sleep_when_queue_active(self):
+        """(c) time.sleep is never called when the queue always has messages."""
+        builder = _make_drain_builder()
+        # Pre-load 3 messages; future is done from the start after queue drains.
+        fq = _FakeQueue(["a", "b", "c"])
+        futures = {_CountdownFuture(done_after=0): None}
+        tracker = _FakeTracker()
+
+        with patch("kenkui.parsing.time.sleep") as mock_sleep:
+            builder._run_drain_loop(fq, futures, tracker)
+
+        mock_sleep.assert_not_called()
+        assert tracker.messages == ["a", "b", "c"]

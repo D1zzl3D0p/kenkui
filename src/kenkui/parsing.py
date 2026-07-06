@@ -764,37 +764,14 @@ class AudioBuilder:
                 )
                 futures[fut] = ch
 
-            _idle_iters = 0  # consecutive outer iterations with an empty queue
-            while True:
-                drained = False
-                while not queue.empty():
-                    drained = True
-                    try:
-                        if self.cancel_check is not None and self.cancel_check():
-                            self.was_cancelled = True
-                            break
-                        msg = queue.get_nowait()
-                        tracker.process_message(msg)
-                    except (IndexError, KeyError, ValueError, TypeError) as exc:
-                        logger.warning("Malformed worker queue message; aborting queue drain: %s", exc, exc_info=True)
-                        break
+            self._run_drain_loop(queue, futures, tracker)
 
-                if drained:
-                    _idle_iters = 0  # activity: reset backoff
-                else:
-                    _idle_iters += 1
-                    time.sleep(_poll_backoff_delay(_idle_iters))
-
-                if self.was_cancelled:
-                    if pool is not None:
-                        for proc in pool._processes.values():
-                            proc.terminate()
-                        pool.shutdown(wait=False, cancel_futures=True)
-                    return []
-
-                if all(f.done() for f in futures) and queue.empty():
-                    tracker.finalize_completed()
-                    break
+            if self.was_cancelled:
+                if pool is not None:
+                    for proc in pool._processes.values():
+                        proc.terminate()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                return []
 
             for future in as_completed(futures):
                 chapter = futures[future]
@@ -821,6 +798,46 @@ class AudioBuilder:
             tracker.log_errors()
 
         return sorted(results, key=lambda x: x.chapter_index)
+
+    def _run_drain_loop(self, queue, futures: dict, tracker) -> None:
+        """Poll *queue* and drive *tracker* until all *futures* are done.
+
+        Uses adaptive exponential backoff (via :func:`_poll_backoff_delay`) when
+        the queue is idle so the loop does not busy-spin.  Extracted from
+        :meth:`_process_chapters` to provide a minimal seam for unit tests —
+        callers check ``self.was_cancelled`` after this returns.
+        """
+        _idle_iters = 0  # consecutive outer iterations with an empty queue
+        while True:
+            drained = False
+            while not queue.empty():
+                drained = True
+                try:
+                    if self.cancel_check is not None and self.cancel_check():
+                        self.was_cancelled = True
+                        break
+                    msg = queue.get_nowait()
+                    tracker.process_message(msg)
+                except (IndexError, KeyError, ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Malformed worker queue message; aborting queue drain: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    break
+
+            if drained:
+                _idle_iters = 0  # activity: reset backoff
+            else:
+                _idle_iters += 1
+                time.sleep(_poll_backoff_delay(_idle_iters))
+
+            if self.was_cancelled:
+                return
+
+            if all(f.done() for f in futures) and queue.empty():
+                tracker.finalize_completed()
+                break
 
     def _stitch_files(
         self, results: list[AudioResult], output_file: Path, narrator_label: str = ""
