@@ -146,11 +146,12 @@ def _compute_fast_scan_result(
     progress_callback: Callable[[int, str], None] | None,
     progress_event_callback: Callable[[ProgressEvent], None] | None,
 ) -> FastScanResult:
-    """Pure extraction computation — build a FastScanResult with no cache writes.
+    """Build a FastScanResult with extraction, analytics writes, and optional roster updates.
 
-    All NLP cache persistence is the caller's responsibility.  Analytics records
-    (``append_record``) are written here because they track computation timing, not
-    cached results.
+    All NLP cache persistence is the caller's responsibility. This function writes
+    analytics records (``append_record``) to track computation timing and may update
+    the series roster (if series_slug and book_slug are provided) to register newly
+    discovered characters.
     """
     chapter_total = len(chapters)
     total = _extraction_step_count(discovery_method)
@@ -521,7 +522,7 @@ def fast_scan(
     nlp_config = NLPConfig.from_app_config(cfg)
     pipeline = NLPPipeline(nlp_config)
 
-    # Pure computation — no cache writes inside.
+    # Extraction, analytics writes, and optional series roster update (cache persistence delegated to caller).
     result = _compute_fast_scan_result(
         ebook=ebook,
         ebook_hash=ebook_hash,
