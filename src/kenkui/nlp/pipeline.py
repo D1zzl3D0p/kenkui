@@ -19,12 +19,14 @@ import signal
 import threading
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kenkui.nlp import _attribution_to_segments, book_hash
+from kenkui.nlp._async import JOB_LOOP
 from kenkui.nlp._async import run_coroutine_sync as _run_coroutine_sync
 from kenkui.nlp._cache import (
     clear_checkpoints,
@@ -167,8 +169,9 @@ class ValidationResult:
 class NLPJob:
     """A running or completed NLP pipeline job.
 
-    Wraps a daemon thread and exposes poll()/wait()/cancel() for callers
-    that want non-blocking progress tracking.
+    Backed by an asyncio task on the shared NLP background loop (see
+    ``kenkui.nlp._async``) and exposes poll()/wait()/cancel() for callers that
+    want non-blocking progress tracking.
     """
 
     job_id: str
@@ -179,22 +182,47 @@ class NLPJob:
     error: Exception | None                        # populated when FAILED
 
     # Internal — excluded from poll() snapshots
-    _thread: threading.Thread | None = field(default=None, repr=False)
-    _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    _future: Future | None = field(default=None, repr=False)
+    _task: asyncio.Task | None = field(default=None, repr=False)
+    _loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
+    # Set-once status flag; the effective cancellation is asyncio task
+    # cancellation (never awaited, so set()/is_set() are safe from any thread).
+    _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
     def poll(self) -> NLPJob:
         """Return a frozen snapshot of current state (non-blocking)."""
-        return dataclasses.replace(self, _thread=None)
+        return dataclasses.replace(self, _future=None, _task=None, _loop=None)
 
     def wait(self, timeout: float | None = None) -> NLPJob:
         """Block until done/failed or timeout. Returns snapshot."""
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        future = self._future
+        if future is not None:
+            try:
+                future.result(timeout=timeout)
+            except (Exception, asyncio.CancelledError):
+                # Failures and cancellation are recorded on the job itself; a
+                # wait timeout simply returns the current snapshot (mirrors the
+                # old thread.join(timeout) contract of never propagating).
+                pass
         return self.poll()
 
     def cancel(self) -> None:
-        """Request cancellation. Sets the cancel event; the running thread checks it."""
+        """Request cancellation via asyncio task cancellation.
+
+        Sets the status flag and cancels the running task on its loop (or the
+        not-yet-started future). Cancellation is cooperative at the ``await``
+        boundary: it unblocks the awaiting job immediately, though a blocking
+        provider call already in flight on the offload thread runs to
+        completion (Python cannot forcibly kill threads — same limit as the
+        previous daemon-thread model, but here the job is freed at once).
+        """
         self._cancel_event.set()
+        task = self._task
+        loop = self._loop
+        if task is not None and loop is not None:
+            loop.call_soon_threadsafe(task.cancel)
+        elif self._future is not None:
+            self._future.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -688,22 +716,33 @@ class NLPPipeline:
             job.progress = pct
             job.message = msg
 
-        def _run() -> None:
+        async def _run() -> None:
+            job._task = asyncio.current_task()
+            job._loop = asyncio.get_running_loop()
+            if job._cancel_event.is_set():
+                job.status = NLPJobStatus.FAILED
+                job.message = "Cancelled"
+                return
             job.status = NLPJobStatus.RUNNING
             try:
-                result = self.extract(book_path, chapters, series_roster, _progress, use_cache)
-                job.result = result
-                job.status = NLPJobStatus.DONE
-                job.progress = 100
-                job.message = "Done"
+                result = await asyncio.to_thread(
+                    self.extract, book_path, chapters, series_roster, _progress, use_cache
+                )
+            except asyncio.CancelledError:
+                job.status = NLPJobStatus.FAILED
+                job.message = "Cancelled"
+                raise
             except Exception as exc:
                 job.error = exc
                 job.status = NLPJobStatus.FAILED
                 job.message = str(exc)
+                return
+            job.result = result
+            job.status = NLPJobStatus.DONE
+            job.progress = 100
+            job.message = "Done"
 
-        t = threading.Thread(target=_run, daemon=True)
-        job._thread = t
-        t.start()
+        job._future = JOB_LOOP.submit(_run())
         return job
 
     # ------------------------------------------------------------------
@@ -733,22 +772,33 @@ class NLPPipeline:
             job.progress = pct
             job.message = msg
 
-        def _run() -> None:
+        async def _run() -> None:
+            job._task = asyncio.current_task()
+            job._loop = asyncio.get_running_loop()
+            if job._cancel_event.is_set():
+                job.status = NLPJobStatus.FAILED
+                job.message = "Cancelled"
+                return
             job.status = NLPJobStatus.RUNNING
             try:
-                result = self.attribute(book_path, chapters, roster, _progress, use_cache)
-                job.result = result
-                job.status = NLPJobStatus.DONE
-                job.progress = 100
-                job.message = "Done"
+                result = await asyncio.to_thread(
+                    self.attribute, book_path, chapters, roster, _progress, use_cache
+                )
+            except asyncio.CancelledError:
+                job.status = NLPJobStatus.FAILED
+                job.message = "Cancelled"
+                raise
             except Exception as exc:
                 job.error = exc
                 job.status = NLPJobStatus.FAILED
                 job.message = str(exc)
+                return
+            job.result = result
+            job.status = NLPJobStatus.DONE
+            job.progress = 100
+            job.message = "Done"
 
-        t = threading.Thread(target=_run, daemon=True)
-        job._thread = t
-        t.start()
+        job._future = JOB_LOOP.submit(_run())
         return job
 
 

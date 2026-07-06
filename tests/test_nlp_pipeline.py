@@ -582,7 +582,7 @@ def test_nlp_job_poll_returns_snapshot():
     )
     snapshot = job.poll()
     assert snapshot.job_id == "test-id"
-    assert snapshot._thread is None
+    assert snapshot._future is None
     assert snapshot is not job
 
 
@@ -599,6 +599,73 @@ def test_nlp_job_cancel_sets_event():
     assert not job._cancel_event.is_set()
     job.cancel()
     assert job._cancel_event.is_set()
+
+
+def test_nlp_job_cancel_is_idempotent_and_safe():
+    """cancel() is safe to call repeatedly and without a running worker."""
+    job = NLPJob(
+        job_id="test-id",
+        status=NLPJobStatus.PENDING,
+        progress=0,
+        message="Queued",
+        result=None,
+        error=None,
+    )
+    # No _future attached — must not raise.
+    job.cancel()
+    job.cancel()
+    assert job._cancel_event.is_set()
+
+
+def test_extract_job_cancel_after_completion_preserves_result(tmp_path):
+    """Cancelling an already-completed job leaves its result untouched."""
+    pipeline = _make_pipeline()
+    roster = _make_roster()
+    pipeline.extract = MagicMock(return_value=roster)  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    job = pipeline.extract_job(book_path, [_make_chapter()])
+    snapshot = job.wait(timeout=5.0)
+    assert snapshot.status == NLPJobStatus.DONE
+
+    job.cancel()  # after DONE — harmless
+    after = job.poll()
+    assert after.status == NLPJobStatus.DONE
+    assert after.result is roster
+
+
+def test_extract_job_cancel_interrupts_before_blocking_work_finishes(tmp_path):
+    """cancel() responsively fails a job whose blocking work has not returned.
+
+    Pins the asyncio-native cancellation contract: a job can be cancelled while
+    its wrapped blocking work is still in flight, and wait() returns promptly
+    with a FAILED/cancelled status rather than blocking for the full duration.
+    """
+    pipeline = _make_pipeline()
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow_extract(*_args, **_kwargs):
+        started.set()
+        release.wait(timeout=30)
+        return _make_roster()
+
+    pipeline.extract = MagicMock(side_effect=_slow_extract)  # type: ignore[method-assign]
+
+    book_path = tmp_path / "book.epub"
+    book_path.write_bytes(b"fake")
+
+    job = pipeline.extract_job(book_path, [_make_chapter()])
+    try:
+        assert started.wait(timeout=5.0)  # blocking work is running
+        job.cancel()
+        snapshot = job.wait(timeout=5.0)  # returns promptly, not after 30s
+        assert snapshot.status == NLPJobStatus.FAILED
+        assert snapshot.result is None
+    finally:
+        release.set()  # let the lingering worker thread exit
 
 
 # ---------------------------------------------------------------------------
