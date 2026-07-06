@@ -38,6 +38,27 @@ WORKER_RECOVERY_MESSAGE = (
 )
 
 
+def _poll_backoff_delay(idle_count: int) -> float:
+    """Return the sleep duration for a given number of consecutive idle poll iterations.
+
+    Uses exponential backoff: ``min_delay * 2^(idle_count-1)``, capped at
+    ``max_delay``.  When the queue is busy (idle_count resets to 0) the caller
+    does not call this function and no sleep is inserted.
+
+    Parameters
+    ----------
+    idle_count:
+        Number of consecutive outer-loop iterations where the queue was empty.
+        Pass 0 to get 0.0 (no sleep).
+    """
+    _MIN_DELAY = 0.005   # 5 ms minimum — fast enough to not miss short chapters
+    _MAX_DELAY = 0.200   # 200 ms cap — well below human-perceptible latency
+
+    if idle_count <= 0:
+        return 0.0
+    return min(_MIN_DELAY * (2 ** (idle_count - 1)), _MAX_DELAY)
+
+
 def _worker_failure_message(chapter_title: str, exc: BaseException) -> str:
     prefix = f"{WORKER_RECOVERY_MESSAGE} Chapter: {chapter_title or 'unknown'}."
     if isinstance(exc, BrokenPipeError):
@@ -743,8 +764,11 @@ class AudioBuilder:
                 )
                 futures[fut] = ch
 
+            _idle_iters = 0  # consecutive outer iterations with an empty queue
             while True:
+                drained = False
                 while not queue.empty():
+                    drained = True
                     try:
                         if self.cancel_check is not None and self.cancel_check():
                             self.was_cancelled = True
@@ -754,6 +778,12 @@ class AudioBuilder:
                     except (IndexError, KeyError, ValueError, TypeError) as exc:
                         logger.warning("Malformed worker queue message; aborting queue drain: %s", exc, exc_info=True)
                         break
+
+                if drained:
+                    _idle_iters = 0  # activity: reset backoff
+                else:
+                    _idle_iters += 1
+                    time.sleep(_poll_backoff_delay(_idle_iters))
 
                 if self.was_cancelled:
                     if pool is not None:
