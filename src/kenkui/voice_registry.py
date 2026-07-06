@@ -611,7 +611,6 @@ __all__ = [
     "bundled_voice_manifest_path",
     "get_catalog",
     "get_registry",
-    "_reset_catalog",
     "load_manifest",
     "preview_cache_dir",
     "validate_manifest",
