@@ -44,6 +44,14 @@ class TestModelSlug:
         assert _model_slug("GPT-4o") == "gpt_4o"
 
 
+class TestNlpCacheDir:
+    def test_returns_config_cache_nlp_subdir(self):
+        import kenkui
+        from kenkui.config import CACHE_DIR
+
+        assert kenkui.nlp_cache_dir() == CACHE_DIR / "nlp_cache"
+
+
 class TestCacheFilename:
     def test_filename_format(self):
         name = _cache_filename("abc123", "extraction", "ollama", "llama3.2")
