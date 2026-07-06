@@ -157,16 +157,29 @@ def _auto_assign_unmapped_speakers(
         for ch_idx in speaker_chapters.get(spk, set()):
             voice_chapters.setdefault(v, set()).add(ch_idx)
 
+    # Precompute inverted co-occurrence index: chapter → set of voices already used
+    # in that chapter.  This lets _pick_shared compute the full "conflicting voices"
+    # set in O(|my_chapters|) rather than scanning every pool voice individually
+    # (O(n·m) → O(n + m) overall across all speaker assignments).
+    ch_to_voices: dict[int, set[str]] = {}
+    for voice_id, chs in voice_chapters.items():
+        for ch in chs:
+            ch_to_voices.setdefault(ch, set()).add(voice_id)
+
     exclusive_voices: set[str] = set()
     updated = dict(speaker_voices)
     genders = character_genders or {}
 
     def _pick_shared(pool: list[str], my_chapters: set[int]) -> str | None:
-        """Find first non-exclusive pool voice that doesn't co-occur in my_chapters."""
+        """Find first non-exclusive pool voice that doesn't co-occur in my_chapters.
+
+        Uses the precomputed ``ch_to_voices`` inverted index so the conflict
+        check is an O(|my_chapters|) union rather than an O(m) per-voice
+        intersection scan.
+        """
+        conflicting = set().union(*(ch_to_voices.get(ch, set()) for ch in my_chapters))
         for v in pool:
-            if v in exclusive_voices:
-                continue
-            if not (voice_chapters.get(v, set()) & my_chapters):
+            if v not in exclusive_voices and v not in conflicting:
                 return v
         return None
 
@@ -213,7 +226,10 @@ def _auto_assign_unmapped_speakers(
             female_used_count += 1
 
         updated[speaker] = voice
+        # Keep both voice_chapters and the inverted ch_to_voices in sync.
         voice_chapters.setdefault(voice, set()).update(my_chapters)
+        for ch in my_chapters:
+            ch_to_voices.setdefault(ch, set()).add(voice)
         log(
             f"INFO: auto-assigned voice '{voice}' ({gender}) "
             f"to valid roster speaker '{speaker}'"
