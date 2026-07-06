@@ -29,6 +29,7 @@ from .models import (
 from .nlp.models import _SPEAKER_SENTINELS
 from .nlp.models import slugify as _slugify
 from .progress import ChapterProgress, ProgressEvent, ProgressStage, ProgressStatus, ProgressUnit
+from .progress_tracking import ChapterProgressTracker
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .voice_loader import load_voice
@@ -447,10 +448,6 @@ class AudioBuilder:
         self.temp_dir = Path("temp_audio_build")
         self.console = LogSink()
         self._reader: EbookReader | None = None
-        self._total_batches = 0
-        self._completed_batches = 0
-        self._completed_tts_units = 0
-        self._current_chapter = ""
         self._book_hash = ""
         self.pause_check: Callable[[], bool] | None = None
         self.cancel_check: Callable[[], bool] | None = None
@@ -495,9 +492,6 @@ class AudioBuilder:
     ) -> bool:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        self._total_batches = total_batches
-        self._completed_batches = 0
-        self._completed_tts_units = 0
         self.was_paused = False
         self.was_cancelled = False
         self._emit_progress(
@@ -677,24 +671,10 @@ class AudioBuilder:
         total_chars: int,
     ) -> list[AudioResult]:
         results = []
-        worker_state: dict = {}
-        worker_errors: list[dict] = []
-        worker_logs: list[str] = []
+        tracker = ChapterProgressTracker(self._emit_progress, total_chars)
 
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore
-
-        def _active_chapter_progress() -> tuple[ChapterProgress, ...]:
-            return tuple(
-                ChapterProgress(
-                    index=int(state.get("index", 0)),
-                    title=str(state.get("title", "")),
-                    completed_units=float(state.get("current", 0)),
-                    total_units=float(state.get("total", 0)),
-                    status=str(state.get("status", "advanced")),  # type: ignore[arg-type]
-                )
-                for state in sorted(worker_state.values(), key=lambda item: int(item.get("index", 0)))
-            )
 
         cfg_dict: dict = {
             "voice": self.cfg.voice,
@@ -757,85 +737,7 @@ class AudioBuilder:
                             self.was_cancelled = True
                             break
                         msg = queue.get_nowait()
-                        event, pid = msg[0], msg[1]
-                        if event == "START":
-                            worker_state[pid] = {
-                                "title": msg[2],
-                                "total": msg[3],
-                                "current": 0,
-                                "total_chars": msg[4] if len(msg) > 4 else 0,
-                                "is_first": msg[5] if len(msg) > 5 else False,
-                                "index": msg[6] if len(msg) > 6 else 0,
-                                "status": "started",
-                            }
-                            self._current_chapter = worker_state[pid].get("title", "")
-                            self._emit_progress(
-                                "tts_synthesis",
-                                "message",
-                                self._current_chapter,
-                                completed_units=self._completed_tts_units,
-                                total_units=total_chars,
-                                unit="chars",
-                                active_chapters=_active_chapter_progress(),
-                            )
-                        elif event == "UPDATE":
-                            chars = msg[5] if len(msg) > 5 else 0
-                            self._completed_batches += msg[2]
-                            self._completed_tts_units = min(
-                                total_chars,
-                                self._completed_tts_units + max(0, chars),
-                            )
-                            if pid in worker_state:
-                                worker_state[pid]["current"] += msg[2]
-                                worker_state[pid]["status"] = "advanced"
-                                self._current_chapter = worker_state[pid].get("title", "")
-                            self._emit_progress(
-                                "tts_synthesis",
-                                "advanced",
-                                self._current_chapter,
-                                completed_units=self._completed_tts_units,
-                                total_units=total_chars,
-                                unit="chars",
-                                active_chapters=_active_chapter_progress(),
-                            )
-                        elif event == "DONE":
-                            if pid in worker_state:
-                                worker_state[pid]["status"] = "completed"
-                                worker_state[pid]["current"] = worker_state[pid].get("total", 0)
-                                self._emit_progress(
-                                    "tts_synthesis",
-                                    "advanced",
-                                    worker_state[pid].get("title", ""),
-                                    completed_units=self._completed_tts_units,
-                                    total_units=total_chars,
-                                    unit="chars",
-                                    active_chapters=_active_chapter_progress(),
-                                )
-                                del worker_state[pid]
-                        elif event == "ERROR":
-                            if pid in worker_state:
-                                worker_state[pid]["status"] = "failed"
-                            self._emit_progress(
-                                "tts_synthesis",
-                                "failed",
-                                msg[3],
-                                completed_units=self._completed_tts_units,
-                                total_units=total_chars,
-                                unit="chars",
-                                active_chapters=_active_chapter_progress(),
-                            )
-                            worker_errors.append(
-                                {
-                                    "pid": pid,
-                                    "chapter": msg[2],
-                                    "message": msg[3],
-                                    "traceback": msg[4],
-                                }
-                            )
-                        elif event == "LOG":
-                            worker_logs.append(f"[{pid}] {msg[2]}")
-                            if len(worker_logs) > 20:
-                                worker_logs.pop(0)
+                        tracker.process_message(msg)
                     except (IndexError, KeyError, ValueError, TypeError) as exc:
                         logger.warning("Malformed worker queue message; aborting queue drain: %s", exc, exc_info=True)
                         break
@@ -848,19 +750,7 @@ class AudioBuilder:
                     return []
 
                 if all(f.done() for f in futures) and queue.empty():
-                    for state in tuple(worker_state.values()):
-                        state["status"] = "completed"
-                        state["current"] = state.get("total", 0)
-                        self._emit_progress(
-                            "tts_synthesis",
-                            "advanced",
-                            state.get("title", ""),
-                            completed_units=self._completed_tts_units,
-                            total_units=total_chars,
-                            unit="chars",
-                            active_chapters=_active_chapter_progress(),
-                        )
-                    worker_state.clear()
+                    tracker.finalize_completed()
                     break
 
             for future in as_completed(futures):
@@ -885,13 +775,7 @@ class AudioBuilder:
         finally:
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
-            if worker_errors:
-                logger.error("Worker errors encountered:")
-                for err in worker_errors:
-                    logger.error("- PID %s %s: %s", err["pid"], err["chapter"], err["message"])
-                    tb = err.get("traceback", "")
-                    if tb:
-                        logger.error("%s", tb)
+            tracker.log_errors()
 
         return sorted(results, key=lambda x: x.chapter_index)
 
