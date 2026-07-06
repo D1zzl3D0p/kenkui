@@ -5,7 +5,6 @@ import logging
 import multiprocessing
 import re
 import shutil
-import subprocess
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,16 +14,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-import imageio_ffmpeg
-
 from .analytics import StageRecord, append_record, now_utc
+from .audio_build import AudioBatcher, M4BBuilder, MetadataWriter
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
 from .models import (
     AudioResult,
     Chapter,
     ProcessingConfig,
     _migrate_speaker_voices_keys,
-    _normalize_bitrate,
 )
 from .nlp.models import _SPEAKER_SENTINELS
 from .nlp.models import slugify as _slugify
@@ -785,90 +782,27 @@ class AudioBuilder:
         file_list = self.temp_dir / "files.txt"
         meta_file = self.temp_dir / "metadata.txt"
 
-        with open(file_list, "w", encoding="utf-8") as f:
-            for res in results:
-                f.write(f"file '{res.file_path.resolve().as_posix()}'\n")
+        writer = MetadataWriter()
+        writer.write_concat_list(results, file_list)
+        writer.write_chapter_metadata(results, meta_file, narrator_label)
 
-        total_ms = sum(r.duration_ms for r in results)
-
-        with open(meta_file, "w", encoding="utf-8") as f:
-            f.write(";FFMETADATA1\n")
-            if narrator_label:
-                f.write(f"comment=Narrated by {narrator_label}\n")
-            t = 0
-            for res in results:
-                start, end = int(t), int(t + res.duration_ms)
-                f.write(
-                    f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={res.title}\n"
-                )
-                t += res.duration_ms
-
-        cmd = [
-            imageio_ffmpeg.get_ffmpeg_exe(),
-            "-y",
-            "-v", "error",
-            "-progress", "pipe:1",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(file_list),
-            "-i", str(meta_file),
-            "-map_metadata", "1",
-            "-c:a", "aac" if output_file.suffix == ".m4b" else "libmp3lame",
-            "-b:a",
-            _normalize_bitrate(self.cfg.m4b_bitrate) if output_file.suffix == ".m4b" else "128k",
-        ]
-        if output_file.suffix == ".m4b":
-            cmd.extend(["-movflags", "+faststart"])
-        cmd.append(str(output_file))
-
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        assert proc.stdout is not None
-
-        for line in proc.stdout:
-            line = line.strip()
-            if line.startswith("out_time_ms="):
-                try:
-                    out_ms = int(line.split("=", 1)[1])
-                    if total_ms > 0 and out_ms > 0:
-                        self._emit_progress(
-                            "stitching",
-                            "advanced",
-                            "Stitching audio files",
-                            completed_units=min(out_ms, total_ms),
-                            total_units=total_ms,
-                            unit="milliseconds",
-                        )
-                except (ValueError, ZeroDivisionError):
-                    pass
-
-        proc.wait()
-        if proc.returncode != 0:
-            stderr_out = proc.stderr.read() if proc.stderr else ""
-            raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr_out)
+        M4BBuilder().stitch(
+            results,
+            output_file,
+            file_list,
+            meta_file,
+            bitrate=self.cfg.m4b_bitrate,
+            emit=self._emit_progress,
+        )
 
     def _embed_cover(self, output_file: Path) -> None:
         """Embed cover image from ebook into the M4B file."""
-        try:
-            from mutagen.mp4 import MP4, MP4Cover
-
+        def _get_cover() -> tuple[bytes | None, str]:
             if self._reader is not None:
-                cover_data, mime_type = self._reader.get_cover()
-            else:
-                cover_data, mime_type = extract_epub_cover(self.cfg.ebook_path)
+                return self._reader.get_cover()
+            return extract_epub_cover(self.cfg.ebook_path)
 
-            if cover_data:
-                image_format = (
-                    MP4Cover.FORMAT_PNG if mime_type == "image/png" else MP4Cover.FORMAT_JPEG
-                )
-                audio = MP4(str(output_file))
-                audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
-                audio.save()
-                self.console.emit("Cover embedded successfully")
-
-        except ImportError:
-            self.console.emit("Warning: mutagen library not found. Cover not embedded.")
-        except Exception as e:
-            self.console.emit(f"Warning: Could not embed cover: {e}")
+        MetadataWriter().embed_cover(output_file, _get_cover, self.console.emit)
 
     def run(self) -> bool:
         """Main entry point for audiobook creation."""
@@ -909,16 +843,7 @@ class AudioBuilder:
             self.console.emit("No chapters match the specified filters")
             return False
 
-        from .workers import get_batch_info
-
-        chapter_batch_info = []
-        for idx, ch in enumerate(chapters):
-            is_first = idx == 0
-            batch_count, total_chars = get_batch_info(ch, is_first_chapter=is_first)
-            chapter_batch_info.append((batch_count, total_chars, is_first))
-
-        total_batches = sum(info[0] for info in chapter_batch_info)
-        total_chars = sum(info[1] for info in chapter_batch_info)
+        chapter_batch_info, total_batches, total_chars = AudioBatcher.compute(chapters)
 
         if self.cfg.output_path and self.cfg.output_path.suffix:
             output_file = self.cfg.output_path
