@@ -408,3 +408,32 @@ class TestDrainLoopBackoff:
 
         mock_sleep.assert_not_called()
         assert tracker.messages == ["a", "b", "c"]
+
+    def test_get_nowait_empty_race_does_not_crash(self):
+        """(d) queue.Empty from get_nowait() (empty/get race) is handled gracefully.
+
+        _FakeQueue.empty() reports False but get_nowait() raises queue.Empty —
+        simulating the multiprocessing.Manager proxy race.  The loop must break
+        out of the inner drain without propagating the exception or losing any
+        already-processed messages.
+        """
+        from unittest.mock import Mock
+
+        builder = _make_drain_builder()
+
+        # empty() returns False once (triggers drain entry), then get_nowait raises Empty.
+        fq = Mock()
+        fq.empty.side_effect = [
+            False,  # inner-while: enter drain
+            True,   # final termination check
+        ]
+        fq.get_nowait.side_effect = _queue.Empty
+
+        futures = {_CountdownFuture(done_after=0): None}
+        tracker = _FakeTracker()
+
+        # Must not raise; loop should complete normally.
+        with patch("kenkui.parsing.time.sleep"):
+            builder._run_drain_loop(fq, futures, tracker)
+
+        assert tracker.messages == []  # no messages processed (Empty before any get)

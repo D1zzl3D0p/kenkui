@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import queue as _queue
 import re
 import shutil
 import time
@@ -818,6 +819,16 @@ class AudioBuilder:
                         break
                     msg = queue.get_nowait()
                     tracker.process_message(msg)
+                except _queue.Empty:
+                    # get_nowait() raced with empty() — the queue is drained.
+                    break
+                except (EOFError, OSError, BrokenPipeError) as exc:
+                    logger.warning(
+                        "Transient manager-proxy error during queue drain: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    break
                 except (IndexError, KeyError, ValueError, TypeError) as exc:
                     logger.warning(
                         "Malformed worker queue message; aborting queue drain: %s",
