@@ -42,11 +42,11 @@ import os
 import re
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._async import run_coroutine_sync as _run_coroutine_sync
 from ._filters import _is_proper_name
 from .models import (
     CharacterRecord,
@@ -64,15 +64,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-def _run_coroutine_sync(coro):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(asyncio.run, coro).result()
 
 # ---------------------------------------------------------------------------
 # Word filtering constants

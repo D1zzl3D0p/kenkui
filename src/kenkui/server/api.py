@@ -52,7 +52,7 @@ from kenkui.models import (
     VoicePoolResponse,
     VoiceResponse,
 )
-from kenkui.services.application_service import get_service
+from kenkui.services.application_service import SERVICE_VERSION, get_service
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def create_app():
     except ImportError as exc:
         raise RuntimeError("Install kenkui[server] to use the FastAPI adapter.") from exc
 
-    app = FastAPI(title="kenkui API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="kenkui API", version=SERVICE_VERSION, lifespan=lifespan)
     service = get_service()
     app.add_middleware(
         CORSMiddleware,

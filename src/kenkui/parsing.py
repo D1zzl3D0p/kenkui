@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import queue as _queue
 import re
 import shutil
-import subprocess
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,20 +15,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-import imageio_ffmpeg
-
 from .analytics import StageRecord, append_record, now_utc
+from .audio_build import AudioBatcher, M4BBuilder, MetadataWriter
 from .chapter_classifier import ChapterClassifier  # noqa: F401 – re-exported
 from .models import (
     AudioResult,
     Chapter,
     ProcessingConfig,
     _migrate_speaker_voices_keys,
-    _normalize_bitrate,
 )
 from .nlp.models import _SPEAKER_SENTINELS
 from .nlp.models import slugify as _slugify
 from .progress import ChapterProgress, ProgressEvent, ProgressStage, ProgressStatus, ProgressUnit
+from .progress_tracking import ChapterProgressTracker
 from .readers import EbookReader, get_reader
 from .utils import extract_epub_cover
 from .voice_loader import load_voice
@@ -38,6 +37,27 @@ WORKER_RECOVERY_MESSAGE = (
     "Synthesis failed while collecting chapter worker results. "
     "Restart the local runtime and retry with workers set to 4 or fewer."
 )
+
+
+def _poll_backoff_delay(idle_count: int) -> float:
+    """Return the sleep duration for a given number of consecutive idle poll iterations.
+
+    Uses exponential backoff: ``min_delay * 2^(idle_count-1)``, capped at
+    ``max_delay``.  When the queue is busy (idle_count resets to 0) the caller
+    does not call this function and no sleep is inserted.
+
+    Parameters
+    ----------
+    idle_count:
+        Number of consecutive outer-loop iterations where the queue was empty.
+        Pass 0 to get 0.0 (no sleep).
+    """
+    _MIN_DELAY = 0.005   # 5 ms minimum — fast enough to not miss short chapters
+    _MAX_DELAY = 0.200   # 200 ms cap — well below human-perceptible latency
+
+    if idle_count <= 0:
+        return 0.0
+    return min(_MIN_DELAY * (2 ** (idle_count - 1)), _MAX_DELAY)
 
 
 def _worker_failure_message(chapter_title: str, exc: BaseException) -> str:
@@ -68,7 +88,8 @@ def _load_character_genders(roster_cache_path: Path | None) -> dict[str, str]:
             for c in result.characters
             if c.gender_pronoun
         }
-    except Exception:
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        logger.warning("Could not load character genders from roster cache: %s", exc, exc_info=True)
         return {}
 
 
@@ -83,7 +104,8 @@ def _load_roster_slugs(roster_cache_path: Path | None) -> set[str]:
         slugs = {c.slug for c in result.roster.characters}
         slugs.update(_slugify(c.character_id) for c in result.characters)
         return {s for s in slugs if s}
-    except Exception:
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        logger.warning("Could not load roster slugs from roster cache: %s", exc, exc_info=True)
         return set()
 
 
@@ -157,16 +179,29 @@ def _auto_assign_unmapped_speakers(
         for ch_idx in speaker_chapters.get(spk, set()):
             voice_chapters.setdefault(v, set()).add(ch_idx)
 
+    # Precompute inverted co-occurrence index: chapter → set of voices already used
+    # in that chapter.  This lets _pick_shared compute the full "conflicting voices"
+    # set in O(|my_chapters|) rather than scanning every pool voice individually
+    # (O(n·m) → O(n + m) overall across all speaker assignments).
+    ch_to_voices: dict[int, set[str]] = {}
+    for voice_id, chs in voice_chapters.items():
+        for ch in chs:
+            ch_to_voices.setdefault(ch, set()).add(voice_id)
+
     exclusive_voices: set[str] = set()
     updated = dict(speaker_voices)
     genders = character_genders or {}
 
     def _pick_shared(pool: list[str], my_chapters: set[int]) -> str | None:
-        """Find first non-exclusive pool voice that doesn't co-occur in my_chapters."""
+        """Find first non-exclusive pool voice that doesn't co-occur in my_chapters.
+
+        Uses the precomputed ``ch_to_voices`` inverted index so the conflict
+        check is an O(|my_chapters|) union rather than an O(m) per-voice
+        intersection scan.
+        """
+        conflicting = set().union(*(ch_to_voices.get(ch, set()) for ch in my_chapters))
         for v in pool:
-            if v in exclusive_voices:
-                continue
-            if not (voice_chapters.get(v, set()) & my_chapters):
+            if v not in exclusive_voices and v not in conflicting:
                 return v
         return None
 
@@ -213,7 +248,10 @@ def _auto_assign_unmapped_speakers(
             female_used_count += 1
 
         updated[speaker] = voice
+        # Keep both voice_chapters and the inverted ch_to_voices in sync.
         voice_chapters.setdefault(voice, set()).update(my_chapters)
+        for ch in my_chapters:
+            ch_to_voices.setdefault(ch, set()).add(voice)
         log(
             f"INFO: auto-assigned voice '{voice}' ({gender}) "
             f"to valid roster speaker '{speaker}'"
@@ -309,7 +347,8 @@ def _load_annotated_chapters(
 
             roster_raw = json.loads(Path(roster_cache_path).read_text(encoding="utf-8"))
             roster_result = FastScanResult.from_dict(roster_raw.get("roster_data") or roster_raw)
-        except Exception:
+        except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+            logger.warning("Could not load roster cache for speaker normalization: %s", exc, exc_info=True)
             roster_raw = None
             roster_result = None
     warn = log or logger.warning
@@ -444,10 +483,6 @@ class AudioBuilder:
         self.temp_dir = Path("temp_audio_build")
         self.console = LogSink()
         self._reader: EbookReader | None = None
-        self._total_batches = 0
-        self._completed_batches = 0
-        self._completed_tts_units = 0
-        self._current_chapter = ""
         self._book_hash = ""
         self.pause_check: Callable[[], bool] | None = None
         self.cancel_check: Callable[[], bool] | None = None
@@ -492,9 +527,6 @@ class AudioBuilder:
     ) -> bool:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        self._total_batches = total_batches
-        self._completed_batches = 0
-        self._completed_tts_units = 0
         self.was_paused = False
         self.was_cancelled = False
         self._emit_progress(
@@ -525,12 +557,14 @@ class AudioBuilder:
         from .nlp import book_hash as _nlp_book_hash
         try:
             _book_hash = _nlp_book_hash(self.cfg.ebook_path)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not compute book hash for analytics: %s", exc, exc_info=True)
             _book_hash = ""
         self._book_hash = _book_hash
         try:
             _book_title = self._reader.get_metadata().title or "" if self._reader is not None else ""
-        except Exception:
+        except Exception as exc:
+            logger.warning("Could not read book title for analytics: %s", exc, exc_info=True)
             _book_title = ""
 
         with self._managed_temp_dir():
@@ -672,24 +706,10 @@ class AudioBuilder:
         total_chars: int,
     ) -> list[AudioResult]:
         results = []
-        worker_state: dict = {}
-        worker_errors: list[dict] = []
-        worker_logs: list[str] = []
+        tracker = ChapterProgressTracker(self._emit_progress, total_chars)
 
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore
-
-        def _active_chapter_progress() -> tuple[ChapterProgress, ...]:
-            return tuple(
-                ChapterProgress(
-                    index=int(state.get("index", 0)),
-                    title=str(state.get("title", "")),
-                    completed_units=float(state.get("current", 0)),
-                    total_units=float(state.get("total", 0)),
-                    status=str(state.get("status", "advanced")),  # type: ignore[arg-type]
-                )
-                for state in sorted(worker_state.values(), key=lambda item: int(item.get("index", 0)))
-            )
 
         cfg_dict: dict = {
             "voice": self.cfg.voice,
@@ -745,117 +765,14 @@ class AudioBuilder:
                 )
                 futures[fut] = ch
 
-            while True:
-                while not queue.empty():
-                    try:
-                        if self.cancel_check is not None and self.cancel_check():
-                            self.was_cancelled = True
-                            break
-                        msg = queue.get_nowait()
-                        event, pid = msg[0], msg[1]
-                        if event == "START":
-                            worker_state[pid] = {
-                                "title": msg[2],
-                                "total": msg[3],
-                                "current": 0,
-                                "total_chars": msg[4] if len(msg) > 4 else 0,
-                                "is_first": msg[5] if len(msg) > 5 else False,
-                                "index": msg[6] if len(msg) > 6 else 0,
-                                "status": "started",
-                            }
-                            self._current_chapter = worker_state[pid].get("title", "")
-                            self._emit_progress(
-                                "tts_synthesis",
-                                "message",
-                                self._current_chapter,
-                                completed_units=self._completed_tts_units,
-                                total_units=total_chars,
-                                unit="chars",
-                                active_chapters=_active_chapter_progress(),
-                            )
-                        elif event == "UPDATE":
-                            chars = msg[5] if len(msg) > 5 else 0
-                            self._completed_batches += msg[2]
-                            self._completed_tts_units = min(
-                                total_chars,
-                                self._completed_tts_units + max(0, chars),
-                            )
-                            if pid in worker_state:
-                                worker_state[pid]["current"] += msg[2]
-                                worker_state[pid]["status"] = "advanced"
-                                self._current_chapter = worker_state[pid].get("title", "")
-                            self._emit_progress(
-                                "tts_synthesis",
-                                "advanced",
-                                self._current_chapter,
-                                completed_units=self._completed_tts_units,
-                                total_units=total_chars,
-                                unit="chars",
-                                active_chapters=_active_chapter_progress(),
-                            )
-                        elif event == "DONE":
-                            if pid in worker_state:
-                                worker_state[pid]["status"] = "completed"
-                                worker_state[pid]["current"] = worker_state[pid].get("total", 0)
-                                self._emit_progress(
-                                    "tts_synthesis",
-                                    "advanced",
-                                    worker_state[pid].get("title", ""),
-                                    completed_units=self._completed_tts_units,
-                                    total_units=total_chars,
-                                    unit="chars",
-                                    active_chapters=_active_chapter_progress(),
-                                )
-                                del worker_state[pid]
-                        elif event == "ERROR":
-                            if pid in worker_state:
-                                worker_state[pid]["status"] = "failed"
-                            self._emit_progress(
-                                "tts_synthesis",
-                                "failed",
-                                msg[3],
-                                completed_units=self._completed_tts_units,
-                                total_units=total_chars,
-                                unit="chars",
-                                active_chapters=_active_chapter_progress(),
-                            )
-                            worker_errors.append(
-                                {
-                                    "pid": pid,
-                                    "chapter": msg[2],
-                                    "message": msg[3],
-                                    "traceback": msg[4],
-                                }
-                            )
-                        elif event == "LOG":
-                            worker_logs.append(f"[{pid}] {msg[2]}")
-                            if len(worker_logs) > 20:
-                                worker_logs.pop(0)
-                    except Exception:
-                        break
+            self._run_drain_loop(queue, futures, tracker)
 
-                if self.was_cancelled:
-                    if pool is not None:
-                        for proc in pool._processes.values():
-                            proc.terminate()
-                        pool.shutdown(wait=False, cancel_futures=True)
-                    return []
-
-                if all(f.done() for f in futures) and queue.empty():
-                    for state in tuple(worker_state.values()):
-                        state["status"] = "completed"
-                        state["current"] = state.get("total", 0)
-                        self._emit_progress(
-                            "tts_synthesis",
-                            "advanced",
-                            state.get("title", ""),
-                            completed_units=self._completed_tts_units,
-                            total_units=total_chars,
-                            unit="chars",
-                            active_chapters=_active_chapter_progress(),
-                        )
-                    worker_state.clear()
-                    break
+            if self.was_cancelled:
+                if pool is not None:
+                    for proc in pool._processes.values():
+                        proc.terminate()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                return []
 
             for future in as_completed(futures):
                 chapter = futures[future]
@@ -879,15 +796,59 @@ class AudioBuilder:
         finally:
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
-            if worker_errors:
-                logger.error("Worker errors encountered:")
-                for err in worker_errors:
-                    logger.error("- PID %s %s: %s", err["pid"], err["chapter"], err["message"])
-                    tb = err.get("traceback", "")
-                    if tb:
-                        logger.error("%s", tb)
+            tracker.log_errors()
 
         return sorted(results, key=lambda x: x.chapter_index)
+
+    def _run_drain_loop(self, queue, futures: dict, tracker) -> None:
+        """Poll *queue* and drive *tracker* until all *futures* are done.
+
+        Uses adaptive exponential backoff (via :func:`_poll_backoff_delay`) when
+        the queue is idle so the loop does not busy-spin.  Extracted from
+        :meth:`_process_chapters` to provide a minimal seam for unit tests —
+        callers check ``self.was_cancelled`` after this returns.
+        """
+        _idle_iters = 0  # consecutive outer iterations with an empty queue
+        while True:
+            drained = False
+            while not queue.empty():
+                drained = True
+                try:
+                    if self.cancel_check is not None and self.cancel_check():
+                        self.was_cancelled = True
+                        break
+                    msg = queue.get_nowait()
+                    tracker.process_message(msg)
+                except _queue.Empty:
+                    # get_nowait() raced with empty() — the queue is drained.
+                    break
+                except (EOFError, OSError, BrokenPipeError) as exc:
+                    logger.warning(
+                        "Transient manager-proxy error during queue drain: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    break
+                except (IndexError, KeyError, ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Malformed worker queue message; aborting queue drain: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    break
+
+            if drained:
+                _idle_iters = 0  # activity: reset backoff
+            else:
+                _idle_iters += 1
+                time.sleep(_poll_backoff_delay(_idle_iters))
+
+            if self.was_cancelled:
+                return
+
+            if all(f.done() for f in futures) and queue.empty():
+                tracker.finalize_completed()
+                break
 
     def _stitch_files(
         self, results: list[AudioResult], output_file: Path, narrator_label: str = ""
@@ -895,90 +856,27 @@ class AudioBuilder:
         file_list = self.temp_dir / "files.txt"
         meta_file = self.temp_dir / "metadata.txt"
 
-        with open(file_list, "w", encoding="utf-8") as f:
-            for res in results:
-                f.write(f"file '{res.file_path.resolve().as_posix()}'\n")
+        writer = MetadataWriter()
+        writer.write_concat_list(results, file_list)
+        writer.write_chapter_metadata(results, meta_file, narrator_label)
 
-        total_ms = sum(r.duration_ms for r in results)
-
-        with open(meta_file, "w", encoding="utf-8") as f:
-            f.write(";FFMETADATA1\n")
-            if narrator_label:
-                f.write(f"comment=Narrated by {narrator_label}\n")
-            t = 0
-            for res in results:
-                start, end = int(t), int(t + res.duration_ms)
-                f.write(
-                    f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={res.title}\n"
-                )
-                t += res.duration_ms
-
-        cmd = [
-            imageio_ffmpeg.get_ffmpeg_exe(),
-            "-y",
-            "-v", "error",
-            "-progress", "pipe:1",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(file_list),
-            "-i", str(meta_file),
-            "-map_metadata", "1",
-            "-c:a", "aac" if output_file.suffix == ".m4b" else "libmp3lame",
-            "-b:a",
-            _normalize_bitrate(self.cfg.m4b_bitrate) if output_file.suffix == ".m4b" else "128k",
-        ]
-        if output_file.suffix == ".m4b":
-            cmd.extend(["-movflags", "+faststart"])
-        cmd.append(str(output_file))
-
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        assert proc.stdout is not None
-
-        for line in proc.stdout:
-            line = line.strip()
-            if line.startswith("out_time_ms="):
-                try:
-                    out_ms = int(line.split("=", 1)[1])
-                    if total_ms > 0 and out_ms > 0:
-                        self._emit_progress(
-                            "stitching",
-                            "advanced",
-                            "Stitching audio files",
-                            completed_units=min(out_ms, total_ms),
-                            total_units=total_ms,
-                            unit="milliseconds",
-                        )
-                except (ValueError, ZeroDivisionError):
-                    pass
-
-        proc.wait()
-        if proc.returncode != 0:
-            stderr_out = proc.stderr.read() if proc.stderr else ""
-            raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr_out)
+        M4BBuilder().stitch(
+            results,
+            output_file,
+            file_list,
+            meta_file,
+            bitrate=self.cfg.m4b_bitrate,
+            emit=self._emit_progress,
+        )
 
     def _embed_cover(self, output_file: Path) -> None:
         """Embed cover image from ebook into the M4B file."""
-        try:
-            from mutagen.mp4 import MP4, MP4Cover
-
+        def _get_cover() -> tuple[bytes | None, str]:
             if self._reader is not None:
-                cover_data, mime_type = self._reader.get_cover()
-            else:
-                cover_data, mime_type = extract_epub_cover(self.cfg.ebook_path)
+                return self._reader.get_cover()
+            return extract_epub_cover(self.cfg.ebook_path)
 
-            if cover_data:
-                image_format = (
-                    MP4Cover.FORMAT_PNG if mime_type == "image/png" else MP4Cover.FORMAT_JPEG
-                )
-                audio = MP4(str(output_file))
-                audio["covr"] = [MP4Cover(cover_data, imageformat=image_format)]
-                audio.save()
-                self.console.emit("Cover embedded successfully")
-
-        except ImportError:
-            self.console.emit("Warning: mutagen library not found. Cover not embedded.")
-        except Exception as e:
-            self.console.emit(f"Warning: Could not embed cover: {e}")
+        MetadataWriter().embed_cover(output_file, _get_cover, self.console.emit)
 
     def run(self) -> bool:
         """Main entry point for audiobook creation."""
@@ -1019,16 +917,7 @@ class AudioBuilder:
             self.console.emit("No chapters match the specified filters")
             return False
 
-        from .workers import get_batch_info
-
-        chapter_batch_info = []
-        for idx, ch in enumerate(chapters):
-            is_first = idx == 0
-            batch_count, total_chars = get_batch_info(ch, is_first_chapter=is_first)
-            chapter_batch_info.append((batch_count, total_chars, is_first))
-
-        total_batches = sum(info[0] for info in chapter_batch_info)
-        total_chars = sum(info[1] for info in chapter_batch_info)
+        chapter_batch_info, total_batches, total_chars = AudioBatcher.compute(chapters)
 
         if self.cfg.output_path and self.cfg.output_path.suffix:
             output_file = self.cfg.output_path

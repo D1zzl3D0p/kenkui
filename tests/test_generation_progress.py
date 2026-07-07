@@ -174,8 +174,8 @@ def test_stitching_progress_events_use_millisecond_units(tmp_path, monkeypatch):
 
     source = tmp_path / "chapter.wav"
     source.write_bytes(b"fake")
-    monkeypatch.setattr("kenkui.parsing.imageio_ffmpeg.get_ffmpeg_exe", lambda: "ffmpeg")
-    monkeypatch.setattr("kenkui.parsing.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("kenkui.audio_build.imageio_ffmpeg.get_ffmpeg_exe", lambda: "ffmpeg")
+    monkeypatch.setattr("kenkui.audio_build.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
 
     builder._stitch_files(
         [AudioResult(chapter_index=0, title="One", file_path=source, duration_ms=1000)],

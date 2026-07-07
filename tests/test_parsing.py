@@ -360,3 +360,48 @@ class TestAutoAssignUnmappedSpeakers:
         _warn_unresolvable_speakers([ch], {}, warnings.append)
 
         assert warnings == []
+
+
+class TestRosterCacheLoaders:
+    """Tests for _load_character_genders and _load_roster_slugs error paths."""
+
+    def test_load_character_genders_bad_json_logs_warning(self, tmp_path, caplog):
+        """Corrupt JSON in roster cache logs a warning and returns empty dict."""
+        import logging
+
+        from kenkui.parsing import _load_character_genders
+
+        bad_file = tmp_path / "roster.json"
+        bad_file.write_text("not-valid-json", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="kenkui.parsing"):
+            result = _load_character_genders(bad_file)
+
+        assert result == {}
+        assert any("character genders" in r.message for r in caplog.records)
+
+    def test_load_roster_slugs_missing_file_logs_warning(self, tmp_path, caplog):
+        """Missing roster cache file logs a warning and returns empty set."""
+        import logging
+
+        from kenkui.parsing import _load_roster_slugs
+
+        missing = tmp_path / "nonexistent.json"
+
+        with caplog.at_level(logging.WARNING, logger="kenkui.parsing"):
+            result = _load_roster_slugs(missing)
+
+        assert result == set()
+        assert any("roster slugs" in r.message for r in caplog.records)
+
+    def test_load_character_genders_none_path_returns_empty(self):
+        """None path returns empty dict without logging."""
+        from kenkui.parsing import _load_character_genders
+
+        assert _load_character_genders(None) == {}
+
+    def test_load_roster_slugs_none_path_returns_empty(self):
+        """None path returns empty set without logging."""
+        from kenkui.parsing import _load_roster_slugs
+
+        assert _load_roster_slugs(None) == set()
