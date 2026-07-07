@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-07-07
+
+### Added
+
+- Public helpers for model-name normalization, voice metadata, and NLP cache directory discovery so clients can consume shared Kenkui behavior without importing private internals.
+
+### Fixed
+
+- FastAPI app metadata now uses the shared service version constant for API compatibility handshakes.
+
 ## [2.0.0] - 2026-05-12
 
 ### Changed
