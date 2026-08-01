@@ -1,12 +1,94 @@
 """Unit tests for voice_registry immutability and caching guarantees (QP Task 11)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 import kenkui.voice_registry as vr
-from kenkui.voice_registry import VoiceCatalog, VoiceCatalogEntry, get_catalog  # noqa: F401
+from kenkui.voice_registry import (  # noqa: F401
+    PREVIEW_TEXT,
+    VoiceCatalog,
+    VoiceCatalogEntry,
+    VoiceCatalogError,
+    get_catalog,
+    load_preview_phrase_catalog,
+)
+
+
+def test_bundled_preview_phrase_catalog_is_versioned_and_source_attributed() -> None:
+    catalog = load_preview_phrase_catalog()
+
+    assert catalog.version == 1
+    assert catalog.default_phrase_id == "pride-and-prejudice"
+    assert [phrase.phrase_id for phrase in catalog.phrases] == [
+        "pride-and-prejudice",
+        "moby-dick",
+        "alice-in-wonderland",
+    ]
+    assert all(phrase.source_url.startswith("https://") for phrase in catalog.phrases)
+    assert catalog.default_phrase.text == PREVIEW_TEXT
+
+
+@pytest.mark.parametrize(
+    "patch,match",
+    [
+        ({"version": 0}, "positive integer"),
+        ({"default_phrase_id": "missing"}, "default_phrase_id"),
+        ({"phrases": []}, "non-empty phrases"),
+    ],
+)
+def test_preview_phrase_catalog_rejects_malformed_catalog(tmp_path, patch, match) -> None:
+    bundled = json.loads(vr.preview_phrase_catalog_path().read_text(encoding="utf-8"))
+    bundled.update(patch)
+    path = tmp_path / "phrases.json"
+    path.write_text(json.dumps(bundled), encoding="utf-8")
+
+    with pytest.raises(VoiceCatalogError, match=match):
+        load_preview_phrase_catalog(path)
+
+
+def test_preview_phrase_catalog_rejects_duplicate_or_unstable_ids(tmp_path) -> None:
+    bundled = json.loads(vr.preview_phrase_catalog_path().read_text(encoding="utf-8"))
+    bundled["phrases"][1]["phrase_id"] = bundled["phrases"][0]["phrase_id"]
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(json.dumps(bundled), encoding="utf-8")
+    with pytest.raises(VoiceCatalogError, match="Duplicate phrase_id"):
+        load_preview_phrase_catalog(duplicate)
+
+    bundled["phrases"][1]["phrase_id"] = "Not Stable"
+    unstable = tmp_path / "unstable.json"
+    unstable.write_text(json.dumps(bundled), encoding="utf-8")
+    with pytest.raises(VoiceCatalogError, match="Invalid phrase_id"):
+        load_preview_phrase_catalog(unstable)
+
+
+def test_bundled_manifest_uses_default_phrase_text_for_all_66_voices() -> None:
+    raw = json.loads(vr.bundled_voice_manifest_path().read_text(encoding="utf-8"))
+
+    assert len(raw["voices"]) == 66
+    assert raw["preview_text"] == PREVIEW_TEXT
+    assert all(voice["preview"]["text"] == PREVIEW_TEXT for voice in raw["voices"])
+
+
+def test_legacy_singular_preview_url_is_read_as_default_phrase_asset(tmp_path) -> None:
+    entry = VoiceCatalogEntry.from_dict(
+        {
+            "voice_id": "legacy",
+            "display_name": "Legacy",
+            "origin": "pocket_tts_builtin",
+            "asset_kind": "pocket_tts_builtin",
+            "gender": "Male",
+            "preview": {"url": "https://audio.example/legacy.mp3", "sha256": "abc"},
+        },
+        base_dir=tmp_path,
+    )
+
+    assert entry.preview.url == "https://audio.example/legacy.mp3"
+    assert len(entry.previews) == 1
+    assert entry.previews[0].phrase_id == "pride-and-prejudice"
+    assert entry.previews[0].content_type == "audio/mpeg"
 
 # ---------------------------------------------------------------------------
 # Helpers

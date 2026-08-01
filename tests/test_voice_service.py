@@ -232,6 +232,59 @@ def test_prepare_voice_preview_reuses_manifest_path(tmp_path):
     assert result.audio_path == str(preview)
 
 
+def test_prepare_voice_preview_reuses_manifest_path_only_for_matching_text(tmp_path):
+    preview = tmp_path / "preview.wav"
+    preview.write_bytes(b"wav")
+    entry = VoiceCatalogEntry(
+        voice_id="custom",
+        display_name="Custom",
+        origin="custom_compiled",
+        asset_kind="safetensors",
+        gender="Female",
+        pool_enabled=False,
+        path=tmp_path / "custom.safetensors",
+        preview=PreviewInfo(text="Manifest words", path=str(preview)),
+    )
+    catalog = MagicMock()
+    catalog.resolve.return_value = entry
+
+    with (
+        patch("kenkui.services.voice_service.get_catalog", return_value=catalog),
+        patch("kenkui.services.voice_service._synthesize_preview") as synthesize,
+        patch("kenkui.services.voice_service.preview_cache_dir", return_value=tmp_path / "cache"),
+    ):
+        matching = prepare_voice_preview("custom", text="Manifest words")
+        different = prepare_voice_preview("custom", text="Different words")
+
+    assert matching.audio_path == str(preview)
+    assert different.audio_path != str(preview)
+    synthesize.assert_called_once_with(entry, Path(different.audio_path), "Different words")
+
+
+def test_prepare_voice_preview_cache_is_text_sensitive(tmp_path):
+    entry = VoiceCatalogEntry(
+        voice_id="alba",
+        display_name="Alba",
+        origin="pocket_tts_builtin",
+        asset_kind="pocket_tts_builtin",
+        gender="Male",
+        pool_enabled=True,
+    )
+    catalog = MagicMock()
+    catalog.resolve.return_value = entry
+
+    with (
+        patch("kenkui.services.voice_service.get_catalog", return_value=catalog),
+        patch("kenkui.services.voice_service._synthesize_preview") as synthesize,
+        patch("kenkui.services.voice_service.preview_cache_dir", return_value=tmp_path),
+    ):
+        first = prepare_voice_preview("alba", text="First text")
+        second = prepare_voice_preview("alba", text="Second text")
+
+    assert first.audio_path != second.audio_path
+    assert synthesize.call_count == 2
+
+
 def test_import_custom_voice_compiles_and_writes_manifest(tmp_path):
     catalog_path = tmp_path / "custom" / "custom_manifest.json"
 

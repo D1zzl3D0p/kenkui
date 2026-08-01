@@ -53,6 +53,8 @@ from .api import (
     TaskResponse,
     VoiceListResponse,
     VoicePoolResponse,
+    VoicePreviewAssetResponse,
+    VoicePreviewPhraseResponse,
     VoiceResponse,
 )
 from .audio import AudioResult, ProcessingConfig
@@ -148,6 +150,8 @@ __all__ = [
     "TTSExecutionMode",
     "VoiceListResponse",
     "VoicePoolResponse",
+    "VoicePreviewAssetResponse",
+    "VoicePreviewPhraseResponse",
     "VoiceResponse",
     "_migrate_speaker_voices_keys",
     "_normalize_bitrate",

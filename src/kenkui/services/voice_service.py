@@ -16,6 +16,7 @@ from kenkui.voice_compiler import compile_audio_prompt_source
 from kenkui.voice_loader import load_voice_conditioning_source
 from kenkui.voice_registry import (
     PREVIEW_TEXT,
+    PreviewAssetInfo,
     VoiceCatalogEntry,
     get_catalog,
     preview_cache_dir,
@@ -55,6 +56,7 @@ class VoiceInfo:
     path: str | None
     preview_path: str | None
     preview_url: str | None
+    previews: tuple[PreviewAssetInfo, ...]
     accent: str | None
     dataset: str | None
     speaker_id: str | None
@@ -102,6 +104,7 @@ def _entry_to_info(v: VoiceCatalogEntry) -> VoiceInfo:
         path=str(v.path) if v.path is not None else None,
         preview_path=v.preview.path,
         preview_url=v.preview.url,
+        previews=v.previews,
         accent=v.accent,
         dataset=v.dataset,
         speaker_id=v.speaker_id,
@@ -217,23 +220,39 @@ def prepare_voice_preview(
     if entry is None:
         raise KeyError(f"Unknown voice_id: {voice_id}")
 
-    if entry.preview.path:
+    requested_text = text if text is not None else entry.preview.text
+    matches_manifest_preview = requested_text == entry.preview.text
+
+    if entry.preview.path and matches_manifest_preview:
         path = Path(entry.preview.path)
         if path.exists() and not force:
-            return AudioPreviewResult(voice_id=voice_id, audio_path=str(path), duration_ms=entry.preview.duration_ms)
+            return AudioPreviewResult(
+                voice_id=voice_id,
+                audio_path=str(path),
+                duration_ms=entry.preview.duration_ms,
+            )
 
-    out_path = preview_cache_dir() / f"{voice_id}.wav"
+    text_hash = hashlib.sha256(requested_text.encode("utf-8")).hexdigest()[:16]
+    out_path = preview_cache_dir() / f"{voice_id}-{text_hash}.wav"
     if out_path.exists() and not force:
-        return AudioPreviewResult(voice_id=voice_id, audio_path=str(out_path), duration_ms=entry.preview.duration_ms)
+        return AudioPreviewResult(
+            voice_id=voice_id,
+            audio_path=str(out_path),
+            duration_ms=entry.preview.duration_ms if matches_manifest_preview else None,
+        )
 
-    if entry.preview.url:
+    if entry.preview.url and matches_manifest_preview:
         try:
             if _download_preview(entry, out_path):
-                return AudioPreviewResult(voice_id=voice_id, audio_path=str(out_path), duration_ms=entry.preview.duration_ms)
+                return AudioPreviewResult(
+                    voice_id=voice_id,
+                    audio_path=str(out_path),
+                    duration_ms=entry.preview.duration_ms,
+                )
         except Exception as exc:
             logger.warning("Failed to download hosted preview for %s: %s", voice_id, exc)
 
-    _synthesize_preview(entry, out_path, text or entry.preview.text)
+    _synthesize_preview(entry, out_path, requested_text)
     return AudioPreviewResult(voice_id=voice_id, audio_path=str(out_path), duration_ms=None)
 
 

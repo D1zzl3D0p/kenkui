@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-07-31
+
+### Added
+
+- A versioned three-phrase voice-preview catalog and public preview response contracts.
+- Deterministic voice-preview pack generation with runtime fingerprints, checksums, and complete-matrix validation.
+
+### Fixed
+
+- Single-voice API responses now expose the same preview assets as the voice-list response.
+
 ## [2.3.0] - 2026-07-07
 
 ### Added

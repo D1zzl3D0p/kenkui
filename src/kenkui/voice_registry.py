@@ -15,6 +15,7 @@ import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from .voice_compiler import is_legacy_audio_prompt_asset
 
@@ -29,12 +30,90 @@ DEFAULT_VOICE_PACK_REVISION = "main"
 VOICE_PACK_FORMAT_VERSION = 2
 MANIFEST_FILENAMES = ("manifest.json", "voice_manifest.json")
 CUSTOM_MANIFEST_FILENAME = "custom_manifest.json"
-PREVIEW_TEXT = (
-    "The rain in Spain stays mainly in the plain. "
-    "How wonderful it is to simply speak and be heard."
-)
 
 _VOICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+_PHRASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+class VoiceCatalogError(ValueError):
+    """Raised when voice or preview phrase catalog data is invalid."""
+
+
+@dataclass(frozen=True)
+class PreviewPhrase:
+    phrase_id: str
+    title: str
+    author: str
+    text: str
+    source_url: str
+
+
+@dataclass(frozen=True)
+class PreviewPhraseCatalog:
+    version: int
+    default_phrase_id: str
+    phrases: tuple[PreviewPhrase, ...]
+
+    @property
+    def default_phrase(self) -> PreviewPhrase:
+        return next(phrase for phrase in self.phrases if phrase.phrase_id == self.default_phrase_id)
+
+
+def preview_phrase_catalog_path() -> Path:
+    return Path(__file__).resolve().parent / "voices" / "preview_phrases.json"
+
+
+def load_preview_phrase_catalog(path: Path | None = None) -> PreviewPhraseCatalog:
+    source = path or preview_phrase_catalog_path()
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VoiceCatalogError(f"Invalid preview phrase catalog {source}") from exc
+    if not isinstance(raw, dict):
+        raise VoiceCatalogError("Preview phrase catalog must be an object")
+    version = raw.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+        raise VoiceCatalogError("Preview phrase catalog version must be a positive integer")
+    default_phrase_id = raw.get("default_phrase_id")
+    if not isinstance(default_phrase_id, str) or not _PHRASE_ID_RE.fullmatch(default_phrase_id):
+        raise VoiceCatalogError("Preview phrase catalog has invalid default_phrase_id")
+    raw_phrases = raw.get("phrases")
+    if not isinstance(raw_phrases, list) or not raw_phrases:
+        raise VoiceCatalogError("Preview phrase catalog must contain a non-empty phrases list")
+
+    phrases: list[PreviewPhrase] = []
+    seen: set[str] = set()
+    for item in raw_phrases:
+        if not isinstance(item, dict):
+            raise VoiceCatalogError("Each preview phrase must be an object")
+        phrase_id = item.get("phrase_id")
+        if not isinstance(phrase_id, str) or not _PHRASE_ID_RE.fullmatch(phrase_id):
+            raise VoiceCatalogError(f"Invalid phrase_id: {phrase_id!r}")
+        if phrase_id in seen:
+            raise VoiceCatalogError(f"Duplicate phrase_id {phrase_id!r}")
+        seen.add(phrase_id)
+        values: dict[str, str] = {}
+        for key in ("title", "author", "text", "source_url"):
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise VoiceCatalogError(f"Preview phrase {phrase_id!r} has invalid {key}")
+            values[key] = value.strip()
+        parsed_url = urlparse(values["source_url"])
+        if parsed_url.scheme != "https" or not parsed_url.netloc:
+            raise VoiceCatalogError(f"Preview phrase {phrase_id!r} source_url must use HTTPS")
+        phrases.append(PreviewPhrase(phrase_id=phrase_id, **values))
+
+    if default_phrase_id not in seen:
+        raise VoiceCatalogError("Preview phrase catalog default_phrase_id does not identify a phrase")
+    return PreviewPhraseCatalog(
+        version=version,
+        default_phrase_id=default_phrase_id,
+        phrases=tuple(phrases),
+    )
+
+
+PREVIEW_PHRASE_CATALOG = load_preview_phrase_catalog()
+PREVIEW_TEXT = PREVIEW_PHRASE_CATALOG.default_phrase.text
 
 _BUILTIN_VOICE_DATA: dict[str, dict[str, str | None]] = {
     "alba": {"gender": "Male", "accent": "American", "dataset": "Alba-Mackenna", "speaker_id": "casual"},
@@ -68,10 +147,6 @@ _BUILTIN_VOICE_DATA: dict[str, dict[str, str | None]] = {
 BUILTIN_VOICE_NAMES: list[str] = list(_BUILTIN_VOICE_DATA)
 
 
-class VoiceCatalogError(ValueError):
-    """Raised when a voice manifest is invalid."""
-
-
 @dataclass(frozen=True)
 class PreviewInfo:
     text: str = PREVIEW_TEXT
@@ -97,6 +172,69 @@ class PreviewInfo:
 
 
 @dataclass(frozen=True)
+class PreviewAssetInfo:
+    phrase_id: str
+    audio_url: str
+    content_type: str
+    duration_ms: int | None = None
+    sha256: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PreviewAssetInfo:
+        phrase_id = str(data.get("phrase_id") or "").strip()
+        audio_url = str(data.get("audio_url") or data.get("url") or "").strip()
+        content_type = str(data.get("content_type") or "").strip()
+        if not phrase_id or not _PHRASE_ID_RE.fullmatch(phrase_id):
+            raise VoiceCatalogError(f"Invalid preview phrase_id: {phrase_id!r}")
+        parsed_url = urlparse(audio_url)
+        if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+            raise VoiceCatalogError(f"Invalid preview audio_url: {audio_url!r}")
+        if not content_type:
+            raise VoiceCatalogError(f"Preview {phrase_id!r} is missing content_type")
+        return cls(
+            phrase_id=phrase_id,
+            audio_url=audio_url,
+            content_type=content_type,
+            duration_ms=data.get("duration_ms"),
+            sha256=data.get("sha256"),
+        )
+
+
+def _load_preview_assets(data: dict[str, Any]) -> tuple[PreviewAssetInfo, ...]:
+    raw_previews = data.get("previews")
+    if raw_previews is not None:
+        if not isinstance(raw_previews, list):
+            raise VoiceCatalogError("Voice previews must be a list")
+        previews = tuple(PreviewAssetInfo.from_dict(item) for item in raw_previews)
+        phrase_ids = [preview.phrase_id for preview in previews]
+        if len(phrase_ids) != len(set(phrase_ids)):
+            raise VoiceCatalogError("Voice previews contain duplicate phrase_id values")
+        return previews
+
+    # Read the singular preview field written by voice-pack manifests before the
+    # multi-preview contract. Local path-only previews remain available through
+    # PreviewInfo but are not exposed as public URL assets.
+    legacy = data.get("preview")
+    if isinstance(legacy, dict) and legacy.get("url"):
+        url = str(legacy["url"])
+        content_type = str(legacy.get("content_type") or "")
+        if not content_type:
+            content_type = "audio/mpeg" if urlparse(url).path.lower().endswith(".mp3") else "audio/wav"
+        return (
+            PreviewAssetInfo.from_dict(
+                {
+                    "phrase_id": PREVIEW_PHRASE_CATALOG.default_phrase_id,
+                    "audio_url": url,
+                    "content_type": content_type,
+                    "duration_ms": legacy.get("duration_ms"),
+                    "sha256": legacy.get("sha256"),
+                }
+            ),
+        )
+    return ()
+
+
+@dataclass(frozen=True)
 class VoiceCatalogEntry:
     voice_id: str
     display_name: str
@@ -107,6 +245,7 @@ class VoiceCatalogEntry:
     path: Path | None = None
     status: VoiceStatus = "available"
     preview: PreviewInfo = field(default_factory=PreviewInfo)
+    previews: tuple[PreviewAssetInfo, ...] = ()
     accent: str | None = None
     dataset: str | None = None
     speaker_id: str | None = None
@@ -178,6 +317,7 @@ class VoiceCatalogEntry:
             path=path,
             status=status,  # type: ignore[arg-type]
             preview=PreviewInfo.from_dict(data.get("preview")),
+            previews=_load_preview_assets(data),
             accent=data.get("accent"),
             dataset=data.get("dataset"),
             speaker_id=data.get("speaker_id"),
@@ -216,6 +356,8 @@ class VoiceCatalogEntry:
         preview = self.preview.to_dict()
         if preview:
             data["preview"] = preview
+        if self.previews:
+            data["previews"] = [asdict(item) for item in self.previews]
         return data
 
 
@@ -600,8 +742,12 @@ __all__ = [
     "DEFAULT_VOICE_PACK_REPO",
     "DEFAULT_VOICE_PACK_REVISION",
     "VOICE_PACK_FORMAT_VERSION",
+    "PREVIEW_PHRASE_CATALOG",
     "PREVIEW_TEXT",
+    "PreviewAssetInfo",
     "PreviewInfo",
+    "PreviewPhrase",
+    "PreviewPhraseCatalog",
     "VoiceCatalog",
     "VoiceCatalogEntry",
     "VoiceCatalogError",
@@ -612,7 +758,9 @@ __all__ = [
     "get_catalog",
     "get_registry",
     "load_manifest",
+    "load_preview_phrase_catalog",
     "preview_cache_dir",
+    "preview_phrase_catalog_path",
     "validate_manifest",
     "voice_pack_manifest_is_current",
     "verify_manifest_assets",

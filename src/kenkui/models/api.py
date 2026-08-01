@@ -188,6 +188,22 @@ class ProviderModelListResponse(BaseModel):
     models: list[str]
 
 
+class VoicePreviewPhraseResponse(BaseModel):
+    phrase_id: str
+    title: str
+    author: str
+    text: str
+    source_url: str
+
+
+class VoicePreviewAssetResponse(BaseModel):
+    phrase_id: str
+    audio_url: str
+    content_type: str
+    duration_ms: int | None = None
+    sha256: str | None = None
+
+
 class VoiceResponse(BaseModel):
     name: str
     source: str
@@ -198,11 +214,14 @@ class VoiceResponse(BaseModel):
     description: str
     display_label: str
     excluded: bool
+    previews: list[VoicePreviewAssetResponse] = Field(default_factory=list)
 
 
 class VoiceListResponse(BaseModel):
     voices: list[VoiceResponse]
     total: int
+    phrase_catalog: list[VoicePreviewPhraseResponse] = Field(default_factory=list)
+    default_phrase_id: str = ""
 
 
 class AuditionRequest(BaseModel):

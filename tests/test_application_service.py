@@ -20,7 +20,7 @@ from kenkui.models import (
     NumberNormalizationConfig,
     PostProcessingConfig,
 )
-from kenkui.models.api import JobCreateRequest
+from kenkui.models.api import JobCreateRequest, VoiceResponse
 from kenkui.progress import ChapterProgress, ProgressEvent
 from kenkui.services.application_service import (
     KenkuiService,
@@ -137,6 +137,93 @@ def test_application_service_task_response_preserves_dict_results(tmp_path):
     assert response.result == {
         "characters": [{"character_id": "alice", "display_name": "Alice"}]
     }
+
+
+def test_application_service_list_voices_serializes_phrase_catalog_and_previews(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "kenkui.services.voice_service.list_voices",
+        lambda **_kwargs: [
+            SimpleNamespace(
+                voice_id="alba",
+                origin="pocket_tts_builtin",
+                gender="Male",
+                accent="American",
+                dataset=None,
+                speaker_id=None,
+                description="Male",
+                display_label="Alba",
+                pool_enabled=True,
+                previews=(
+                    SimpleNamespace(
+                        phrase_id="pride-and-prejudice",
+                        audio_url="https://audio.example/alba.mp3",
+                        content_type="audio/mpeg",
+                        duration_ms=1234,
+                        sha256="abc",
+                    ),
+                ),
+                preview_url=None,
+            )
+        ],
+    )
+    response = KenkuiService(queue_file=tmp_path / "queue.toml").list_voices()
+    payload = response.model_dump(mode="json")
+
+    assert response.default_phrase_id == "pride-and-prejudice"
+    assert len(response.phrase_catalog) == 3
+    assert payload["voices"][0]["previews"][0]["phrase_id"] == "pride-and-prejudice"
+    assert payload["voices"][0]["previews"][0]["audio_url"].startswith("https://")
+
+
+def test_application_service_get_voice_serializes_previews(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "kenkui.services.voice_service.get_voice",
+        lambda _name: SimpleNamespace(
+            voice_id="alba",
+            origin="pocket_tts_builtin",
+            gender="Male",
+            accent="American",
+            dataset=None,
+            speaker_id=None,
+            description="Male",
+            display_label="Alba",
+            pool_enabled=True,
+            previews=(
+                SimpleNamespace(
+                    phrase_id="pride-and-prejudice",
+                    audio_url="https://audio.example/alba.mp3",
+                    content_type="audio/mpeg",
+                    duration_ms=1234,
+                    sha256="abc",
+                ),
+            ),
+            preview_url=None,
+        ),
+    )
+
+    response = KenkuiService(queue_file=tmp_path / "queue.toml").get_voice("alba")
+
+    assert response is not None
+    assert response.previews[0].phrase_id == "pride-and-prejudice"
+    assert response.previews[0].audio_url == "https://audio.example/alba.mp3"
+
+
+def test_voice_response_previews_default_is_backward_compatible() -> None:
+    voice = VoiceResponse(
+        name="alba",
+        source="pocket_tts_builtin",
+        description="Male",
+        display_label="Alba",
+        excluded=False,
+    )
+
+    assert voice.previews == []
 
 
 def test_application_service_resets_stale_processing_jobs(tmp_path):

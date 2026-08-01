@@ -61,6 +61,8 @@ from kenkui.models.api import (
     TaskResponse,
     VoiceListResponse,
     VoicePoolResponse,
+    VoicePreviewAssetResponse,
+    VoicePreviewPhraseResponse,
     VoiceResponse,
 )
 from kenkui.progress import ProgressEvent
@@ -113,6 +115,31 @@ def _model_dict(value: Any) -> dict[str, Any] | None:
     if hasattr(value, "__dict__"):
         return dict(value.__dict__)
     return {"value": str(value)}
+
+
+def _voice_preview_responses(voice: Any) -> list[VoicePreviewAssetResponse]:
+    from kenkui.voice_registry import PREVIEW_PHRASE_CATALOG
+
+    previews = [
+        VoicePreviewAssetResponse(
+            phrase_id=item.phrase_id,
+            audio_url=item.audio_url,
+            content_type=item.content_type,
+            duration_ms=item.duration_ms,
+            sha256=item.sha256,
+        )
+        for item in voice.previews
+    ]
+    if not previews and voice.preview_url:
+        content_type = "audio/mpeg" if voice.preview_url.lower().endswith(".mp3") else "audio/wav"
+        previews.append(
+            VoicePreviewAssetResponse(
+                phrase_id=PREVIEW_PHRASE_CATALOG.default_phrase_id,
+                audio_url=voice.preview_url,
+                content_type=content_type,
+            )
+        )
+    return previews
 
 
 def _merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -860,8 +887,10 @@ class KenkuiService:
         source: str | None = None,
     ) -> VoiceListResponse:
         from kenkui.services.voice_service import list_voices
+        from kenkui.voice_registry import PREVIEW_PHRASE_CATALOG
 
         voices = list_voices(gender=gender, accent=accent, dataset=dataset, origin=source)
+
         return VoiceListResponse(
             voices=[
                 VoiceResponse(
@@ -874,10 +903,22 @@ class KenkuiService:
                     description=v.description,
                     display_label=v.display_label,
                     excluded=not v.pool_enabled,
+                    previews=_voice_preview_responses(v),
                 )
                 for v in voices
             ],
             total=len(voices),
+            phrase_catalog=[
+                VoicePreviewPhraseResponse(
+                    phrase_id=phrase.phrase_id,
+                    title=phrase.title,
+                    author=phrase.author,
+                    text=phrase.text,
+                    source_url=phrase.source_url,
+                )
+                for phrase in PREVIEW_PHRASE_CATALOG.phrases
+            ],
+            default_phrase_id=PREVIEW_PHRASE_CATALOG.default_phrase_id,
         )
 
     def get_voice(self, name: str) -> VoiceResponse | None:
@@ -896,6 +937,7 @@ class KenkuiService:
             description=v.description,
             display_label=v.display_label,
             excluded=not v.pool_enabled,
+            previews=_voice_preview_responses(v),
         )
 
     def set_voice_pool_enabled(self, name: str, enabled: bool) -> VoicePoolResponse:
