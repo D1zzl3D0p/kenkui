@@ -16,8 +16,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "58567b14b7ca8312397e4817bb4a45c80b97da2b9120a18cd417de15edacca1b",
-      "size_bytes": 7423224,
+      "sha256": "5d460870bd33b9e9aad5f3927065363d61cb78b9a0228c168a0c05b6ba2f8c4c",
+      "size_bytes": 7472376,
       "speaker_id": "P246",
       "status": "available",
       "voice_id": "alasdair-m-vctk-p246-scottish"
@@ -34,8 +34,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "ca4c0bf056ceda321d1a2600cad827f0728d657029fb610771f4fbc39425979a",
-      "size_bytes": 7963896,
+      "sha256": "7e87b6e822b49f1787862d60a5221193cdfe34f638d9de9e2bac2f05ff35f24e",
+      "size_bytes": 8013048,
       "speaker_id": "P270",
       "status": "available",
       "voice_id": "alf-m-vctk-p270-english-yorkshire"
@@ -52,8 +52,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "6bdcb8f47642a83be912bcbb413677e672638bc03ae2c579b479c9afe3a923c9",
-      "size_bytes": 6145272,
+      "sha256": "1e39a1cf2794b4a8ab750d05eef3b7292cf98f55c460c28456421830252fc129",
+      "size_bytes": 6194424,
       "speaker_id": "P041",
       "status": "available",
       "voice_id": "amara-f-ears-p041-african"
@@ -70,8 +70,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "c5b09a6e3d080154d5ecc9747a3af65733802b1009885c0216675bb044ecbc6b",
-      "size_bytes": 7914744,
+      "sha256": "8a4feecbd1d2af780a555e6f958d5f1f5863002e4726f9242bac7f1b27868227",
+      "size_bytes": 7963896,
       "speaker_id": "P255",
       "status": "available",
       "voice_id": "angus-m-vctk-p255-scottish"
@@ -88,8 +88,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "f02809e4e250dc87c71804db1b5bb1293a6de533b666c2e43389ca103a22ad8f",
-      "size_bytes": 6046968,
+      "sha256": "2ae6f87ed683257cce6ccaafca82a0405d26a16bd330211ceb54e2dc56f7b74f",
+      "size_bytes": 6096120,
       "speaker_id": "P351",
       "status": "available",
       "voice_id": "aoife-f-vctk-p351-northernirish"
@@ -106,8 +106,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "e9f7e37de35a32472af620e1bfc285f4ac5b9a632ed90a4066c8e67e91fd75e5",
-      "size_bytes": 6833400,
+      "sha256": "ca3004906c3dda97e08820bc0d27dbfa41427a0d9bc53f15eff7b2af7a8b68dc",
+      "size_bytes": 6882552,
       "speaker_id": "P251",
       "status": "available",
       "voice_id": "arjun-m-vctk-p251-indian"
@@ -124,8 +124,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "76457fca656e0d12a7a60650366bf325214d10370e049508549fdb3bf25371d0",
-      "size_bytes": 9143544,
+      "sha256": "142b79bbc3c56ffe75002c9c38537907e9bc7aa29fa6c2c7af96eefc5a1b7ee7",
+      "size_bytes": 9192696,
       "speaker_id": "P335",
       "status": "available",
       "voice_id": "aroha-f-vctk-p335-newzealand"
@@ -142,8 +142,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "af78b46b4ae6f64bbf1a000d4e472a25bda4e0f6340c787e0bcf57471b75f6d5",
-      "size_bytes": 6489336,
+      "sha256": "23d319567379a72a8e552ef2fa2d1b97983bbda49bcf06f655047c1f7ad92897",
+      "size_bytes": 6538488,
       "speaker_id": "P233",
       "status": "available",
       "voice_id": "beatrix-f-vctk-p233-english"
@@ -160,8 +160,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "366b6ed41692f99772d4aab4dfde09bb8c753586203b9d6104e2b87032ec4219",
-      "size_bytes": 7619832,
+      "sha256": "e544cdf8d090e4f5df37fdd36519360373d6d517a1af3f76f7bef98fef54ff69",
+      "size_bytes": 7668984,
       "speaker_id": "P286",
       "status": "available",
       "voice_id": "benny-m-vctk-p286-english-geordie"
@@ -178,11 +178,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "57928a264677cf471ab6f06ee3cd49e90fd86b3635fb11cf1f7c640e36f7e39b",
-      "size_bytes": 6145272,
+      "sha256": "1be935d8d7b35d9dc0b6d414cbb7693f2d31ebebdb3b6983941e1abb5c0a926b",
+      "size_bytes": 6194424,
       "speaker_id": "P101",
       "status": "available",
       "voice_id": "billy-m-ears-p101-southern"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Boone",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/boone-m-ears-p091-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "a3ef6949bbaa7121a8d8131236eb418fa9fc1edf918427d67bc26dd23ee38a76",
+      "size_bytes": 5407992,
+      "speaker_id": "P091",
+      "status": "available",
+      "voice_id": "boone-m-ears-p091-american"
     },
     {
       "accent": "Scottish",
@@ -196,8 +214,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "3571ed32fc068d807f2d156a4ef4a60d981475804782ca884102e0985a49d36e",
-      "size_bytes": 6194424,
+      "sha256": "19771cb21ad87fd645e1198ccddafeadd2ad28a1514316c7dd3ad9f333a0efbf",
+      "size_bytes": 6243576,
       "speaker_id": "P260",
       "status": "available",
       "voice_id": "bram-m-vctk-p260-scottish"
@@ -214,8 +232,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "a7f8b2106afc67934e1beec105264983aec9e99239603986978792fb0ea2223e",
-      "size_bytes": 7275768,
+      "sha256": "accdd78e82158fd977760c91bf2b3e1ba3999868a7e7a0cbd6cda150aec56006",
+      "size_bytes": 7324920,
       "speaker_id": "P305",
       "status": "available",
       "voice_id": "bridget-f-vctk-p305-american-philadelphia"
@@ -232,8 +250,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "5fabb6dbc3c9a01e180c90e4000cc2d31723c1d896acf8c0b960cb07f5d564df",
-      "size_bytes": 7226616,
+      "sha256": "8194f9de7112b16de2060d6410f8c0a2d49f484162418f51c89b3253a59c4765",
+      "size_bytes": 7275768,
       "speaker_id": "P283",
       "status": "available",
       "voice_id": "brigid-f-vctk-p283-irish"
@@ -250,11 +268,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "b603c73ee31e815a3614de13ca0f2bf3be2652ecbfb966ad918a88b5b1bd971a",
-      "size_bytes": 6489336,
+      "sha256": "da9a8afc3e3e62e1a69ab1f34f2ac0e744a352dea06f60a36753673394614b6b",
+      "size_bytes": 6538488,
       "speaker_id": "P253",
       "status": "available",
       "voice_id": "bronwen-f-vctk-p253-welsh"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Bryce",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/bryce-m-ears-p057-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "480ee3d1a5b67fddfe9dfda01f176a9b8c32ab55997019e171268b813b043c31",
+      "size_bytes": 4621552,
+      "speaker_id": "P057",
+      "status": "available",
+      "voice_id": "bryce-m-ears-p057-american"
     },
     {
       "accent": "Scottish",
@@ -268,8 +304,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "1faa72d3dd5abbaa54c47171dea63a50fed1dd1f900cb24962e71f8e9aa14c67",
-      "size_bytes": 6489336,
+      "sha256": "0a2e2e7c201612bcbf0e03386a5d6e7d1bd7daf81fd562c2137f652121a4533b",
+      "size_bytes": 6538488,
       "speaker_id": "P237",
       "status": "available",
       "voice_id": "callum-m-vctk-p237-scottish"
@@ -286,8 +322,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "8bff6df189f317188ee2bd48ddc4a852ba5cd0581013c38cb6eff20620479419",
-      "size_bytes": 6145272,
+      "sha256": "f608ce23449c642308694d6f4b7513e8ed7fc02d468e25f52bf26e0ce0e320ee",
+      "size_bytes": 6194424,
       "speaker_id": "P067",
       "status": "available",
       "voice_id": "celeste-f-ears-p067-french"
@@ -304,8 +340,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "b607a3c797eda3bb0505bc697dda977bf57a34205c45b6f66d64a522dea04a1e",
-      "size_bytes": 7963896,
+      "sha256": "ff772ddc74dfeb6ec5c5ec7c66b1307eb29a759a2b238335c8fd19601a08296a",
+      "size_bytes": 8013048,
       "speaker_id": "P245",
       "status": "available",
       "voice_id": "ciaran-m-vctk-p245-irish"
@@ -322,11 +358,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "31f0a465e43832b5c93cb219fca752e30527a888725050324b003066430a9416",
-      "size_bytes": 6145272,
+      "sha256": "2336b4d54314ccff0d46df1c224421c1aa0d460eccbdb37858468405381b60de",
+      "size_bytes": 6194424,
       "speaker_id": "P027",
       "status": "available",
       "voice_id": "clara-f-ears-p027-american"
+    },
+    {
+      "accent": "Southern",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Clyde",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/clyde-m-ears-p010-southern.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "79376e9173ad7e52115c628d732f06e9237b1449bf29c586629daab9dae98d8f",
+      "size_bytes": 4916472,
+      "speaker_id": "P010",
+      "status": "available",
+      "voice_id": "clyde-m-ears-p010-southern"
     },
     {
       "accent": "American",
@@ -340,11 +394,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "b1d0bf95b6163f70a0a24836c7571690a80b75712251ef744cf10894c04baa77",
-      "size_bytes": 6145272,
+      "sha256": "6b8e0bda503a31f4ae33ce1a682a23a8f80f377912054ab6210580294200ea8e",
+      "size_bytes": 6194424,
       "speaker_id": "P023",
       "status": "available",
       "voice_id": "cole-m-ears-p023-american"
+    },
+    {
+      "accent": "Southern",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Colt",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/colt-m-ears-p025-southern.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "e74266a0b8f4b34c55ab4ce29a0ef3a20ef94ec347e84411cc5fb032e6fe4e00",
+      "size_bytes": 5555448,
+      "speaker_id": "P025",
+      "status": "available",
+      "voice_id": "colt-m-ears-p025-southern"
     },
     {
       "accent": "NorthernIrish",
@@ -358,8 +430,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "1757c29e03839c928208adb570ea3997664fd222ab097874818b13b07deeea7d",
-      "size_bytes": 6587640,
+      "sha256": "33990c44c91c74817e8934a6bd1436c476ca4eae2856605f45f9e0840f2e844c",
+      "size_bytes": 6636792,
       "speaker_id": "P304",
       "status": "available",
       "voice_id": "declan-m-vctk-p304-northernirish"
@@ -376,8 +448,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "6028ab934849f79eba1098366ac34867c3724053556e71794b2739c10722dc10",
-      "size_bytes": 8062200,
+      "sha256": "e5a41f349209d82f715898c59919af5b70aaa7263d9938d60bb211e2cfe51edd",
+      "size_bytes": 8111352,
       "speaker_id": "P347",
       "status": "available",
       "voice_id": "deon-m-vctk-p347-southafrican"
@@ -394,8 +466,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "862a454cdc848d5591f131733639cd2c3dace07aaf47f80c27d1166abb35b881",
-      "size_bytes": 9487608,
+      "sha256": "d01b8a9d5702735ff6ef417a9a295684bac2fd903de7bedc60fb4fbd5c718ca8",
+      "size_bytes": 9536760,
       "speaker_id": "P310",
       "status": "available",
       "voice_id": "dolly-f-vctk-p310-american-tennessee"
@@ -412,8 +484,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "d04d3aceb9e5af567cd9c9cc8cd8c2b9022d8c0474e16f5ed663dc003232ac1f",
-      "size_bytes": 6636792,
+      "sha256": "94f58f2bcfd4208ca0259b3547fd92cd9c46a74bde684ff69f0489cc4d92ff80",
+      "size_bytes": 6685944,
       "speaker_id": "P311",
       "status": "available",
       "voice_id": "earl-m-vctk-p311-american-midwest"
@@ -430,8 +502,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "1a2daf8de5fc2b0eb6ae34bb54c6444127dfe75b356a5579c3db98d5bbdfe33c",
-      "size_bytes": 6145272,
+      "sha256": "197cfbc3ab48ed864d7155b5a0508a855c0b2a58b1f479175286bd824bfda65f",
+      "size_bytes": 6194424,
       "speaker_id": "P019",
       "status": "available",
       "voice_id": "edmund-m-ears-p019-british"
@@ -448,8 +520,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "e6e432e19098bd8408dd1c5b70cf5446593b5fc17e710b76cf97ddf7961800be",
-      "size_bytes": 6145272,
+      "sha256": "364ef0d20645664810d7cef801fc744d800e5ec582e59bffbd5e8a6fc7e215ea",
+      "size_bytes": 6194424,
       "speaker_id": "P028",
       "status": "available",
       "voice_id": "elara-f-ears-p028-american"
@@ -466,11 +538,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "c96fd3dcee43d8ef5700defe90ffcbe7bdf2c0e7e64509178467e6ff4f634f68",
-      "size_bytes": 7275768,
+      "sha256": "66d335146f11e041533ce31d58deb063c5142ee64970d9546af175a627308280",
+      "size_bytes": 7324920,
       "speaker_id": "S5",
       "status": "available",
       "voice_id": "elspeth-f-vctk-s5-british"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Ember",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/ember-f-ears-p036-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "e5c9a07c53656711fc461187061957f6d10989508ed68e828031135382f4ac7d",
+      "size_bytes": 3884272,
+      "speaker_id": "P036",
+      "status": "available",
+      "voice_id": "ember-f-ears-p036-american"
     },
     {
       "accent": "Irish",
@@ -484,8 +574,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "c1a5335fe4e460586c9fd4b4302f5f3bd4ad09b1c46c2b1c1f8e44cab195bec8",
-      "size_bytes": 8357112,
+      "sha256": "ace5c4f3a4edf5a819c79b1483bfd4f30b322fae00e39fa555d70298fc55fd11",
+      "size_bytes": 8406264,
       "speaker_id": "P364",
       "status": "available",
       "voice_id": "eoin-m-vctk-p364-irish"
@@ -502,8 +592,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "f9810e7df84c5d6aca522d116e2cbdf33206a21ffd6e1c27dec2fa58b626a575",
-      "size_bytes": 6489336,
+      "sha256": "4327328dbc079b9185a4ed04b9ee8b173094555c9aa208c6abe76f5b22c0ff95",
+      "size_bytes": 6538488,
       "speaker_id": "P247",
       "status": "available",
       "voice_id": "fergus-m-vctk-p247-scottish"
@@ -520,8 +610,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "d449ce450f03e594eca15016d6d819da8007825a2593398c368a6cae2563f182",
-      "size_bytes": 6489336,
+      "sha256": "194f9aa433b279d8929b879ad234902e865cf9a30d72914c54a86de5e27e1910",
+      "size_bytes": 6538488,
       "speaker_id": "P263",
       "status": "available",
       "voice_id": "finlay-m-vctk-p263-scottish"
@@ -538,8 +628,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "ce1318bce7f06555cc8c400f8531af24d55bc1f1ab795019ba9baa22497d141e",
-      "size_bytes": 6145272,
+      "sha256": "6d960ba94b1459d186f3e74f159c2ee82c9ee3a37289bba26cc610108c79e4c2",
+      "size_bytes": 6194424,
       "speaker_id": "P102",
       "status": "available",
       "voice_id": "flint-m-ears-p102-american"
@@ -556,8 +646,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "6914d2c9acb29dee9e5475334d6316d25715277c7a12fb053ac96d41fdc61195",
-      "size_bytes": 6636792,
+      "sha256": "e6f9ba34f077677b68b10d46bafb5a99bebc6cd70196d6b658c7ef79d2e08dda",
+      "size_bytes": 6685944,
       "speaker_id": "P326",
       "status": "available",
       "voice_id": "flynn-m-vctk-p326-australian"
@@ -574,8 +664,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "2ca7941a8e44d7743b4862da56fa7076c3e8f110ff4a72ee87d976d2bea5fe01",
-      "size_bytes": 7914744,
+      "sha256": "68fb57ea06a5a601d77f6eb9801c523edaaf07f7589f019ad39668c1453b7c0f",
+      "size_bytes": 7963896,
       "speaker_id": "P297",
       "status": "available",
       "voice_id": "frankie-f-vctk-p297-american-newyork"
@@ -592,8 +682,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "12567377174c9ef373272bb6770b3fc9dbd99cbf55a591a8d77145e4590b5660",
-      "size_bytes": 6145272,
+      "sha256": "b3864ee9ff495bdaeefe8ee37378fa8d1d9bf5fd6ca6bb3ddc2fb4e33bdd1bb2",
+      "size_bytes": 6194424,
       "speaker_id": "P017",
       "status": "available",
       "voice_id": "garrett-m-ears-p017-american"
@@ -610,11 +700,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "4679161d139f17738611498457edac367876d08117e1c26ac19de10fcab40cdd",
-      "size_bytes": 6440184,
+      "sha256": "d185969bec09c30537cbfbcbada5bea5cf8bafd884d6eef4f6cd1b4bbeb649ec",
+      "size_bytes": 6489336,
       "speaker_id": "P269",
       "status": "available",
       "voice_id": "georgie-f-vctk-p269-english-geordie"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Granger",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/granger-m-ears-p095-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "40e2bd78e12656927486df8b420ab443cb67d09390acdc84c32477e7dc9f8d63",
+      "size_bytes": 4326640,
+      "speaker_id": "P095",
+      "status": "available",
+      "voice_id": "granger-m-ears-p095-american"
     },
     {
       "accent": "American",
@@ -628,11 +736,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "332c1c0e720dd8e1c5fd630826656c3899f1f993ec368b5b9967667f7dadc45f",
-      "size_bytes": 6145272,
+      "sha256": "d5d4cac09c23bb1233b335ed7fcaeb35baf4acc65722dd14abf5d7adea7356e6",
+      "size_bytes": 6194424,
       "speaker_id": "P009",
       "status": "available",
       "voice_id": "grant-m-ears-p009-american"
+    },
+    {
+      "accent": "Midwestern",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Greta",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/greta-f-ears-p015-midwestern.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "9ceb646c564e44c414732b2d3ebc3e884102e6b38fddd7d54c37c25649dfb40b",
+      "size_bytes": 6440184,
+      "speaker_id": "P015",
+      "status": "available",
+      "voice_id": "greta-f-ears-p015-midwestern"
     },
     {
       "accent": "Scottish",
@@ -646,8 +772,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "4a97aad4a29f58513e29e98f4a32e90b35629809bb41d6ff0659b88abdc8a3e7",
-      "size_bytes": 6980856,
+      "sha256": "8bc17e280a107337dd018c784c4bd16576510aba0ef23940cf1251ea31291e78",
+      "size_bytes": 7030008,
       "speaker_id": "P252",
       "status": "available",
       "voice_id": "hamish-m-vctk-p252-scottish"
@@ -664,11 +790,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "f7e170b361f01f968b1be5a8990e92461a3aa778fc023086b1d3aa747799cc88",
-      "size_bytes": 6145272,
+      "sha256": "9cac874d69109a637469f5750d631dc0ce9c3ed91a4bbd4c693f5a2988782b83",
+      "size_bytes": 6194424,
       "speaker_id": "P064",
       "status": "available",
       "voice_id": "harper-f-ears-p064-american"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Hazel",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/hazel-f-ears-p032-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "59754458b155a3281afc2680ea6c7765ef801639f0e62b1f2cfd24b43f68c17b",
+      "size_bytes": 4326640,
+      "speaker_id": "P032",
+      "status": "available",
+      "voice_id": "hazel-f-ears-p032-american"
     },
     {
       "accent": "Southern",
@@ -682,8 +826,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "49fd06a1b2d2bd1450c79ac1287c414b2549354ac2530059491952e283bbe239",
-      "size_bytes": 6145272,
+      "sha256": "52eb2f8d66524c702fda9120a0a774b7e194d97c5483f01976bcb09d2d677173",
+      "size_bytes": 6194424,
       "speaker_id": "P099",
       "status": "available",
       "voice_id": "huck-m-ears-p099-southern"
@@ -700,11 +844,83 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "936f5102383a087b2c064c479fe7fb9c0796925d49b29e36c47e23638236e56f",
-      "size_bytes": 7324920,
+      "sha256": "6041f1332d40e30050437e40e42cc6b35460b9f2f9e7ccccbf1125f2adc72d21",
+      "size_bytes": 7374072,
       "speaker_id": "P280",
       "status": "available",
       "voice_id": "isabeau-f-vctk-p280-french"
+    },
+    {
+      "accent": "Latin",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Ivy",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/ivy-f-ears-p006-latin.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "07f1390aa16eb2ce20de4e3bb6c544edfe2d56e0323d8b3ca16c6ac2cc6db621",
+      "size_bytes": 4523248,
+      "speaker_id": "P006",
+      "status": "available",
+      "voice_id": "ivy-f-ears-p006-latin"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Jasper",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/jasper-m-ears-p039-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "00df5f7bcde4e34b20c5a6e8249206c03637fd94cad6d0b2d1e6e87c44a09821",
+      "size_bytes": 4818160,
+      "speaker_id": "P039",
+      "status": "available",
+      "voice_id": "jasper-m-ears-p039-american"
+    },
+    {
+      "accent": "German",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Klaus",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/klaus-m-ears-p001-german.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "93f4b68f29a77bf1ae5ffb92e617620fcc5fb637fd5954c33675a71dc9df3c00",
+      "size_bytes": 5014776,
+      "speaker_id": "P001",
+      "status": "available",
+      "voice_id": "klaus-m-ears-p001-german"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Knox",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/knox-m-ears-p085-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "cbd39289bf1ec6705a7b17b1b50773b58fcd3a4e418a65b68eb1641e1ea13a11",
+      "size_bytes": 4965624,
+      "speaker_id": "P085",
+      "status": "available",
+      "voice_id": "knox-m-ears-p085-american"
     },
     {
       "accent": "Canadian",
@@ -718,8 +934,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "1e149ff44b6658ca83b425acbf6f7d415fed53818a144bbe0298f90cfbb9f184",
-      "size_bytes": 7668984,
+      "sha256": "450ec679731783e544efc4049e8383576245e870d1438ef663d1a57508d19d4b",
+      "size_bytes": 7718136,
       "speaker_id": "P343",
       "status": "available",
       "voice_id": "laurel-f-vctk-p343-canadian"
@@ -736,8 +952,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "46cf2c36911580261bbb6fdf466a85dca58abcd346bc5d29f3d232bd03c2836e",
-      "size_bytes": 9045240,
+      "sha256": "b9f5880c03aafd32fade7ac83ce6b31f539120abdccce5dd0d8ee4091e646d55",
+      "size_bytes": 9094392,
       "speaker_id": "P306",
       "status": "available",
       "voice_id": "lexie-f-vctk-p306-american-newyork"
@@ -754,8 +970,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "3fa7f01c2e673448910999e61c1b00125538c06567268426defe8fe26b8e8353",
-      "size_bytes": 6145272,
+      "sha256": "8601fa19942d42ffec00b9b56533ad1c6e92d0e6dd2ef50438d819d563326e2d",
+      "size_bytes": 6194424,
       "speaker_id": "P042",
       "status": "available",
       "voice_id": "luca-m-ears-p042-european"
@@ -772,8 +988,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "d3c27afdefc2ac75b2076f592da0049b62f10a9e991ca1973d7d199cce44f945",
-      "size_bytes": 6145272,
+      "sha256": "172325895ed9e8e959b5322534ffbb45d4da4b70ccae8ad7684694d9c312216c",
+      "size_bytes": 6194424,
       "speaker_id": "P058",
       "status": "available",
       "voice_id": "lyra-f-ears-p058-american"
@@ -790,8 +1006,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "4e77cdcf672f22e20c2ef4b14634c0d47f177b3eab0f1a2c2287cfaba8dae39d",
-      "size_bytes": 7030008,
+      "sha256": "7276c7fe2bdb0d9732d46425e4630cbf28816f0924a318214c42e5483dc4163a",
+      "size_bytes": 7079160,
       "speaker_id": "P267",
       "status": "available",
       "voice_id": "mabel-f-vctk-p267-english-yorkshire"
@@ -808,8 +1024,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "25f9d1ffeb0904ea329203c4581faf26918d890e08d5c551dac7ad69ad1bcf9c",
-      "size_bytes": 5899512,
+      "sha256": "092f8d0f9c3bb53ea7a46711540dee71cca8c2202dbb4c7fb84ceecfee78d1af",
+      "size_bytes": 5948664,
       "speaker_id": "P334",
       "status": "available",
       "voice_id": "marco-m-vctk-p334-american-chicago"
@@ -826,11 +1042,47 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "2a50e5aee57d36126756f263b3532b6204c5171cc06a1a18886ed6f0dd037715",
-      "size_bytes": 6538488,
+      "sha256": "e051c0c6117c4581064ae8b51818010ff9685b762c6ba44f875aa65604cf8bb5",
+      "size_bytes": 6587640,
       "speaker_id": "P299",
       "status": "available",
       "voice_id": "marin-f-vctk-p299-american-california"
+    },
+    {
+      "accent": "Latin",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Mateo",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/mateo-m-ears-p094-latin.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "bfd2e480ab847b0d9673af2c1ad8be1aed7a55f85b5c5fa522f81f1590084214",
+      "size_bytes": 4179184,
+      "speaker_id": "P094",
+      "status": "available",
+      "voice_id": "mateo-m-ears-p094-latin"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Maverick",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/maverick-m-ears-p065-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "3ba2e4fa47f4744d621f97f38438b558c2296c1179f90110f744a8a919d8c793",
+      "size_bytes": 4769008,
+      "speaker_id": "P065",
+      "status": "available",
+      "voice_id": "maverick-m-ears-p065-american"
     },
     {
       "accent": "American",
@@ -844,8 +1096,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "7ff804d23af4033d1663acbd436cde344915ac7391e25b0f75cb1881f0bf7178",
-      "size_bytes": 6145272,
+      "sha256": "5cfaed0bd85af3d52a02a724d6db5607dfaed9da4f58d68a504d4be56ac56925",
+      "size_bytes": 6194424,
       "speaker_id": "P022",
       "status": "available",
       "voice_id": "miles-m-ears-p022-american"
@@ -862,8 +1114,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "fb79ebbac938653e51f9c7a50239856e67fa6910b095bc4a4befdc7b14fdcc69",
-      "size_bytes": 7079160,
+      "sha256": "2d3a735ea1ca0f6c42e80d77170cb3a01e38038efd0b430271c4a2376bbfbc89",
+      "size_bytes": 7128312,
       "speaker_id": "P249",
       "status": "available",
       "voice_id": "moira-f-vctk-p249-scottish"
@@ -880,11 +1132,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "3ebf97ce01a4f2269a9e9ef5bf4028eadebbb6d40ef108fef577f3b1d084a1df",
-      "size_bytes": 6145272,
+      "sha256": "2061c4675eb537e194d739cea8a44423d8e28d95b0bf239f61a255b2f2b379e4",
+      "size_bytes": 6194424,
       "speaker_id": "P093",
       "status": "available",
       "voice_id": "nadia-f-ears-p093-american"
+    },
+    {
+      "accent": "British",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Nigel",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/nigel-m-ears-p049-british.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "37d09df51a45308ba1092b3258932654a60c5c6930b1adaa8b21396ecd8efb6a",
+      "size_bytes": 4769008,
+      "speaker_id": "P049",
+      "status": "available",
+      "voice_id": "nigel-m-ears-p049-british"
     },
     {
       "accent": "American",
@@ -898,8 +1168,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "266347379049cb8b4a0d7110e27a64953bde23612fbe3f727266e6968caf74e4",
-      "size_bytes": 6341880,
+      "sha256": "69e715795e5c97fdf82d8f8c411d7bc87047c24030690055e6520a0637559ce3",
+      "size_bytes": 6391032,
       "speaker_id": "P308",
       "status": "available",
       "voice_id": "nora-f-vctk-p308-american"
@@ -916,11 +1186,47 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "4d1e4339fadd3ab24de7f6b0bcbd8a0d495cef14d6ce9055c5a68e76008f5dcb",
-      "size_bytes": 7668984,
+      "sha256": "18ba8df97a929cc45208d83fd8e31daadc458ab0ad2bf4e0c2ed434c2c15f625",
+      "size_bytes": 7718136,
       "speaker_id": "P256",
       "status": "available",
       "voice_id": "ozzy-m-vctk-p256-english-birmingham"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Paige",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/paige-f-ears-p047-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "2aecef7a32993862ca4799bf78f82a2fc5ae4f0dfdeb412777e8723605f08970",
+      "size_bytes": 4080880,
+      "speaker_id": "P047",
+      "status": "available",
+      "voice_id": "paige-f-ears-p047-american"
+    },
+    {
+      "accent": "Latin",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Paloma",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/paloma-f-ears-p013-latin.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "8a52fe71580f7d00ef0a3826602c9e7d7915e4c24163393643816b3bc63d3e74",
+      "size_bytes": 4375792,
+      "speaker_id": "P013",
+      "status": "available",
+      "voice_id": "paloma-f-ears-p013-latin"
     },
     {
       "accent": "Indian",
@@ -934,11 +1240,47 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "6ee45546b281e598f334fb97c357c023b093f9c56f22e0454d988c5ed839506d",
-      "size_bytes": 8258808,
+      "sha256": "fa42d5b76ec397c4af1f048b39cfd5e7df72653346f2ed60d8371daf278a094c",
+      "size_bytes": 8307960,
       "speaker_id": "P248",
       "status": "available",
       "voice_id": "priya-f-vctk-p248-indian"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Quinn",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/quinn-f-ears-p034-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "33cfef227fafb179f48a847e7ef515678dd7c93b1a1b878e9f68bdbaa388e24e",
+      "size_bytes": 4228336,
+      "speaker_id": "P034",
+      "status": "available",
+      "voice_id": "quinn-f-ears-p034-american"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Rae",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/rae-f-ears-p052-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "d8783e8e453202a7c8bf1e9bb6475f597a747760113a7acec2584fc6122d777e",
+      "size_bytes": 5063928,
+      "speaker_id": "P052",
+      "status": "available",
+      "voice_id": "rae-f-ears-p052-american"
     },
     {
       "accent": "Canadian",
@@ -952,11 +1294,47 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "a81e47e76cda7d3e4a0838200897f4012d51468ef6d3ef8fb859890500be202c",
-      "size_bytes": 6194424,
+      "sha256": "0199de4c97f3dfd177b0980beedcb3d43e452158c70f22a72fa5e45f5588f05e",
+      "size_bytes": 6243576,
       "speaker_id": "P363",
       "status": "available",
       "voice_id": "reid-m-vctk-p363-canadian"
+    },
+    {
+      "accent": "French",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Rémy",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/remy-m-ears-p020-french.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "449c90d8289feac919ac4005da384ec06e7cda9221d3ce2f41048e16d7587162",
+      "size_bytes": 7374072,
+      "speaker_id": "P020",
+      "status": "available",
+      "voice_id": "remy-m-ears-p020-french"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Renata",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/renata-f-ears-p014-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "ce29da9c53586391af838c5dd014304e14ba1b8e9c469bdbbc7dcc924977f401",
+      "size_bytes": 5309688,
+      "speaker_id": "P014",
+      "status": "available",
+      "voice_id": "renata-f-ears-p014-american"
     },
     {
       "accent": "English London",
@@ -970,11 +1348,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "245aa345149d01c7e3529baad92aef890168ed2e2be63e8de4180e51392c7c21",
-      "size_bytes": 7718136,
+      "sha256": "842e40af03d09e01f6f8b06eb99b8d3f607fd3649e985c02c1f7495cc02d7fb5",
+      "size_bytes": 7767288,
       "speaker_id": "P243",
       "status": "available",
       "voice_id": "rex-m-vctk-p243-english-london"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "River",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/river-m-ears-p073-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "92c4d39671ddddbfad3729a1b5e8a8b74a087c886a20c8d8008a32ea1648971e",
+      "size_bytes": 4572400,
+      "speaker_id": "P073",
+      "status": "available",
+      "voice_id": "river-m-ears-p073-american"
     },
     {
       "accent": "Southern",
@@ -988,8 +1384,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "fe0da30b45bd65bb3992e56754682cefb2a20f123cf213f9a75594e3ed432fee",
-      "size_bytes": 6145272,
+      "sha256": "7e18964e0712c0ca7fbb846528d21790d7c109c5ecdce28dc3968119eae0b366",
+      "size_bytes": 6194424,
       "speaker_id": "P105",
       "status": "available",
       "voice_id": "roan-m-ears-p105-southern"
@@ -1006,8 +1402,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "27357c98e7b99764d14a3e2b88ef2a17fb2bef0305ba58cc28d2d28567e4c146",
-      "size_bytes": 6538488,
+      "sha256": "6815ff54831b589f78bdc298559deb2da28100f53d537ad1fb31dbcec06a8f86",
+      "size_bytes": 6587640,
       "speaker_id": "P376",
       "status": "available",
       "voice_id": "rohan-m-vctk-p376-indian"
@@ -1024,11 +1420,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "c229a2af8b232e55b9fb86ef52e435d4d0b145151f192754b03ae029342584af",
-      "size_bytes": 6243576,
+      "sha256": "a5774bbce65a02454063134ad1390fd2d4ee67847c3f687b5b1379075d27abc7",
+      "size_bytes": 6292728,
       "speaker_id": "P272",
       "status": "available",
       "voice_id": "rory-m-vctk-p272-scottish"
+    },
+    {
+      "accent": "Southern",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Rosie",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/rosie-f-ears-p080-southern.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "1949ede1e2bce2a9c8581c5e2b90c51d4a245d2c7be0010645295f6315130ba1",
+      "size_bytes": 5014776,
+      "speaker_id": "P080",
+      "status": "available",
+      "voice_id": "rosie-f-ears-p080-southern"
     },
     {
       "accent": "American",
@@ -1042,8 +1456,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "c539e9d981e9ceac804658d2980e697497759162c79fae09c83294b48343e0d8",
-      "size_bytes": 6145272,
+      "sha256": "ac7605fb9aa325f0875375b529cd0d4e3dd6216080c055ba5ae639c41fecacce",
+      "size_bytes": 6194424,
       "speaker_id": "P055",
       "status": "available",
       "voice_id": "sage-f-ears-p055-american"
@@ -1060,11 +1474,47 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "15e2bc40854984ce2dfd00dbd3422f769733371eecc540940e78924927d42470",
-      "size_bytes": 6587640,
+      "sha256": "77e57da43dbfd7bbaa8051fe73eaf653746203131df14cfe72d068ad10e2b815",
+      "size_bytes": 6636792,
       "speaker_id": "P266",
       "status": "available",
       "voice_id": "saoirse-f-vctk-p266-irish"
+    },
+    {
+      "accent": "Southern",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Savannah",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/savannah-f-ears-p075-southern.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "b19a2e46118c701ccfe4980201ff7d94e8772666511b6db23b503485b502e0cf",
+      "size_bytes": 4719856,
+      "speaker_id": "P075",
+      "status": "available",
+      "voice_id": "savannah-f-ears-p075-southern"
+    },
+    {
+      "accent": "Southern",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Scarlett",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/scarlett-f-ears-p083-southern.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "d9996e7b613d01e2d2d496dd930d2ff3e7afc6f5fb760f393f5a4bffceb7ef0c",
+      "size_bytes": 4670704,
+      "speaker_id": "P083",
+      "status": "available",
+      "voice_id": "scarlett-f-ears-p083-southern"
     },
     {
       "accent": "Irish",
@@ -1078,11 +1528,47 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "d5564b3fd964e00531ce982f3b7d1759f3760a0b0a55aa92b6d5f14ddd954e6d",
-      "size_bytes": 6046968,
+      "sha256": "5be88804fe9774857ee1dc8382778536a48628d0e5744a8fbb03ba0ddd13c46b",
+      "size_bytes": 6096120,
       "speaker_id": "P298",
       "status": "available",
       "voice_id": "seamus-m-vctk-p298-irish"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Sloane",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/sloane-f-ears-p069-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "128d6ec0e83b810d786d622324892389d4fe3b85b368b096847d0cc70baea8db",
+      "size_bytes": 5850360,
+      "speaker_id": "P069",
+      "status": "available",
+      "voice_id": "sloane-f-ears-p069-american"
+    },
+    {
+      "accent": "British",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Sterling",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/sterling-m-ears-p008-british.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "ff33503a3b1e932d19f6462371c08b6a9bc8b59279f6f5134285ffb1a623dbdc",
+      "size_bytes": 5014776,
+      "speaker_id": "P008",
+      "status": "available",
+      "voice_id": "sterling-m-ears-p008-british"
     },
     {
       "accent": "Scottish",
@@ -1096,8 +1582,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "bef55268619b77d2d05f31903e98e01c4b27fca5ab30070f9fd46626869581a9",
-      "size_bytes": 5899512,
+      "sha256": "83b63da5436ac5f32c962066144929c721451db3cd4bdd115d91686518c9df56",
+      "size_bytes": 5948664,
       "speaker_id": "P284",
       "status": "available",
       "voice_id": "tavish-m-vctk-p284-scottish"
@@ -1114,8 +1600,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "35884158787c4badb8c6da3a2e79a44fa9a6fc54957b69ce54385e2dc7f8fecd",
-      "size_bytes": 8504568,
+      "sha256": "b137cf895cad4e7b303714c038d7358a84523ea57f2f34946f1b11475e3ae57d",
+      "size_bytes": 8553720,
       "speaker_id": "P323",
       "status": "available",
       "voice_id": "thandi-f-vctk-p323-southafrican"
@@ -1132,11 +1618,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "ef1d4b7e2d9e3a6ee9cb02a40e6dee05ac57994e6c71916c475f360592842b21",
-      "size_bytes": 6145272,
+      "sha256": "216398dd28f89d684fedb4d326231d2a9737e00ca50e6f0a6c4e679e4cc8bef2",
+      "size_bytes": 6194424,
       "speaker_id": "P107",
       "status": "available",
       "voice_id": "trace-m-ears-p107-american"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Vera",
+      "gender": "Female",
+      "origin": "kenkui_compiled",
+      "path": "compiled/vera-f-ears-p082-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "3ebe6a7bdcd4d53844f6e972303eb360fa5c051f184686d7fbe9ac2cf49bd381",
+      "size_bytes": 5014776,
+      "speaker_id": "P082",
+      "status": "available",
+      "voice_id": "vera-f-ears-p082-american"
     },
     {
       "accent": "English",
@@ -1150,11 +1654,29 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "d86fd881c32f68f391bf0407776c3233ee65bf19a18265d5b72c127a4e1b4151",
-      "size_bytes": 5702904,
+      "sha256": "567f86a35a1fa495d2f843fb6bda87a301c3d3b3fccd49416a21776994a27e49",
+      "size_bytes": 5752056,
       "speaker_id": "P231",
       "status": "available",
       "voice_id": "vivienne-f-vctk-p231-english"
+    },
+    {
+      "accent": "American",
+      "asset_kind": "safetensors",
+      "dataset": "EARS",
+      "display_name": "Wade",
+      "gender": "Male",
+      "origin": "kenkui_compiled",
+      "path": "compiled/wade-m-ears-p090-american.safetensors",
+      "pool_enabled": true,
+      "preview": {
+        "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
+      },
+      "sha256": "b6fcff2a0acd1c6a00cbe9a6209a61f93c355cc35e078fa6d6bd161c6969c277",
+      "size_bytes": 4818160,
+      "speaker_id": "P090",
+      "status": "available",
+      "voice_id": "wade-m-ears-p090-american"
     },
     {
       "accent": "American",
@@ -1168,8 +1690,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "86201d81de52265e756d6c7e03e916c1086f4d29902600edf1c37776ded0f9b6",
-      "size_bytes": 6980856,
+      "sha256": "0e034ee9812baf55ba66fe5c4607a7a932a4d18d0c3e27f71435a0c4a1f35b7a",
+      "size_bytes": 7030008,
       "speaker_id": "P301",
       "status": "available",
       "voice_id": "wren-f-vctk-p301-american"
@@ -1186,8 +1708,8 @@
       "preview": {
         "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife."
       },
-      "sha256": "89126835aa6ad0083c7c9f971f32eff05aaf184154cadf1dc923e854b0549b0f",
-      "size_bytes": 6980856,
+      "sha256": "64bb1cd40190894e484e705c583393baa6e1aa7349cd2a970df4710fbc637c48",
+      "size_bytes": 7030008,
       "speaker_id": "P314",
       "status": "available",
       "voice_id": "zola-f-vctk-p314-southafrican"

@@ -36,7 +36,16 @@ from kenkui.voice_registry import (
 PreviewGenerator = Callable[[Path, PreviewPhrase], tuple[int, np.ndarray]]
 Mp3Encoder = Callable[[Path, Path], None]
 MIN_PREVIEW_DURATION_MS = 500
+MAX_PREVIEW_TOKENS = 200
+PREVIEW_EOS_THRESHOLD = -2.0
+MAX_PREVIEW_DURATION_MS = 30 * 1000
+PREVIEW_GENERATION_ATTEMPTS = 5
+MAX_PREVIEW_CHARACTERS_PER_SECOND = 30
 MP3_BITRATE = "96k"
+
+
+class RetryablePreviewError(ValueError):
+    """A stochastic preview-generation failure that may succeed on retry."""
 
 
 def _hash_file(path: Path) -> str:
@@ -88,11 +97,19 @@ def _make_preview_generator() -> PreviewGenerator:
         from pocket_tts import TTSModel  # type: ignore
     except Exception as exc:
         raise RuntimeError("pocket_tts.TTSModel is required to generate previews") from exc
-    model = TTSModel.load_model(language=DEFAULT_VOICE_PACK_LANGUAGE)
+    model = TTSModel.load_model(
+        language=DEFAULT_VOICE_PACK_LANGUAGE,
+        eos_threshold=PREVIEW_EOS_THRESHOLD,
+    )
 
     def generate(asset_path: Path, phrase: PreviewPhrase) -> tuple[int, np.ndarray]:
         state = model.get_state_for_audio_prompt(str(asset_path))
-        audio = model.generate_audio(state, phrase.text, frames_after_eos=2).squeeze()
+        audio = model.generate_audio(
+            state,
+            phrase.text,
+            max_tokens=MAX_PREVIEW_TOKENS,
+            frames_after_eos=2,
+        ).squeeze()
         return model.sample_rate, audio.detach().cpu().numpy()
 
     return generate
@@ -115,13 +132,46 @@ def validate_preview_audio(sample_rate: int, samples: np.ndarray) -> np.ndarray:
         raise ValueError("Preview audio is empty or not mono")
     if not np.isfinite(audio).all():
         raise ValueError("Preview audio contains non-finite samples")
-    if audio.size * 1000 / sample_rate < MIN_PREVIEW_DURATION_MS:
-        raise ValueError("Preview audio is implausibly short")
+    duration_ms = audio.size * 1000 / sample_rate
+    if duration_ms < MIN_PREVIEW_DURATION_MS:
+        raise RetryablePreviewError("Preview audio is implausibly short")
+    if duration_ms > MAX_PREVIEW_DURATION_MS:
+        raise RetryablePreviewError("Preview audio is implausibly long")
     peak = float(np.max(np.abs(audio)))
     clipped_fraction = float(np.mean(np.abs(audio) >= 0.999))
-    if peak > 1.0 or clipped_fraction > 0.01:
-        raise ValueError("Preview audio has obvious clipping")
+    if clipped_fraction > 0.01:
+        raise RetryablePreviewError("Preview audio has obvious clipping")
+    if peak > 1.0:
+        audio = audio * (0.99 / peak)
     return audio.astype(np.float32, copy=False)
+
+
+def _generate_valid_preview(
+    generator: PreviewGenerator,
+    asset_path: Path,
+    phrase: PreviewPhrase,
+) -> tuple[int, np.ndarray]:
+    minimum_duration_ms = max(
+        MIN_PREVIEW_DURATION_MS,
+        len(phrase.text) * 1000 / MAX_PREVIEW_CHARACTERS_PER_SECOND,
+    )
+    last_error: RetryablePreviewError | None = None
+    for _attempt in range(PREVIEW_GENERATION_ATTEMPTS):
+        sample_rate, raw_audio = generator(asset_path, phrase)
+        try:
+            audio = validate_preview_audio(sample_rate, raw_audio)
+            if audio.size * 1000 / sample_rate < minimum_duration_ms:
+                raise RetryablePreviewError(
+                    "Preview audio is implausibly short for the requested phrase"
+                )
+        except RetryablePreviewError as exc:
+            last_error = exc
+            continue
+        return sample_rate, audio
+    assert last_error is not None
+    raise ValueError(
+        f"Preview audio repeatedly failed validation for {asset_path.stem}/{phrase.phrase_id}"
+    ) from last_error
 
 
 def _write_preview_matrix(
@@ -148,8 +198,7 @@ def _write_preview_matrix(
             for phrase in phrases:
                 wav_path = output_dir / "preview-wav" / entry.voice_id / f"{phrase.phrase_id}.wav"
                 mp3_path = output_dir / "previews" / entry.voice_id / f"{phrase.phrase_id}.mp3"
-                sample_rate, raw_audio = generator(entry.path, phrase)
-                audio = validate_preview_audio(sample_rate, raw_audio)
+                sample_rate, audio = _generate_valid_preview(generator, entry.path, phrase)
                 wav_path.parent.mkdir(parents=True, exist_ok=True)
                 mp3_path.parent.mkdir(parents=True, exist_ok=True)
                 scipy.io.wavfile.write(wav_path, sample_rate, audio)
@@ -217,6 +266,7 @@ def build_voice_pack(
     compiled_dir = output_dir / "compiled"
     output_dir.mkdir(parents=True, exist_ok=True)
     compiled_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "preview-manifest.json").unlink(missing_ok=True)
 
     manifest_entries: list[VoiceCatalogEntry] = []
     for source_entry in _load_source_manifest(source_manifest):

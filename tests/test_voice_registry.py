@@ -64,12 +64,19 @@ def test_preview_phrase_catalog_rejects_duplicate_or_unstable_ids(tmp_path) -> N
         load_preview_phrase_catalog(unstable)
 
 
-def test_bundled_manifest_uses_default_phrase_text_for_all_66_voices() -> None:
+def test_bundled_manifest_uses_default_phrase_text_for_all_95_voices() -> None:
     raw = json.loads(vr.bundled_voice_manifest_path().read_text(encoding="utf-8"))
 
-    assert len(raw["voices"]) == 66
+    assert len(raw["voices"]) == 95
+    assert len({voice["voice_id"] for voice in raw["voices"]}) == 95
+    assert all(len(voice["sha256"]) == 64 for voice in raw["voices"])
     assert raw["preview_text"] == PREVIEW_TEXT
     assert all(voice["preview"]["text"] == PREVIEW_TEXT for voice in raw["voices"])
+
+
+def test_default_voice_pack_revision_is_immutable() -> None:
+    assert vr.DEFAULT_VOICE_PACK_REVISION != "main"
+    assert len(vr.DEFAULT_VOICE_PACK_REVISION) == 40
 
 
 def test_legacy_singular_preview_url_is_read_as_default_phrase_asset(tmp_path) -> None:

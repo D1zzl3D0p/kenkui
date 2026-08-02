@@ -26,7 +26,7 @@ VoiceAssetKind = Literal["pocket_tts_builtin", "safetensors"]
 VoiceStatus = Literal["available", "missing", "downloadable"]
 
 DEFAULT_VOICE_PACK_REPO = "D1zzl3D0p/kenkui-voices"
-DEFAULT_VOICE_PACK_REVISION = "main"
+DEFAULT_VOICE_PACK_REVISION = "b513c6aaa350da3fcaff12c9c0afd2a1e97c92d7"
 VOICE_PACK_FORMAT_VERSION = 2
 MANIFEST_FILENAMES = ("manifest.json", "voice_manifest.json")
 CUSTOM_MANIFEST_FILENAME = "custom_manifest.json"

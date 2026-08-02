@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-08-01
+
+### Changed
+
+- The bundled hosted voice catalog now matches the approved 95-voice production pack and pins its immutable Hugging Face revision.
+
+### Fixed
+
+- Voice-preview generation now retries bounded stochastic synthesis failures and rejects stale, clipped, too-short, or excessively long output before publishing a complete manifest.
+
 ## [2.3.1] - 2026-07-31
 
 ### Added
