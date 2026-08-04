@@ -1,16 +1,60 @@
 """Tests for kenkui parsing functionality."""
 
 import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from kenkui.chapter_filter import FilterOperation
+from kenkui.errors import KenkuiReaderError
 from kenkui.models import Chapter, ProcessingConfig
 from kenkui.readers.epub import EpubReader
 
 TEST_EPUB = Path("src/kenkui/samples/Les Miserables - Victor Hugo.epub")
+
+
+def _write_adept_drm_epub(epub_path: Path) -> None:
+    """Write a minimal EPUB whose content is encrypted with Adobe ADEPT DRM."""
+    encryption_xml = """<?xml version="1.0"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/>
+    <KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#">
+      <resource xmlns="http://ns.adobe.com/adept">urn:uuid:2b63d91e-1c6f-4e2d-ae4b-f73c8ad67fd7</resource>
+    </KeyInfo>
+    <CipherData>
+      <CipherReference URI="OEBPS/chap.xhtml"/>
+    </CipherData>
+  </EncryptedData>
+</encryption>"""
+    files = {
+        "META-INF/container.xml": """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>""",
+        "META-INF/encryption.xml": encryption_xml,
+        "OEBPS/content.opf": """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">drm-book</dc:identifier>
+    <dc:title>DRM Book</dc:title>
+  </metadata>
+  <manifest>
+    <item id="c1" href="chap.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>""",
+        # Ciphertext stand-in — deliberately not valid XHTML, as in a real DRM'd book.
+        "OEBPS/chap.xhtml": b"\x9c\x1e\xd3encrypted-bytes\x00\xff",
+    }
+    with zipfile.ZipFile(epub_path, "w") as epub_zip:
+        epub_zip.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        for name, content in files.items():
+            epub_zip.writestr(name, content)
 
 
 class TestEpubReader:
@@ -52,6 +96,18 @@ class TestEpubReader:
                 assert isinstance(chapter.index, int)
                 assert isinstance(chapter.title, str)
                 assert isinstance(chapter.paragraphs, list)
+
+    def test_adept_drm_epub_raises_actionable_error(self, tmp_path):
+        """A DRM-protected EPUB fails with a clear message, not a cryptic crash."""
+        epub_path = tmp_path / "drm.epub"
+        _write_adept_drm_epub(epub_path)
+
+        with pytest.raises(KenkuiReaderError) as excinfo:
+            EpubReader(epub_path)
+
+        message = str(excinfo.value)
+        assert "DRM" in message
+        assert "Adobe" in message
 
 
 class TestChapterDataclass:

@@ -15,9 +15,20 @@ from bs4 import BeautifulSoup
 from ebooklib import epub
 
 from ..chapter_classifier import ChapterClassifier
+from ..errors import KenkuiReaderError
 from ..models import Chapter
 from ..utils import extract_epub_cover
 from . import EbookMetadata, EbookReader, Registry, TocEntry
+
+# Known DRM signatures found inside META-INF/encryption.xml. These schemes
+# encrypt the book's content documents with keys kenkui does not (and should
+# not) hold, so the book cannot be parsed. Detecting them lets us fail with an
+# actionable message instead of an opaque parser crash deep inside ebooklib.
+_DRM_SIGNATURES: tuple[tuple[str, str], ...] = (
+    ("http://ns.adobe.com/adept", "Adobe ADEPT"),
+    ("http://www.apple.com/2009/fpk", "Apple FairPlay"),
+    ("http://www.barnesandnoble.com/2010", "Barnes & Noble"),
+)
 
 
 @Registry.register
@@ -28,9 +39,39 @@ class EpubReader(EbookReader):
 
     def __init__(self, filepath: Path, verbose: bool = False):
         super().__init__(filepath, verbose)
+        self._raise_if_drm_protected(Path(filepath))
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             self.book = epub.read_epub(str(filepath))
+
+    @staticmethod
+    def _raise_if_drm_protected(filepath: Path) -> None:
+        """Raise ``KenkuiReaderError`` if the EPUB is DRM-encrypted.
+
+        Commercial EPUBs (Adobe ADEPT, Apple FairPlay, Barnes & Noble) encrypt
+        their content documents and record it in ``META-INF/encryption.xml``.
+        ebooklib cannot decrypt these and instead fails partway through parsing
+        with a cryptic ``'NoneType' object has no attribute ...`` error. We
+        detect the DRM signature up front and surface a clear message.
+        """
+        try:
+            with zipfile.ZipFile(str(filepath), "r") as book_zip:
+                if "META-INF/encryption.xml" not in book_zip.namelist():
+                    return
+                encryption_xml = book_zip.read("META-INF/encryption.xml").decode(
+                    "utf-8", errors="ignore"
+                )
+        except (zipfile.BadZipFile, OSError):
+            # Let ebooklib produce the definitive error for unreadable archives.
+            return
+
+        for signature, scheme in _DRM_SIGNATURES:
+            if signature in encryption_xml:
+                raise KenkuiReaderError(
+                    f"'{filepath.name}' is DRM-protected ({scheme}) and cannot be "
+                    "processed. kenkui can only read books without DRM; remove the "
+                    "DRM using software you are licensed to use, then try again."
+                )
 
     def get_metadata(self) -> EbookMetadata:
         """Extract metadata from EPUB."""
