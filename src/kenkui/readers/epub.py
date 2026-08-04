@@ -7,6 +7,7 @@ Provides EbookReader interface for EPUB files using ebooklib.
 from __future__ import annotations
 
 import re
+import tempfile
 import warnings
 import zipfile
 from pathlib import Path
@@ -30,7 +31,60 @@ class EpubReader(EbookReader):
         super().__init__(filepath, verbose)
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
-            self.book = epub.read_epub(str(filepath))
+            try:
+                self.book = epub.read_epub(str(filepath))
+            except AttributeError as exc:
+                if "'NoneType' object has no attribute" not in str(exc):
+                    raise
+                try:
+                    self.book = self._read_epub_without_nav_parsing()
+                except Exception:
+                    raise exc
+
+    def _read_epub_without_nav_parsing(self):
+        """Load an EPUB while bypassing EbookLib's brittle NAV parser.
+
+        EbookLib parses any manifest item marked ``properties=\"nav\"`` during
+        ``read_epub``. Some real EPUBs contain malformed NAV documents (for
+        example a TOC ``<nav>`` without an ``<ol>``), which makes EbookLib raise
+        an opaque ``'NoneType' object has no attribute ...`` before kenkui can
+        fall back to its own TOC/chapter extraction.  Strip only the ``nav``
+        property from a temporary copy so EbookLib still loads manifest/spine
+        items while kenkui parses the original file itself.
+        """
+        from xml.etree import ElementTree as ET
+
+        with tempfile.NamedTemporaryFile(suffix=".epub") as temp_epub:
+            with zipfile.ZipFile(str(self.filepath), "r") as source_zip:
+                names = source_zip.namelist()
+                container_path = "META-INF/container.xml"
+                if container_path not in names:
+                    raise ValueError("EPUB is missing META-INF/container.xml")
+                container_tree = ET.fromstring(source_zip.read(container_path))
+                container_ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
+                rootfile = container_tree.find(".//container:rootfile", container_ns)
+                if rootfile is None or rootfile.get("full-path") is None:
+                    raise ValueError("EPUB container is missing rootfile full-path")
+                opf_path = rootfile.get("full-path") or ""
+                opf_tree = ET.fromstring(source_zip.read(opf_path))
+                opf_ns = {"opf": "http://www.idpf.org/2007/opf"}
+                for item in opf_tree.findall(".//opf:item", opf_ns):
+                    properties = item.get("properties")
+                    if not properties:
+                        continue
+                    remaining = [prop for prop in properties.split() if prop != "nav"]
+                    if remaining:
+                        item.set("properties", " ".join(remaining))
+                    else:
+                        item.attrib.pop("properties", None)
+                sanitized_opf = ET.tostring(opf_tree, encoding="utf-8", xml_declaration=True)
+
+                with zipfile.ZipFile(temp_epub.name, "w") as sanitized_zip:
+                    for info in source_zip.infolist():
+                        content = sanitized_opf if info.filename == opf_path else source_zip.read(info.filename)
+                        sanitized_zip.writestr(info, content)
+
+            return epub.read_epub(temp_epub.name)
 
     def get_metadata(self) -> EbookMetadata:
         """Extract metadata from EPUB."""

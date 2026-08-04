@@ -1,6 +1,7 @@
 """Tests for kenkui parsing functionality."""
 
 import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,38 @@ from kenkui.models import Chapter, ProcessingConfig
 from kenkui.readers.epub import EpubReader
 
 TEST_EPUB = Path("src/kenkui/samples/Les Miserables - Victor Hugo.epub")
+
+
+def _write_epub_with_nav(epub_path: Path, *, nav_body: str) -> None:
+    files = {
+        "META-INF/container.xml": """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>""",
+        "OEBPS/content.opf": """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">bad-nav</dc:identifier>
+    <dc:title>Bad Nav</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="c1" href="chap.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="c1"/>
+  </spine>
+</package>""",
+        "OEBPS/nav.xhtml": f"""<html xmlns="http://www.w3.org/1999/xhtml"><body>{nav_body}</body></html>""",
+        "OEBPS/chap.xhtml": """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapter One</h1><p>Hello world.</p></body></html>""",
+    }
+    with zipfile.ZipFile(epub_path, "w") as epub_zip:
+        epub_zip.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        for name, content in files.items():
+            epub_zip.writestr(name, content)
 
 
 class TestEpubReader:
@@ -52,6 +85,21 @@ class TestEpubReader:
                 assert isinstance(chapter.index, int)
                 assert isinstance(chapter.title, str)
                 assert isinstance(chapter.paragraphs, list)
+
+    def test_reader_handles_nav_document_without_ordered_list(self, tmp_path):
+        """EPUBs with a malformed NAV document still load chapters."""
+        epub_path = tmp_path / "bad-nav.epub"
+        _write_epub_with_nav(
+            epub_path,
+            nav_body='<nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><h1>Contents</h1></nav>',
+        )
+
+        reader = EpubReader(epub_path)
+
+        assert reader.get_metadata().title == "Bad Nav"
+        chapters = reader.get_chapters(min_text_len=1)
+        assert len(chapters) == 1
+        assert chapters[0].paragraphs == ["Chapter One", "Hello world."]
 
 
 class TestChapterDataclass:
