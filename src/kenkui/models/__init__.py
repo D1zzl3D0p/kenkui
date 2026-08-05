@@ -72,7 +72,13 @@ from .common import (
     _migrate_speaker_voices_keys,
     _normalize_bitrate,
 )
-from .config import AppConfig, NumberNormalizationConfig, PostProcessingConfig
+from .config import (
+    AppConfig,
+    NumberNormalizationConfig,
+    PostProcessingConfig,
+    WORKER_CEILING,
+    recommended_workers,
+)
 from .job import JobConfig
 from .nlp import Chapter, FastScanResult, NLPResult, Segment
 from .queue import QueueItem
@@ -153,6 +159,8 @@ __all__ = [
     "VoicePreviewAssetResponse",
     "VoicePreviewPhraseResponse",
     "VoiceResponse",
+    "WORKER_CEILING",
     "_migrate_speaker_voices_keys",
     "_normalize_bitrate",
+    "recommended_workers",
 ]

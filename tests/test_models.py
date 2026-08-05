@@ -162,11 +162,28 @@ class TestAppConfigRoundTrip:
         restored = AppConfig.from_dict(cfg.to_dict())
         assert restored.frames_after_eos == 10
 
-    def test_workers_default_is_memory_safe(self):
-        assert 1 <= AppConfig().workers <= 4
+    def test_workers_default_is_environment_aware(self):
+        import multiprocessing
+        from kenkui.models.config import recommended_workers
 
-    def test_workers_clamps_unsafe_values(self):
-        assert AppConfig.from_dict({"workers": 64}).workers == 4
+        expected = recommended_workers()
+        assert AppConfig().workers == expected
+        assert 2 <= expected <= 128
+
+    def test_recommended_workers_uses_cpu_budget_minus_one(self):
+        from kenkui.models.config import recommended_workers
+
+        assert recommended_workers(24) == 23
+        assert recommended_workers(2) == 2      # floor
+        assert recommended_workers(1) == 2      # floor
+        assert recommended_workers(1000) == 128  # ceiling
+
+    def test_workers_override_survives_and_is_not_reduced_to_four(self):
+        assert AppConfig.from_dict({"workers": 20}).workers == 20
+
+    def test_workers_clamps_to_backstop_bounds(self):
+        assert AppConfig.from_dict({"workers": 999}).workers == 128
+        assert AppConfig.from_dict({"workers": 0}).workers == 1
 
     def test_tts_max_tokens_per_chunk_default_is_bounded(self):
         assert AppConfig().tts_max_tokens_per_chunk == 50

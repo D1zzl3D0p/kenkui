@@ -10,6 +10,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from ..utils import ApostropheMode, NumberNormalizationMode
 from .common import AttributionExecutionMode, NlpExecutionMode, _normalize_bitrate
 
+WORKER_CEILING = 128
+
+
+def recommended_workers(cpu_budget: int | None = None) -> int:
+    """Recommended TTS worker count for a given CPU budget.
+
+    Leaves one core of headroom; floors at 2; caps at WORKER_CEILING as a
+    safety backstop. When *cpu_budget* is None, uses the local machine's
+    CPU count.
+    """
+    budget = cpu_budget if cpu_budget is not None else multiprocessing.cpu_count()
+    return max(2, min(WORKER_CEILING, budget - 1))
+
 
 class PostProcessingConfig(BaseModel):
     """Broadcast-quality audio effects chain applied per-chapter WAV."""
@@ -82,7 +95,7 @@ class AppConfig(BaseSettings):
     )
 
     name: str = "default"
-    workers: int = Field(default_factory=lambda: min(4, max(2, multiprocessing.cpu_count() - 2)))
+    workers: int = Field(default_factory=recommended_workers)
     verbose: bool = False
     log_path: Path | None = None
     keep_temp: bool = False
@@ -162,8 +175,8 @@ class AppConfig(BaseSettings):
         try:
             value = int(v)
         except (TypeError, ValueError):
-            return min(4, max(2, multiprocessing.cpu_count() - 2))
-        return min(4, max(1, value))
+            return recommended_workers()
+        return max(1, min(WORKER_CEILING, value))
 
     @field_validator(
         "modal_tts_cpu",
