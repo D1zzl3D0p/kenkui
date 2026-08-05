@@ -19,12 +19,12 @@ def actionable_tts_error_message(error: object) -> str:
     if isinstance(error, BrokenPipeError) or "Broken pipe" in text:
         return (
             "Synthesis failed because a chapter worker pipe closed unexpectedly. "
-            "Restart the local runtime and retry with workers set to 4 or fewer."
+            "Restart the local runtime and retry with a lower worker count."
         )
     if "process pool" in text.lower() or "worker process" in text.lower():
         return (
             "Synthesis failed because a chapter worker process exited unexpectedly. "
-            "Restart the local runtime and retry with workers set to 4 or fewer."
+            "Restart the local runtime and retry with a lower worker count."
         )
     return f"Synthesis failed: {text}"
 

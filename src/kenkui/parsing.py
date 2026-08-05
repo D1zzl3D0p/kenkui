@@ -35,7 +35,7 @@ from .workers import worker_process_chapter
 
 WORKER_RECOVERY_MESSAGE = (
     "Synthesis failed while collecting chapter worker results. "
-    "Restart the local runtime and retry with workers set to 4 or fewer."
+    "Restart the local runtime and retry with a lower worker count."
 )
 
 

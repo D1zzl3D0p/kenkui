@@ -284,4 +284,4 @@ def test_process_chapters_broken_future_result_has_chapter_context(tmp_path, mon
     message = str(exc_info.value)
     assert "Pipe Chapter" in message
     assert "progress pipe closed unexpectedly" in message
-    assert "workers set to 4 or fewer" in message
+    assert "lower worker count" in message

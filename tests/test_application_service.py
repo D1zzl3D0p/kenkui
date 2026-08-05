@@ -430,7 +430,7 @@ def test_queue_failure_message_names_synthesis_recovery(tmp_path, monkeypatch):
 
     assert item.status == JobStatus.FAILED
     assert "Synthesis failed" in item.error_message
-    assert "workers set to 4 or fewer" in item.error_message
+    assert "lower worker count" in item.error_message
 
 
 def test_queue_pause_keeps_job_visible_and_blocks_following_jobs(tmp_path, monkeypatch):
