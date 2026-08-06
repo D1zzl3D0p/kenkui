@@ -499,6 +499,8 @@ class AudioBuilder:
         total_units: float = 0.0,
         unit: ProgressUnit = "",
         active_chapters: tuple[ChapterProgress, ...] = (),
+        total_chapters: int = 0,
+        chapter_ordinal: int = 0,
     ) -> None:
         """Report structured generation progress facts to the callback."""
         if self.progress_callback:
@@ -514,6 +516,8 @@ class AudioBuilder:
                     provider=self.cfg.tts_provider or "kokoro",
                     model=self.cfg.tts_model or "",
                     active_chapters=active_chapters,
+                    total_chapters=total_chapters,
+                    chapter_ordinal=chapter_ordinal,
                 )
             )
 
@@ -706,7 +710,7 @@ class AudioBuilder:
         total_chars: int,
     ) -> list[AudioResult]:
         results = []
-        tracker = ChapterProgressTracker(self._emit_progress, total_chars)
+        tracker = ChapterProgressTracker(self._emit_progress, total_chars, total_chapters=len(chapters))
 
         manager = multiprocessing.Manager()
         queue = manager.Queue()  # type: ignore

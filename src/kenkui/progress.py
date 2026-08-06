@@ -44,6 +44,8 @@ class ProgressEvent:
     provider: str = ""
     model: str = ""
     active_chapters: tuple[ChapterProgress, ...] = ()
+    total_chapters: int = 0
+    chapter_ordinal: int = 0
 
 
 __all__ = ["ChapterProgress", "ProgressEvent", "ProgressStage", "ProgressStatus", "ProgressUnit"]

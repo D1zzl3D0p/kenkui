@@ -38,6 +38,8 @@ def test_start_message_emits_message_event_and_records_state():
             "total_units": 100,
             "unit": "chars",
             "active_chapters": tracker.active_chapter_progress(),
+            "total_chapters": 0,
+            "chapter_ordinal": 1,
         }
     ]
 
@@ -147,3 +149,23 @@ def test_log_errors_emits_logging(caplog):
     assert "Worker errors encountered" in joined
     assert "boom" in joined
     assert "tb-here" in joined
+
+
+def test_tracker_reports_total_and_ordinal_across_started_chapters():
+    from kenkui.progress import ProgressEvent
+    from kenkui.progress_tracking import ChapterProgressTracker
+
+    events: list[ProgressEvent] = []
+    tracker = ChapterProgressTracker(
+        lambda stage, status, message, **kw: events.append(
+            ProgressEvent(stage=stage, status=status, message=message, **kw)
+        ),
+        total_chars=1000,
+        total_chapters=27,
+    )
+    # START chapter index 13 (msg: event, pid, title, total, total_chars, is_first, index)
+    tracker.process_message(("START", 1, "The Mule", 100, 500, False, 13))
+    tracker.process_message(("START", 2, "Search by the Foundation", 100, 500, False, 14))
+
+    assert events[-1].total_chapters == 27
+    assert events[-1].chapter_ordinal == 2  # two distinct chapters have started

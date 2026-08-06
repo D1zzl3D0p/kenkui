@@ -26,9 +26,11 @@ EmitFn = Callable[..., None]
 class ChapterProgressTracker:
     """Accumulates worker progress facts and drives progress-event emission."""
 
-    def __init__(self, emit: EmitFn, total_chars: float) -> None:
+    def __init__(self, emit: EmitFn, total_chars: float, total_chapters: int = 0) -> None:
         self._emit = emit
         self._total_chars = total_chars
+        self._total_chapters = total_chapters
+        self._started_indices: set[int] = set()
         self.worker_state: dict = {}
         self.worker_errors: list[dict] = []
         self.worker_logs: list[str] = []
@@ -59,6 +61,8 @@ class ChapterProgressTracker:
             total_units=self._total_chars,
             unit="chars",
             active_chapters=self.active_chapter_progress(),
+            total_chapters=self._total_chapters,
+            chapter_ordinal=len(self._started_indices),
         )
 
     def process_message(self, msg) -> None:
@@ -70,6 +74,8 @@ class ChapterProgressTracker:
         """
         event, pid = msg[0], msg[1]
         if event == "START":
+            index = msg[6] if len(msg) > 6 else 0
+            self._started_indices.add(int(index))
             self.worker_state[pid] = {
                 "title": msg[2],
                 "total": msg[3],
