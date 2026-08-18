@@ -1,0 +1,25 @@
+site_name: Kenkui
+site_description: Documentation for the Kenkui Python package
+repo_url: https://github.com/kenkui/kenkui
+strict: true
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Immutable API: usage.md
+  - Architecture: architecture.md
+  - Security boundaries: security.md
+  - Models and voices: models-and-voices.md
+  - Pocket-TTS adapter: pocket-tts-adapter.md
+  - Troubleshooting: troubleshooting.md
+  - Development and release: development.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]

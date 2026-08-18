@@ -1,0 +1,139 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kenkui"
+version = "0.1.0"
+description = "A typed Python toolkit for audiobook production."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+authors = [{ name = "Kenkui contributors" }]
+keywords = ["audiobook", "epub", "m4b", "text-to-speech", "tts"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+dependencies = [
+    "defusedxml==0.7.1",
+]
+
+[project.optional-dependencies]
+pocket = ["pocket-tts==2.1.0"]
+
+[project.urls]
+Documentation = "https://kenkui.readthedocs.io"
+Issues = "https://github.com/kenkui/kenkui/issues"
+Source = "https://github.com/kenkui/kenkui"
+
+[dependency-groups]
+dev = [
+  "check-wheel-contents>=0.6.2",
+  "mypy>=1.15",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.11",
+  "twine>=6.1",
+  "types-defusedxml>=0.7.0.20250822",
+]
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.6",
+  "mkdocstrings[python]>=0.29",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kenkui"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/docs",
+  "/LICENSE",
+  "/NOTICE",
+  "/README.md",
+  "/CONTRIBUTING.md",
+  "/mkdocs.yml",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812",
+  "CPY001",
+  "D203",
+  "D213",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"tests/test_pocket_tts*.py" = [
+  "ANN401", "D107", "E501", "FBT003", "PT012", "PT018", "RUF005",
+  "RUF100", "S301", "TRY003",
+]
+"src/kenkui/_tts/pocket.py" = ["PLR2004", "RUF100"]
+"src/kenkui/_tts/production.py" = ["TC001"]
+"src/kenkui/_execution/process_pool.py" = ["PLC0415", "RUF100", "TRY301"]
+"src/kenkui/__init__.py" = ["A004"]
+"src/kenkui/api.py" = ["PLC0415"]
+"src/kenkui/events.py" = ["A001"]
+# Exploratory probes intentionally report arbitrary third-party failures and JSON trees.
+"spikes/**/*.py" = [
+  "ANN401",
+  "BLE001",
+  "D103",
+  "D105",
+  "D107",
+  "EXE001",
+  "PYI034",
+  "SIM105",
+  "T201",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+addopts = [
+  "--strict-config",
+  "--strict-markers",
+  "--cov=kenkui",
+  "--cov-branch",
+  "--cov-report=term-missing",
+  "--cov-fail-under=90",
+  "-m=not native",
+]
+markers = [
+  "native: opt-in tests that execute host FFmpeg/ffprobe (requires KENKUI_RUN_NATIVE=1)",
+  "pocket_real: opt-in strictly local Pocket-TTS test",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["kenkui"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

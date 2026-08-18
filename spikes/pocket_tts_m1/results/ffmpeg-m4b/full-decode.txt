@@ -1,0 +1,2 @@
+Command semantics: decode every stream completely and discard decoded output.
+full_decode_exit_status=0

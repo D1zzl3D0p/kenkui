@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environments
+.venv/
+.venv*/
+venv/
+.env
+.env.*
+
+# Local spike outputs (scripts and textual evidence remain reviewable)
+spikes/**/results/artifacts/
+
+# Builds
+dist/
+build/
+site/
+.worktrees/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp

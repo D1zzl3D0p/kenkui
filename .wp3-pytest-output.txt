@@ -1,0 +1,44 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/dizzler/Projects/Repos/kenkui-v2/kenkui
+configfile: pyproject.toml
+testpaths: tests
+plugins: cov-7.1.0
+collected 33 items
+
+tests/test_epub.py ...................                                   [ 57%]
+tests/test_package.py .                                                  [ 60%]
+tests/test_pipeline.py .............                                     [100%]
+
+=============================== warnings summary ===============================
+tests/test_epub.py::test_archive_limits_members_sizes_total_ratio_and_duplicate_names
+  /Users/dizzler/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/zipfile/__init__.py:1624: UserWarning: Duplicate name: 'a'
+    return self._open_to_write(zinfo, force_zip64=force_zip64)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.12.13-final-0 _______________
+
+Name                               Stmts   Miss Branch BrPart  Cover   Missing
+------------------------------------------------------------------------------
+src/kenkui/__init__.py                10      0      0      0   100%
+src/kenkui/_domain/__init__.py         0      0      0      0   100%
+src/kenkui/_domain/operations.py      33      0      4      0   100%
+src/kenkui/_domain/selection.py       31      4      8      2    85%   38, 40, 56-57
+src/kenkui/_domain/text.py            14      0      0      0   100%
+src/kenkui/_epub/__init__.py           0      0      0      0   100%
+src/kenkui/_epub/archive.py           35      1     16      1    96%   45
+src/kenkui/_epub/identifiers.py        7      0      0      0   100%
+src/kenkui/_epub/parser.py           167      7     46      6    94%   114, 180-183, 248, 264, 268, 284
+src/kenkui/_epub/paths.py             30      2     16      2    91%   20, 29
+src/kenkui/api.py                     34      0      2      0   100%
+src/kenkui/cancellation.py            14      0      2      1    94%   28->exit
+src/kenkui/errors.py                  51      0      2      0   100%
+src/kenkui/events.py                  34      0      0      0   100%
+src/kenkui/inspection.py              17      0      0      0   100%
+src/kenkui/pipeline.py               107     11     48     11    86%   72, 80, 82, 114, 116, 126, 136, 138, 177, 185, 189
+src/kenkui/voices.py                   9      0      0      0   100%
+------------------------------------------------------------------------------
+TOTAL                                593     25    144     23    93%
+Required test coverage of 90% reached. Total coverage: 93.49%
+======================== 33 passed, 1 warning in 0.18s =========================
