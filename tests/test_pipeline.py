@@ -269,6 +269,8 @@ def test_public_exports_are_intentional() -> None:
         "ChapterInspection",
         "BookInspection",
         "Voice",
+        "get_voice",
+        "list_voices",
         "ValidationIssue",
         "ValidationResult",
         "ExecutionStats",
@@ -292,3 +294,17 @@ def test_public_exports_are_intentional() -> None:
         "CancelledError",
     }
     assert set(kk.__all__) == expected
+
+def test_voice_registry_returns_enabled_licensed_metadata() -> None:
+    """The public registry exposes only local, render-eligible voice metadata."""
+    voice = kk.get_voice("fixture-voice")
+
+    assert voice.id == "fixture-voice"
+    assert voice.enabled
+    assert voice.provenance is not None
+    assert voice.license_id is not None
+    assert voice.commercial_use_allowed is True
+    assert kk.list_voices() == (voice,)
+    with pytest.raises(kk.VoiceError) as unresolved:
+        kk.get_voice("not-local")
+    assert unresolved.value.code == kk.ErrorCode.VOICE_UNRESOLVED

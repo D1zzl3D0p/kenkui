@@ -32,7 +32,7 @@ from .events import (
 )
 from .inspection import BookInspection, BookMetadata, ChapterInspection
 from .pipeline import Pipeline, Source
-from .voices import Voice
+from .voices import Voice, get_voice, list_voices
 
 __version__ = "0.1.0"
 
@@ -63,6 +63,8 @@ __all__ = [
     "ValidationIssue",
     "ValidationResult",
     "Voice",
+    "get_voice",
+    "list_voices",
     "VoiceError",
     "Warning",
     "__version__",

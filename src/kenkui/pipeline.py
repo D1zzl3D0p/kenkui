@@ -28,6 +28,8 @@ from .errors import (
     SourceError,
     ValidationError,
 )
+from .observability import get_logger, log_event
+from .validation import render_intent_errors, source_validation_error
 from .voices import Voice
 
 if TYPE_CHECKING:
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
     from .inspection import BookInspection
+
+_LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,23 +123,17 @@ class Pipeline:
     def validate(self) -> ValidationResult:
         """Perform inexpensive source and operation validation without parsing."""
         issues: list[ValidationIssue] = []
-        path = self.source.path
-        if not path.exists():
-            issues.append(_issue(ErrorCode.SOURCE_NOT_FOUND))
-        elif not path.is_file() or not os.access(path, os.R_OK):
-            issues.append(_issue(ErrorCode.SOURCE_NOT_READABLE))
-        if not has_operation(self.operations, AssignVoice):
-            issues.append(_issue(ErrorCode.VOICE_REQUIRED))
-        if not has_operation(self.operations, SynthesizeSpeech):
-            issues.append(_issue(ErrorCode.TTS_REQUIRED))
+        source_error = source_validation_error(self.source.path)
+        if source_error is not None:
+            issues.append(_issue(source_error))
+        issues.extend(_issue(code) for code in render_intent_errors(self.operations))
         return ValidationResult(tuple(issues))
 
     def inspect(self) -> BookInspection:
         """Parse and select immutable normalized source data without synthesis."""
-        if not self.source.path.exists():
-            raise SourceError(ErrorCode.SOURCE_NOT_FOUND)
-        if not self.source.path.is_file() or not os.access(self.source.path, os.R_OK):
-            raise SourceError(ErrorCode.SOURCE_NOT_READABLE)
+        source_error = source_validation_error(self.source.path)
+        if source_error is not None:
+            raise SourceError(source_error)
         inspection = inspect_epub(self.source.path)
         explicit = next(
             (item for item in self.operations if isinstance(item, SelectChapters)), None
@@ -154,7 +152,13 @@ class Pipeline:
             )
         else:
             chapters = inspection.chapters
-        return type(inspection)(inspection.metadata, chapters)
+        selected = type(inspection)(inspection.metadata, chapters)
+        log_event(
+            _LOGGER,
+            "inspection_completed",
+            context={"boundary": "parse", "chapter_count": len(chapters)},
+        )
+        return selected
 
     def write(
         self,

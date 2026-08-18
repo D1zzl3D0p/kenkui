@@ -108,6 +108,18 @@ def test_plan_is_deterministic_frozen_spawn_safe_and_exact() -> None:
         first.total_speech_characters = 0  # type: ignore[misc]
 
 
+
+def test_public_local_voice_metadata_supplies_a_deterministic_plan() -> None:
+    """A registry voice remains a pure local input to planning."""
+    plan = _compile(
+        pipeline=kk.epub("ignored-location.epub").assign_voice("fixture-voice").tts(),
+        voice=kk.get_voice("fixture-voice"),
+        model_revision="fixture-v1",
+    )
+
+    assert plan.voice.id == "fixture-voice"
+    assert plan.model_revision == "fixture-v1"
+
 def test_one_nonempty_ordered_segment_per_selected_spine_chapter() -> None:
     """M1 planning preserves selected order and never performs hidden chunking."""
     chapters = (
