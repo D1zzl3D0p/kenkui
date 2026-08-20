@@ -123,6 +123,11 @@ python_version = "3.12"
 strict = true
 files = ["src", "tests"]
 
+# pocket-tts ships no py.typed marker and no stubs.
+[[tool.mypy.overrides]]
+module = ["pocket_tts.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 addopts = [
   "--strict-config",
