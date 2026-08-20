@@ -29,6 +29,9 @@ classifiers = [
 dependencies = [
     "defusedxml==0.7.1",
     "pocket-tts==2.1.0",
+    # Provisioning rewrites pocket-tts config YAML to local paths. yaml arrives
+    # transitively via pocket-tts, but Kenkui imports it directly.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +53,7 @@ dev = [
   "ruff>=0.11",
   "twine>=6.1",
   "types-defusedxml>=0.7.0.20250822",
+  "types-pyyaml>=6.0",
 ]
 docs = [
   "mkdocs>=1.6",
