@@ -22,6 +22,10 @@ class ErrorCode(StrEnum):
     VOICE_DISABLED = "voice_disabled"
     VOICE_INCOMPATIBLE = "voice_incompatible"
     VOICE_PROVENANCE_REQUIRED = "voice_provenance_required"
+    VOICE_NOT_PROVISIONED = "voice_not_provisioned"
+    VOICE_UNKNOWN = "voice_unknown"
+    ENGINE_NOT_CLONING_CAPABLE = "engine_not_cloning_capable"
+    VOICE_VARIETY_INVALID = "voice_variety_invalid"
     TTS_REQUIRED = "tts_required"
     EMPTY_SPEECH = "empty_speech"
     INVALID_SOURCE_HASH = "invalid_source_hash"
@@ -78,6 +82,14 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.VOICE_PROVENANCE_REQUIRED: (
         "The voice is missing required content, compatibility, or provenance metadata."
     ),
+    ErrorCode.VOICE_NOT_PROVISIONED: (
+        "The voice is registered but not loaded. Call load_voice with its ID."
+    ),
+    ErrorCode.VOICE_UNKNOWN: "The voice ID is not in the catalog or the manifest.",
+    ErrorCode.ENGINE_NOT_CLONING_CAPABLE: (
+        "The engine lacks voice-cloning weights required for this voice."
+    ),
+    ErrorCode.VOICE_VARIETY_INVALID: "The voice variety or state is not recognized.",
     ErrorCode.TTS_REQUIRED: "Explicit TTS intent is required.",
     ErrorCode.EMPTY_SPEECH: "Selected speech must be non-empty and exactly counted.",
     ErrorCode.INVALID_SOURCE_HASH: "The source-bytes hash is invalid.",
