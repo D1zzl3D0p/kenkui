@@ -933,12 +933,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from kenkui._tts.production import MANIFEST_SCHEMA_VERSION, default_cache_root
+from kenkui._tts.production import default_cache_root
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from kenkui.voices.types import VoiceVariety
+
+MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v2"
 
 _ENGINE_KEYS: Final = (
     "language",
@@ -1250,6 +1252,13 @@ def _activate(
 
 def test_schema_version_is_v2() -> None:
     assert production.MANIFEST_SCHEMA_VERSION == "kenkui-pocket-production-v2"
+
+
+def test_reader_and_writer_agree_on_schema_version() -> None:
+    """Pre-flight Ruling A: the two constants are separate and must match."""
+    from kenkui.voices import manifest as writer
+
+    assert writer.MANIFEST_SCHEMA_VERSION == production.MANIFEST_SCHEMA_VERSION
 
 
 def test_v1_schema_version_is_rejected(
@@ -3141,16 +3150,30 @@ import pytest
 
 import kenkui as kk
 from kenkui import ErrorCode, VoiceError
-from kenkui._execution import coordinator
+from test_epub import make_epub, xhtml
 
 
 @pytest.fixture(autouse=True)
 def no_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-flight Ruling B: pipeline.py:23 from-imports execute_sequential.
+
+    Patching kenkui._execution.coordinator would leave pipeline's own binding
+    untouched and silently run a real render.
+    """
+
     def explode(*args: object, **kwargs: object) -> object:
         message = "write must fail before execution starts"
         raise AssertionError(message)
 
-    monkeypatch.setattr(coordinator, "execute_sequential", explode)
+    monkeypatch.setattr(kk.pipeline, "execute_sequential", explode)
+
+
+def _book(tmp_path: Path) -> Path:
+    return make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml("<h1>One</h1><p>Exact first.</p>")},
+        spine=("one",),
+    )
 
 
 def _manifest(tmp_path: Path, state: str) -> Path:
@@ -3184,28 +3207,28 @@ def _manifest(tmp_path: Path, state: str) -> Path:
 
 
 def test_registered_voice_fails_before_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, epub_fixture: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_manifest(tmp_path, "registered")))
-    pipeline = kk.book(epub_fixture).normalize_text().assign_voice("mine").tts()
+    pipeline = kk.book(_book(tmp_path)).normalize_text().assign_voice("mine").tts()
     with pytest.raises(VoiceError) as excinfo:
         pipeline.write(tmp_path / "out.m4b")
     assert excinfo.value.code is ErrorCode.VOICE_NOT_PROVISIONED
 
 
 def test_unknown_voice_fails_before_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, epub_fixture: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_manifest(tmp_path, "registered")))
-    pipeline = kk.book(epub_fixture).normalize_text().assign_voice("nobody").tts()
+    pipeline = kk.book(_book(tmp_path)).normalize_text().assign_voice("nobody").tts()
     with pytest.raises(VoiceError) as excinfo:
         pipeline.write(tmp_path / "out.m4b")
     assert excinfo.value.code is ErrorCode.VOICE_UNRESOLVED
 ```
 
-Reuse the existing EPUB fixture. If `tests/conftest.py` has no `epub_fixture`,
-find the fixture helper the current suite uses for `kk.book(...)` and use that
-name instead; do not create a second EPUB builder.
+Pre-flight Ruling C: there is no `tests/conftest.py` and no `tests/fixtures/`
+directory. The suite's convention is `from test_epub import make_epub, xhtml`
+(see `tests/test_execution.py:27`). Do not create a second EPUB builder.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -3389,7 +3412,13 @@ def test_render_a_real_m4b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     manifest = tmp_path / "manifest.json"
     kk.load_voice("eponine", manifest=manifest)
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(manifest))
-    source = Path(__file__).parent / "fixtures" / "minimal.epub"
+    from test_epub import make_epub, xhtml
+
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml("<h1>One</h1><p>Exact first.</p>")},
+        spine=("one",),
+    )
     output = tmp_path / "out.m4b"
     result = (
         kk.book(source)
@@ -3402,8 +3431,9 @@ def test_render_a_real_m4b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert Path(result.output).stat().st_size > 0
 ```
 
-Use whatever minimal EPUB fixture the existing suite already provides; adjust
-the `source` path to match rather than adding a new fixture.
+Pre-flight Ruling C: the suite has no `tests/fixtures/` directory. EPUBs are
+built with `from test_epub import make_epub, xhtml`, as `tests/test_execution.py:27`
+does. Do not add a fixture directory.
 
 - [ ] **Step 2: Run it with real assets**
 
@@ -3429,9 +3459,10 @@ def test_gated_compiled_embedding_renders_on_ungated_weights(
     Requires accepted kyutai/pocket-tts terms and `hf auth login`.
     """
     manifest = tmp_path / "manifest.json"
-    prompt = Path(__file__).parent / "fixtures" / "voice_prompt.wav"
-    if not prompt.is_file():
-        pytest.skip("no local WAV prompt available")
+    named = os.environ.get("KENKUI_TEST_VOICE_WAV")
+    if named is None or not Path(named).is_file():
+        pytest.skip("set KENKUI_TEST_VOICE_WAV to a readable local WAV prompt")
+    prompt = Path(named)
     kk.add_voice(
         prompt,
         voice_id="local-test",
