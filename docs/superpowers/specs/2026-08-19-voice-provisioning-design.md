@@ -25,7 +25,7 @@ Verified against the installed `pocket-tts==2.1.0` wheel.
 The wheel contains Python code and twelve YAML configs. It bundles **no model
 weights and no audio**. Every asset is fetched at runtime.
 
-`utils/utils.py` defines `_ORIGINS_OF_PREDEFINED_VOICES`, mapping 25 names to
+`utils/utils.py` defines `_ORIGINS_OF_PREDEFINED_VOICES`, mapping 26 names to
 remote audio prompts; `eponine` is
 `hf://kyutai/tts-voices/vctk/p262_023_enhanced.wav`. Twenty-one names are
 English; `giovanni` (it), `lola` (es), `juergen` (de), `rafael` (pt), and

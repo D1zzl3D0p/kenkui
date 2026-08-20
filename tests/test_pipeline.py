@@ -262,6 +262,7 @@ def test_public_exports_are_intentional() -> None:
         "__version__",
         "Engine",
         "add_voice",
+        "list_voices",
         "load_voice",
         "remove_voice",
         "unload_voice",

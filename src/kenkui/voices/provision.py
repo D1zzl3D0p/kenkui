@@ -7,6 +7,7 @@ render: provisioning downloads and compiles, rendering only reads a manifest.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import shutil
 from pathlib import Path
@@ -446,3 +447,28 @@ def remove_voice(voice_id: str, *, manifest: Path | None = None) -> None:
         _discard_asset(record)
         _prune_engines(engines, voices)
         store.write(engines, voices)
+
+
+def list_voices(*, manifest: Path | None = None) -> tuple[Voice, ...]:
+    """Return every known voice, unioning the catalog with the manifest.
+
+    No network and no hashing: asset presence is a stat. This is the only
+    enumeration primitive, so multi-voice work composes over it.
+    """
+    engines, voices = _store(manifest).read()
+    known: dict[str, Voice] = {
+        voice_id: catalog_voice(voice_id) for voice_id in CATALOG
+    }
+    for voice_id, record in voices.items():
+        if record.state != "loaded":
+            known[voice_id] = _registered_view(record)
+            continue
+        asset = Path(record.asset_path or "")
+        engine = engines.get(record.engine_id)
+        if not asset.is_file() or engine is None:
+            known[voice_id] = dataclasses.replace(
+                _registered_view(record), state="missing"
+            )
+            continue
+        known[voice_id] = _loaded_view(record, engine)
+    return tuple(known[key] for key in sorted(known))
