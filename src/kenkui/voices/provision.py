@@ -22,7 +22,7 @@ from kenkui.voices.manifest import (
     VoiceRecord,
     default_manifest_path,
 )
-from kenkui.voices.registry import CATALOG, embedding_url
+from kenkui.voices.registry import CATALOG, catalog_voice, embedding_url
 from kenkui.voices.types import Engine, Voice, VoiceVariety
 
 if TYPE_CHECKING:
@@ -354,3 +354,95 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
         voices[voice_id] = loaded
         store.write(engines, voices)
         return _loaded_view(loaded, engine)
+
+
+def _registered_view(record: VoiceRecord) -> Voice:
+    return Voice(
+        id=record.id,
+        name=record.name,
+        enabled=record.enabled,
+        provenance=record.provenance,
+        license_id=record.license_id,
+        commercial_use_allowed=record.commercial_use_allowed,
+        language=record.language,
+        variety=record.variety,
+        state="registered",
+    )
+
+
+def _unloaded(record: VoiceRecord) -> VoiceRecord:
+    return VoiceRecord(
+        id=record.id,
+        variety=record.variety,
+        state="registered",
+        name=record.name,
+        enabled=record.enabled,
+        language=record.language,
+        engine_id=record.engine_id,
+        provenance=record.provenance,
+        license_id=record.license_id,
+        commercial_use_allowed=record.commercial_use_allowed,
+        voice_rights=record.voice_rights,
+        source_path=record.source_path,
+        source_sha256=record.source_sha256,
+    )
+
+
+def _prune_engines(
+    engines: dict[str, EngineRecord], voices: dict[str, VoiceRecord]
+) -> None:
+    """Delete engines no loaded voice references, reclaiming their files.
+
+    An engine is roughly 225 MB against roughly 6.5 MB per embedding, so this
+    is where unloading actually reclaims disk.
+    """
+    referenced = {
+        record.engine_id for record in voices.values() if record.state == "loaded"
+    }
+    for engine_id in list(engines):
+        if engine_id in referenced:
+            continue
+        shutil.rmtree(Path(engines[engine_id].model_root), ignore_errors=True)
+        del engines[engine_id]
+
+
+def _discard_asset(record: VoiceRecord) -> None:
+    if record.asset_path is not None:
+        Path(record.asset_path).unlink(missing_ok=True)
+
+
+def unload_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
+    """Delete a voice's asset, keep its rights metadata, and prune its engine."""
+    store = _store(manifest)
+    with store.lock():
+        engines, voices = store.read()
+        record = voices.get(voice_id)
+        if record is None:
+            if voice_id in CATALOG:
+                return catalog_voice(voice_id)
+            raise VoiceError(ErrorCode.VOICE_UNKNOWN)
+        _discard_asset(record)
+        reverted = _unloaded(record)
+        voices[voice_id] = reverted
+        _prune_engines(engines, voices)
+        store.write(engines, voices)
+        return _registered_view(reverted)
+
+
+def remove_voice(voice_id: str, *, manifest: Path | None = None) -> None:
+    """Delete a voice entry entirely, including hand-entered rights metadata.
+
+    Equivalent to `unload_voice` for a built-in, whose catalog registration
+    cannot be deleted.
+    """
+    store = _store(manifest)
+    with store.lock():
+        engines, voices = store.read()
+        record = voices.pop(voice_id, None)
+        if record is None:
+            if voice_id in CATALOG:
+                return
+            raise VoiceError(ErrorCode.VOICE_UNKNOWN)
+        _discard_asset(record)
+        _prune_engines(engines, voices)
+        store.write(engines, voices)

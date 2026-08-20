@@ -263,6 +263,8 @@ def test_public_exports_are_intentional() -> None:
         "Engine",
         "add_voice",
         "load_voice",
+        "remove_voice",
+        "unload_voice",
         "book",
         "epub",
         "Pipeline",
