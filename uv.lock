@@ -707,10 +707,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "defusedxml" },
-]
-
-[package.optional-dependencies]
-pocket = [
     { name = "pocket-tts" },
 ]
 
@@ -733,7 +729,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "defusedxml", specifier = "==0.7.1" },
-    { name = "pocket-tts", marker = "extra == 'pocket'", specifier = "==2.1.0" },
+    { name = "pocket-tts", specifier = "==2.1.0" },
 ]
 provides-extras = ["pocket"]
 

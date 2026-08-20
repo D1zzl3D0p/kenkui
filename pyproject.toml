@@ -28,10 +28,13 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml==0.7.1",
+    "pocket-tts==2.1.0",
 ]
 
 [project.optional-dependencies]
-pocket = ["pocket-tts==2.1.0"]
+# Retained as an empty alias so existing `kenkui[pocket]` installs keep working.
+# See spec section 10: this is the path back if pocket-tts becomes optional again.
+pocket = []
 
 [project.urls]
 Documentation = "https://kenkui.readthedocs.io"
@@ -110,7 +113,7 @@ ignore = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 files = ["src", "tests"]
 
