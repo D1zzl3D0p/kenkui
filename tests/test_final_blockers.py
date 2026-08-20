@@ -111,34 +111,40 @@ def _manifest(tmp_path: Path) -> Path:
     prompt.write_bytes(b"local fixture")
     payload = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
-        "engine": {
-            "model_root": str(root),
-            "config_path": str(config),
-            "model_revision": "fake-v1",
-            "package_version": "2.1.0",
-            "files": [
-                {
-                    "relative_path": "config.yaml",
-                    "size": config.stat().st_size,
-                    "sha256": "a" * 64,
-                }
-            ],
-            "sample_rate_hz": 24000,
-            "device": "cpu",
-            "timeout_seconds": 300.0,
+        "engines": {
+            "english": {
+                "language": "english",
+                "model_root": str(root),
+                "config_path": str(config),
+                "model_revision": "fake-v1",
+                "package_version": "2.1.0",
+                "files": [
+                    {
+                        "relative_path": "config.yaml",
+                        "size": config.stat().st_size,
+                        "sha256": "a" * 64,
+                    }
+                ],
+                "sample_rate_hz": 24000,
+                "device": "cpu",
+                "timeout_seconds": 300.0,
+                "cloning_capable": False,
+            }
         },
         "voices": {
             "narrator": {
+                "variety": "built-in",
+                "state": "loaded",
                 "name": "Narrator",
                 "enabled": True,
                 "provenance": "project fixture",
                 "license_id": "CC0-1.0",
                 "commercial_use_allowed": True,
-                "language": "en",
-                "content_fingerprint": "b" * 64,
+                "language": "english",
+                "engine_id": "english",
                 "compatible_model_revisions": ["fake-v1"],
-                "voice_prompt_path": str(prompt),
-                "voice_prompt_sha256": "c" * 64,
+                "asset_path": str(prompt),
+                "asset_sha256": "c" * 64,
                 "voice_rights": "project-owned",
             }
         },
@@ -161,7 +167,8 @@ def test_manifest_activation_resolves_voice_and_attaches_private_cache(
     bindings = production_bindings_from_environment("narrator")
 
     assert bindings.voice.id == "narrator"
-    assert bindings.voice.content_fingerprint == "b" * 64
+    # Schema v2 collapses content_fingerprint into asset_sha256 (spec section 5).
+    assert bindings.voice.content_fingerprint == "c" * 64
     assert bindings.voice.compatible_model_revisions == ("fake-v1",)
     assert bindings.model_revision == "fake-v1"
     assert bindings.engine_specification.kind == "pocket"

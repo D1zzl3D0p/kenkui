@@ -73,6 +73,8 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
         files,
         str(voice_path.resolve()),
         _digest(voice_bytes),
+        "wav",
+        True,
         "locally recorded with documented consent",
         "research-only",
         "authorized for this local use",
@@ -82,7 +84,7 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
     voice = VoicePlan(
         "voice",
         "Voice",
-        config.voice_prompt_sha256,
+        config.voice_asset_sha256,
         "en",
         config.voice_provenance,
         config.voice_license_id,
@@ -131,7 +133,7 @@ def test_manifest_failures_are_stable(
     elif failure == "symlink":
         target = root / "model.safetensors"
         target.unlink()
-        target.symlink_to(Path(config.voice_prompt_path))
+        target.symlink_to(Path(config.voice_asset_path))
     elif failure == "hardlink":
         os.link(root / "model.safetensors", root / "second-link")
         config = replace(
@@ -290,8 +292,8 @@ def test_voice_hash_wav_and_plan_identity_are_verified(
 ) -> None:
     config, voice = _fixture(tmp_path)
     _installed(monkeypatch)
-    Path(config.voice_prompt_path).write_bytes(b"not a wav!!")
-    bad = replace(config, voice_prompt_sha256=_digest(b"not a wav!!"))
+    Path(config.voice_asset_path).write_bytes(b"not a wav!!")
+    bad = replace(config, voice_asset_sha256=_digest(b"not a wav!!"))
     with pytest.raises(VoiceError) as caught:
         preflight_pocket(bad)
     assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
@@ -458,7 +460,7 @@ def test_private_production_factory_requires_complete_approved_voice(
         config.voice_license_id,
         False,
         "en",
-        config.voice_prompt_sha256,
+        config.voice_asset_sha256,
         (config.model_revision,),
     )
     bindings = pocket_production_bindings(config, voice)
@@ -506,9 +508,9 @@ def test_every_malformed_model_field_is_stably_model_invalid(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("voice_prompt_path", 1),
-        ("voice_prompt_sha256", None),
-        ("voice_prompt_sha256", "A" * 64),
+        ("voice_asset_path", 1),
+        ("voice_asset_sha256", None),
+        ("voice_asset_sha256", "A" * 64),
         ("voice_provenance", []),
         ("voice_license_id", "  "),
         ("voice_rights", False),
@@ -556,8 +558,8 @@ def test_wav_must_be_structurally_complete(
         (b"RIFF\x04\x00\x00\x00WAVE", _wav_bytes()[:-1], _wav_bytes()[:36])
     ):
         config, _ = _fixture(tmp_path / str(index))
-        Path(config.voice_prompt_path).write_bytes(malformed)
-        bad = replace(config, voice_prompt_sha256=_digest(malformed))
+        Path(config.voice_asset_path).write_bytes(malformed)
+        bad = replace(config, voice_asset_sha256=_digest(malformed))
         with pytest.raises(VoiceError) as caught:
             preflight_pocket(bad)
         assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
@@ -731,18 +733,18 @@ def test_manifest_selected_prompt_and_directory_rejections(
     bad = replace(
         config,
         files=config.files + (item,),
-        voice_prompt_path=str(prompt.resolve()),
-        voice_prompt_sha256=item.sha256,
+        voice_asset_path=str(prompt.resolve()),
+        voice_asset_sha256=item.sha256,
     )
     with pytest.raises(VoiceError):
         preflight_pocket(bad)
 
     config, _ = _fixture(tmp_path / "extension")
-    prompt = Path(config.voice_prompt_path)
+    prompt = Path(config.voice_asset_path)
     renamed = prompt.with_suffix(".bin")
     prompt.rename(renamed)
     with pytest.raises(VoiceError):
-        preflight_pocket(replace(config, voice_prompt_path=str(renamed.resolve())))
+        preflight_pocket(replace(config, voice_asset_path=str(renamed.resolve())))
 
     config, _ = _fixture(tmp_path / "directory")
     nested = Path(config.model_root) / "nested"
@@ -799,7 +801,7 @@ def test_snapshot_binds_loaded_bytes_despite_original_replacement(
     config, _ = _fixture(tmp_path)
     _installed(monkeypatch)
     original_yaml = Path(config.config_path).read_bytes()
-    original_wav = Path(config.voice_prompt_path).read_bytes()
+    original_wav = Path(config.voice_asset_path).read_bytes()
     observed: dict[str, bytes | Path] = {}
 
     class SnapshotModel:
@@ -834,8 +836,8 @@ def test_snapshot_binds_loaded_bytes_despite_original_replacement(
 
     monkeypatch.setattr(module, "_worker_marker", module._WORKER_TOKEN)
     engine = PocketTTSEngine(config)
-    Path(config.voice_prompt_path).unlink()
-    Path(config.voice_prompt_path).symlink_to(config_path_name)
+    Path(config.voice_asset_path).unlink()
+    Path(config.voice_asset_path).symlink_to(config_path_name)
     engine.synthesize(_task())
     assert observed["yaml"] == original_yaml
     assert observed["wav"] == original_wav

@@ -61,8 +61,10 @@ class PocketEngineConfig:
     model_revision: str
     package_version: str
     files: tuple[PocketManifestFile, ...]
-    voice_prompt_path: str
-    voice_prompt_sha256: str
+    voice_asset_path: str
+    voice_asset_sha256: str
+    voice_variety: str
+    cloning_capable: bool
     voice_provenance: str
     voice_license_id: str
     voice_rights: str
@@ -85,7 +87,8 @@ class PocketEngineConfig:
             "package_version": self.package_version,
             "sample_rate_hz": self.sample_rate_hz,
             "voice_license_id": self.voice_license_id,
-            "voice_prompt_sha256": self.voice_prompt_sha256,
+            "voice_asset_sha256": self.voice_asset_sha256,
+            "voice_variety": self.voice_variety,
             "voice_provenance": self.voice_provenance,
             "voice_rights": self.voice_rights,
         }
@@ -161,10 +164,10 @@ def _validate_fields(config: object) -> PocketEngineConfig:
         or not 0.0 < config.timeout_seconds <= MAX_TIMEOUT_SECONDS
     ):
         raise _model_failure()
-    _nonempty_string(config.voice_prompt_path, voice=True)
+    _nonempty_string(config.voice_asset_path, voice=True)
     if (
-        type(config.voice_prompt_sha256) is not str
-        or _SHA256.fullmatch(config.voice_prompt_sha256) is None
+        type(config.voice_asset_sha256) is not str
+        or _SHA256.fullmatch(config.voice_asset_sha256) is None
     ):
         raise _voice_failure()
     _nonempty_string(config.voice_provenance, voice=True)
@@ -467,7 +470,7 @@ def _manifest(
         raise _model_failure()
     _inspect_yaml(config_bytes)
 
-    prompt = _canonical_absolute(config.voice_prompt_path, voice=True)
+    prompt = _canonical_absolute(config.voice_asset_path, voice=True)
     _validate_root(prompt.parent, voice=True)
     if prompt.is_relative_to(root) or prompt.suffix.lower() != ".wav":
         raise _voice_failure()
@@ -478,7 +481,7 @@ def _manifest(
     wav_bytes = _verify_source(
         prompt,
         prompt_size,
-        config.voice_prompt_sha256,
+        config.voice_asset_sha256,
         MAX_VOICE_BYTES,
         voice=True,
         capture_limit=MAX_VOICE_BYTES,
@@ -510,7 +513,7 @@ def preflight_pocket(
         raise _model_failure()
     _manifest(config)
     if voice is not None and (
-        voice.content_fingerprint != config.voice_prompt_sha256
+        voice.content_fingerprint != config.voice_asset_sha256
         or voice.provenance != config.voice_provenance
         or voice.license_id != config.voice_license_id
         or voice.commercial_use_allowed is not config.commercial_use_allowed
@@ -621,27 +624,29 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
                 item,
             )
         voice_item = PocketManifestFile(
-            "prompt.wav", prompt_size, config.voice_prompt_sha256
+            "prompt.wav", prompt_size, config.voice_asset_sha256
         )
-        _copy_snapshot(Path(config.voice_prompt_path), prompt, voice_item, voice=True)
+        _copy_snapshot(Path(config.voice_asset_path), prompt, voice_item, voice=True)
         for current, directories, _names in os.walk(snapshot, topdown=False):
             for directory in directories:
                 (Path(current) / directory).chmod(0o500)
         snap = PocketEngineConfig(
-            str(model),
-            str(model / selected.relative_to(root)),
-            config.model_revision,
-            config.package_version,
-            config.files,
-            str(prompt),
-            config.voice_prompt_sha256,
-            config.voice_provenance,
-            config.voice_license_id,
-            config.voice_rights,
-            config.commercial_use_allowed,
-            config.sample_rate_hz,
-            config.device,
-            config.timeout_seconds,
+            model_root=str(model),
+            config_path=str(model / selected.relative_to(root)),
+            model_revision=config.model_revision,
+            package_version=config.package_version,
+            files=config.files,
+            voice_asset_path=str(prompt),
+            voice_asset_sha256=config.voice_asset_sha256,
+            voice_variety=config.voice_variety,
+            cloning_capable=config.cloning_capable,
+            voice_provenance=config.voice_provenance,
+            voice_license_id=config.voice_license_id,
+            voice_rights=config.voice_rights,
+            commercial_use_allowed=config.commercial_use_allowed,
+            sample_rate_hz=config.sample_rate_hz,
+            device=config.device,
+            timeout_seconds=config.timeout_seconds,
         )
         return snapshot, snap
     except Exception:
@@ -743,7 +748,7 @@ class PocketTTSEngine:
     def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
         try:
             state = self._model.get_state_for_audio_prompt(
-                Path(self._config.voice_prompt_path)
+                Path(self._config.voice_asset_path)
             )
         except Exception:
             self.close()

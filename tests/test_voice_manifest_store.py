@@ -1,5 +1,5 @@
 """Managed manifest round-trips, writes atomically, and stays owner-private."""
-# ruff: noqa: D103, PLR2004, TC003
+# ruff: noqa: D103, PLR2004, SLF001, TC003
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import json
 import stat
 from pathlib import Path
 
+from kenkui._tts import production
 from kenkui.voices.manifest import (
     EngineRecord,
     FileRecord,
@@ -124,3 +125,14 @@ def test_lock_is_reentrant_across_sequential_uses(tmp_path: Path) -> None:
     with store.lock():
         store.write({}, {})
     assert (tmp_path / "manifest.json").exists()
+
+
+def test_writer_output_is_accepted_by_the_strict_reader(tmp_path: Path) -> None:
+    """The convenience writer and the paranoid reader must agree on schema."""
+    path = tmp_path / "manifest.json"
+    ManifestStore(path).write({"english": _engine()}, {"eponine": _voice()})
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    root = production._object(payload, {"schema_version", "engines", "voices"})
+    voice_data, engine = production._select(root, "eponine")
+    assert engine["language"] == "english"
+    assert voice_data["state"] == "loaded"
