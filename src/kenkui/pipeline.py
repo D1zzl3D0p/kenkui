@@ -206,10 +206,15 @@ class Pipeline:
             raise EncodingError(ErrorCode.OUTPUT_EXISTS)
         if cancel is not None:
             cancel.raise_if_cancelled()
+        # Resolved before the call, not inside the argument list: an
+        # unprovisioned or unknown voice must fail before any worker spawns,
+        # and that ordering should be legible rather than an artifact of
+        # argument-evaluation order.
+        bindings = _resolved_execution_bindings(self._assigned_voice_id())
         return execute_sequential(
             self,
             output_path,
-            bindings=_resolved_execution_bindings(self._assigned_voice_id()),
+            bindings=bindings,
             on_event=on_event,
             cancel=cancel,
             workers=workers,
