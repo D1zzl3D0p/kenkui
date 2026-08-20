@@ -6,7 +6,6 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.metadata
-import io
 import math
 import os
 import re
@@ -15,7 +14,6 @@ import stat
 import struct
 import sys
 import tempfile
-import wave
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -32,6 +30,7 @@ MAX_MODEL_FILE_BYTES: Final = 2 * 1024 * 1024 * 1024
 MAX_MODEL_TOTAL_BYTES: Final = 4 * 1024 * 1024 * 1024
 MAX_CONFIG_BYTES: Final = 1024 * 1024
 MAX_VOICE_BYTES: Final = 64 * 1024 * 1024
+MAX_SAFETENSORS_HEADER_BYTES: Final = 16 * 1024 * 1024
 MAX_MANIFEST_ENTRIES: Final = 4096
 MAX_DIRECTORY_ENTRIES: Final = 8192
 MAX_RELATIVE_PATH_DEPTH: Final = 32
@@ -333,48 +332,20 @@ def _inspect_yaml(data: bytes) -> None:
             raise _model_failure()
 
 
-def _validate_wav(data: bytes) -> None:
-    try:
-        if (
-            len(data) < 44
-            or data[:4] != b"RIFF"
-            or data[8:12] != b"WAVE"
-            or struct.unpack_from("<I", data, 4)[0] + 8 != len(data)
-        ):
-            raise wave.Error
-        offset = 12
-        chunks: set[bytes] = set()
-        while offset < len(data):
-            if offset + 8 > len(data):
-                raise wave.Error
-            name = data[offset : offset + 4]
-            size = struct.unpack_from("<I", data, offset + 4)[0]
-            offset += 8
-            end = offset + size
-            if end > len(data):
-                raise wave.Error
-            chunks.add(name)
-            offset = end + (size & 1)
-        if offset != len(data) or not {b"fmt ", b"data"}.issubset(chunks):
-            raise wave.Error
-        with wave.open(io.BytesIO(data), "rb") as source:
-            channels = source.getnchannels()
-            width = source.getsampwidth()
-            rate = source.getframerate()
-            frames = source.getnframes()
-            if (
-                not 1 <= channels <= 8
-                or not 1 <= width <= 4
-                or not 8_000 <= rate <= 192_000
-                or frames <= 0
-                or frames * channels * width > MAX_VOICE_BYTES
-            ):
-                raise wave.Error
-            payload = source.readframes(frames)
-            if len(payload) != frames * channels * width:
-                raise wave.Error
-    except (EOFError, OverflowError, struct.error, wave.Error):
-        raise _voice_failure() from None
+def _validate_safetensors(data: bytes) -> None:
+    """Validate a bounded safetensors header without importing torch."""
+    prefix = 8
+    if len(data) < prefix:
+        raise _voice_failure()
+    declared = int.from_bytes(data[:prefix], "little")
+    if (
+        declared <= 0
+        or declared > MAX_SAFETENSORS_HEADER_BYTES
+        or declared > len(data) - prefix
+    ):
+        raise _voice_failure()
+    if not data[prefix : prefix + declared].lstrip().startswith(b"{"):
+        raise _voice_failure()
 
 
 def _scan_manifest(root: Path, expected: dict[str, PocketManifestFile]) -> None:
@@ -472,7 +443,7 @@ def _manifest(
 
     prompt = _canonical_absolute(config.voice_asset_path, voice=True)
     _validate_root(prompt.parent, voice=True)
-    if prompt.is_relative_to(root) or prompt.suffix.lower() != ".wav":
+    if prompt.is_relative_to(root) or prompt.suffix.lower() != ".safetensors":
         raise _voice_failure()
     try:
         prompt_size = prompt.lstat().st_size
@@ -488,7 +459,9 @@ def _manifest(
     )
     if wav_bytes is None:
         raise _voice_failure()
-    _validate_wav(wav_bytes)
+    # Every renderable asset is a compiled embedding: WAV prompts are compiled
+    # during provisioning, so the render path has exactly one branch.
+    _validate_safetensors(wav_bytes)
     return root, selected, expected, prompt_size
 
 
@@ -614,7 +587,7 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
     snapshot = Path(tempfile.mkdtemp(prefix="kenkui-pocket-"))
     snapshot.chmod(0o700)
     model = snapshot / "model"
-    prompt = snapshot / "voice" / "prompt.wav"
+    prompt = snapshot / "voice" / "prompt.safetensors"
     try:
         model.mkdir(mode=0o700)
         for relative_name, item in expected.items():
@@ -624,7 +597,7 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
                 item,
             )
         voice_item = PocketManifestFile(
-            "prompt.wav", prompt_size, config.voice_asset_sha256
+            "prompt.safetensors", prompt_size, config.voice_asset_sha256
         )
         _copy_snapshot(Path(config.voice_asset_path), prompt, voice_item, voice=True)
         for current, directories, _names in os.walk(snapshot, topdown=False):
@@ -680,6 +653,7 @@ class PocketTTSEngine:
 
     def __init__(self, config: PocketEngineConfig, *, reusable: bool = False) -> None:
         self._snapshot: Path | None = None
+        self._state: Any = None
         self._reusable = reusable
         if _worker_marker is not _WORKER_TOKEN:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED)
@@ -745,14 +719,26 @@ class PocketTTSEngine:
     def __del__(self) -> None:
         self.close()
 
+    def _voice_state(self) -> Any:
+        """Derive the conditioning state once and reuse it for every segment.
+
+        Workers hold a reusable engine and process a batch serially, so deriving
+        this per segment was pure waste. The argument is a Path, never a str:
+        get_state_for_audio_prompt calls download_if_necessary only on str, so a
+        Path cannot reach the network even before _deny_remote intervenes.
+        """
+        if self._state is None:
+            try:
+                self._state = self._model.get_state_for_audio_prompt(
+                    Path(self._config.voice_asset_path)
+                )
+            except Exception:
+                self.close()
+                raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+        return self._state
+
     def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
-        try:
-            state = self._model.get_state_for_audio_prompt(
-                Path(self._config.voice_asset_path)
-            )
-        except Exception:
-            self.close()
-            raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+        state = self._voice_state()
         try:
             output = self._model.generate_audio(state, task.text)
             audio = tensor_to_pcm(
