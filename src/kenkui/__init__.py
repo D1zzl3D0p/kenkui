@@ -33,6 +33,7 @@ from .events import (
 from .inspection import BookInspection, BookMetadata, ChapterInspection
 from .pipeline import Pipeline, Source
 from .voices import Engine, Voice
+from .voices.provision import add_voice
 
 __version__ = "0.1.0"
 
@@ -67,6 +68,7 @@ __all__ = [
     "VoiceError",
     "Warning",
     "__version__",
+    "add_voice",
     "book",
     "epub",
 ]

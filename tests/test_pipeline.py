@@ -261,6 +261,7 @@ def test_public_exports_are_intentional() -> None:
     expected = {
         "__version__",
         "Engine",
+        "add_voice",
         "book",
         "epub",
         "Pipeline",
