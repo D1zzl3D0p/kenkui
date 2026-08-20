@@ -113,7 +113,9 @@ def test_public_local_voice_metadata_supplies_a_deterministic_plan() -> None:
     """A registry voice remains a pure local input to planning."""
     plan = _compile(
         pipeline=kk.epub("ignored-location.epub").assign_voice("fixture-voice").tts(),
-        voice=kk.get_voice("fixture-voice"),
+        voice=_voice(
+            id="fixture-voice", compatible_model_revisions=("fixture-v1",)
+        ),
         model_revision="fixture-v1",
     )
 

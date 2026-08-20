@@ -114,7 +114,17 @@ def test_fixture_epub_to_single_voice_m4b(
     bindings = ExecutionBindings(
         EngineSpecification.fake(),
         FFmpegM4BAssembler(),
-        kk.get_voice("fixture-voice"),
+        kk.Voice(
+            id="fixture-voice",
+            name="Fixture Voice",
+            enabled=True,
+            provenance="bundled local metadata",
+            license_id="CC0-1.0",
+            commercial_use_allowed=True,
+            language="en",
+            content_fingerprint="0" * 64,
+            compatible_model_revisions=("fixture-v1",),
+        ),
         "fixture-v1",
     )
     monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)

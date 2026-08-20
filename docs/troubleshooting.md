@@ -76,10 +76,19 @@ KENKUI_RUN_NATIVE=1 uv run pytest --no-cov -m native tests/test_native_ffmpeg.py
 
 ## Renderer, Pocket, voice, and synthesis
 
-- `renderer_unavailable`: expected for ordinary public writes while the approved
-  production gate is closed. Inspection and validation still work.
-- `pocket_package_missing`: install `"kenkui[pocket]"` only if approved local
-  deployment material exists.
+- `renderer_unavailable`: no manifest at `KENKUI_POCKET_MANIFEST` or the
+  managed default. Run `kk.load_voice("<id>")` once. Inspection and validation
+  work without it.
+- `voice_not_provisioned`: the voice is registered but not loaded. The message
+  names the call that fixes it: `kk.load_voice("<id>")`.
+- `voice_unknown`: the ID is in neither the built-in catalog nor the manifest.
+  `kk.list_voices()` shows everything available.
+- `engine_not_cloning_capable`: a `wav` voice needs the gated
+  `kyutai/pocket-tts` weights to compile. Accept the terms and authenticate, or
+  supply a pre-compiled `.safetensors` instead.
+- `voice_variety_invalid`: unrecognised variety or state, or an `add_voice`
+  ID that collides with a built-in catalog name.
+- `pocket_package_missing`: `pocket-tts` is a required dependency; reinstall.
 - `pocket_version_unsupported`: exactly 2.1.0 is required.
 - `pocket_model_invalid` / `pocket_voice_invalid`: local manifest/tree/config or
   prompt/rights declarations failed preflight; do not fall back to a downloader.

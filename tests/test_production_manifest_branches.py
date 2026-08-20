@@ -28,34 +28,40 @@ def _payload(tmp_path: Path) -> Payload:
     prompt.write_bytes(b"fixture")
     return {
         "schema_version": production.MANIFEST_SCHEMA_VERSION,
-        "engine": {
-            "model_root": str(root),
-            "config_path": str(config),
-            "model_revision": "revision-1",
-            "package_version": "2.1.0",
-            "files": [
-                {
-                    "relative_path": "config.yaml",
-                    "size": config.stat().st_size,
-                    "sha256": "a" * 64,
-                }
-            ],
-            "sample_rate_hz": 24000,
-            "device": "cpu",
-            "timeout_seconds": 30.0,
+        "engines": {
+            "english": {
+                "language": "english",
+                "model_root": str(root),
+                "config_path": str(config),
+                "model_revision": "revision-1",
+                "package_version": "2.1.0",
+                "files": [
+                    {
+                        "relative_path": "config.yaml",
+                        "size": config.stat().st_size,
+                        "sha256": "a" * 64,
+                    }
+                ],
+                "sample_rate_hz": 24000,
+                "device": "cpu",
+                "timeout_seconds": 30.0,
+                "cloning_capable": False,
+            }
         },
         "voices": {
             "narrator": {
+                "variety": "built-in",
+                "state": "loaded",
                 "name": "Narrator",
                 "enabled": True,
                 "provenance": "project fixture",
                 "license_id": "CC0-1.0",
                 "commercial_use_allowed": True,
-                "language": "en",
-                "content_fingerprint": "b" * 64,
+                "language": "english",
+                "engine_id": "english",
                 "compatible_model_revisions": ["revision-1"],
-                "voice_prompt_path": str(prompt),
-                "voice_prompt_sha256": "c" * 64,
+                "asset_path": str(prompt),
+                "asset_sha256": "c" * 64,
                 "voice_rights": "project-owned",
             }
         },
@@ -99,12 +105,16 @@ def test_objects_require_exact_keys(
     if container == "root":
         target = payload
     elif container == "engine":
-        target = payload["engine"]
+        target = payload["engines"]["english"]
     else:
         target = payload["voices"]["narrator"]
     assert isinstance(target, dict)
     if operation == "missing":
-        target.pop(next(iter(target)))
+        # variety and state are validated before the key-set check, because the
+        # expected key set depends on them, and they have their own codes and
+        # tests. Drop a key whose absence exercises exact-key-set enforcement.
+        gated = {"variety", "state"}
+        target.pop(next(key for key in target if key not in gated))
     else:
         target["unknown"] = None
 
@@ -123,34 +133,59 @@ def test_objects_require_exact_keys(
     ("path", "value", "error", "code"),
     [
         (("schema_version",), "wrong", ModelError, ErrorCode.POCKET_MODEL_INVALID),
-        (("engine",), [], ModelError, ErrorCode.POCKET_MODEL_INVALID),
+        (("engines", "english"), [], ModelError, ErrorCode.POCKET_MODEL_INVALID),
         (("voices",), [], VoiceError, ErrorCode.VOICE_UNRESOLVED),
         (("voices",), {}, VoiceError, ErrorCode.VOICE_UNRESOLVED),
         (
-            ("engine", "model_revision"),
+            ("engines", "english", "model_revision"),
             None,
             ModelError,
             ErrorCode.POCKET_MODEL_INVALID,
         ),
-        (("engine", "model_revision"), " ", ModelError, ErrorCode.POCKET_MODEL_INVALID),
         (
-            ("engine", "package_version"),
+            ("engines", "english", "model_revision"),
+            " ",
+            ModelError,
+            ErrorCode.POCKET_MODEL_INVALID,
+        ),
+        (
+            ("engines", "english", "package_version"),
             2.1,
             ModelError,
             ErrorCode.POCKET_MODEL_INVALID,
         ),
-        (("engine", "files"), {}, ModelError, ErrorCode.POCKET_MODEL_INVALID),
-        (("engine", "files"), [], ModelError, ErrorCode.POCKET_MODEL_INVALID),
         (
-            ("engine", "sample_rate_hz"),
+            ("engines", "english", "files"),
+            {},
+            ModelError,
+            ErrorCode.POCKET_MODEL_INVALID,
+        ),
+        (
+            ("engines", "english", "files"),
+            [],
+            ModelError,
+            ErrorCode.POCKET_MODEL_INVALID,
+        ),
+        (
+            ("engines", "english", "sample_rate_hz"),
             True,
             ModelError,
             ErrorCode.POCKET_MODEL_INVALID,
         ),
-        (("engine", "timeout_seconds"), 30, ModelError, ErrorCode.POCKET_MODEL_INVALID),
-        (("engine", "device"), "", ModelError, ErrorCode.POCKET_MODEL_INVALID),
         (
-            ("engine", "model_root"),
+            ("engines", "english", "timeout_seconds"),
+            30,
+            ModelError,
+            ErrorCode.POCKET_MODEL_INVALID,
+        ),
+        (
+            ("engines", "english", "device"),
+            "",
+            ModelError,
+            ErrorCode.POCKET_MODEL_INVALID,
+        ),
+        (
+            ("engines", "english", "model_root"),
             "relative",
             ModelError,
             ErrorCode.POCKET_MODEL_INVALID,
@@ -181,13 +216,13 @@ def test_objects_require_exact_keys(
             ErrorCode.VOICE_PROVENANCE_REQUIRED,
         ),
         (
-            ("voices", "narrator", "content_fingerprint"),
+            ("voices", "narrator", "asset_sha256"),
             "B" * 64,
             VoiceError,
             ErrorCode.VOICE_PROVENANCE_REQUIRED,
         ),
         (
-            ("voices", "narrator", "voice_prompt_sha256"),
+            ("voices", "narrator", "asset_sha256"),
             "c" * 63,
             VoiceError,
             ErrorCode.VOICE_PROVENANCE_REQUIRED,
@@ -211,7 +246,7 @@ def test_objects_require_exact_keys(
             ErrorCode.VOICE_PROVENANCE_REQUIRED,
         ),
         (
-            ("voices", "narrator", "voice_prompt_path"),
+            ("voices", "narrator", "asset_path"),
             "relative.wav",
             VoiceError,
             ErrorCode.POCKET_VOICE_INVALID,
@@ -250,7 +285,7 @@ def test_manifest_file_requires_exact_typed_fields(
     item: object,
 ) -> None:
     payload = _payload(tmp_path)
-    payload["engine"]["files"] = [item]
+    payload["engines"]["english"]["files"] = [item]
     with pytest.raises(ModelError) as caught:
         _activate(tmp_path, monkeypatch, payload)
     assert caught.value.code is ErrorCode.POCKET_MODEL_INVALID
@@ -389,6 +424,7 @@ def test_manifest_empty_oversize_short_read_and_identity_mutation_are_rejected(
     assert mutated
 
 
+@pytest.mark.usefixtures("_real_cache_root")
 def test_default_cache_roots_cover_darwin_xdg_and_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

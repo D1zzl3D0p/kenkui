@@ -933,12 +933,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from kenkui._tts.production import MANIFEST_SCHEMA_VERSION, default_cache_root
+from kenkui._tts.production import default_cache_root
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from kenkui.voices.types import VoiceVariety
+
+MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v2"
 
 _ENGINE_KEYS: Final = (
     "language",
@@ -1117,9 +1119,7 @@ def _voice_to(record: VoiceRecord) -> dict[str, Any]:
     if record.state == "loaded":
         payload["asset_path"] = record.asset_path
         payload["asset_sha256"] = record.asset_sha256
-        payload["compatible_model_revisions"] = list(
-            record.compatible_model_revisions
-        )
+        payload["compatible_model_revisions"] = list(record.compatible_model_revisions)
     return payload
 
 
@@ -1130,9 +1130,7 @@ def _voice_from(voice_id: str, payload: dict[str, Any]) -> VoiceRecord:
         source_sha256=payload.get("source_sha256"),
         asset_path=payload.get("asset_path"),
         asset_sha256=payload.get("asset_sha256"),
-        compatible_model_revisions=tuple(
-            payload.get("compatible_model_revisions", ())
-        ),
+        compatible_model_revisions=tuple(payload.get("compatible_model_revisions", ())),
         **{key: payload[key] for key in _VOICE_COMMON_KEYS},
     )
 ```
@@ -1241,15 +1239,20 @@ def _write(tmp_path: Path, payload: object) -> Path:
     return path
 
 
-def _activate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: object
-) -> None:
+def _activate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: object) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_write(tmp_path, payload)))
     production.production_bindings_from_environment("eponine")
 
 
 def test_schema_version_is_v2() -> None:
     assert production.MANIFEST_SCHEMA_VERSION == "kenkui-pocket-production-v2"
+
+
+def test_reader_and_writer_agree_on_schema_version() -> None:
+    """Pre-flight Ruling A: the two constants are separate and must match."""
+    from kenkui.voices import manifest as writer
+
+    assert writer.MANIFEST_SCHEMA_VERSION == production.MANIFEST_SCHEMA_VERSION
 
 
 def test_v1_schema_version_is_rejected(
@@ -1914,9 +1917,7 @@ def fake_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     return calls
 
 
-def test_loads_a_builtin_voice(
-    tmp_path: Path, fake_hub: dict[str, int]
-) -> None:
+def test_loads_a_builtin_voice(tmp_path: Path, fake_hub: dict[str, int]) -> None:
     manifest = tmp_path / "manifest.json"
     voice = load_voice("eponine", manifest=manifest)
     assert voice.state == "loaded"
@@ -1992,9 +1993,7 @@ def test_unknown_voice_is_rejected(tmp_path: Path) -> None:
     assert excinfo.value.code is ErrorCode.VOICE_UNKNOWN
 
 
-def test_missing_asset_is_repaired(
-    tmp_path: Path, fake_hub: dict[str, int]
-) -> None:
+def test_missing_asset_is_repaired(tmp_path: Path, fake_hub: dict[str, int]) -> None:
     manifest = tmp_path / "manifest.json"
     load_voice("eponine", manifest=manifest)
     _, voices = ManifestStore(manifest).read()
@@ -2164,9 +2163,7 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
         engine = engines.get(record.engine_id)
         cloning = record.variety == "wav"
         if engine is None or (cloning and not engine.cloning_capable):
-            engine = _provision_engine(
-                record.language, cloning=cloning, root=root
-            )
+            engine = _provision_engine(record.language, cloning=cloning, root=root)
             engines[engine.id] = engine
         loaded = _materialize(record, engine, root)
         voices[voice_id] = loaded
@@ -2192,9 +2189,7 @@ def _registered_from_catalog(voice_id: str) -> VoiceRecord:
     )
 
 
-def _materialize(
-    record: VoiceRecord, engine: EngineRecord, root: Path
-) -> VoiceRecord:
+def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> VoiceRecord:
     """Produce the safetensors asset for one registered voice."""
     destination = root / "voices" / record.language / f"{record.id}.safetensors"
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -2316,9 +2311,7 @@ def stub_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     return requested
 
 
-def test_wav_compiles_to_safetensors(
-    tmp_path: Path, stub_engine: list[bool]
-) -> None:
+def test_wav_compiles_to_safetensors(tmp_path: Path, stub_engine: list[bool]) -> None:
     manifest = tmp_path / "manifest.json"
     source = tmp_path / "mine.wav"
     source.write_bytes(b"RIFF0000WAVEfmt ")
@@ -2342,9 +2335,7 @@ def test_wav_requests_a_cloning_capable_engine(
     assert stub_engine == [True]
 
 
-def test_wav_retains_both_hashes(
-    tmp_path: Path, stub_engine: list[bool]
-) -> None:
+def test_wav_retains_both_hashes(tmp_path: Path, stub_engine: list[bool]) -> None:
     manifest = tmp_path / "manifest.json"
     source = tmp_path / "mine.wav"
     source.write_bytes(b"RIFF0000WAVEfmt ")
@@ -2809,9 +2800,7 @@ def test_missing_state_is_never_persisted(tmp_path: Path) -> None:
     assert after["eponine"].state == "loaded"
 
 
-def test_listing_does_not_hash(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_listing_does_not_hash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = tmp_path / "manifest.json"
     load_voice("eponine", manifest=manifest)
 
@@ -2827,9 +2816,7 @@ def test_engine_dedup_across_sibling_voices(tmp_path: Path) -> None:
     manifest = tmp_path / "manifest.json"
     load_voice("eponine", manifest=manifest)
     load_voice("alba", manifest=manifest)
-    engines = {
-        v.engine for v in list_voices(manifest=manifest) if v.state == "loaded"
-    }
+    engines = {v.engine for v in list_voices(manifest=manifest) if v.state == "loaded"}
     assert len(engines) == 1
 ```
 
@@ -3065,35 +3052,36 @@ In `PocketTTSEngine.__init__`, add `self._state: object | None = None` before
 the `try`. Add the method and rewrite `synthesize`:
 
 ```python
-    def _voice_state(self) -> Any:
-        """Derive the conditioning state once and reuse it for every segment."""
-        if self._state is None:
-            try:
-                self._state = self._model.get_state_for_audio_prompt(
-                    Path(self._config.voice_asset_path)
-                )
-            except Exception:
-                self.close()
-                raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
-        return self._state
-
-    def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
-        """Render the task's exact text as PCM from a precompiled embedding."""
-        state = self._voice_state()
+def _voice_state(self) -> Any:
+    """Derive the conditioning state once and reuse it for every segment."""
+    if self._state is None:
         try:
-            output = self._model.generate_audio(state, task.text)
-            audio = tensor_to_pcm(
-                output, self._tensor_type, task, self._config.sample_rate_hz
+            self._state = self._model.get_state_for_audio_prompt(
+                Path(self._config.voice_asset_path)
             )
-        except RenderError:
-            self.close()
-            raise
         except Exception:
             self.close()
-            raise RenderError(ErrorCode.POCKET_INFERENCE_FAILED) from None
-        if not self._reusable:
-            self.close()
-        return audio
+            raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+    return self._state
+
+
+def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
+    """Render the task's exact text as PCM from a precompiled embedding."""
+    state = self._voice_state()
+    try:
+        output = self._model.generate_audio(state, task.text)
+        audio = tensor_to_pcm(
+            output, self._tensor_type, task, self._config.sample_rate_hz
+        )
+    except RenderError:
+        self.close()
+        raise
+    except Exception:
+        self.close()
+        raise RenderError(ErrorCode.POCKET_INFERENCE_FAILED) from None
+    if not self._reusable:
+        self.close()
+    return audio
 ```
 
 Note the argument is a `Path`, never a `str`. `get_state_for_audio_prompt`
@@ -3141,16 +3129,30 @@ import pytest
 
 import kenkui as kk
 from kenkui import ErrorCode, VoiceError
-from kenkui._execution import coordinator
+from test_epub import make_epub, xhtml
 
 
 @pytest.fixture(autouse=True)
 def no_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-flight Ruling B: pipeline.py:23 from-imports execute_sequential.
+
+    Patching kenkui._execution.coordinator would leave pipeline's own binding
+    untouched and silently run a real render.
+    """
+
     def explode(*args: object, **kwargs: object) -> object:
         message = "write must fail before execution starts"
         raise AssertionError(message)
 
-    monkeypatch.setattr(coordinator, "execute_sequential", explode)
+    monkeypatch.setattr(kk.pipeline, "execute_sequential", explode)
+
+
+def _book(tmp_path: Path) -> Path:
+    return make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml("<h1>One</h1><p>Exact first.</p>")},
+        spine=("one",),
+    )
 
 
 def _manifest(tmp_path: Path, state: str) -> Path:
@@ -3184,28 +3186,28 @@ def _manifest(tmp_path: Path, state: str) -> Path:
 
 
 def test_registered_voice_fails_before_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, epub_fixture: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_manifest(tmp_path, "registered")))
-    pipeline = kk.book(epub_fixture).normalize_text().assign_voice("mine").tts()
+    pipeline = kk.book(_book(tmp_path)).normalize_text().assign_voice("mine").tts()
     with pytest.raises(VoiceError) as excinfo:
         pipeline.write(tmp_path / "out.m4b")
     assert excinfo.value.code is ErrorCode.VOICE_NOT_PROVISIONED
 
 
 def test_unknown_voice_fails_before_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, epub_fixture: Path
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_manifest(tmp_path, "registered")))
-    pipeline = kk.book(epub_fixture).normalize_text().assign_voice("nobody").tts()
+    pipeline = kk.book(_book(tmp_path)).normalize_text().assign_voice("nobody").tts()
     with pytest.raises(VoiceError) as excinfo:
         pipeline.write(tmp_path / "out.m4b")
     assert excinfo.value.code is ErrorCode.VOICE_UNRESOLVED
 ```
 
-Reuse the existing EPUB fixture. If `tests/conftest.py` has no `epub_fixture`,
-find the fixture helper the current suite uses for `kk.book(...)` and use that
-name instead; do not create a second EPUB builder.
+Pre-flight Ruling C: there is no `tests/conftest.py` and no `tests/fixtures/`
+directory. The suite's convention is `from test_epub import make_epub, xhtml`
+(see `tests/test_execution.py:27`). Do not create a second EPUB builder.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -3389,21 +3391,24 @@ def test_render_a_real_m4b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     manifest = tmp_path / "manifest.json"
     kk.load_voice("eponine", manifest=manifest)
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(manifest))
-    source = Path(__file__).parent / "fixtures" / "minimal.epub"
+    from test_epub import make_epub, xhtml
+
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml("<h1>One</h1><p>Exact first.</p>")},
+        spine=("one",),
+    )
     output = tmp_path / "out.m4b"
     result = (
-        kk.book(source)
-        .normalize_text()
-        .assign_voice("eponine")
-        .tts()
-        .write(output)
+        kk.book(source).normalize_text().assign_voice("eponine").tts().write(output)
     )
     assert Path(result.output).is_file()
     assert Path(result.output).stat().st_size > 0
 ```
 
-Use whatever minimal EPUB fixture the existing suite already provides; adjust
-the `source` path to match rather than adding a new fixture.
+Pre-flight Ruling C: the suite has no `tests/fixtures/` directory. EPUBs are
+built with `from test_epub import make_epub, xhtml`, as `tests/test_execution.py:27`
+does. Do not add a fixture directory.
 
 - [ ] **Step 2: Run it with real assets**
 
@@ -3429,9 +3434,10 @@ def test_gated_compiled_embedding_renders_on_ungated_weights(
     Requires accepted kyutai/pocket-tts terms and `hf auth login`.
     """
     manifest = tmp_path / "manifest.json"
-    prompt = Path(__file__).parent / "fixtures" / "voice_prompt.wav"
-    if not prompt.is_file():
-        pytest.skip("no local WAV prompt available")
+    named = os.environ.get("KENKUI_TEST_VOICE_WAV")
+    if named is None or not Path(named).is_file():
+        pytest.skip("set KENKUI_TEST_VOICE_WAV to a readable local WAV prompt")
+    prompt = Path(named)
     kk.add_voice(
         prompt,
         voice_id="local-test",

@@ -32,7 +32,14 @@ from .events import (
 )
 from .inspection import BookInspection, BookMetadata, ChapterInspection
 from .pipeline import Pipeline, Source
-from .voices import Voice, get_voice, list_voices
+from .voices import Engine, Voice
+from .voices.provision import (
+    add_voice,
+    list_voices,
+    load_voice,
+    remove_voice,
+    unload_voice,
+)
 
 __version__ = "0.1.0"
 
@@ -44,6 +51,7 @@ __all__ = [
     "ChapterInspection",
     "Completed",
     "EncodingError",
+    "Engine",
     "ErrorCode",
     "ExecutionEvent",
     "ExecutionStats",
@@ -63,11 +71,14 @@ __all__ = [
     "ValidationIssue",
     "ValidationResult",
     "Voice",
-    "get_voice",
-    "list_voices",
     "VoiceError",
     "Warning",
     "__version__",
+    "add_voice",
     "book",
     "epub",
+    "list_voices",
+    "load_voice",
+    "remove_voice",
+    "unload_voice",
 ]

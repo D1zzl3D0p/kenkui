@@ -20,10 +20,38 @@ from kenkui._tts.pocket import (
     preflight_pocket,
 )
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
-from kenkui.voices import Voice
+from kenkui.voices.types import Voice, VoiceVariety
 
 _MANIFEST_ENV: Final = "KENKUI_POCKET_MANIFEST"
-MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v1"
+MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v2"
+_VARIETIES: Final = frozenset({"built-in", "pre-compiled", "wav"})
+_LOCAL_VARIETIES: Final = frozenset({"pre-compiled", "wav"})
+_VOICE_BASE_KEYS: Final = {
+    "variety",
+    "state",
+    "name",
+    "enabled",
+    "language",
+    "engine_id",
+    "provenance",
+    "license_id",
+    "commercial_use_allowed",
+    "voice_rights",
+}
+_LOADED_KEYS: Final = {"asset_path", "asset_sha256", "compatible_model_revisions"}
+_SOURCE_KEYS: Final = {"source_path", "source_sha256"}
+_ENGINE_KEYS: Final = {
+    "language",
+    "model_root",
+    "config_path",
+    "model_revision",
+    "package_version",
+    "files",
+    "sample_rate_hz",
+    "device",
+    "timeout_seconds",
+    "cloning_capable",
+}
 MAX_PRODUCTION_MANIFEST_BYTES: Final = MAX_CONFIG_BYTES
 _SHA256_LENGTH: Final = 64
 _MAX_DECLARED_STRING_LENGTH: Final = 4096
@@ -44,59 +72,37 @@ def default_cache_root() -> Path:
     return base / "kenkui" / "v1"
 
 
+def resolve_manifest_path() -> Path | None:
+    """Return the operator override, else the managed default, else None."""
+    from kenkui.voices.manifest import default_manifest_path  # noqa: PLC0415
+
+    override = os.environ.get(_MANIFEST_ENV)
+    if override is not None:
+        return Path(override)
+    managed = default_manifest_path()
+    return managed if managed.exists() else None
+
+
 def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
     """Resolve one explicitly assigned voice from a strict local manifest."""
-    value = os.environ.get(_MANIFEST_ENV)
-    if value is None:
+    path = resolve_manifest_path()
+    if path is None:
         raise RenderError(ErrorCode.RENDERER_UNAVAILABLE)
-    manifest = _read_manifest(value)
-    root = _object(manifest, {"schema_version", "engine", "voices"})
+    manifest = _read_manifest(str(path))
+    root = _object(manifest, {"schema_version", "engines", "voices"})
     if root["schema_version"] != MANIFEST_SCHEMA_VERSION:
         raise ModelError(ErrorCode.POCKET_MODEL_INVALID)
-    engine = _object(
-        root["engine"],
-        {
-            "model_root",
-            "config_path",
-            "model_revision",
-            "package_version",
-            "files",
-            "sample_rate_hz",
-            "device",
-            "timeout_seconds",
-        },
-    )
-    voices_raw = root["voices"]
-    if type(voices_raw) is not dict or not voices_raw:
-        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
-    voices = cast("dict[object, object]", voices_raw)
-    if any(type(key) is not str or not key for key in voices):
-        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
-    selected = voices.get(voice_id)
-    if selected is None:
-        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
-    voice_data = _object(
-        selected,
-        {
-            "name",
-            "enabled",
-            "provenance",
-            "license_id",
-            "commercial_use_allowed",
-            "language",
-            "content_fingerprint",
-            "compatible_model_revisions",
-            "voice_prompt_path",
-            "voice_prompt_sha256",
-            "voice_rights",
-        },
-        voice=True,
-    )
+    voice_data, engine = _select(root, voice_id)
+    revision = _string(engine["model_revision"])
+    compatible = _string_tuple(voice_data["compatible_model_revisions"])
+    variety = _string(voice_data["variety"], voice=True)
+    cloning_capable = _boolean(engine["cloning_capable"])
+    if variety == "wav" and not cloning_capable:
+        raise VoiceError(ErrorCode.ENGINE_NOT_CLONING_CAPABLE)
     enabled = _boolean(voice_data["enabled"], voice=True)
     if not enabled:
         raise VoiceError(ErrorCode.VOICE_DISABLED)
-    revision = _string(engine["model_revision"])
-    compatible = _string_tuple(voice_data["compatible_model_revisions"])
+    digest = _digest(voice_data["asset_sha256"], voice=True)
     voice = Voice(
         id=voice_id,
         name=_string(voice_data["name"], voice=True),
@@ -107,8 +113,10 @@ def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
             voice_data["commercial_use_allowed"], voice=True
         ),
         language=_string(voice_data["language"], voice=True),
-        content_fingerprint=_digest(voice_data["content_fingerprint"], voice=True),
+        content_fingerprint=digest,
         compatible_model_revisions=compatible,
+        variety=cast("VoiceVariety", variety),
+        state="loaded",
     )
     if revision not in compatible:
         raise VoiceError(ErrorCode.VOICE_INCOMPATIBLE)
@@ -122,8 +130,10 @@ def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
         model_revision=revision,
         package_version=_string(engine["package_version"]),
         files=files,
-        voice_prompt_path=_absolute_path(voice_data["voice_prompt_path"], voice=True),
-        voice_prompt_sha256=_digest(voice_data["voice_prompt_sha256"], voice=True),
+        voice_asset_path=_absolute_path(voice_data["asset_path"], voice=True),
+        voice_asset_sha256=digest,
+        voice_variety=variety,
+        cloning_capable=cloning_capable,
         voice_provenance=cast("str", voice.provenance),
         voice_license_id=cast("str", voice.license_id),
         voice_rights=_string(voice_data["voice_rights"], voice=True),
@@ -133,6 +143,55 @@ def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
         timeout_seconds=_floating(engine["timeout_seconds"]),
     )
     return pocket_production_bindings(config, voice)
+
+
+def _select(
+    root: dict[str, object], voice_id: str
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Return the strict voice and engine objects for one assigned voice ID."""
+    voice_data = _select_voice(root, voice_id)
+    return voice_data, _select_engine(root, voice_data["engine_id"])
+
+
+def _select_voice(root: dict[str, object], voice_id: str) -> dict[str, object]:
+    """Return one strictly validated voice entry, keyed on variety and state."""
+    voices_raw = root["voices"]
+    if type(voices_raw) is not dict or not voices_raw:
+        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
+    voices = cast("dict[object, object]", voices_raw)
+    if any(type(key) is not str or not key for key in voices):
+        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
+    selected = voices.get(voice_id)
+    if selected is None:
+        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
+    if type(selected) is not dict:
+        raise VoiceError(ErrorCode.VOICE_PROVENANCE_REQUIRED)
+    entry = cast("dict[str, object]", selected)
+    variety = entry.get("variety")
+    if variety not in _VARIETIES:
+        raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
+    state = entry.get("state")
+    if state == "registered":
+        raise VoiceError(ErrorCode.VOICE_NOT_PROVISIONED)
+    if state != "loaded":
+        raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
+    expected = _VOICE_BASE_KEYS | _LOADED_KEYS
+    if variety in _LOCAL_VARIETIES:
+        # Both local varieties retain the reviewed original alongside the
+        # compiled asset; only built-ins have no local source.
+        expected = expected | _SOURCE_KEYS
+    return _object(entry, expected, voice=True)
+
+
+def _select_engine(root: dict[str, object], engine_id: object) -> dict[str, object]:
+    """Return the strictly validated engine one voice entry references."""
+    engines_raw = root["engines"]
+    if type(engines_raw) is not dict or not engines_raw:
+        raise ModelError(ErrorCode.POCKET_MODEL_INVALID)
+    engines = cast("dict[str, object]", engines_raw)
+    if type(engine_id) is not str or engine_id not in engines:
+        raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
+    return _object(engines[engine_id], _ENGINE_KEYS)
 
 
 def pocket_production_bindings(
@@ -173,13 +232,18 @@ def _read_manifest(value: object) -> object:
         raise ModelError(ErrorCode.POCKET_MODEL_INVALID)
     descriptor = -1
     try:
-        path = Path(value)
+        declared = Path(value)
         _require_manifest_io(
-            condition=path.is_absolute()
-            and PurePath(value) == path
-            and path.resolve(strict=True) == path
+            condition=declared.is_absolute() and PurePath(value) == declared
         )
+        # Resolve ancestors, then require the final component itself not to be
+        # a symlink. Demanding resolve() == path rejected any manifest under a
+        # symlinked ancestor, which on macOS is every temporary directory
+        # (/var -> /private/var). O_NOFOLLOW plus the lstat/fstat identity
+        # comparison below is what actually blocks final-component swaps.
+        path = declared.parent.resolve(strict=True) / declared.name
         named = path.lstat()
+        _require_manifest_io(condition=not stat.S_ISLNK(named.st_mode))
         descriptor = os.open(
             path,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),

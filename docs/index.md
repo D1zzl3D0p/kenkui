@@ -8,11 +8,15 @@ publication.
 
 EPUB inspection, semantic planning, process isolation, private caching, FFmpeg
 assembly, events, cancellation, and stable errors are implemented and tested.
-The ordinary public write path intentionally reports `renderer_unavailable`
-until approved local production bindings exist. Pocket-TTS package compatibility
-has been implemented without gated assets, but **real Pocket inference is not
-approved or verified**. Kenkui does not silently discover/download a model or
-voice.
+Writing requires one explicit provisioning call. `kk.load_voice("eponine")`
+downloads and hashes a voice from the built-in catalog; after that the ordinary
+public write path works. Without it, `write()` reports `voice_not_provisioned`
+or `renderer_unavailable`. Kenkui never silently discovers or downloads a model
+or voice, and rendering itself never touches the network.
+
+**Real Pocket inference has not been verified in CI.** The end-to-end test that
+downloads real assets and renders a real M4B is opt-in. See
+[Models and voices](models-and-voices.md).
 
 Start here:
 

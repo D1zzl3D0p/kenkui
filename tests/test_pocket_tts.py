@@ -5,11 +5,9 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
-import io
 import os
 import pickle
 import struct
-import wave
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,14 +38,13 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _wav_bytes() -> bytes:
-    stream = io.BytesIO()
-    with wave.open(stream, "wb") as target:
-        target.setnchannels(1)
-        target.setsampwidth(2)
-        target.setframerate(24_000)
-        target.writeframes(b"\x00\x00" * 24)
-    return stream.getvalue()
+def _safetensors_bytes(header: bytes = b'{"voice":{}}') -> bytes:
+    """Build a minimal well-formed safetensors payload.
+
+    Every renderable voice asset is a compiled embedding; WAV prompts are
+    compiled during provisioning and never reach the render path.
+    """
+    return len(header).to_bytes(8, "little") + header + b"\x00" * 16
 
 
 def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
@@ -58,8 +55,8 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
     config_path = root / "model.yaml"
     config_path.write_bytes(config_bytes)
     (root / "model.safetensors").write_bytes(weights)
-    voice_bytes = _wav_bytes()
-    voice_path = tmp_path / "authorized.wav"
+    voice_bytes = _safetensors_bytes()
+    voice_path = tmp_path / "authorized.safetensors"
     voice_path.write_bytes(voice_bytes)
     files = (
         PocketManifestFile("model.safetensors", len(weights), _digest(weights)),
@@ -73,6 +70,8 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
         files,
         str(voice_path.resolve()),
         _digest(voice_bytes),
+        "wav",
+        True,
         "locally recorded with documented consent",
         "research-only",
         "authorized for this local use",
@@ -82,7 +81,7 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
     voice = VoicePlan(
         "voice",
         "Voice",
-        config.voice_prompt_sha256,
+        config.voice_asset_sha256,
         "en",
         config.voice_provenance,
         config.voice_license_id,
@@ -131,7 +130,7 @@ def test_manifest_failures_are_stable(
     elif failure == "symlink":
         target = root / "model.safetensors"
         target.unlink()
-        target.symlink_to(Path(config.voice_prompt_path))
+        target.symlink_to(Path(config.voice_asset_path))
     elif failure == "hardlink":
         os.link(root / "model.safetensors", root / "second-link")
         config = replace(
@@ -263,7 +262,7 @@ def test_weights_are_streamed_and_only_selected_yaml_and_voice_are_captured(
     assert captures == [
         ("model.safetensors", None),
         ("model.yaml", module.MAX_CONFIG_BYTES),
-        ("authorized.wav", module.MAX_VOICE_BYTES),
+        ("authorized.safetensors", module.MAX_VOICE_BYTES),
     ]
 
 
@@ -290,8 +289,8 @@ def test_voice_hash_wav_and_plan_identity_are_verified(
 ) -> None:
     config, voice = _fixture(tmp_path)
     _installed(monkeypatch)
-    Path(config.voice_prompt_path).write_bytes(b"not a wav!!")
-    bad = replace(config, voice_prompt_sha256=_digest(b"not a wav!!"))
+    Path(config.voice_asset_path).write_bytes(b"not a wav!!")
+    bad = replace(config, voice_asset_sha256=_digest(b"not a wav!!"))
     with pytest.raises(VoiceError) as caught:
         preflight_pocket(bad)
     assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
@@ -426,7 +425,7 @@ def test_adapter_exact_local_api_and_sanitized_stages(
     assert FakeModel.loaded_config is not None
     assert FakeModel.loaded_config.name == Path(config.config_path).name
     assert FakeModel.prompt is not None
-    assert FakeModel.prompt.name == "prompt.wav"
+    assert FakeModel.prompt.name == "prompt.safetensors"
     assert FakeModel.text == "exact task text"
     assert len(audio.pcm_s16le) == 48
     for stage, code in (
@@ -458,7 +457,7 @@ def test_private_production_factory_requires_complete_approved_voice(
         config.voice_license_id,
         False,
         "en",
-        config.voice_prompt_sha256,
+        config.voice_asset_sha256,
         (config.model_revision,),
     )
     bindings = pocket_production_bindings(config, voice)
@@ -506,9 +505,9 @@ def test_every_malformed_model_field_is_stably_model_invalid(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("voice_prompt_path", 1),
-        ("voice_prompt_sha256", None),
-        ("voice_prompt_sha256", "A" * 64),
+        ("voice_asset_path", 1),
+        ("voice_asset_sha256", None),
+        ("voice_asset_sha256", "A" * 64),
         ("voice_provenance", []),
         ("voice_license_id", "  "),
         ("voice_rights", False),
@@ -548,16 +547,20 @@ def test_every_malformed_manifest_file_field_is_model_invalid(
     assert caught.value.code == ErrorCode.POCKET_MODEL_INVALID
 
 
-def test_wav_must_be_structurally_complete(
+def test_embedding_must_be_structurally_complete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _installed(monkeypatch)
-    for index, malformed in enumerate(
-        (b"RIFF\x04\x00\x00\x00WAVE", _wav_bytes()[:-1], _wav_bytes()[:36])
-    ):
+    malformed_payloads = (
+        b"\x08",
+        (1 << 40).to_bytes(8, "little") + b"{}",
+        (3).to_bytes(8, "little") + b"[1]",
+        (99).to_bytes(8, "little") + b"{}",
+    )
+    for index, malformed in enumerate(malformed_payloads):
         config, _ = _fixture(tmp_path / str(index))
-        Path(config.voice_prompt_path).write_bytes(malformed)
-        bad = replace(config, voice_prompt_sha256=_digest(malformed))
+        Path(config.voice_asset_path).write_bytes(malformed)
+        bad = replace(config, voice_asset_sha256=_digest(malformed))
         with pytest.raises(VoiceError) as caught:
             preflight_pocket(bad)
         assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
@@ -723,26 +726,26 @@ def test_manifest_selected_prompt_and_directory_rejections(
         preflight_pocket(replace(config, files=(config.files[0],)))
 
     config, _ = _fixture(tmp_path / "inside")
-    prompt = Path(config.model_root) / "prompt.wav"
-    prompt.write_bytes(_wav_bytes())
+    prompt = Path(config.model_root) / "prompt.safetensors"
+    prompt.write_bytes(_safetensors_bytes())
     item = PocketManifestFile(
-        "prompt.wav", prompt.stat().st_size, _digest(prompt.read_bytes())
+        "prompt.safetensors", prompt.stat().st_size, _digest(prompt.read_bytes())
     )
     bad = replace(
         config,
         files=config.files + (item,),
-        voice_prompt_path=str(prompt.resolve()),
-        voice_prompt_sha256=item.sha256,
+        voice_asset_path=str(prompt.resolve()),
+        voice_asset_sha256=item.sha256,
     )
     with pytest.raises(VoiceError):
         preflight_pocket(bad)
 
     config, _ = _fixture(tmp_path / "extension")
-    prompt = Path(config.voice_prompt_path)
+    prompt = Path(config.voice_asset_path)
     renamed = prompt.with_suffix(".bin")
     prompt.rename(renamed)
     with pytest.raises(VoiceError):
-        preflight_pocket(replace(config, voice_prompt_path=str(renamed.resolve())))
+        preflight_pocket(replace(config, voice_asset_path=str(renamed.resolve())))
 
     config, _ = _fixture(tmp_path / "directory")
     nested = Path(config.model_root) / "nested"
@@ -753,6 +756,12 @@ def test_manifest_selected_prompt_and_directory_rejections(
 
 
 def test_downloader_allowlist_revalidates_snapshot_files(tmp_path: Path) -> None:
+    """Declared names are relative and resolve against the snapshot root.
+
+    Config YAML cannot carry absolute paths: _inspect_yaml rejects them, and the
+    snapshot root is a per-engine temporary directory that does not exist when
+    the config is written.
+    """
     from kenkui._tts import pocket as module
 
     root = tmp_path / "snapshot"
@@ -761,16 +770,32 @@ def test_downloader_allowlist_revalidates_snapshot_files(tmp_path: Path) -> None
     approved.write_bytes(b"approved")
     approved.chmod(0o400)
     allowed = frozenset({approved.resolve()})
+    resolved_root = root.resolve()
+
     assert (
-        module._deny_remote(approved.resolve(), allowed, root.resolve())
+        module._deny_remote("approved.bin", allowed, resolved_root)
         == approved.resolve()
     )
-    for value in (object(), "relative", str(tmp_path / "missing")):
+
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"outside")
+    outside.chmod(0o400)
+    rejected = (
+        object(),
+        str(approved.resolve()),
+        "/etc/passwd",
+        "../outside.bin",
+        "nested/../approved.bin",
+        "missing.bin",
+        "unapproved.bin",
+    )
+    for value in rejected:
         with pytest.raises(RuntimeError):
-            module._deny_remote(value, allowed, root.resolve())
+            module._deny_remote(value, allowed, resolved_root)
+
     approved.chmod(0o666)
     with pytest.raises(RuntimeError):
-        module._deny_remote(approved.resolve(), allowed, root.resolve())
+        module._deny_remote("approved.bin", allowed, resolved_root)
 
 
 def test_additional_tensor_contract_rejections() -> None:
@@ -799,7 +824,7 @@ def test_snapshot_binds_loaded_bytes_despite_original_replacement(
     config, _ = _fixture(tmp_path)
     _installed(monkeypatch)
     original_yaml = Path(config.config_path).read_bytes()
-    original_wav = Path(config.voice_prompt_path).read_bytes()
+    original_wav = Path(config.voice_asset_path).read_bytes()
     observed: dict[str, bytes | Path] = {}
 
     class SnapshotModel:
@@ -834,8 +859,8 @@ def test_snapshot_binds_loaded_bytes_despite_original_replacement(
 
     monkeypatch.setattr(module, "_worker_marker", module._WORKER_TOKEN)
     engine = PocketTTSEngine(config)
-    Path(config.voice_prompt_path).unlink()
-    Path(config.voice_prompt_path).symlink_to(config_path_name)
+    Path(config.voice_asset_path).unlink()
+    Path(config.voice_asset_path).symlink_to(config_path_name)
     engine.synthesize(_task())
     assert observed["yaml"] == original_yaml
     assert observed["wav"] == original_wav

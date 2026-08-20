@@ -6,7 +6,6 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.metadata
-import io
 import math
 import os
 import re
@@ -15,7 +14,6 @@ import stat
 import struct
 import sys
 import tempfile
-import wave
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -32,6 +30,7 @@ MAX_MODEL_FILE_BYTES: Final = 2 * 1024 * 1024 * 1024
 MAX_MODEL_TOTAL_BYTES: Final = 4 * 1024 * 1024 * 1024
 MAX_CONFIG_BYTES: Final = 1024 * 1024
 MAX_VOICE_BYTES: Final = 64 * 1024 * 1024
+MAX_SAFETENSORS_HEADER_BYTES: Final = 16 * 1024 * 1024
 MAX_MANIFEST_ENTRIES: Final = 4096
 MAX_DIRECTORY_ENTRIES: Final = 8192
 MAX_RELATIVE_PATH_DEPTH: Final = 32
@@ -61,8 +60,10 @@ class PocketEngineConfig:
     model_revision: str
     package_version: str
     files: tuple[PocketManifestFile, ...]
-    voice_prompt_path: str
-    voice_prompt_sha256: str
+    voice_asset_path: str
+    voice_asset_sha256: str
+    voice_variety: str
+    cloning_capable: bool
     voice_provenance: str
     voice_license_id: str
     voice_rights: str
@@ -85,7 +86,8 @@ class PocketEngineConfig:
             "package_version": self.package_version,
             "sample_rate_hz": self.sample_rate_hz,
             "voice_license_id": self.voice_license_id,
-            "voice_prompt_sha256": self.voice_prompt_sha256,
+            "voice_asset_sha256": self.voice_asset_sha256,
+            "voice_variety": self.voice_variety,
             "voice_provenance": self.voice_provenance,
             "voice_rights": self.voice_rights,
         }
@@ -161,10 +163,10 @@ def _validate_fields(config: object) -> PocketEngineConfig:
         or not 0.0 < config.timeout_seconds <= MAX_TIMEOUT_SECONDS
     ):
         raise _model_failure()
-    _nonempty_string(config.voice_prompt_path, voice=True)
+    _nonempty_string(config.voice_asset_path, voice=True)
     if (
-        type(config.voice_prompt_sha256) is not str
-        or _SHA256.fullmatch(config.voice_prompt_sha256) is None
+        type(config.voice_asset_sha256) is not str
+        or _SHA256.fullmatch(config.voice_asset_sha256) is None
     ):
         raise _voice_failure()
     _nonempty_string(config.voice_provenance, voice=True)
@@ -330,48 +332,20 @@ def _inspect_yaml(data: bytes) -> None:
             raise _model_failure()
 
 
-def _validate_wav(data: bytes) -> None:
-    try:
-        if (
-            len(data) < 44
-            or data[:4] != b"RIFF"
-            or data[8:12] != b"WAVE"
-            or struct.unpack_from("<I", data, 4)[0] + 8 != len(data)
-        ):
-            raise wave.Error
-        offset = 12
-        chunks: set[bytes] = set()
-        while offset < len(data):
-            if offset + 8 > len(data):
-                raise wave.Error
-            name = data[offset : offset + 4]
-            size = struct.unpack_from("<I", data, offset + 4)[0]
-            offset += 8
-            end = offset + size
-            if end > len(data):
-                raise wave.Error
-            chunks.add(name)
-            offset = end + (size & 1)
-        if offset != len(data) or not {b"fmt ", b"data"}.issubset(chunks):
-            raise wave.Error
-        with wave.open(io.BytesIO(data), "rb") as source:
-            channels = source.getnchannels()
-            width = source.getsampwidth()
-            rate = source.getframerate()
-            frames = source.getnframes()
-            if (
-                not 1 <= channels <= 8
-                or not 1 <= width <= 4
-                or not 8_000 <= rate <= 192_000
-                or frames <= 0
-                or frames * channels * width > MAX_VOICE_BYTES
-            ):
-                raise wave.Error
-            payload = source.readframes(frames)
-            if len(payload) != frames * channels * width:
-                raise wave.Error
-    except (EOFError, OverflowError, struct.error, wave.Error):
-        raise _voice_failure() from None
+def _validate_safetensors(data: bytes) -> None:
+    """Validate a bounded safetensors header without importing torch."""
+    prefix = 8
+    if len(data) < prefix:
+        raise _voice_failure()
+    declared = int.from_bytes(data[:prefix], "little")
+    if (
+        declared <= 0
+        or declared > MAX_SAFETENSORS_HEADER_BYTES
+        or declared > len(data) - prefix
+    ):
+        raise _voice_failure()
+    if not data[prefix : prefix + declared].lstrip().startswith(b"{"):
+        raise _voice_failure()
 
 
 def _scan_manifest(root: Path, expected: dict[str, PocketManifestFile]) -> None:
@@ -467,9 +441,9 @@ def _manifest(
         raise _model_failure()
     _inspect_yaml(config_bytes)
 
-    prompt = _canonical_absolute(config.voice_prompt_path, voice=True)
+    prompt = _canonical_absolute(config.voice_asset_path, voice=True)
     _validate_root(prompt.parent, voice=True)
-    if prompt.is_relative_to(root) or prompt.suffix.lower() != ".wav":
+    if prompt.is_relative_to(root) or prompt.suffix.lower() != ".safetensors":
         raise _voice_failure()
     try:
         prompt_size = prompt.lstat().st_size
@@ -478,14 +452,16 @@ def _manifest(
     wav_bytes = _verify_source(
         prompt,
         prompt_size,
-        config.voice_prompt_sha256,
+        config.voice_asset_sha256,
         MAX_VOICE_BYTES,
         voice=True,
         capture_limit=MAX_VOICE_BYTES,
     )
     if wav_bytes is None:
         raise _voice_failure()
-    _validate_wav(wav_bytes)
+    # Every renderable asset is a compiled embedding: WAV prompts are compiled
+    # during provisioning, so the render path has exactly one branch.
+    _validate_safetensors(wav_bytes)
     return root, selected, expected, prompt_size
 
 
@@ -510,7 +486,7 @@ def preflight_pocket(
         raise _model_failure()
     _manifest(config)
     if voice is not None and (
-        voice.content_fingerprint != config.voice_prompt_sha256
+        voice.content_fingerprint != config.voice_asset_sha256
         or voice.provenance != config.voice_provenance
         or voice.license_id != config.voice_license_id
         or voice.commercial_use_allowed is not config.commercial_use_allowed
@@ -611,7 +587,7 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
     snapshot = Path(tempfile.mkdtemp(prefix="kenkui-pocket-"))
     snapshot.chmod(0o700)
     model = snapshot / "model"
-    prompt = snapshot / "voice" / "prompt.wav"
+    prompt = snapshot / "voice" / "prompt.safetensors"
     try:
         model.mkdir(mode=0o700)
         for relative_name, item in expected.items():
@@ -621,27 +597,29 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
                 item,
             )
         voice_item = PocketManifestFile(
-            "prompt.wav", prompt_size, config.voice_prompt_sha256
+            "prompt.safetensors", prompt_size, config.voice_asset_sha256
         )
-        _copy_snapshot(Path(config.voice_prompt_path), prompt, voice_item, voice=True)
+        _copy_snapshot(Path(config.voice_asset_path), prompt, voice_item, voice=True)
         for current, directories, _names in os.walk(snapshot, topdown=False):
             for directory in directories:
                 (Path(current) / directory).chmod(0o500)
         snap = PocketEngineConfig(
-            str(model),
-            str(model / selected.relative_to(root)),
-            config.model_revision,
-            config.package_version,
-            config.files,
-            str(prompt),
-            config.voice_prompt_sha256,
-            config.voice_provenance,
-            config.voice_license_id,
-            config.voice_rights,
-            config.commercial_use_allowed,
-            config.sample_rate_hz,
-            config.device,
-            config.timeout_seconds,
+            model_root=str(model),
+            config_path=str(model / selected.relative_to(root)),
+            model_revision=config.model_revision,
+            package_version=config.package_version,
+            files=config.files,
+            voice_asset_path=str(prompt),
+            voice_asset_sha256=config.voice_asset_sha256,
+            voice_variety=config.voice_variety,
+            cloning_capable=config.cloning_capable,
+            voice_provenance=config.voice_provenance,
+            voice_license_id=config.voice_license_id,
+            voice_rights=config.voice_rights,
+            commercial_use_allowed=config.commercial_use_allowed,
+            sample_rate_hz=config.sample_rate_hz,
+            device=config.device,
+            timeout_seconds=config.timeout_seconds,
         )
         return snapshot, snap
     except Exception:
@@ -650,15 +628,25 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
 
 
 def _deny_remote(value: object, allowed: frozenset[Path], root: Path) -> Path:
+    """Map a declared relative asset name to a verified file inside the snapshot.
+
+    Config YAML declares assets by relative name: `_inspect_yaml` rejects
+    absolute paths, and an absolute path could not be written in advance anyway
+    because the snapshot root is a temporary directory created per engine. This
+    is the single place that resolves a declared name against that root and
+    checks it against the manifest allowlist.
+    """
     if type(value) is not str and not isinstance(value, Path):
         raise RuntimeError
     try:
-        path = Path(value)
+        declared = PurePosixPath(str(value))
+        if declared.is_absolute() or any(part in {"..", ""} for part in declared.parts):
+            raise OSError
+        path = root.joinpath(*declared.parts)
         resolved = path.resolve(strict=True)
         info = resolved.lstat()
         if (
-            not path.is_absolute()
-            or resolved != path
+            resolved != path
             or resolved not in allowed
             or not resolved.is_relative_to(root)
             or not _safe_mode(info)
@@ -675,6 +663,8 @@ class PocketTTSEngine:
 
     def __init__(self, config: PocketEngineConfig, *, reusable: bool = False) -> None:
         self._snapshot: Path | None = None
+        self._state: Any = None
+        self._patched: list[tuple[Any, Any]] = []
         self._reusable = reusable
         if _worker_marker is not _WORKER_TOKEN:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED)
@@ -690,7 +680,13 @@ class PocketTTSEngine:
             )
             module = importlib.import_module("pocket_tts")
             implementation = importlib.import_module("pocket_tts.models.tts_model")
-            root = Path(self._config.model_root)
+            # Resolve the root once and build the allowlist from it. The
+            # per-component symlink check below compares a candidate against
+            # its own resolution, which only means "the final component is not
+            # a symlink" when the ancestors are already resolved. On macOS the
+            # snapshot lives under /var, a symlink to /private/var, so an
+            # unresolved root made every candidate compare unequal.
+            root = Path(self._config.model_root).resolve()
             allowed = frozenset(
                 root / item.relative_path for item in self._config.files
             )
@@ -698,14 +694,29 @@ class PocketTTSEngine:
             def deny(value: object) -> Path:
                 return _deny_remote(value, allowed, root)
 
+            self._patched = []
             setattr(implementation, "download_if_necessary", deny)
-            for alias_name in ("pocket_tts.utils", "pocket_tts.models"):
-                try:
-                    alias = importlib.import_module(alias_name)
-                except (ImportError, KeyError):
-                    continue
-                if hasattr(alias, "download_if_necessary"):
+            # Every pocket-tts module that imported the downloader gets the
+            # allowlist, not a hand-picked few. pocket_tts.conditioners.text
+            # holds its own reference and loads the sentencepiece tokenizer
+            # through it; leaving that one unpatched both bypassed the
+            # allowlist and left a relative tokenizer path unresolved.
+            for alias_name in [
+                name for name in sys.modules if name.startswith("pocket_tts")
+            ]:
+                alias = sys.modules.get(alias_name)
+                if alias is not None and hasattr(alias, "download_if_necessary"):
+                    self._patched.append(
+                        (alias, getattr(alias, "download_if_necessary"))
+                    )
                     setattr(alias, "download_if_necessary", deny)
+            if any(
+                getattr(sys.modules.get(name), "download_if_necessary", deny)
+                is not deny
+                for name in sys.modules
+                if name.startswith("pocket_tts")
+            ):
+                raise RuntimeError
             model_type = getattr(module, "TTSModel")
             if not hasattr(model_type, "load_model"):
                 raise RuntimeError
@@ -725,6 +736,13 @@ class PocketTTSEngine:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED) from None
 
     def close(self) -> None:
+        # Restore the downloader before dropping the snapshot. The rebinding is
+        # process-global, so leaving it in place outlives the engine and, in a
+        # single process, would poison provisioning's own fetch.
+        for module, original in getattr(self, "_patched", ()):
+            with suppress(AttributeError, TypeError):
+                setattr(module, "download_if_necessary", original)
+        self._patched = []
         snapshot = self._snapshot
         self._snapshot = None
         if snapshot is not None:
@@ -740,14 +758,26 @@ class PocketTTSEngine:
     def __del__(self) -> None:
         self.close()
 
+    def _voice_state(self) -> Any:
+        """Derive the conditioning state once and reuse it for every segment.
+
+        Workers hold a reusable engine and process a batch serially, so deriving
+        this per segment was pure waste. The argument is a Path, never a str:
+        get_state_for_audio_prompt calls download_if_necessary only on str, so a
+        Path cannot reach the network even before _deny_remote intervenes.
+        """
+        if self._state is None:
+            try:
+                self._state = self._model.get_state_for_audio_prompt(
+                    Path(self._config.voice_asset_path)
+                )
+            except Exception:
+                self.close()
+                raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+        return self._state
+
     def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
-        try:
-            state = self._model.get_state_for_audio_prompt(
-                Path(self._config.voice_prompt_path)
-            )
-        except Exception:
-            self.close()
-            raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+        state = self._voice_state()
         try:
             output = self._model.generate_audio(state, task.text)
             audio = tensor_to_pcm(
