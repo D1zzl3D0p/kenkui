@@ -76,6 +76,18 @@ upstream flow.
 7. `pocket-tts==2.1.0` becomes a required dependency.
 8. No CLI. Suite spec 00 section 18 assigns user-facing command-line surface to
    the separate `kentui` project, and the specs do not describe a CLI for core.
+9. Engines are derived state, never user-chosen. They are provisioned when a
+   voice needs one and pruned when the last `loaded` voice referencing them is
+   unloaded or removed. There is no engine verb and no engine listing; engine
+   data hangs off the voices that pull it in.
+10. No bulk operations. Every provisioning verb takes exactly one voice ID, and
+    bulk work composes over `list_voices()`. This keeps the blast radius of a
+    destructive call visible at the call site and makes arbitrary filtering
+    free, at the cost of a comprehension for multi-voice work.
+11. `unload_voice` and `remove_voice` stay distinct verbs rather than one verb
+    with a `keep_registration` flag. A boolean deciding whether hand-entered
+    rights metadata survives is too easy to get wrong, and the two converge for
+    built-in voices anyway.
 
 ## 4. Public API
 
@@ -120,11 +132,44 @@ rejected with `voice_variety_invalid` rather than shadowing the catalog.
 ISO code, because it selects both the engine config and the embedding path.
 
 ```python
+unload_voice(voice_id: str) -> Voice
+```
+
+Reverts `loaded` to `registered`. Deletes the compiled or downloaded asset,
+retains rights metadata so the voice can be reloaded without re-entering it,
+and prunes the voice's engine if no other `loaded` voice references it. Engine
+pruning is the point: at roughly 225 MB per language engine against roughly
+6.5 MB per embedding, unloading without pruning reclaims a small fraction of
+the actual footprint.
+
+```python
+remove_voice(voice_id: str) -> None
+```
+
+Deletes the manifest entry outright, including hand-entered rights metadata,
+after performing the same asset deletion and engine pruning as `unload_voice`.
+For a built-in voice this is equivalent to `unload_voice`, since catalog
+registration cannot be deleted.
+
+```python
 list_voices() -> tuple[Voice, ...]
 ```
 
-Returns the built-in catalog plus manifest entries with rights metadata and
-state. No network.
+Returns every voice Kenkui knows about: the built-in catalog unioned with
+manifest entries. No network, and no hashing — asset presence is a `stat`, not
+a digest. This is the only enumeration primitive, and all multi-voice work
+composes over it:
+
+```python
+loaded  = [v for v in kk.list_voices() if v.state == "loaded"]
+english = [v for v in kk.list_voices() if v.language == "english"]
+stale   = [v for v in kk.list_voices() if v.state == "missing"]
+
+engines = {v.engine for v in kk.list_voices() if v.state == "loaded"}
+disk    = sum(e.size_bytes for e in engines) + sum(
+    v.asset_bytes or 0 for v in kk.list_voices() if v.state == "loaded"
+)
+```
 
 ```python
 Pipeline.assign_voice(voice: str | Voice) -> Pipeline
@@ -135,6 +180,42 @@ Accepts a resolved `Voice` or a bare ID, and always stores the ID, keeping
 
 Invariant: **after `load_voice(x)` returns, `x` is renderable, and nothing else
 produces that state.**
+
+### 4.1 Voice state machine
+
+```
+(none) --add_voice--> registered --load_voice--> loaded
+   ^                      ^  |                      |
+   |                      |  +----unload_voice------+
+   +----remove_voice------+
+```
+
+Built-in voices are implicitly registered by the catalog and therefore start at
+`registered` with no manifest entry; they gain one on load. Local voices enter
+at `registered` via `add_voice`. A third state, `missing`, is reported by
+`list_voices()` when the manifest says `loaded` but the asset file is absent.
+`missing` is computed at list time and never persisted, so the manifest schema
+carries only `registered` and `loaded`. `load_voice` repairs a `missing` voice.
+
+### 4.2 Voice and Engine types
+
+`Voice` is extended beyond the rights metadata of core spec section 12, which
+specifies a minimum rather than a maximum set. It gains `variety`, `state`,
+`language`, `asset_bytes`, and `engine`. `engine` is `None` unless the voice is
+`loaded`.
+
+```python
+@dataclass(frozen=True, slots=True)
+class Engine:
+    id: str
+    language: str
+    model_revision: str
+    cloning_capable: bool
+    size_bytes: int
+```
+
+`Engine` is returned only as `Voice.engine`. There is no top-level engine
+function, per decision 9.
 
 ## 5. Manifest schema
 
@@ -202,7 +283,8 @@ absolute-path requirements are unchanged. The file security checks in
 `src/kenkui/voices.py` becomes a package:
 
 ```
-voices/__init__.py    re-exports Voice, load_voice, add_voice, list_voices
+voices/__init__.py    re-exports Voice, Engine, add_voice, load_voice,
+                      unload_voice, remove_voice, list_voices
 voices/registry.py    static built-in catalog; no network, no I/O
 voices/provision.py   the only network-touching module in Kenkui
 voices/manifest.py    read, merge, atomic write of the managed manifest
@@ -291,6 +373,17 @@ explicitly revisitable trade; the retained extra is the path back.
 - Provisioning against a local fake asset source, with no real network.
 - `add_voice` then `load_voice` round trip, asserting the `registered` to
   `loaded` transition and both hashes for `wav`.
+- `unload_voice` reverts to `registered`, deletes the asset, and retains every
+  rights field.
+- `remove_voice` deletes the entry, and on a built-in leaves the catalog entry
+  reachable at `registered`.
+- Engine pruning: unloading the last voice referencing an engine removes the
+  engine entry and its files; unloading a voice while a sibling remains
+  `loaded` leaves the engine intact.
+- `list_voices()` reports `missing` when a `loaded` asset file is deleted
+  underneath, without hashing, and `load_voice` repairs it.
+- `list_voices()` union semantics: catalog-only voices appear as `registered`
+  with no manifest entry.
 - Atomic manifest write and concurrent provisioning.
 - `write()` raising `voice_not_provisioned` for a registered-only voice.
 - Real download, real compile, and real render remain opt-in behind explicit
@@ -329,4 +422,5 @@ scanning — against real assets. Expect to debug those.
 - Character voices and multi-voice assignment.
 - Shipping known-good asset hashes.
 - Making `pocket-tts` optional again.
-- Voice removal and manifest garbage collection.
+- Bulk provisioning verbs, per decision 10.
+- Any engine verb or engine enumeration, per decision 9.
