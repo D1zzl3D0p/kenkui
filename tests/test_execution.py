@@ -17,6 +17,7 @@ from kenkui._audio.m4b import (
     FakeArtifactAssembler,
 )
 from kenkui._execution.coordinator import MAX_SEGMENT_PCM_BYTES, ExecutionBindings
+from kenkui._execution.cache import CacheStore
 from kenkui._execution.process_pool import (
     EngineSpecification,
     FakeEngineConfig,
@@ -664,3 +665,79 @@ def test_fake_engine_preflights_output_budget_before_allocation() -> None:
         DeterministicFakeEngine().synthesize(task)
     assert caught.value.code == kk.ErrorCode.INVALID_AUDIO
     assert MAX_SEGMENT_PCM_BYTES > 1
+
+
+def test_execution_logs_structured_safe_boundary_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Lifecycle logs provide boundary fields without source or output locations."""
+    pipeline, source, _ = _pipeline(tmp_path)
+    _bind(monkeypatch, DeterministicFakeEngine(), FakeArtifactAssembler())
+    caplog.set_level("INFO", logger="kenkui._execution.coordinator")
+
+    pipeline.write_m4b(tmp_path / "result.m4b")
+
+    boundaries = {
+        record.boundary
+        for record in caplog.records
+        if getattr(record, "event", None) == "execution_stage_started"
+    }
+    assert {"planning", "rendering", "encoding"} <= boundaries
+    assert str(source) not in caplog.text
+    assert "Exact first." not in caplog.text
+
+
+def test_execution_logs_terminal_errors_with_stable_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Terminal errors log a public code without backend exception details."""
+    pipeline, _, _ = _pipeline(tmp_path)
+
+    class BrokenEngine(DeterministicFakeEngine):
+        def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
+            raise RuntimeError("provider token and source path")
+
+    _bind(monkeypatch, BrokenEngine(), FakeArtifactAssembler())
+    caplog.set_level("INFO", logger="kenkui._execution.coordinator")
+
+    with pytest.raises(kk.RenderError):
+        pipeline.write_m4b(tmp_path / "result.m4b")
+
+    terminal = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "execution_failed"
+    )
+    assert terminal.boundary == "terminal_error"
+    assert terminal.code == kk.ErrorCode.SYNTHESIS_FAILED.value
+    assert "provider token" not in caplog.text
+
+
+def test_execution_logs_structured_cache_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cache outcomes carry a structured boundary without cache-key details."""
+    pipeline, source, _ = _pipeline(tmp_path)
+    bindings = ExecutionBindings(
+        EngineSpecification.fake(),
+        FakeArtifactAssembler(),
+        _voice(),
+        "fake-v1",
+        CacheStore(tmp_path / "cache"),
+    )
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    caplog.set_level("INFO", logger="kenkui._execution.coordinator")
+
+    pipeline.write_m4b(tmp_path / "result.m4b")
+
+    record = next(
+        entry for entry in caplog.records if getattr(entry, "event", None) == "cache_miss"
+    )
+    assert record.boundary == "cache"
+    assert str(source) not in caplog.text

@@ -596,3 +596,40 @@ def test_deep_xhtml_has_stable_limit_error_and_template_is_inert(
         spine=["one"],
     )
     assert kk.epub(shallow).inspect().chapters[0].text == "spoken"
+
+
+def test_source_only_pipeline_can_inspect_fixture_epub(tmp_path: Path) -> None:
+    """Inspection reads a valid EPUB without voice or synthesis intent."""
+    fixture_epub = make_epub(
+        tmp_path / "fixture.epub",
+        chapters={"chapter": xhtml("<p>Inspectable source.</p>")},
+        spine=("chapter",),
+    )
+
+    inspection = kk.epub(fixture_epub).inspect()
+
+    assert inspection.chapters
+
+
+def test_inspection_logs_safe_parse_context(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Inspection logs only structured parse metadata, never source contents."""
+    source = make_epub(
+        tmp_path / "secret-source.epub",
+        chapters={"chapter": xhtml("<p>Secret source text.</p>")},
+        spine=("chapter",),
+    )
+    caplog.set_level("INFO", logger="kenkui.pipeline")
+
+    kk.epub(source).inspect()
+
+    record = next(
+        entry
+        for entry in caplog.records
+        if getattr(entry, "event", None) == "inspection_completed"
+    )
+    assert record.boundary == "parse"
+    assert record.chapter_count == 1
+    assert str(source) not in caplog.text
+    assert "Secret source text." not in caplog.text

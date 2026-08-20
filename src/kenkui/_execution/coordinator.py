@@ -30,6 +30,7 @@ from kenkui._execution.process_pool import (
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ
 from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
 from kenkui.api import ExecutionStats, Result
+from kenkui.observability import get_logger, log_event
 from kenkui.errors import (
     EncodingError,
     ErrorCode,
@@ -62,7 +63,7 @@ MAX_COMPRESSED_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_SEGMENT_PCM_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_PCM_BYTES = 512 * 1024 * 1024
 MAX_ARTIFACT_BYTES = MAX_TOTAL_PCM_BYTES + (16 * 1024 * 1024)
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +88,11 @@ class _Emitter:
         self._emit(Started(self._next()))
 
     def emit_stage_started(self, stage: str) -> None:
-        _LOGGER.info("execution_stage_started stage=%s", stage)
+        log_event(
+            _LOGGER,
+            "execution_stage_started",
+            context={"boundary": _stage_boundary(stage), "stage": stage},
+        )
         self._emit(StageStarted(self._next(), stage))
 
     def emit_progress(
@@ -97,22 +102,40 @@ class _Emitter:
 
     def emit_stage_completed(self, stage: str) -> None:
         self._emit(StageCompleted(self._next(), stage))
-        _LOGGER.info("execution_stage_completed stage=%s", stage)
+        log_event(
+            _LOGGER,
+            "execution_stage_completed",
+            context={"boundary": _stage_boundary(stage), "stage": stage},
+        )
 
     def emit_stage_completed_best_effort(self, stage: str) -> None:
         """Notify post-commit stage success without allowing commit revocation."""
         try:
             self._emit(StageCompleted(self._next(), stage))
         except RenderError:
-            _LOGGER.warning("execution_callback_failed_post_commit")
-        _LOGGER.info("execution_stage_completed stage=%s", stage)
+            log_event(
+                _LOGGER,
+                "execution_callback_failed_post_commit",
+                level=logging.WARNING,
+                context={"boundary": "callback"},
+            )
+        log_event(
+            _LOGGER,
+            "execution_stage_completed",
+            context={"boundary": _stage_boundary(stage), "stage": stage},
+        )
 
     def emit_completed_best_effort(self) -> None:
         """Notify terminal success without allowing an observer to revoke commit."""
         try:
             self._emit(Completed(self._next()))
         except RenderError:
-            _LOGGER.warning("execution_callback_failed_post_commit")
+            log_event(
+                _LOGGER,
+                "execution_callback_failed_post_commit",
+                level=logging.WARNING,
+                context={"boundary": "callback"},
+            )
 
     def _next(self) -> int:
         self._sequence += 1
@@ -125,6 +148,18 @@ class _Emitter:
             self._callback(event)
         except Exception:  # noqa: BLE001 - sanitize arbitrary public callback.
             raise RenderError(ErrorCode.CALLBACK_FAILED) from None
+
+
+
+
+def _stage_boundary(stage: str) -> str:
+    """Map internal execution stages to their public logging boundaries."""
+    return {
+        "planning": "planning",
+        "render": "rendering",
+        "assembly": "encoding",
+        "publication": "publication",
+    }[stage]
 
 
 def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
@@ -222,7 +257,12 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
         return result  # noqa: TRY300 - commit success remains in the guarded scope.
     except KenkuiError as error:
         # Deliberately omit traceback/context because backends may contain secrets.
-        _LOGGER.error("execution_failed code=%s", error.code.value)  # noqa: TRY400
+        log_event(
+            _LOGGER,
+            "execution_failed",
+            level=logging.ERROR,
+            context={"boundary": "terminal_error", "code": error.code.value},
+        )
         raise
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
@@ -297,10 +337,18 @@ def _render(  # noqa: PLR0913
             item = cache_store.lookup(key, segment, task)
             if item is None:
                 miss_indices.append(index)
-                _LOGGER.info("cache.miss")
+                log_event(
+                    _LOGGER,
+                    "cache_miss",
+                    context={"boundary": "cache"},
+                )
             else:
                 cached[index] = item
-                _LOGGER.info("cache.hit")
+                log_event(
+                    _LOGGER,
+                    "cache_hit",
+                    context={"boundary": "cache"},
+                )
     else:
         miss_indices.extend(range(len(tasks)))
 
