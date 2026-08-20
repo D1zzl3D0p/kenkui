@@ -15,6 +15,20 @@ The runner labels above deliberately state the platform exactly; they do not
 promise every Linux distribution, macOS release, CPU architecture, PyPy, or
 Windows.
 
+## Install size
+
+`pocket-tts==2.1.0` is a **required** dependency, and it pulls `torch`,
+`scipy`, `sentencepiece`, `numpy`, and `pydantic`. Expect a torch-scale
+install of well over a gigabyte, not the few hundred kilobytes a pure-Python
+EPUB library would suggest.
+
+Provisioning downloads more on top of that, on first use only: roughly 225 MB
+per language engine plus roughly 6.5 MB per voice. See
+[Usage](usage.md#provisioning-voices).
+
+The `[pocket]` extra is retained as an empty alias so existing
+`kenkui[pocket]` installs keep resolving. It no longer adds anything.
+
 ## Base and Pocket installs
 
 Install only the base parser/public API dependencies:
@@ -23,7 +37,8 @@ Install only the base parser/public API dependencies:
 python -m pip install kenkui
 ```
 
-Install the optional adapter dependencies when an approved local Pocket
+The adapter dependencies are already included. This extra is a no-op, kept
+for compatibility with installs that requested it when Pocket
 deployment is available:
 
 ```console
@@ -37,7 +52,8 @@ uv build
 python -m pip install dist/kenkui-0.1.0-py3-none-any.whl
 ```
 
-`[pocket]` pins `pocket-tts==2.1.0`, the exact upstream API inspected and adapted.
+`pocket-tts==2.1.0` is pinned exactly: the adapter depends on the inspected
+upstream API and rejects any other installed version.
 It does **not** include model weights, a voice, accepted upstream terms, or an
 online downloader, and it does not make the fail-closed public renderer active.
 See [Pocket-TTS adapter](pocket-tts-adapter.md).
@@ -71,8 +87,8 @@ candidate is published after a failed check.
 
 - Base runtime pins `defusedxml==0.7.1`: XML hardening is part of the reviewed
   EPUB parser boundary, so silent behavior drift is avoided.
-- The optional extra pins `pocket-tts==2.1.0`: the adapter depends on the
-  inspected package API and rejects any other installed version.
+- `pocket-tts==2.1.0` is pinned exactly: the adapter depends on the inspected
+  package API and rejects any other installed version.
 - Development/docs tools are resolved transitively and locked in `uv.lock`.
   `uv sync --frozen --all-groups` makes that lock authoritative in CI without
   rewriting it.

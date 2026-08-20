@@ -1,15 +1,26 @@
 # Pocket-TTS 2.1.0 adapter and offline activation
 
-The Pocket adapter is implemented as a private, fail-closed production binding.
-It is not an online model manager and is not automatically selected by the
-public pipeline. Install its Python dependency with:
+The Pocket adapter is a private, fail-closed production binding. It is not an
+online model manager: it downloads nothing, compiles nothing, and reads only a
+manifest that [provisioning](usage.md#provisioning-voices) wrote.
 
-```console
-python -m pip install "kenkui[pocket]"
-```
+`pocket-tts==2.1.0` is a required dependency and needs no separate install.
+Installing it does not fetch or authorize any model or voice.
 
-This installs the exact inspected adapter dependency, `pocket-tts==2.1.0`; it
-does not fetch or authorize a model/voice and does not pass the real gate.
+## Single-branch render path
+
+Every renderable voice asset is a compiled `.safetensors` speaker embedding.
+WAV prompts are compiled during provisioning, so the adapter has no
+audio-encoding branch: `preflight_pocket` validates a bounded safetensors
+header, and `synthesize` loads a conditioning state and nothing else.
+
+The conditioning state is derived **once per engine**, not once per segment. A
+worker holds a reusable engine and processes its batch serially, so
+re-deriving per segment repeated a file load for every chunk of text.
+
+The path passed to `get_state_for_audio_prompt` is always a `Path`, never a
+`str`. Upstream calls `download_if_necessary` only for `str` input, so a `Path`
+cannot reach the network even before the allowlist intervenes.
 
 ## Required local manifest
 
@@ -64,12 +75,28 @@ The inspected PyPI wheel SHA-256 was
 `7b8f01d3e52aa7df84887b711994586bdc875e024a8b40a15f757feeeb29f752`.
 Wheel/source inspection is not inference acceptance.
 
-## Explicit blocker
+## Provisioning boundary
 
-The real gate is currently blocked on an **approved model revision plus complete
-manifest/checksums** and a **selected authorized local voice with complete
-provenance/license/rights metadata**. No approved assets are present, no
-model/voice was downloaded, no credentials are used, and no real Pocket inference
-runs in CI. The gate must remain separate and opt-in even after assets are
-approved; fake/native FFmpeg acceptance cannot be relabeled as real Pocket
-acceptance.
+Provisioning is the only part of Kenkui that reaches the network, and it never
+runs inside a render. `tests/test_import_boundaries.py` statically asserts that
+no module under `_tts`, `_execution`, `_audio`, `_domain`, or `_epub` imports
+the provisioning module.
+
+Because the renderer replaces `download_if_necessary` with an allowlist
+accepting only local absolute paths, a stock pocket-tts config full of `hf://`
+URLs would be rejected at load time. Provisioning therefore writes a derived
+config with every weight reference rewritten to a local path, and a test
+asserts no remote scheme survives into it.
+
+## Remaining gate
+
+Real inference has not been exercised in CI. Unit tests use doubles, and the
+end-to-end test that downloads real assets and renders a real M4B is opt-in
+behind `KENKUI_RUN_PROVISIONING_REAL=1`. Fake or native FFmpeg acceptance
+cannot be relabelled as real Pocket acceptance.
+
+One question remains empirically open: whether an embedding compiled against
+the gated cloning-capable weights loads under the ungated model. The design
+fails closed on it — the compiling engine's revision is recorded in the voice's
+`compatible_model_revisions`, and the existing revision check rejects a
+mismatch.

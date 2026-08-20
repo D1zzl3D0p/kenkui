@@ -62,13 +62,15 @@ they do not mutate the original. `validate()` is inexpensive and does not parse
 the EPUB. `inspect()` securely parses it and returns frozen metadata/chapters.
 
 ```python
-from kenkui import CancellationToken, ErrorCode, KenkuiError, epub
+from kenkui import CancellationToken, ErrorCode, KenkuiError, epub, load_voice
+
+load_voice("eponine")  # one-time: downloads and hashes the voice
 
 base = epub("book.epub")
 job = (
     base.select_chapter_range("chapter-start", "chapter-end")
     .normalize_text()
-    .assign_voice("approved-narrator")
+    .assign_voice("eponine")
     .tts()
     .metadata(title="Example", author="Author", cover="source")
 )
