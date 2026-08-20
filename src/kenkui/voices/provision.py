@@ -161,8 +161,11 @@ def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineReco
     )
     files = [_place(_fetch(weights_url), model_root / "model.safetensors")]
 
+    # Relative names, not absolute paths: _inspect_yaml rejects absolute paths,
+    # and the renderer resolves these against its per-engine snapshot root,
+    # which does not exist yet here.
     derived = dict(stock)
-    derived["weights_path"] = str(model_root / "model.safetensors")
+    derived["weights_path"] = "model.safetensors"
     derived.pop("weights_path_without_voice_cloning", None)
     derived["flow_lm"] = dict(stock["flow_lm"])
     derived["mimi"] = dict(stock["mimi"])
@@ -175,16 +178,14 @@ def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineReco
         files.append(
             _place(_fetch(lookup["tokenizer_path"]), model_root / "tokenizer.model")
         )
-        derived["flow_lm"]["lookup_table"]["tokenizer_path"] = str(
-            model_root / "tokenizer.model"
-        )
+        derived["flow_lm"]["lookup_table"]["tokenizer_path"] = "tokenizer.model"
     if stock["mimi"].get("weights_path"):
         files.append(
             _place(
                 _fetch(stock["mimi"]["weights_path"]), model_root / "mimi.safetensors"
             )
         )
-        derived["mimi"]["weights_path"] = str(model_root / "mimi.safetensors")
+        derived["mimi"]["weights_path"] = "mimi.safetensors"
     if stock["flow_lm"].get("weights_path"):
         files.append(
             _place(
@@ -192,7 +193,7 @@ def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineReco
                 model_root / "flow_lm.safetensors",
             )
         )
-        derived["flow_lm"]["weights_path"] = str(model_root / "flow_lm.safetensors")
+        derived["flow_lm"]["weights_path"] = "flow_lm.safetensors"
 
     config_path = model_root / f"{language}.yaml"
     config_path.write_text(yaml.safe_dump(derived, sort_keys=True), encoding="utf-8")

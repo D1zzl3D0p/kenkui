@@ -628,15 +628,25 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
 
 
 def _deny_remote(value: object, allowed: frozenset[Path], root: Path) -> Path:
+    """Map a declared relative asset name to a verified file inside the snapshot.
+
+    Config YAML declares assets by relative name: `_inspect_yaml` rejects
+    absolute paths, and an absolute path could not be written in advance anyway
+    because the snapshot root is a temporary directory created per engine. This
+    is the single place that resolves a declared name against that root and
+    checks it against the manifest allowlist.
+    """
     if type(value) is not str and not isinstance(value, Path):
         raise RuntimeError
     try:
-        path = Path(value)
+        declared = PurePosixPath(str(value))
+        if declared.is_absolute() or any(part in {"..", ""} for part in declared.parts):
+            raise OSError
+        path = root.joinpath(*declared.parts)
         resolved = path.resolve(strict=True)
         info = resolved.lstat()
         if (
-            not path.is_absolute()
-            or resolved != path
+            resolved != path
             or resolved not in allowed
             or not resolved.is_relative_to(root)
             or not _safe_mode(info)
@@ -669,7 +679,13 @@ class PocketTTSEngine:
             )
             module = importlib.import_module("pocket_tts")
             implementation = importlib.import_module("pocket_tts.models.tts_model")
-            root = Path(self._config.model_root)
+            # Resolve the root once and build the allowlist from it. The
+            # per-component symlink check below compares a candidate against
+            # its own resolution, which only means "the final component is not
+            # a symlink" when the ancestors are already resolved. On macOS the
+            # snapshot lives under /var, a symlink to /private/var, so an
+            # unresolved root made every candidate compare unequal.
+            root = Path(self._config.model_root).resolve()
             allowed = frozenset(
                 root / item.relative_path for item in self._config.files
             )
@@ -678,13 +694,24 @@ class PocketTTSEngine:
                 return _deny_remote(value, allowed, root)
 
             setattr(implementation, "download_if_necessary", deny)
-            for alias_name in ("pocket_tts.utils", "pocket_tts.models"):
-                try:
-                    alias = importlib.import_module(alias_name)
-                except (ImportError, KeyError):
-                    continue
-                if hasattr(alias, "download_if_necessary"):
+            # Every pocket-tts module that imported the downloader gets the
+            # allowlist, not a hand-picked few. pocket_tts.conditioners.text
+            # holds its own reference and loads the sentencepiece tokenizer
+            # through it; leaving that one unpatched both bypassed the
+            # allowlist and left a relative tokenizer path unresolved.
+            for alias_name in [
+                name for name in sys.modules if name.startswith("pocket_tts")
+            ]:
+                alias = sys.modules.get(alias_name)
+                if alias is not None and hasattr(alias, "download_if_necessary"):
                     setattr(alias, "download_if_necessary", deny)
+            if any(
+                getattr(sys.modules.get(name), "download_if_necessary", deny)
+                is not deny
+                for name in sys.modules
+                if name.startswith("pocket_tts")
+            ):
+                raise RuntimeError
             model_type = getattr(module, "TTSModel")
             if not hasattr(model_type, "load_model"):
                 raise RuntimeError

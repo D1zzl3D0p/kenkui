@@ -756,6 +756,12 @@ def test_manifest_selected_prompt_and_directory_rejections(
 
 
 def test_downloader_allowlist_revalidates_snapshot_files(tmp_path: Path) -> None:
+    """Declared names are relative and resolve against the snapshot root.
+
+    Config YAML cannot carry absolute paths: _inspect_yaml rejects them, and the
+    snapshot root is a per-engine temporary directory that does not exist when
+    the config is written.
+    """
     from kenkui._tts import pocket as module
 
     root = tmp_path / "snapshot"
@@ -764,16 +770,32 @@ def test_downloader_allowlist_revalidates_snapshot_files(tmp_path: Path) -> None
     approved.write_bytes(b"approved")
     approved.chmod(0o400)
     allowed = frozenset({approved.resolve()})
+    resolved_root = root.resolve()
+
     assert (
-        module._deny_remote(approved.resolve(), allowed, root.resolve())
+        module._deny_remote("approved.bin", allowed, resolved_root)
         == approved.resolve()
     )
-    for value in (object(), "relative", str(tmp_path / "missing")):
+
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"outside")
+    outside.chmod(0o400)
+    rejected = (
+        object(),
+        str(approved.resolve()),
+        "/etc/passwd",
+        "../outside.bin",
+        "nested/../approved.bin",
+        "missing.bin",
+        "unapproved.bin",
+    )
+    for value in rejected:
         with pytest.raises(RuntimeError):
-            module._deny_remote(value, allowed, root.resolve())
+            module._deny_remote(value, allowed, resolved_root)
+
     approved.chmod(0o666)
     with pytest.raises(RuntimeError):
-        module._deny_remote(approved.resolve(), allowed, root.resolve())
+        module._deny_remote("approved.bin", allowed, resolved_root)
 
 
 def test_additional_tensor_contract_rejections() -> None:
