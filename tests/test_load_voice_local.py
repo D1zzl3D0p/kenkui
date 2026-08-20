@@ -7,10 +7,11 @@ import hashlib
 from pathlib import Path
 
 import pytest
+import yaml
 
 from kenkui import ErrorCode, VoiceError, add_voice, load_voice
 from kenkui.voices import provision
-from kenkui.voices.manifest import EngineRecord, ManifestStore
+from kenkui.voices.manifest import EngineRecord, FileRecord, ManifestStore
 
 _RIGHTS: dict[str, object] = {
     "name": "My Narrator",
@@ -127,3 +128,53 @@ def test_source_modified_after_registration_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(VoiceError) as excinfo:
         load_voice("mine", manifest=manifest)
     assert excinfo.value.code is ErrorCode.POCKET_VOICE_INVALID
+
+
+def test_absolute_config_resolves_every_relative_asset_name(tmp_path: Path) -> None:
+    """Regression: compilation cannot use the stored relative-name config.
+
+    The renderer rejects absolute paths and resolves names against its own
+    snapshot; compilation runs outside it and would fail to find any asset.
+    """
+    root = tmp_path / "engine"
+    root.mkdir()
+    stored = root / "english.yaml"
+    stored.write_text(
+        yaml.safe_dump(
+            {
+                "weights_path": "model.safetensors",
+                "flow_lm": {"lookup_table": {"tokenizer_path": "tokenizer.model"}},
+                "mimi": {"weights_path": "mimi.safetensors"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine = EngineRecord(
+        id="english",
+        language="english",
+        model_root=str(root),
+        config_path=str(stored),
+        model_revision="rev",
+        package_version="2.1.0",
+        files=(FileRecord("model.safetensors", 1, "a" * 64),),
+        sample_rate_hz=24000,
+        device="cpu",
+        timeout_seconds=300.0,
+        cloning_capable=True,
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    produced = yaml.safe_load(
+        provision._absolute_config(engine, work).read_text(encoding="utf-8")
+    )
+    assert produced["weights_path"] == str(root / "model.safetensors")
+    assert produced["flow_lm"]["lookup_table"]["tokenizer_path"] == str(
+        root / "tokenizer.model"
+    )
+    assert produced["mimi"]["weights_path"] == str(root / "mimi.safetensors")
+    for value in (
+        produced["weights_path"],
+        produced["flow_lm"]["lookup_table"]["tokenizer_path"],
+        produced["mimi"]["weights_path"],
+    ):
+        assert Path(value).is_absolute()

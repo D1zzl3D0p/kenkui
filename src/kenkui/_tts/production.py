@@ -25,6 +25,7 @@ from kenkui.voices.types import Voice, VoiceVariety
 _MANIFEST_ENV: Final = "KENKUI_POCKET_MANIFEST"
 MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v2"
 _VARIETIES: Final = frozenset({"built-in", "pre-compiled", "wav"})
+_LOCAL_VARIETIES: Final = frozenset({"pre-compiled", "wav"})
 _VOICE_BASE_KEYS: Final = {
     "variety",
     "state",
@@ -175,7 +176,9 @@ def _select_voice(root: dict[str, object], voice_id: str) -> dict[str, object]:
     if state != "loaded":
         raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
     expected = _VOICE_BASE_KEYS | _LOADED_KEYS
-    if variety == "wav":
+    if variety in _LOCAL_VARIETIES:
+        # Both local varieties retain the reviewed original alongside the
+        # compiled asset; only built-ins have no local source.
         expected = expected | _SOURCE_KEYS
     return _object(entry, expected, voice=True)
 
@@ -229,13 +232,18 @@ def _read_manifest(value: object) -> object:
         raise ModelError(ErrorCode.POCKET_MODEL_INVALID)
     descriptor = -1
     try:
-        path = Path(value)
+        declared = Path(value)
         _require_manifest_io(
-            condition=path.is_absolute()
-            and PurePath(value) == path
-            and path.resolve(strict=True) == path
+            condition=declared.is_absolute() and PurePath(value) == declared
         )
+        # Resolve ancestors, then require the final component itself not to be
+        # a symlink. Demanding resolve() == path rejected any manifest under a
+        # symlinked ancestor, which on macOS is every temporary directory
+        # (/var -> /private/var). O_NOFOLLOW plus the lstat/fstat identity
+        # comparison below is what actually blocks final-component swaps.
+        path = declared.parent.resolve(strict=True) / declared.name
         named = path.lstat()
+        _require_manifest_io(condition=not stat.S_ISLNK(named.st_mode))
         descriptor = os.open(
             path,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),

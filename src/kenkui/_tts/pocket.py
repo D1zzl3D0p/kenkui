@@ -664,6 +664,7 @@ class PocketTTSEngine:
     def __init__(self, config: PocketEngineConfig, *, reusable: bool = False) -> None:
         self._snapshot: Path | None = None
         self._state: Any = None
+        self._patched: list[tuple[Any, Any]] = []
         self._reusable = reusable
         if _worker_marker is not _WORKER_TOKEN:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED)
@@ -693,6 +694,7 @@ class PocketTTSEngine:
             def deny(value: object) -> Path:
                 return _deny_remote(value, allowed, root)
 
+            self._patched = []
             setattr(implementation, "download_if_necessary", deny)
             # Every pocket-tts module that imported the downloader gets the
             # allowlist, not a hand-picked few. pocket_tts.conditioners.text
@@ -704,6 +706,9 @@ class PocketTTSEngine:
             ]:
                 alias = sys.modules.get(alias_name)
                 if alias is not None and hasattr(alias, "download_if_necessary"):
+                    self._patched.append(
+                        (alias, getattr(alias, "download_if_necessary"))
+                    )
                     setattr(alias, "download_if_necessary", deny)
             if any(
                 getattr(sys.modules.get(name), "download_if_necessary", deny)
@@ -731,6 +736,13 @@ class PocketTTSEngine:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED) from None
 
     def close(self) -> None:
+        # Restore the downloader before dropping the snapshot. The rebinding is
+        # process-global, so leaving it in place outlives the engine and, in a
+        # single process, would poison provisioning's own fetch.
+        for module, original in getattr(self, "_patched", ()):
+            with suppress(AttributeError, TypeError):
+                setattr(module, "download_if_necessary", original)
+        self._patched = []
         snapshot = self._snapshot
         self._snapshot = None
         if snapshot is not None:

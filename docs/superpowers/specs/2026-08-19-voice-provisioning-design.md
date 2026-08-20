@@ -415,30 +415,43 @@ explicitly revisitable trade; the retained extra is the path back.
 
 ## 13. Open risks
 
-### Resolved 2026-08-20: gated-compiled embeddings load under ungated weights
+### STILL OPEN: gated-compiled embeddings under ungated weights
 
 Compiling a WAV requires gated cloning-capable weights, and the exported state
-contains flow-LM-specific tensors, so it was unclear whether such an embedding
-is valid under the ungated model. **It is.** Measured directly:
+contains flow-LM-specific tensors, so it is unclear whether such an embedding is
+valid under the ungated model. **This remains unverified.**
 
-1. Loaded `kyutai/pocket-tts` (gated, `has_voice_cloning=True`) and compiled a
-   WAV prompt into a 4,769,008-byte embedding.
-2. Loaded `kyutai/pocket-tts-without-voice-cloning` — a genuinely different
-   weight file, confirmed by SHA-256 (`473f47d9…` versus `be9c6b48…`, both
-   219,029,196 bytes).
-3. `_import_model_state` accepted the gated-compiled embedding.
-4. `generate_audio` produced 46,080 finite samples, RMS 0.058, range
-   [-0.630, 0.457] — audio, not silence and not NaN.
+An experiment on 2026-08-20 established only the weaker claim that the tensors
+load. An embedding compiled with `kyutai/pocket-tts` imported cleanly into
+`kyutai/pocket-tts-without-voice-cloning` — a genuinely different weight file,
+confirmed by SHA-256 (`473f47d9…` versus `be9c6b48…`, both 219,029,196 bytes) —
+and `generate_audio` returned 46,080 finite samples at RMS 0.058.
 
-The conservative pinning stays as designed: the compiling engine's revision is
-recorded in `compatible_model_revisions` and the check at
-`production.py:113-114` still rejects a mismatch. Relaxing it so a compiled
-voice may list both revisions is now a safe, optional follow-up rather than an
-unknown.
+**That is not evidence of compatibility.** Weight incompatibility in this stack
+fails *silently*: a mismatched pairing still produces finite, well-formed,
+plausible-looking audio. Every signal the experiment measured — sample count,
+finiteness, RMS, dynamic range — would look identical under an incompatible
+pairing. The only reliable confirmation is listening to the output, which the
+experiment did not do.
 
-Perceptual quality was not assessed. The finding is that the tensors are
-structurally compatible and produce well-formed audio, not that the cloned
-voice sounds identical across the two weight sets.
+Concretely, what is known and what is not:
+
+| Claim | Status |
+| --- | --- |
+| The embedding imports without error | verified |
+| `generate_audio` returns well-formed finite audio | verified |
+| The audio is intelligible speech | **not tested** |
+| The audio preserves the cloned speaker's voice | **not tested** |
+| The pairing is compatible | **unknown** |
+
+Resolving this requires a human listening to output generated from a
+gated-compiled embedding under ungated weights, ideally against the same
+embedding under the gated weights as a reference.
+
+The design stays conservative regardless, and nothing depends on the answer: the
+compiling engine's revision is recorded in the voice's
+`compatible_model_revisions`, and the check at `production.py:113-114` rejects a
+mismatch. Relaxing that pinning must wait for a listening test.
 
 ### Resolved 2026-08-20: first real inference found three renderer defects
 

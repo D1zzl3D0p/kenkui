@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import os
+import re
 import shutil
+import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 import yaml
 
-from kenkui.errors import ErrorCode, VoiceError
+from kenkui.errors import ErrorCode, ModelError, VoiceError
 from kenkui.voices.manifest import (
     EngineRecord,
     FileRecord,
@@ -26,10 +29,27 @@ from kenkui.voices.manifest import (
 from kenkui.voices.registry import CATALOG, catalog_voice, embedding_url
 from kenkui.voices.types import Engine, Voice, VoiceVariety
 
-if TYPE_CHECKING:
-    import os
-
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
+_IDENTIFIER = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
+
+
+def _identifier(value: str, *, code: ErrorCode) -> str:
+    """Reject anything unfit to be a path component or a manifest key."""
+    if type(value) is not str or _IDENTIFIER.fullmatch(value) is None or ".." in value:
+        raise VoiceError(code)
+    return value
+
+
+def _language(value: str) -> str:
+    """Validate a language against the config stems pocket-tts actually ships."""
+    from pocket_tts.utils.config import CONFIGS_DIR  # noqa: PLC0415
+
+    _identifier(value, code=ErrorCode.VOICE_VARIETY_INVALID)
+    if not (CONFIGS_DIR / f"{value}.yaml").is_file():
+        raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
+    return value
+
+
 _SUFFIX_VARIETY: Final[dict[str, VoiceVariety]] = {
     ".wav": "wav",
     ".safetensors": "pre-compiled",
@@ -37,7 +57,18 @@ _SUFFIX_VARIETY: Final[dict[str, VoiceVariety]] = {
 
 
 def _store(manifest: Path | None) -> ManifestStore:
-    return ManifestStore(manifest if manifest is not None else default_manifest_path())
+    """Resolve the manifest the same way the renderer does.
+
+    An explicit argument wins, then KENKUI_POCKET_MANIFEST, then the managed
+    default. Ignoring the override made load_voice write one file while write()
+    read another.
+    """
+    if manifest is not None:
+        return ManifestStore(manifest)
+    override = os.environ.get("KENKUI_POCKET_MANIFEST")
+    if override:
+        return ManifestStore(Path(override))
+    return ManifestStore(default_manifest_path())
 
 
 def _sha256(path: Path) -> str:
@@ -70,6 +101,8 @@ def add_voice(  # noqa: PLR0913
     """
     if voice_id in CATALOG:
         raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
+    _identifier(voice_id, code=ErrorCode.VOICE_VARIETY_INVALID)
+    _language(language)
     source = Path(path).resolve()
     variety = _SUFFIX_VARIETY.get(source.suffix.lower())
     if variety is None:
@@ -94,6 +127,11 @@ def add_voice(  # noqa: PLR0913
     store = _store(manifest)
     with store.lock():
         engines, voices = store.read()
+        existing = voices.get(voice_id)
+        if existing is not None and existing.state == "loaded":
+            # Silently downgrading would orphan the compiled asset and leave an
+            # unreferenced engine behind. Unload first, deliberately.
+            raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
         voices[voice_id] = record
         store.write(engines, voices)
     return Voice(
@@ -139,6 +177,17 @@ def _place(source: Path, destination: Path) -> FileRecord:
     )
 
 
+def engine_id_for(language: str, *, cloning: bool) -> str:
+    """Return the engine identity for one language and capability.
+
+    Capability is part of the identity: the gated cloning weights and the
+    ungated weights are different files with different revisions. Keying on
+    language alone let provisioning a wav voice overwrite the ungated engine
+    every already-loaded built-in in that language depended on.
+    """
+    return f"{language}-cloning" if cloning else language
+
+
 def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineRecord:
     """Download one language engine and write a fully local derived config.
 
@@ -149,8 +198,14 @@ def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineReco
     """
     from pocket_tts.utils.config import CONFIGS_DIR  # noqa: PLC0415
 
-    model_root = root / "engines" / language
-    model_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    engine_id = engine_id_for(language, cloning=cloning)
+    model_root = root / "engines" / engine_id
+    # Staged, then swapped into place. Overwriting the live directory meant a
+    # failure part-way left manifest hashes disagreeing with the bytes on disk,
+    # bricking a previously working engine.
+    staging = root / "engines" / f".{engine_id}.staging"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(mode=0o700, parents=True, exist_ok=True)
     stock: dict[str, Any] = yaml.safe_load(
         (CONFIGS_DIR / f"{language}.yaml").read_text(encoding="utf-8")
     )
@@ -159,7 +214,18 @@ def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineReco
         if cloning
         else stock["weights_path_without_voice_cloning"]
     )
-    files = [_place(_fetch(weights_url), model_root / "model.safetensors")]
+    try:
+        weights = _fetch(weights_url)
+    except VoiceError:
+        raise
+    except Exception:  # noqa: BLE001 — sanitize hub and auth failures
+        # A gated-repo denial otherwise escapes as a huggingface_hub error
+        # carrying repo URLs and local cache paths.
+        shutil.rmtree(staging, ignore_errors=True)
+        if cloning:
+            raise VoiceError(ErrorCode.ENGINE_NOT_CLONING_CAPABLE) from None
+        raise ModelError(ErrorCode.POCKET_MODEL_INVALID) from None
+    files = [_place(weights, staging / "model.safetensors")]
 
     # Relative names, not absolute paths: _inspect_yaml rejects absolute paths,
     # and the renderer resolves these against its per-engine snapshot root,
@@ -176,38 +242,40 @@ def _provision_engine(language: str, *, cloning: bool, root: Path) -> EngineReco
     if lookup is not None and lookup.get("tokenizer_path"):
         derived["flow_lm"]["lookup_table"] = dict(lookup)
         files.append(
-            _place(_fetch(lookup["tokenizer_path"]), model_root / "tokenizer.model")
+            _place(_fetch(lookup["tokenizer_path"]), staging / "tokenizer.model")
         )
         derived["flow_lm"]["lookup_table"]["tokenizer_path"] = "tokenizer.model"
     if stock["mimi"].get("weights_path"):
         files.append(
-            _place(
-                _fetch(stock["mimi"]["weights_path"]), model_root / "mimi.safetensors"
-            )
+            _place(_fetch(stock["mimi"]["weights_path"]), staging / "mimi.safetensors")
         )
         derived["mimi"]["weights_path"] = "mimi.safetensors"
     if stock["flow_lm"].get("weights_path"):
         files.append(
             _place(
                 _fetch(stock["flow_lm"]["weights_path"]),
-                model_root / "flow_lm.safetensors",
+                staging / "flow_lm.safetensors",
             )
         )
         derived["flow_lm"]["weights_path"] = "flow_lm.safetensors"
 
-    config_path = model_root / f"{language}.yaml"
-    config_path.write_text(yaml.safe_dump(derived, sort_keys=True), encoding="utf-8")
-    config_path.chmod(0o600)
+    staged_config = staging / f"{language}.yaml"
+    staged_config.write_text(yaml.safe_dump(derived, sort_keys=True), encoding="utf-8")
+    staged_config.chmod(0o600)
     files.append(
         FileRecord(
-            relative_path=config_path.name,
-            size=config_path.stat().st_size,
-            sha256=_sha256(config_path),
+            relative_path=staged_config.name,
+            size=staged_config.stat().st_size,
+            sha256=_sha256(staged_config),
         )
     )
 
+    shutil.rmtree(model_root, ignore_errors=True)
+    staging.replace(model_root)
+    config_path = model_root / staged_config.name
+
     return EngineRecord(
-        id=language,
+        id=engine_id,
         language=language,
         model_root=str(model_root),
         config_path=str(config_path),
@@ -267,6 +335,37 @@ def _registered_from_catalog(voice_id: str) -> VoiceRecord:
     )
 
 
+def _absolute_config(engine: EngineRecord, work: Path) -> Path:
+    """Write a copy of the engine config with every asset name made absolute.
+
+    The stored config names assets relatively, because the renderer rejects
+    absolute paths and resolves names against its own per-engine snapshot.
+    Compilation runs outside the renderer and has no such resolver.
+    """
+    root = Path(engine.model_root)
+    stock: dict[str, Any] = yaml.safe_load(
+        Path(engine.config_path).read_text(encoding="utf-8")
+    )
+    derived = dict(stock)
+    if derived.get("weights_path"):
+        derived["weights_path"] = str(root / derived["weights_path"])
+    flow = dict(stock.get("flow_lm", {}))
+    lookup = flow.get("lookup_table")
+    if lookup is not None and lookup.get("tokenizer_path"):
+        flow["lookup_table"] = dict(lookup)
+        flow["lookup_table"]["tokenizer_path"] = str(root / lookup["tokenizer_path"])
+    if flow.get("weights_path"):
+        flow["weights_path"] = str(root / flow["weights_path"])
+    derived["flow_lm"] = flow
+    mimi = dict(stock.get("mimi", {}))
+    if mimi.get("weights_path"):
+        mimi["weights_path"] = str(root / mimi["weights_path"])
+    derived["mimi"] = mimi
+    path = work / Path(engine.config_path).name
+    path.write_text(yaml.safe_dump(derived, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def _compile_wav(source: Path, engine: EngineRecord, destination: Path) -> None:
     """Compile one audio prompt into a speaker embedding via pocket-tts.
 
@@ -279,11 +378,12 @@ def _compile_wav(source: Path, engine: EngineRecord, destination: Path) -> None:
     if not engine.cloning_capable:
         raise VoiceError(ErrorCode.ENGINE_NOT_CLONING_CAPABLE)
     try:
-        model = TTSModel.load_model(config=Path(engine.config_path))
-        state = model.get_state_for_audio_prompt(
-            audio_conditioning=source, truncate=True
-        )
-        export_model_state(state, destination)
+        with tempfile.TemporaryDirectory(dir=Path(engine.model_root)) as work:
+            model = TTSModel.load_model(config=_absolute_config(engine, Path(work)))
+            state = model.get_state_for_audio_prompt(
+                audio_conditioning=source, truncate=True
+            )
+            export_model_state(state, destination)
     except VoiceError:
         raise
     except Exception:  # noqa: BLE001 — sanitize any torch/pocket-tts failure
@@ -347,9 +447,10 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
                 return _loaded_view(record, engines[record.engine_id])
         if record is None:
             record = _registered_from_catalog(voice_id)
-        engine = engines.get(record.engine_id)
         cloning = record.variety == "wav"
-        if engine is None or (cloning and not engine.cloning_capable):
+        wanted = engine_id_for(record.language, cloning=cloning)
+        engine = engines.get(wanted)
+        if engine is None or engine.cloning_capable != cloning:
             engine = _provision_engine(record.language, cloning=cloning, root=root)
             engines[engine.id] = engine
         loaded = _materialize(record, engine, root)

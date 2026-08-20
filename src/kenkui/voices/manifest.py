@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from kenkui._tts.production import default_cache_root
+from kenkui.errors import ErrorCode, ModelError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -121,20 +122,32 @@ class ManifestStore:
             os.close(descriptor)
 
     def read(self) -> tuple[dict[str, EngineRecord], dict[str, VoiceRecord]]:
-        """Return stored engines and voices, or empty mappings when absent."""
+        """Return stored engines and voices, or empty mappings when absent.
+
+        A corrupt, truncated, or foreign-schema manifest raises a stable public
+        error rather than leaking a JSON or key error from the internals.
+        """
         try:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return {}, {}
-        payload = json.loads(raw)
-        engines = {
-            key: _engine_from(key, value)
-            for key, value in payload.get("engines", {}).items()
-        }
-        voices = {
-            key: _voice_from(key, value)
-            for key, value in payload.get("voices", {}).items()
-        }
+        except OSError:
+            raise ModelError(ErrorCode.POCKET_MODEL_INVALID) from None
+        try:
+            payload = json.loads(raw)
+            _require_schema(payload)
+            engines = {
+                key: _engine_from(key, value)
+                for key, value in payload.get("engines", {}).items()
+            }
+            voices = {
+                key: _voice_from(key, value)
+                for key, value in payload.get("voices", {}).items()
+            }
+        except ModelError:
+            raise
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise ModelError(ErrorCode.POCKET_MODEL_INVALID) from None
         return engines, voices
 
     def write(
@@ -165,6 +178,14 @@ class ManifestStore:
             raise
 
 
+def _require_schema(payload: object) -> None:
+    """Reject anything that is not a v2 manifest object."""
+    if type(payload) is not dict or payload.get("schema_version") != (
+        MANIFEST_SCHEMA_VERSION
+    ):
+        raise ModelError(ErrorCode.POCKET_MODEL_INVALID)
+
+
 def _engine_to(record: EngineRecord) -> dict[str, Any]:
     payload: dict[str, Any] = {key: getattr(record, key) for key in _ENGINE_KEYS}
     payload["files"] = [
@@ -191,6 +212,10 @@ def _engine_from(engine_id: str, payload: dict[str, Any]) -> EngineRecord:
 
 def _voice_to(record: VoiceRecord) -> dict[str, Any]:
     payload: dict[str, Any] = {key: getattr(record, key) for key in _VOICE_COMMON_KEYS}
+    # Source keys are present exactly when the voice came from a local file,
+    # for both local varieties and in both states. The reader's exact-key-set
+    # check mirrors this rule; the two must agree or a voice that loaded
+    # successfully becomes unrenderable.
     if record.source_path is not None:
         payload["source_path"] = record.source_path
         payload["source_sha256"] = record.source_sha256

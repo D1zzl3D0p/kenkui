@@ -424,6 +424,7 @@ def test_manifest_empty_oversize_short_read_and_identity_mutation_are_rejected(
     assert mutated
 
 
+@pytest.mark.usefixtures("_real_cache_root")
 def test_default_cache_roots_cover_darwin_xdg_and_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
