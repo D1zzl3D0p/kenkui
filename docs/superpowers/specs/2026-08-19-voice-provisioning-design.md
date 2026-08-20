@@ -415,43 +415,43 @@ explicitly revisitable trade; the retained extra is the path back.
 
 ## 13. Open risks
 
-### STILL OPEN: gated-compiled embeddings under ungated weights
+### Resolved 2026-08-20: gated-compiled embeddings work under ungated weights
 
 Compiling a WAV requires gated cloning-capable weights, and the exported state
-contains flow-LM-specific tensors, so it is unclear whether such an embedding is
-valid under the ungated model. **This remains unverified.**
+contains flow-LM-specific tensors, so it was unclear whether such an embedding
+is valid under the ungated model. **It is**, established with a controlled test.
 
-An experiment on 2026-08-20 established only the weaker claim that the tensors
-load. An embedding compiled with `kyutai/pocket-tts` imported cleanly into
-`kyutai/pocket-tts-without-voice-cloning` — a genuinely different weight file,
-confirmed by SHA-256 (`473f47d9…` versus `be9c6b48…`, both 219,029,196 bytes) —
-and `generate_audio` returned 46,080 finite samples at RMS 0.058.
+The measurement matters here, because **weight incompatibility in this stack
+fails silently**: a mismatched pairing still produces finite, well-formed,
+plausible-looking audio. Sample count, finiteness, RMS, and dynamic range are
+all worthless as signals — an earlier attempt wrongly concluded compatibility
+from exactly those numbers. What distinguishes the cases is whether the output
+contains *words*, so the test is speech-to-text with a negative control.
 
-**That is not evidence of compatibility.** Weight incompatibility in this stack
-fails *silently*: a mismatched pairing still produces finite, well-formed,
-plausible-looking audio. Every signal the experiment measured — sample count,
-finiteness, RMS, dynamic range — would look identical under an incompatible
-pairing. The only reliable confirmation is listening to the output, which the
-experiment did not do.
+Same text and same embedding throughout, transcribed with whisper.cpp
+(`ggml-large-v3-turbo-q8_0`):
 
-Concretely, what is known and what is not:
+| Sample | Weights | Duration | Transcription |
+| --- | --- | --- | --- |
+| A, reference | gated compile, **gated** render | 5.68 s | full sentence, verbatim |
+| B, test | gated compile, **ungated** render | 6.32 s | full sentence, verbatim |
+| C, control | italian embedding, english weights | 11.04 s | `"Okay."` |
 
-| Claim | Status |
-| --- | --- |
-| The embedding imports without error | verified |
-| `generate_audio` returns well-formed finite audio | verified |
-| The audio is intelligible speech | **not tested** |
-| The audio preserves the cloned speaker's voice | **not tested** |
-| The pairing is compatible | **unknown** |
+C is a genuinely incompatible pairing. It ran to the generation limit without
+EOS — pocket-tts logs `Maximum generation length reached without EOS, this very
+often indicates an error` — and produced eleven seconds of audio containing no
+words. That is what incompatibility looks like, and it confirms the test can
+detect it. B shows none of it.
 
-Resolving this requires a human listening to output generated from a
-gated-compiled embedding under ungated weights, ideally against the same
-embedding under the gated weights as a reference.
+Scope of the claim: B is intelligible speech of the correct text. Whether B
+preserves the *speaker identity* as faithfully as A is a separate question that
+transcription cannot answer, and it was not assessed.
 
-The design stays conservative regardless, and nothing depends on the answer: the
-compiling engine's revision is recorded in the voice's
-`compatible_model_revisions`, and the check at `production.py:113-114` rejects a
-mismatch. Relaxing that pinning must wait for a listening test.
+The conservative pinning stays in place for now: the compiling engine's
+revision is recorded in the voice's `compatible_model_revisions`, and the check
+at `production.py:113-114` rejects a mismatch. Relaxing it so a compiled voice
+may list both revisions is now a safe, evidenced follow-up rather than an
+unknown. Reproduce with `compat-listening-test/`.
 
 ### Resolved 2026-08-20: first real inference found three renderer defects
 

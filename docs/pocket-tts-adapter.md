@@ -95,13 +95,15 @@ end-to-end test that downloads real assets and renders a real M4B is opt-in
 behind `KENKUI_RUN_PROVISIONING_REAL=1`. Fake or native FFmpeg acceptance
 cannot be relabelled as real Pocket acceptance.
 
-Whether a gated-compiled embedding is valid under the ungated model is **still
-unverified**. An embedding compiled with `kyutai/pocket-tts` does import into
-`kyutai/pocket-tts-without-voice-cloning` and produce finite audio, but that
-proves only that the tensors load. Weight incompatibility here fails silently —
-a mismatched pairing produces equally well-formed audio — so confirming this
-requires listening to the output, which has not been done.
+A gated-compiled embedding **is** valid under the ungated model, confirmed by
+transcription against a negative control. Incompatibility here fails silently —
+a mismatched pairing still yields well-formed audio — so the discriminating
+signal is whether the output contains words. A genuinely mismatched control
+(italian embedding, english weights) ran to the generation limit without EOS and
+transcribed to nothing; the gated-compiled embedding under ungated weights
+transcribed the full sentence verbatim. Speaker-identity fidelity was not
+assessed.
 
-Kenkui pins conservatively: the compiling engine's revision goes into the
+Kenkui still pins conservatively: the compiling engine's revision goes into the
 voice's `compatible_model_revisions` and the revision check rejects a mismatch.
-That pinning must stay until a listening test settles the question.
+Relaxing that is now an evidenced follow-up.
