@@ -415,30 +415,60 @@ explicitly revisitable trade; the retained extra is the path back.
 
 ## 13. Open risks
 
+### Resolved 2026-08-20: gated-compiled embeddings load under ungated weights
+
 Compiling a WAV requires gated cloning-capable weights, and the exported state
-contains flow-LM-specific tensors. Whether an embedding compiled against gated
-weights is valid under the ungated model is **expected to work but unverified**.
-The owner's assessment is that the two weight sets can consume each other's
-embeddings; no evidence either way has been gathered in this project.
+contains flow-LM-specific tensors, so it was unclear whether such an embedding
+is valid under the ungated model. **It is.** Measured directly:
 
-The design stays conservative regardless: the compiling engine's revision is
-recorded in the voice's `compatible_model_revisions`, and the existing check at
-`production.py:113-114` fails closed on mismatch. That costs nothing if
-compatibility holds.
+1. Loaded `kyutai/pocket-tts` (gated, `has_voice_cloning=True`) and compiled a
+   WAV prompt into a 4,769,008-byte embedding.
+2. Loaded `kyutai/pocket-tts-without-voice-cloning` — a genuinely different
+   weight file, confirmed by SHA-256 (`473f47d9…` versus `be9c6b48…`, both
+   219,029,196 bytes).
+3. `_import_model_state` accepted the gated-compiled embedding.
+4. `generate_audio` produced 46,080 finite samples, RMS 0.058, range
+   [-0.630, 0.457] — audio, not silence and not NaN.
 
-**Verification is a named post-implementation acceptance task.** Gated Hugging
-Face access is available to the owner, so the test is: compile a WAV against
-gated cloning-capable weights, then render it with the ungated engine and
-confirm intelligible audio. If it passes, a compiled voice may list both
-revisions in `compatible_model_revisions` and the conservative pinning relaxes.
-If it fails, `wav` voices require gated weights at render time as well as
-compile time, which narrows their usefulness but invalidates no part of this
-design.
+The conservative pinning stays as designed: the compiling engine's revision is
+recorded in `compatible_model_revisions` and the check at
+`production.py:113-114` still rejects a mismatch. Relaxing it so a compiled
+voice may list both revisions is now a safe, optional follow-up rather than an
+unknown.
 
-No real Pocket inference has ever run in this project. The first end-to-end
-render will be the first exercise of the adapter's strict checks — exact sample
-rate equality, `str(model.device)` equality, and full file size and hash
-scanning — against real assets. Expect to debug those.
+Perceptual quality was not assessed. The finding is that the tensors are
+structurally compatible and produce well-formed audio, not that the cloned
+voice sounds identical across the two weight sets.
+
+### Resolved 2026-08-20: first real inference found three renderer defects
+
+The end-to-end run surfaced three pre-existing bugs, all invisible to the
+offline suite because every unit test stubs the model loader:
+
+1. **Config paths contradicted themselves.** `_inspect_yaml` rejects absolute
+   paths while `_deny_remote` required them, and the allowlist is built from a
+   per-engine snapshot temp directory that does not exist when a config is
+   written. Declared names are now relative, resolved against the snapshot root.
+2. **The allowlist was bypassable.** Only three named modules had
+   `download_if_necessary` patched; `pocket_tts.conditioners.text` holds its own
+   reference and loads the tokenizer through it, so a stock `hf://` config would
+   have reached the network despite the allowlist. Every loaded module holding
+   the symbol is now patched, with a post-condition check.
+3. **The snapshot root was never resolved.** The per-component symlink check
+   compares a candidate against its own resolution, which only means "the final
+   component is not a symlink" when ancestors are already resolved. On macOS the
+   snapshot lives under `/var`, a symlink to `/private/var`, so every load
+   failed.
+
+Verified afterwards: a two-chapter EPUB renders to a 69,941-byte M4B, AAC mono
+24 kHz, 7.68 s, both chapter markers correct, decoding with no errors.
+
+### Remaining
+
+Real inference is exercised only in the opt-in suite, not in CI. The tier-1
+platform matrix, determinism, cancellation boundaries under real load, cold and
+warm timing, and peak RSS remain unmeasured. Perceptual voice quality is
+unassessed.
 
 ## 14. Out of scope
 

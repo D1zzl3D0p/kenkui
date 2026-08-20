@@ -20,7 +20,8 @@ pre-compiled embedding does not.** Built-in voices therefore work without
 accepting any gated terms.
 
 Kenkui compiles WAV prompts into embeddings during provisioning, so the render
-path only ever loads an embedding and never performs voice cloning.
+path only ever loads an embedding and never performs voice cloning. Compiling
+needs the gated weights; rendering the result does not.
 
 ## Voice varieties
 
