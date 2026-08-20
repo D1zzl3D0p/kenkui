@@ -1119,9 +1119,7 @@ def _voice_to(record: VoiceRecord) -> dict[str, Any]:
     if record.state == "loaded":
         payload["asset_path"] = record.asset_path
         payload["asset_sha256"] = record.asset_sha256
-        payload["compatible_model_revisions"] = list(
-            record.compatible_model_revisions
-        )
+        payload["compatible_model_revisions"] = list(record.compatible_model_revisions)
     return payload
 
 
@@ -1132,9 +1130,7 @@ def _voice_from(voice_id: str, payload: dict[str, Any]) -> VoiceRecord:
         source_sha256=payload.get("source_sha256"),
         asset_path=payload.get("asset_path"),
         asset_sha256=payload.get("asset_sha256"),
-        compatible_model_revisions=tuple(
-            payload.get("compatible_model_revisions", ())
-        ),
+        compatible_model_revisions=tuple(payload.get("compatible_model_revisions", ())),
         **{key: payload[key] for key in _VOICE_COMMON_KEYS},
     )
 ```
@@ -1243,9 +1239,7 @@ def _write(tmp_path: Path, payload: object) -> Path:
     return path
 
 
-def _activate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: object
-) -> None:
+def _activate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: object) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_write(tmp_path, payload)))
     production.production_bindings_from_environment("eponine")
 
@@ -1923,9 +1917,7 @@ def fake_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     return calls
 
 
-def test_loads_a_builtin_voice(
-    tmp_path: Path, fake_hub: dict[str, int]
-) -> None:
+def test_loads_a_builtin_voice(tmp_path: Path, fake_hub: dict[str, int]) -> None:
     manifest = tmp_path / "manifest.json"
     voice = load_voice("eponine", manifest=manifest)
     assert voice.state == "loaded"
@@ -2001,9 +1993,7 @@ def test_unknown_voice_is_rejected(tmp_path: Path) -> None:
     assert excinfo.value.code is ErrorCode.VOICE_UNKNOWN
 
 
-def test_missing_asset_is_repaired(
-    tmp_path: Path, fake_hub: dict[str, int]
-) -> None:
+def test_missing_asset_is_repaired(tmp_path: Path, fake_hub: dict[str, int]) -> None:
     manifest = tmp_path / "manifest.json"
     load_voice("eponine", manifest=manifest)
     _, voices = ManifestStore(manifest).read()
@@ -2173,9 +2163,7 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
         engine = engines.get(record.engine_id)
         cloning = record.variety == "wav"
         if engine is None or (cloning and not engine.cloning_capable):
-            engine = _provision_engine(
-                record.language, cloning=cloning, root=root
-            )
+            engine = _provision_engine(record.language, cloning=cloning, root=root)
             engines[engine.id] = engine
         loaded = _materialize(record, engine, root)
         voices[voice_id] = loaded
@@ -2201,9 +2189,7 @@ def _registered_from_catalog(voice_id: str) -> VoiceRecord:
     )
 
 
-def _materialize(
-    record: VoiceRecord, engine: EngineRecord, root: Path
-) -> VoiceRecord:
+def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> VoiceRecord:
     """Produce the safetensors asset for one registered voice."""
     destination = root / "voices" / record.language / f"{record.id}.safetensors"
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -2325,9 +2311,7 @@ def stub_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     return requested
 
 
-def test_wav_compiles_to_safetensors(
-    tmp_path: Path, stub_engine: list[bool]
-) -> None:
+def test_wav_compiles_to_safetensors(tmp_path: Path, stub_engine: list[bool]) -> None:
     manifest = tmp_path / "manifest.json"
     source = tmp_path / "mine.wav"
     source.write_bytes(b"RIFF0000WAVEfmt ")
@@ -2351,9 +2335,7 @@ def test_wav_requests_a_cloning_capable_engine(
     assert stub_engine == [True]
 
 
-def test_wav_retains_both_hashes(
-    tmp_path: Path, stub_engine: list[bool]
-) -> None:
+def test_wav_retains_both_hashes(tmp_path: Path, stub_engine: list[bool]) -> None:
     manifest = tmp_path / "manifest.json"
     source = tmp_path / "mine.wav"
     source.write_bytes(b"RIFF0000WAVEfmt ")
@@ -2818,9 +2800,7 @@ def test_missing_state_is_never_persisted(tmp_path: Path) -> None:
     assert after["eponine"].state == "loaded"
 
 
-def test_listing_does_not_hash(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_listing_does_not_hash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = tmp_path / "manifest.json"
     load_voice("eponine", manifest=manifest)
 
@@ -2836,9 +2816,7 @@ def test_engine_dedup_across_sibling_voices(tmp_path: Path) -> None:
     manifest = tmp_path / "manifest.json"
     load_voice("eponine", manifest=manifest)
     load_voice("alba", manifest=manifest)
-    engines = {
-        v.engine for v in list_voices(manifest=manifest) if v.state == "loaded"
-    }
+    engines = {v.engine for v in list_voices(manifest=manifest) if v.state == "loaded"}
     assert len(engines) == 1
 ```
 
@@ -3074,35 +3052,36 @@ In `PocketTTSEngine.__init__`, add `self._state: object | None = None` before
 the `try`. Add the method and rewrite `synthesize`:
 
 ```python
-    def _voice_state(self) -> Any:
-        """Derive the conditioning state once and reuse it for every segment."""
-        if self._state is None:
-            try:
-                self._state = self._model.get_state_for_audio_prompt(
-                    Path(self._config.voice_asset_path)
-                )
-            except Exception:
-                self.close()
-                raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
-        return self._state
-
-    def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
-        """Render the task's exact text as PCM from a precompiled embedding."""
-        state = self._voice_state()
+def _voice_state(self) -> Any:
+    """Derive the conditioning state once and reuse it for every segment."""
+    if self._state is None:
         try:
-            output = self._model.generate_audio(state, task.text)
-            audio = tensor_to_pcm(
-                output, self._tensor_type, task, self._config.sample_rate_hz
+            self._state = self._model.get_state_for_audio_prompt(
+                Path(self._config.voice_asset_path)
             )
-        except RenderError:
-            self.close()
-            raise
         except Exception:
             self.close()
-            raise RenderError(ErrorCode.POCKET_INFERENCE_FAILED) from None
-        if not self._reusable:
-            self.close()
-        return audio
+            raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+    return self._state
+
+
+def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
+    """Render the task's exact text as PCM from a precompiled embedding."""
+    state = self._voice_state()
+    try:
+        output = self._model.generate_audio(state, task.text)
+        audio = tensor_to_pcm(
+            output, self._tensor_type, task, self._config.sample_rate_hz
+        )
+    except RenderError:
+        self.close()
+        raise
+    except Exception:
+        self.close()
+        raise RenderError(ErrorCode.POCKET_INFERENCE_FAILED) from None
+    if not self._reusable:
+        self.close()
+    return audio
 ```
 
 Note the argument is a `Path`, never a `str`. `get_state_for_audio_prompt`
@@ -3421,11 +3400,7 @@ def test_render_a_real_m4b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     )
     output = tmp_path / "out.m4b"
     result = (
-        kk.book(source)
-        .normalize_text()
-        .assign_voice("eponine")
-        .tts()
-        .write(output)
+        kk.book(source).normalize_text().assign_voice("eponine").tts().write(output)
     )
     assert Path(result.output).is_file()
     assert Path(result.output).stat().st_size > 0

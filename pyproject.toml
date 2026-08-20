@@ -113,6 +113,12 @@ ignore = [
 ]
 
 [tool.mypy]
+# 3.12 rather than the 3.11 floor: numpy's stubs use PEP-695 `type` statements
+# that mypy refuses to parse below 3.12, and the failure is at parse time, so
+# no per-module override suppresses it (follow_imports = "skip" and
+# ignore_missing_imports were both tried). numpy arrived transitively with the
+# now-required pocket-tts. Cost: 3.11-specific type errors go unchecked, so
+# keep 3.11 in the pytest CI matrix to cover the floor at runtime.
 python_version = "3.12"
 strict = true
 files = ["src", "tests"]

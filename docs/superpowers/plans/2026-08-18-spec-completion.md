@@ -57,11 +57,19 @@ Record the exact Pocket-TTS model revision, asset checksums, license/provenance,
 def test_approved_manifest_and_authorized_prompt_enable_bindings(monkeypatch, tmp_path):
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(tmp_path / "manifest.json"))
     monkeypatch.setenv("KENKUI_POCKET_VOICE_PROMPT", str(tmp_path / "prompt.wav"))
-    assert production_bindings_from_environment("approved-narrator").renderer is not None
+    assert (
+        production_bindings_from_environment("approved-narrator").renderer is not None
+    )
+
 
 @pytest.mark.pocket_real
 def test_real_fixture_epub_renders_playable_m4b(tmp_path):
-    result = epub(FIXTURE_EPUB).assign_voice("approved-narrator").tts().write(tmp_path / "book.m4b")
+    result = (
+        epub(FIXTURE_EPUB)
+        .assign_voice("approved-narrator")
+        .tts()
+        .write(tmp_path / "book.m4b")
+    )
     assert result.output.exists()
     assert result.stats.rendered_chapters > 0
 ```
@@ -102,6 +110,7 @@ git commit -m "feat: activate approved Pocket-TTS renderer"
 def test_source_only_pipeline_can_inspect_fixture_epub():
     inspection = epub(FIXTURE_EPUB).inspect()
     assert inspection.chapters
+
 
 def test_voice_registry_returns_enabled_licensed_metadata():
     voice = get_voice("fixture-voice")
@@ -148,9 +157,12 @@ git commit -m "feat: complete core v1 inspection and voice contract"
 ```python
 def test_fixture_epub_to_single_voice_m4b(tmp_path):
     events = []
-    result = (epub(FIXTURE_EPUB).assign_voice("fixture-voice").tts().write(
-        tmp_path / "fixture.m4b", on_event=events.append, workers=1
-    ))
+    result = (
+        epub(FIXTURE_EPUB)
+        .assign_voice("fixture-voice")
+        .tts()
+        .write(tmp_path / "fixture.m4b", on_event=events.append, workers=1)
+    )
     assert probe_m4b(result.output).chapter_titles == ("One", "Two")
     assert result.stats.normalized_speech_characters > 0
     assert type(events[-1]).__name__ == "Completed"
@@ -241,6 +253,7 @@ git commit -m "feat: scaffold versioned kenkui server contract"
 def test_queued_cancel_is_terminal():
     assert transition(queued_job(), CancelRequested()).status is JobStatus.CANCELLED
 
+
 def test_job_spec_reconstructs_single_voice_pipeline(source_path):
     pipeline = pipeline_from_job(single_voice_spec(), source_path)
     assert pipeline.inspect().chapters
@@ -286,7 +299,9 @@ git commit -m "feat: add durable local Job domain and repositories"
 def test_local_epub_job_lifecycle(client, fixture_epub):
     asset = upload_asset(client, fixture_epub)
     inspection = client.get(f"/v1/assets/{asset['id']}/book").json()
-    job = client.post("/v1/jobs", json=single_voice_spec(asset["id"], inspection)).json()
+    job = client.post(
+        "/v1/jobs", json=single_voice_spec(asset["id"], inspection)
+    ).json()
     assert wait_for_terminal_job(client, job["id"])["status"] == "completed"
     assert client.get(f"/v1/jobs/{job['id']}/artifact").status_code == 200
 ```
@@ -379,6 +394,7 @@ def test_duplicate_completed_attempt_settles_one_authorization(postgres):
     finalize_success(job)
     assert settlements_for(authorization.id) == 1
 
+
 def test_duplicate_stripe_event_credits_account_once(client, signed_event):
     client.post("/v1/billing/webhooks/stripe", content=signed_event)
     client.post("/v1/billing/webhooks/stripe", content=signed_event)
@@ -425,7 +441,9 @@ git commit -m "feat: add hosted storage identity and credit billing adapters"
 def test_stale_modal_attempt_cannot_replace_newer_terminal_attempt():
     mark_attempt_retrying(job_id, attempt=1)
     complete_attempt(job_id, attempt=2)
-    assert finalize_attempt(job_id, attempt=1, outcome="completed") is FinalizationIgnored
+    assert (
+        finalize_attempt(job_id, attempt=1, outcome="completed") is FinalizationIgnored
+    )
 ```
 
 - [ ] **Step 2: Implement durable claim/submit/retry behavior**
@@ -467,6 +485,7 @@ git commit -m "feat: add Modal job runner and cloud deployment adapters"
 def test_character_pipeline_normalizes_fake_llm_output():
     book = infer_characters(fixture_book(), model="fake/model", llm=FakeLiteLLM())
     assert [character.id for character in book.characters] == ["elizabeth-bennet"]
+
 
 def test_character_casting_reuses_one_voice_plan_renderer():
     plan = assign_voices(character_book, narrator="narrator", characters="auto")

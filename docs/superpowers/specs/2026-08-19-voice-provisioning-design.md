@@ -161,12 +161,12 @@ a digest. This is the only enumeration primitive, and all multi-voice work
 composes over it:
 
 ```python
-loaded  = [v for v in kk.list_voices() if v.state == "loaded"]
+loaded = [v for v in kk.list_voices() if v.state == "loaded"]
 english = [v for v in kk.list_voices() if v.language == "english"]
-stale   = [v for v in kk.list_voices() if v.state == "missing"]
+stale = [v for v in kk.list_voices() if v.state == "missing"]
 
 engines = {v.engine for v in kk.list_voices() if v.state == "loaded"}
-disk    = sum(e.size_bytes for e in engines) + sum(
+disk = sum(e.size_bytes for e in engines) + sum(
     v.asset_bytes or 0 for v in kk.list_voices() if v.state == "loaded"
 )
 ```
