@@ -303,11 +303,23 @@ lock file beside the manifest.
 
 ## 7. Asset integrity
 
+**Trust on first use is the accepted root of trust.** Trust has to root
+somewhere, and for downloaded assets it roots at the first fetch of a pinned
+upstream revision.
+
 Kenkui cannot ship expected SHA-256 values for embeddings without downloading
 every voice for every language first. Provisioning therefore hashes what it
 fetches and pins the result in the manifest, which governs every subsequent
-render. The initial fetch trusts the pinned upstream revision. Shipping
-known-good hashes later is additive hardening, not a redesign.
+render.
+
+`unload_voice` discards the pinned hash along with the asset, so a later
+`load_voice` re-establishes trust from upstream rather than re-verifying
+against the previously seen bytes. This is deliberate and consistent with the
+model above: a reload is a first use. Retaining `asset_sha256` on the
+`registered` entry to force byte-identical reloads was considered and rejected
+as inconsistent ceremony.
+
+Shipping known-good hashes later is additive hardening, not a redesign.
 
 ## 8. Adapter changes
 
@@ -405,11 +417,23 @@ explicitly revisitable trade; the retained extra is the path back.
 
 Compiling a WAV requires gated cloning-capable weights, and the exported state
 contains flow-LM-specific tensors. Whether an embedding compiled against gated
-weights is valid under the ungated model is **unverified**. The design is
-conservative: the compiling engine's revision is recorded in the voice's
-`compatible_model_revisions`, and the existing check at `production.py:113-114`
-fails closed on mismatch. Determining the actual compatibility is an
-implementation-time empirical question and must not be assumed either way.
+weights is valid under the ungated model is **expected to work but unverified**.
+The owner's assessment is that the two weight sets can consume each other's
+embeddings; no evidence either way has been gathered in this project.
+
+The design stays conservative regardless: the compiling engine's revision is
+recorded in the voice's `compatible_model_revisions`, and the existing check at
+`production.py:113-114` fails closed on mismatch. That costs nothing if
+compatibility holds.
+
+**Verification is a named post-implementation acceptance task.** Gated Hugging
+Face access is available to the owner, so the test is: compile a WAV against
+gated cloning-capable weights, then render it with the ungated engine and
+confirm intelligible audio. If it passes, a compiled voice may list both
+revisions in `compatible_model_revisions` and the conservative pinning relaxes.
+If it fails, `wav` voices require gated weights at render time as well as
+compile time, which narrows their usefulness but invalidates no part of this
+design.
 
 No real Pocket inference has ever run in this project. The first end-to-end
 render will be the first exercise of the adapter's strict checks — exact sample
