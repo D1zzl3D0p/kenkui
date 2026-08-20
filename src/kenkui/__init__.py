@@ -32,7 +32,7 @@ from .events import (
 )
 from .inspection import BookInspection, BookMetadata, ChapterInspection
 from .pipeline import Pipeline, Source
-from .voices import Voice
+from .voices import Engine, Voice
 
 __version__ = "0.1.0"
 
@@ -44,6 +44,7 @@ __all__ = [
     "ChapterInspection",
     "Completed",
     "EncodingError",
+    "Engine",
     "ErrorCode",
     "ExecutionEvent",
     "ExecutionStats",

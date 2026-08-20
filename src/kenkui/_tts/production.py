@@ -20,7 +20,7 @@ from kenkui._tts.pocket import (
     preflight_pocket,
 )
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
-from kenkui.voices import Voice
+from kenkui.voices.types import Voice
 
 _MANIFEST_ENV: Final = "KENKUI_POCKET_MANIFEST"
 MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v1"

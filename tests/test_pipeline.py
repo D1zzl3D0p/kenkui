@@ -260,6 +260,7 @@ def test_public_exports_are_intentional() -> None:
     """The facade publishes only the approved WP2 concepts."""
     expected = {
         "__version__",
+        "Engine",
         "book",
         "epub",
         "Pipeline",
