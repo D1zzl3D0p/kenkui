@@ -265,6 +265,31 @@ def _registered_from_catalog(voice_id: str) -> VoiceRecord:
     )
 
 
+def _compile_wav(source: Path, engine: EngineRecord, destination: Path) -> None:
+    """Compile one audio prompt into a speaker embedding via pocket-tts.
+
+    Voice cloning needs the gated weights, so this runs only at provision time
+    and never during a render.
+    """
+    from pocket_tts import export_model_state  # noqa: PLC0415
+    from pocket_tts.models.tts_model import TTSModel  # noqa: PLC0415
+
+    if not engine.cloning_capable:
+        raise VoiceError(ErrorCode.ENGINE_NOT_CLONING_CAPABLE)
+    try:
+        model = TTSModel.load_model(config=Path(engine.config_path))
+        state = model.get_state_for_audio_prompt(
+            audio_conditioning=source, truncate=True
+        )
+        export_model_state(state, destination)
+    except VoiceError:
+        raise
+    except Exception:  # noqa: BLE001 — sanitize any torch/pocket-tts failure
+        # Public errors are stable and must not leak third-party internals or
+        # local paths, so every downstream failure collapses to one code.
+        raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+
+
 def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> VoiceRecord:
     """Produce the safetensors asset for one registered voice."""
     destination = root / "voices" / record.language / f"{record.id}.safetensors"
@@ -273,7 +298,13 @@ def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> Voice
         fetched = _fetch(embedding_url(record.language, record.id))
         shutil.copyfile(fetched, destination)
     else:
-        raise VoiceError(ErrorCode.VOICE_VARIETY_INVALID)
+        source = Path(record.source_path or "")
+        if not source.is_file() or _sha256(source) != record.source_sha256:
+            raise VoiceError(ErrorCode.POCKET_VOICE_INVALID)
+        if record.variety == "wav":
+            _compile_wav(source, engine, destination)
+        else:
+            shutil.copyfile(source, destination)
     destination.chmod(0o600)
     return VoiceRecord(
         id=record.id,
