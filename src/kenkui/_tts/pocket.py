@@ -719,7 +719,7 @@ class PocketTTSEngine:
 
     def __init__(self, config: PocketEngineConfig, *, reusable: bool = False) -> None:
         self._snapshot: Path | None = None
-        self._state: Any = None
+        self._states: dict[str, Any] = {}
         self._patched: list[tuple[Any, Any]] = []
         self._reusable = reusable
         if _worker_marker is not _WORKER_TOKEN:
@@ -799,6 +799,9 @@ class PocketTTSEngine:
             with suppress(AttributeError, TypeError):
                 setattr(module, "download_if_necessary", original)
         self._patched = []
+        # States hold tensors derived from snapshot files that are about to be
+        # removed, so they must not outlive it.
+        self._states = {}
         snapshot = self._snapshot
         self._snapshot = None
         if snapshot is not None:
@@ -814,26 +817,33 @@ class PocketTTSEngine:
     def __del__(self) -> None:
         self.close()
 
-    def _voice_state(self) -> Any:
-        """Derive the conditioning state once and reuse it for every segment.
+    def _voice_state(self, voice_asset_sha256: str) -> Any:
+        """Derive one conditioning state per voice and reuse each for its segments.
 
         Workers hold a reusable engine and process a batch serially, so deriving
-        this per segment was pure waste. The argument is a Path, never a str:
-        get_state_for_audio_prompt calls download_if_necessary only on str, so a
-        Path cannot reach the network even before _deny_remote intervenes.
+        this per segment was pure waste. One model serves the whole cast: a
+        language engine is ~225 MB of weights against ~6.5 MB per embedding, and
+        the scheduler rejects any worker reporting more than one initialization.
+        The argument is a Path, never a str: get_state_for_audio_prompt calls
+        download_if_necessary only on str, so a Path cannot reach the network
+        even before _deny_remote intervenes.
         """
-        if self._state is None:
-            try:
-                self._state = self._model.get_state_for_audio_prompt(
-                    Path(self._config.voices[0].path)
-                )
-            except Exception:
-                self.close()
-                raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
-        return self._state
+        cached = self._states.get(voice_asset_sha256)
+        if cached is not None:
+            return cached
+        try:
+            asset = self._config.voice_by_sha(voice_asset_sha256)
+            state = self._model.get_state_for_audio_prompt(Path(asset.path))
+        except Exception:
+            self.close()
+            raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
+        self._states[voice_asset_sha256] = state
+        return state
 
     def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
-        state = self._voice_state()
+        state = self._voice_state(
+            task.voice_asset_sha256 or self._config.voices[0].sha256
+        )
         try:
             output = self._model.generate_audio(state, task.text)
             audio = tensor_to_pcm(

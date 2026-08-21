@@ -16,6 +16,9 @@ class SynthesisTask:
     sample_rate_hz: int
     channels: int
     max_output_bytes: int
+    # Which conditioning state renders this unit. A cast holds several, and a
+    # worker that had to guess would emit valid audio in the wrong voice.
+    voice_asset_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)

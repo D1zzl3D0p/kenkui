@@ -114,7 +114,7 @@ def _detached_engine(model: _Model) -> pocket.PocketTTSEngine:
     engine = pocket.PocketTTSEngine.__new__(pocket.PocketTTSEngine)
     object.__setattr__(engine, "_model", model)
     object.__setattr__(engine, "_config", _config())
-    object.__setattr__(engine, "_state", None)
+    object.__setattr__(engine, "_states", {})
     # __del__ calls close(), which reads these; omitting them raises during
     # garbage collection and surfaces as an unraisable-exception warning.
     object.__setattr__(engine, "_snapshot", None)
@@ -122,11 +122,12 @@ def _detached_engine(model: _Model) -> pocket.PocketTTSEngine:
     return engine
 
 
-def test_voice_state_is_derived_once_per_engine() -> None:
+def test_voice_state_is_derived_once_per_voice() -> None:
     model = _Model()
     engine = _detached_engine(model)
-    first = engine._voice_state()
-    second = engine._voice_state()
+    digest = "b" * 64
+    first = engine._voice_state(digest)
+    second = engine._voice_state(digest)
     assert first is second
     assert model.state_calls == 1
 
@@ -134,7 +135,7 @@ def test_voice_state_is_derived_once_per_engine() -> None:
 def test_voice_state_is_passed_a_path_not_a_string() -> None:
     """A str would let pocket-tts call download_if_necessary; a Path cannot."""
     model = _Model()
-    state = _detached_engine(model)._voice_state()
+    state = _detached_engine(model)._voice_state("b" * 64)
     assert isinstance(state["conditioning"], Path)
 
 
