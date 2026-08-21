@@ -15,7 +15,7 @@ import struct
 import sys
 import tempfile
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
 
@@ -42,6 +42,9 @@ MAX_OUTPUT_SAMPLES: Final = 32 * 1024 * 1024
 # keeps the fail-closed signal that a bare clamp would discard.
 SAMPLE_TOLERANCE: Final = 2.0
 MAX_TIMEOUT_SECONDS: Final = 3600.0
+# A cast is bounded so a hostile manifest cannot force unbounded state
+# derivation in a worker. The English catalog holds 21 voices.
+MAX_CAST_VOICES: Final = 64
 _TENSOR_CHUNK_SAMPLES: Final = 64 * 1024
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -59,29 +62,53 @@ class PocketManifestFile:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceAsset:
+    """One renderable speaker embedding and the rights recorded against it."""
+
+    path: str
+    sha256: str
+    variety: str
+    provenance: str
+    license_id: str
+    rights: str
+    commercial_use_allowed: bool
+
+    def semantic_material(self) -> dict[str, object]:
+        """Return semantic identity without machine-specific absolute paths."""
+        return {
+            "commercial_use_allowed": self.commercial_use_allowed,
+            "license_id": self.license_id,
+            "provenance": self.provenance,
+            "rights": self.rights,
+            "sha256": self.sha256,
+            "variety": self.variety,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PocketEngineConfig:
     model_root: str
     config_path: str
     model_revision: str
     package_version: str
     files: tuple[PocketManifestFile, ...]
-    voice_asset_path: str
-    voice_asset_sha256: str
-    voice_variety: str
+    voices: tuple[VoiceAsset, ...]
     cloning_capable: bool
-    voice_provenance: str
-    voice_license_id: str
-    voice_rights: str
-    commercial_use_allowed: bool
     sample_rate_hz: int
     device: str = "cpu"
     timeout_seconds: float = 300.0
+
+    def voice_by_sha(self, sha256: str) -> VoiceAsset:
+        """Resolve one voice asset by content digest."""
+        for voice in self.voices:
+            if voice.sha256 == sha256:
+                return voice
+        raise KeyError(sha256)
 
     def semantic_material(self) -> dict[str, object]:
         """Return semantic identity without machine-specific absolute paths."""
         selected = _selected_config_identity(self)
         return {
-            "commercial_use_allowed": self.commercial_use_allowed,
             "config_manifest_path": selected,
             "device": self.device,
             "files": tuple(
@@ -90,11 +117,11 @@ class PocketEngineConfig:
             "model_revision": self.model_revision,
             "package_version": self.package_version,
             "sample_rate_hz": self.sample_rate_hz,
-            "voice_license_id": self.voice_license_id,
-            "voice_asset_sha256": self.voice_asset_sha256,
-            "voice_variety": self.voice_variety,
-            "voice_provenance": self.voice_provenance,
-            "voice_rights": self.voice_rights,
+            # Sorted by digest so cast ordering cannot change the cache key.
+            "voices": tuple(
+                voice.semantic_material()
+                for voice in sorted(self.voices, key=lambda item: item.sha256)
+            ),
         }
 
 
@@ -168,17 +195,32 @@ def _validate_fields(config: object) -> PocketEngineConfig:
         or not 0.0 < config.timeout_seconds <= MAX_TIMEOUT_SECONDS
     ):
         raise _model_failure()
-    _nonempty_string(config.voice_asset_path, voice=True)
+    if type(config.cloning_capable) is not bool:
+        raise _model_failure()
     if (
-        type(config.voice_asset_sha256) is not str
-        or _SHA256.fullmatch(config.voice_asset_sha256) is None
+        type(config.voices) is not tuple
+        or not config.voices
+        or len(config.voices) > MAX_CAST_VOICES
     ):
         raise _voice_failure()
-    _nonempty_string(config.voice_provenance, voice=True)
-    _nonempty_string(config.voice_license_id, voice=True)
-    _nonempty_string(config.voice_rights, voice=True)
-    if type(config.commercial_use_allowed) is not bool:
-        raise _voice_failure()
+    digests: set[str] = set()
+    for voice in config.voices:
+        if type(voice) is not VoiceAsset:
+            raise _voice_failure()
+        _nonempty_string(voice.path, voice=True)
+        if type(voice.sha256) is not str or _SHA256.fullmatch(voice.sha256) is None:
+            raise _voice_failure()
+        # Two assets sharing a digest would make voice_by_sha ambiguous, and the
+        # worker resolves its conditioning state by exactly that key.
+        if voice.sha256 in digests:
+            raise _voice_failure()
+        digests.add(voice.sha256)
+        _nonempty_string(voice.variety, voice=True)
+        _nonempty_string(voice.provenance, voice=True)
+        _nonempty_string(voice.license_id, voice=True)
+        _nonempty_string(voice.rights, voice=True)
+        if type(voice.commercial_use_allowed) is not bool:
+            raise _voice_failure()
     return config
 
 
@@ -394,7 +436,8 @@ def _scan_manifest(root: Path, expected: dict[str, PocketManifestFile]) -> None:
 
 def _manifest(
     config: PocketEngineConfig,
-) -> tuple[Path, Path, dict[str, PocketManifestFile], int]:
+) -> tuple[Path, Path, dict[str, PocketManifestFile], dict[str, int]]:
+    """Verify every declared byte, returning voice sizes keyed by digest."""
     config = _validate_fields(config)
     root = _canonical_absolute(config.model_root)
     selected = _canonical_absolute(config.config_path)
@@ -446,28 +489,31 @@ def _manifest(
         raise _model_failure()
     _inspect_yaml(config_bytes)
 
-    prompt = _canonical_absolute(config.voice_asset_path, voice=True)
-    _validate_root(prompt.parent, voice=True)
-    if prompt.is_relative_to(root) or prompt.suffix.lower() != ".safetensors":
-        raise _voice_failure()
-    try:
-        prompt_size = prompt.lstat().st_size
-    except OSError:
-        raise _voice_failure() from None
-    wav_bytes = _verify_source(
-        prompt,
-        prompt_size,
-        config.voice_asset_sha256,
-        MAX_VOICE_BYTES,
-        voice=True,
-        capture_limit=MAX_VOICE_BYTES,
-    )
-    if wav_bytes is None:
-        raise _voice_failure()
-    # Every renderable asset is a compiled embedding: WAV prompts are compiled
-    # during provisioning, so the render path has exactly one branch.
-    _validate_safetensors(wav_bytes)
-    return root, selected, expected, prompt_size
+    sizes: dict[str, int] = {}
+    for asset in config.voices:
+        prompt = _canonical_absolute(asset.path, voice=True)
+        _validate_root(prompt.parent, voice=True)
+        if prompt.is_relative_to(root) or prompt.suffix.lower() != ".safetensors":
+            raise _voice_failure()
+        try:
+            prompt_size = prompt.lstat().st_size
+        except OSError:
+            raise _voice_failure() from None
+        asset_bytes = _verify_source(
+            prompt,
+            prompt_size,
+            asset.sha256,
+            MAX_VOICE_BYTES,
+            voice=True,
+            capture_limit=MAX_VOICE_BYTES,
+        )
+        if asset_bytes is None:
+            raise _voice_failure()
+        # Every renderable asset is a compiled embedding: WAV prompts are
+        # compiled during provisioning, so the render path has one branch.
+        _validate_safetensors(asset_bytes)
+        sizes[asset.sha256] = prompt_size
+    return root, selected, expected, sizes
 
 
 def preflight_pocket(
@@ -490,11 +536,16 @@ def preflight_pocket(
     ):
         raise _model_failure()
     _manifest(config)
-    if voice is not None and (
-        voice.content_fingerprint != config.voice_asset_sha256
-        or voice.provenance != config.voice_provenance
-        or voice.license_id != config.voice_license_id
-        or voice.commercial_use_allowed is not config.commercial_use_allowed
+    if voice is None:
+        return
+    try:
+        asset = config.voice_by_sha(voice.content_fingerprint)
+    except KeyError:
+        raise _voice_failure() from None
+    if (
+        voice.provenance != asset.provenance
+        or voice.license_id != asset.license_id
+        or voice.commercial_use_allowed is not asset.commercial_use_allowed
         or config.model_revision not in voice.compatible_model_revisions
     ):
         raise _voice_failure()
@@ -588,11 +639,11 @@ def _copy_snapshot(
 
 
 def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig]:
-    root, selected, expected, prompt_size = _manifest(config)
+    root, selected, expected, sizes = _manifest(config)
     snapshot = Path(tempfile.mkdtemp(prefix="kenkui-pocket-"))
     snapshot.chmod(0o700)
     model = snapshot / "model"
-    prompt = snapshot / "voice" / "prompt.safetensors"
+    voice_directory = snapshot / "voice"
     try:
         model.mkdir(mode=0o700)
         for relative_name, item in expected.items():
@@ -601,10 +652,16 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
                 model.joinpath(*PurePosixPath(relative_name).parts),
                 item,
             )
-        voice_item = PocketManifestFile(
-            "prompt.safetensors", prompt_size, config.voice_asset_sha256
-        )
-        _copy_snapshot(Path(config.voice_asset_path), prompt, voice_item, voice=True)
+        snapshot_voices: list[VoiceAsset] = []
+        for asset in config.voices:
+            # Named by digest, not by voice id: two casts can hold different
+            # voices whose display names collide, and the digest cannot.
+            destination = voice_directory / f"{asset.sha256}.safetensors"
+            voice_item = PocketManifestFile(
+                destination.name, sizes[asset.sha256], asset.sha256
+            )
+            _copy_snapshot(Path(asset.path), destination, voice_item, voice=True)
+            snapshot_voices.append(replace(asset, path=str(destination)))
         for current, directories, _names in os.walk(snapshot, topdown=False):
             for directory in directories:
                 (Path(current) / directory).chmod(0o500)
@@ -614,14 +671,8 @@ def _make_snapshot(config: PocketEngineConfig) -> tuple[Path, PocketEngineConfig
             model_revision=config.model_revision,
             package_version=config.package_version,
             files=config.files,
-            voice_asset_path=str(prompt),
-            voice_asset_sha256=config.voice_asset_sha256,
-            voice_variety=config.voice_variety,
+            voices=tuple(snapshot_voices),
             cloning_capable=config.cloning_capable,
-            voice_provenance=config.voice_provenance,
-            voice_license_id=config.voice_license_id,
-            voice_rights=config.voice_rights,
-            commercial_use_allowed=config.commercial_use_allowed,
             sample_rate_hz=config.sample_rate_hz,
             device=config.device,
             timeout_seconds=config.timeout_seconds,
@@ -774,7 +825,7 @@ class PocketTTSEngine:
         if self._state is None:
             try:
                 self._state = self._model.get_state_for_audio_prompt(
-                    Path(self._config.voice_asset_path)
+                    Path(self._config.voices[0].path)
                 )
             except Exception:
                 self.close()

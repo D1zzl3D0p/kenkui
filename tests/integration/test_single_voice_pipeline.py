@@ -1,5 +1,5 @@
 """Opt-in vertical acceptance for the local single-voice M4B path."""
-# ruff: noqa: D103, PLR2004, S603
+# ruff: noqa: S603
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ import kenkui as kk
 from kenkui._audio.production import FFmpegM4BAssembler
 from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import EngineSpecification
-
 
 pytestmark = [
     pytest.mark.native,
@@ -94,8 +93,8 @@ def _fixture_epub(path: Path) -> Path:
  <spine><itemref idref="one"/><itemref idref="two"/></spine>
 </package>"""
     chapters = {
-        "one": "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>One</title></head><body><h1>One</h1><p>First fixture sentence.</p></body></html>",
-        "two": "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Two</title></head><body><h1>Two</h1><p>Second fixture sentence.</p></body></html>",
+        "one": '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head><body><h1>One</h1><p>First fixture sentence.</p></body></html>',
+        "two": '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Two</title></head><body><h1>Two</h1><p>Second fixture sentence.</p></body></html>',
     }
     with ZipFile(path, "w") as archive:
         archive.writestr("mimetype", "application/epub+zip", compress_type=ZIP_STORED)

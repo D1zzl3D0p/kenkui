@@ -17,6 +17,7 @@ from kenkui._tts.pocket import (
     MAX_CONFIG_BYTES,
     PocketEngineConfig,
     PocketManifestFile,
+    VoiceAsset,
     preflight_pocket,
 )
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
@@ -130,14 +131,18 @@ def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
         model_revision=revision,
         package_version=_string(engine["package_version"]),
         files=files,
-        voice_asset_path=_absolute_path(voice_data["asset_path"], voice=True),
-        voice_asset_sha256=digest,
-        voice_variety=variety,
+        voices=(
+            VoiceAsset(
+                path=_absolute_path(voice_data["asset_path"], voice=True),
+                sha256=digest,
+                variety=variety,
+                provenance=cast("str", voice.provenance),
+                license_id=cast("str", voice.license_id),
+                rights=_string(voice_data["voice_rights"], voice=True),
+                commercial_use_allowed=cast("bool", voice.commercial_use_allowed),
+            ),
+        ),
         cloning_capable=cloning_capable,
-        voice_provenance=cast("str", voice.provenance),
-        voice_license_id=cast("str", voice.license_id),
-        voice_rights=_string(voice_data["voice_rights"], voice=True),
-        commercial_use_allowed=cast("bool", voice.commercial_use_allowed),
         sample_rate_hz=_integer(engine["sample_rate_hz"]),
         device=_string(engine["device"]),
         timeout_seconds=_floating(engine["timeout_seconds"]),

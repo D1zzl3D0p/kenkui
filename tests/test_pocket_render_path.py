@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -37,28 +38,36 @@ def _config(tmp_path: Path | None = None) -> pocket.PocketEngineConfig:
         model_revision="revision-1",
         package_version="2.1.0",
         files=(pocket.PocketManifestFile("english.yaml", 4, "a" * 64),),
-        voice_asset_path=asset,
-        voice_asset_sha256="b" * 64,
-        voice_variety="built-in",
+        voices=(
+            pocket.VoiceAsset(
+                path=asset,
+                sha256="b" * 64,
+                variety="built-in",
+                provenance="kyutai catalog",
+                license_id="CC-BY-4.0",
+                rights="review required",
+                commercial_use_allowed=False,
+            ),
+        ),
         cloning_capable=False,
-        voice_provenance="kyutai catalog",
-        voice_license_id="CC-BY-4.0",
-        voice_rights="review required",
-        commercial_use_allowed=False,
         sample_rate_hz=24000,
     )
 
 
 def test_semantic_material_includes_variety_and_asset_hash(tmp_path: Path) -> None:
     material = _config(tmp_path).semantic_material()
-    assert material["voice_variety"] == "built-in"
-    assert material["voice_asset_sha256"] == "b" * 64
+    voices = cast("tuple[dict[str, object], ...]", material["voices"])
+    assert voices[0]["variety"] == "built-in"
+    assert voices[0]["sha256"] == "b" * 64
     assert "voice_prompt_sha256" not in material
 
 
 def test_semantic_material_changes_with_variety(tmp_path: Path) -> None:
     base = _config(tmp_path)
-    other = dataclasses.replace(base, voice_variety="pre-compiled")
+    other = dataclasses.replace(
+        base,
+        voices=(dataclasses.replace(base.voices[0], variety="pre-compiled"),),
+    )
     assert base.semantic_material() != other.semantic_material()
 
 

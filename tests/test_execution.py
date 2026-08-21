@@ -16,8 +16,8 @@ from kenkui._audio.m4b import (
     AssemblyResult,
     FakeArtifactAssembler,
 )
-from kenkui._execution.coordinator import MAX_SEGMENT_PCM_BYTES, ExecutionBindings
 from kenkui._execution.cache import CacheStore
+from kenkui._execution.coordinator import MAX_SEGMENT_PCM_BYTES, ExecutionBindings
 from kenkui._execution.process_pool import (
     EngineSpecification,
     FakeEngineConfig,

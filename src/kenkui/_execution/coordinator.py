@@ -35,7 +35,6 @@ from kenkui._tts.protocols import (
     segment_audio,
 )
 from kenkui.api import ExecutionStats, Result
-from kenkui.observability import get_logger, log_event
 from kenkui.errors import (
     EncodingError,
     ErrorCode,
@@ -51,6 +50,7 @@ from kenkui.events import (
     StageStarted,
     Started,
 )
+from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
