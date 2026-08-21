@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ._domain.operations import AssignVoice, Operation, SynthesizeSpeech, has_operation
 from .errors import ErrorCode
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def source_validation_error(path: Path) -> ErrorCode | None:

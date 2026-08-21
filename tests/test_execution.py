@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 import kenkui as kk
+from conftest import log_field
 from kenkui._audio.m4b import (
     ArtifactAssembler,
     AssemblyRequest,
@@ -680,7 +681,7 @@ def test_execution_logs_structured_safe_boundary_context(
     pipeline.write_m4b(tmp_path / "result.m4b")
 
     boundaries = {
-        record.boundary
+        log_field(record, "boundary")
         for record in caplog.records
         if getattr(record, "event", None) == "execution_stage_started"
     }
@@ -712,8 +713,8 @@ def test_execution_logs_terminal_errors_with_stable_code(
         for record in caplog.records
         if getattr(record, "event", None) == "execution_failed"
     )
-    assert terminal.boundary == "terminal_error"
-    assert terminal.code == kk.ErrorCode.SYNTHESIS_FAILED.value
+    assert log_field(terminal, "boundary") == "terminal_error"
+    assert log_field(terminal, "code") == kk.ErrorCode.SYNTHESIS_FAILED.value
     assert "provider token" not in caplog.text
 
 
@@ -739,7 +740,7 @@ def test_execution_logs_structured_cache_context(
     record = next(
         entry for entry in caplog.records if getattr(entry, "event", None) == "cache_miss"
     )
-    assert record.boundary == "cache"
+    assert log_field(record, "boundary") == "cache"
     assert str(source) not in caplog.text
 
 
@@ -751,21 +752,18 @@ class CapturingAssembler(FakeArtifactAssembler):
         self.expected_sizes: tuple[int, ...] = ()
         self.audio: tuple[object, ...] = ()
 
-    def assemble(self, request: object) -> object:
-        self.part_sizes = tuple(
-            part.stat().st_size
-            for part in request.pcm_parts  # type: ignore[attr-defined]
-        )
+    def assemble(self, request: AssemblyRequest) -> AssemblyResult:
+        self.part_sizes = tuple(part.stat().st_size for part in request.pcm_parts)
         totals: dict[str, int] = {}
         order: list[str] = []
-        for item in request.audio:  # type: ignore[attr-defined]
+        for item in request.audio:
             if item.chapter_id not in totals:
                 totals[item.chapter_id] = 0
                 order.append(item.chapter_id)
             totals[item.chapter_id] += item.byte_count
         self.expected_sizes = tuple(totals[key] for key in order)
-        self.audio = tuple(request.audio)  # type: ignore[attr-defined]
-        return super().assemble(request)  # type: ignore[arg-type]
+        self.audio = tuple(request.audio)
+        return super().assemble(request)
 
 
 def test_render_spills_one_exact_pcm_part_per_chapter(

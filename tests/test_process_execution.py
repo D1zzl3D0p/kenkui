@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from conftest import log_field
 from kenkui._execution import process_pool
 from kenkui.cancellation import CancellationToken
 
@@ -262,7 +263,8 @@ def test_worker_failure_is_logged_with_context(
         list(render_spawned(_tasks(), spec, 2, None))
     records = [r for r in caplog.records if getattr(r, "event", "") == "worker_failed"]
     assert records
-    assert records[0].error_code == ErrorCode.POCKET_INFERENCE_FAILED.value
+    code = log_field(records[0], "error_code")
+    assert code == ErrorCode.POCKET_INFERENCE_FAILED.value
     text = caplog.text
     assert "exact task text" not in text
     assert "Traceback" not in text

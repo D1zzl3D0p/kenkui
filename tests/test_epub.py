@@ -11,6 +11,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 import kenkui as kk
+from conftest import log_field
 from kenkui._domain.selection import select_chapters
 from kenkui._domain.text import SPACE_CODEPOINTS, normalize_text
 from kenkui._epub import parser as epub_parser
@@ -629,8 +630,8 @@ def test_inspection_logs_safe_parse_context(
         for entry in caplog.records
         if getattr(entry, "event", None) == "inspection_completed"
     )
-    assert record.boundary == "parse"
-    assert record.chapter_count == 1
+    assert log_field(record, "boundary") == "parse"
+    assert log_field(record, "chapter_count") == 1
     assert str(source) not in caplog.text
     assert "Secret source text." not in caplog.text
 

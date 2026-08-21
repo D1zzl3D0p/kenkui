@@ -519,7 +519,7 @@ def test_hundred_fractional_frame_chapters_telescope_and_probe_within_tolerance(
         )
         for i in range(count)
     )
-    boundaries = cumulative_frame_boundaries_ms(audio)
+    boundaries = cumulative_frame_boundaries_ms(tuple(map(segment_audio, audio)))
     assert boundaries[-1] == count * frames * 1_000 // rate
     assert (
         sum(
