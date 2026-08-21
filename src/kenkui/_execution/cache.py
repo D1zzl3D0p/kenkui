@@ -120,7 +120,7 @@ class CacheStore:
                     "INSERT OR IGNORE INTO voices(voice_id,content_fingerprint,metadata_json,created_ns) VALUES(?,?,?,?)",
                     (
                         voice_id,
-                        plan.voice.content_fingerprint,
+                        plan.cast.narrator.content_fingerprint,
                         _canonical_json(voice_material),
                         now,
                     ),
@@ -159,7 +159,7 @@ class CacheStore:
                 "id": segment.id,
                 "ordinal": segment.ordinal,
             },
-            "voice": _voice_material(plan),
+            "voice": _voice_material(plan, segment),
             "pcm": {"channels": task.channels, "sample_rate_hz": task.sample_rate_hz},
         }
         return _sha256_json(material)
@@ -964,8 +964,17 @@ def _audio_matches(audio: SynthesizedAudio, task: SynthesisTask) -> bool:
     )
 
 
-def _voice_material(plan: ExecutionPlan) -> dict[str, object]:
-    voice = plan.voice
+def _voice_material(
+    plan: ExecutionPlan, segment: SpeechSegment | None = None
+) -> dict[str, object]:
+    """Return the voice identity that renders one segment.
+
+    Per segment rather than per plan: in a cast, two characters speaking the
+    same words must not collide on one cache key.
+    """
+    voice = (
+        plan.cast.voice_for(segment.speaker_id) if segment else plan.cast.narrator
+    )
     return {
         "commercial_use_allowed": voice.commercial_use_allowed,
         "content_fingerprint": voice.content_fingerprint,

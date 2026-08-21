@@ -219,7 +219,7 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
                 raise RenderError(ErrorCode.SYNTHESIS_FAILED)
             from kenkui._tts.pocket import preflight_pocket  # noqa: PLC0415
 
-            preflight_pocket(config, plan.voice, plan.model_revision)
+            preflight_pocket(config, plan.cast.narrator, plan.model_revision)
         cache_context = (
             bindings.cache_store.prepare_run(plan)
             if bindings.cache_store is not None
@@ -365,6 +365,10 @@ def _render(  # noqa: PLR0913
             ),
             1 if engine_specification.kind == "pocket" else FAKE_CHANNELS,
             MAX_SEGMENT_PCM_BYTES,
+            # VoicePlan.content_fingerprint is the asset digest the worker
+            # routes its conditioning state by, so this bridge is a lookup
+            # rather than new state.
+            plan.cast.voice_for(segment.speaker_id).content_fingerprint,
         )
         for segment in plan.segments
     )

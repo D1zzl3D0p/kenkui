@@ -119,7 +119,7 @@ def test_public_local_voice_metadata_supplies_a_deterministic_plan() -> None:
         model_revision="fixture-v1",
     )
 
-    assert plan.voice.id == "fixture-voice"
+    assert plan.cast.narrator.id == "fixture-voice"
     assert plan.model_revision == "fixture-v1"
 
 def test_one_nonempty_ordered_segment_per_selected_spine_chapter() -> None:
@@ -335,7 +335,7 @@ def test_voice_plan_preserves_exact_commercial_status(
     """Both exact boolean rights statuses are valid and represented in the plan."""
     plan = _compile(voice=_voice(commercial_use_allowed=commercial_use_allowed))
 
-    assert plan.voice.commercial_use_allowed is commercial_use_allowed
+    assert plan.cast.narrator.commercial_use_allowed is commercial_use_allowed
 
 
 def test_empty_or_inconsistent_speech_fails_stably() -> None:

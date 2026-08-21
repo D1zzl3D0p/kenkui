@@ -20,6 +20,7 @@ from kenkui._audio.m4b import AssemblyRequest, cumulative_frame_boundaries_ms
 from kenkui._audio.native import NativeCommandRunner, SubprocessRunner, run_checked
 from kenkui._audio.production import FFmpegM4BAssembler
 from kenkui._domain.planning import (
+    CastPlan,
     CoverIntent,
     ExecutionPlan,
     OutputChapter,
@@ -110,13 +111,14 @@ def _plan(*, cover: CoverIntent = CoverIntent.NONE) -> ExecutionPlan:
         OutputChapter("chapter-1", 0, "One = #; \\ title", 3),
         OutputChapter("chapter-2", 1, "Two\ncontinued", 3),
     )
+    voice = VoicePlan(
+        "voice", "Voice", "b" * 64, "en", "fixture", "CC0", True, ("fake-v1",)
+    )
     return ExecutionPlan(
         SchemaVersions("parser", "normalization", "planning", "render"),
         "a" * 64,
         "fake-v1",
-        VoicePlan(
-            "voice", "Voice", "b" * 64, "en", "fixture", "CC0", True, ("fake-v1",)
-        ),
+        CastPlan.single(voice),
         (
             SpeechSegment("segment-1", "chapter-1", 0, "one", 3, "c" * 64),
             SpeechSegment("segment-2", "chapter-2", 1, "two", 3, "d" * 64),

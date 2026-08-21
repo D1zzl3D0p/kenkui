@@ -24,6 +24,8 @@ from kenkui.errors import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from kenkui.inspection import BookInspection, ChapterInspection
     from kenkui.voices import Voice
 
@@ -121,6 +123,48 @@ class VoicePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeakerSpan:
+    """One contiguous run of a chapter's normalized text with a single speaker."""
+
+    chapter_id: str
+    start: int
+    end: int
+    character_id: str | None  # None is narration
+
+
+@dataclass(frozen=True, slots=True)
+class CastPlan:
+    """Resolved narrator, unknown, and per-character voices for one run."""
+
+    narrator: VoicePlan
+    unknown: VoicePlan
+    voices: tuple[VoicePlan, ...]
+    assignments: Mapping[str, str]  # character id -> voice id
+
+    @classmethod
+    def single(cls, voice: VoicePlan) -> CastPlan:
+        """Return the degenerate cast: one voice narrates everything."""
+        return cls(narrator=voice, unknown=voice, voices=(voice,), assignments={})
+
+    def voice_for(self, speaker_id: str | None) -> VoicePlan:
+        """Resolve the voice a speaker renders in.
+
+        Narration takes the narrator. A character with no assignment takes the
+        unknown voice, which defaults to the narrator's, so speech never
+        silently vanishes because casting missed someone.
+        """
+        if speaker_id is None:
+            return self.narrator
+        voice_id = self.assignments.get(speaker_id)
+        if voice_id is None:
+            return self.unknown
+        for voice in self.voices:
+            if voice.id == voice_id:
+                return voice
+        return self.unknown
+
+
+@dataclass(frozen=True, slots=True)
 class SpeechSegment:
     """One exact ordered synthesis input for an M1 spine chapter."""
 
@@ -130,6 +174,8 @@ class SpeechSegment:
     text: str
     character_count: int
     content_hash: str
+    speaker_id: str | None = None
+    voice_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +206,10 @@ class ExecutionPlan:
     schema_versions: SchemaVersions
     source_bytes_hash: str
     model_revision: str
-    voice: VoicePlan
+    # No separate singular voice: a lone VoicePlan beside the cast is a second
+    # source of truth that can disagree with it, and disagreement here renders
+    # well-formed audio in the wrong voice. cast.narrator is the authority.
+    cast: CastPlan
     segments: tuple[SpeechSegment, ...]
     output: OutputMetadata
     total_speech_characters: int
@@ -180,13 +229,15 @@ class _PlanMaterial:
     total: int
 
 
-def compile_execution_plan(
+def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     pipeline: _PipelineIntent,
     inspection: BookInspection,
     *,
     source_bytes_hash: str,
     resolved_voice: Voice | None,
     model_revision: str,
+    cast: CastPlan | None = None,
+    spans: tuple[SpeakerSpan, ...] = (),
 ) -> ExecutionPlan:
     """Compile supplied material without filesystem, provider, or process effects."""
     source_hash = _validated_hash(source_bytes_hash)
@@ -199,9 +250,15 @@ def compile_execution_plan(
         raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
     if _one_operation(pipeline.operations, SynthesizeSpeech) is None:
         raise ValidationError(ErrorCode.TTS_REQUIRED)
-    voice = _resolve_voice(assigned.voice_id, resolved_voice, revision)
+    if cast is None:
+        voice = _resolve_voice(assigned.voice_id, resolved_voice, revision)
+        # Single voice is the degenerate cast, not a separate path: one
+        # VoicePlan, one renderer, one set of segment identities.
+        cast = CastPlan.single(voice)
+    else:
+        voice = cast.narrator
 
-    segments = _compile_segments(inspection.chapters)
+    segments = _compile_segments(inspection.chapters, spans, cast)
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
     total = sum(segment.character_count for segment in segments)
@@ -228,7 +285,7 @@ def compile_execution_plan(
         schema_versions=schemas,
         source_bytes_hash=source_hash,
         model_revision=revision,
-        voice=voice,
+        cast=cast,
         segments=segments,
         output=metadata,
         total_speech_characters=total,
@@ -297,14 +354,47 @@ def _resolve_voice(
 
 def _compile_segments(
     chapters: tuple[ChapterInspection, ...],
+    spans: tuple[SpeakerSpan, ...],
+    cast: CastPlan,
 ) -> tuple[SpeechSegment, ...]:
-    """Split selected chapters while assigning one global plan-order ordinal."""
+    """Split each speaker span while assigning one global plan-order ordinal.
+
+    Spans partition a chapter, and the frozen chunker runs inside each one, so
+    concatenating every chunk still reproduces the chapter exactly. A chapter
+    with no spans is one narration span, which is byte-for-byte the behaviour
+    that existed before attribution.
+    """
     result: list[SpeechSegment] = []
     for chapter in chapters:
-        chunks = _chunk_text(chapter)
-        for chunk_index, text in enumerate(chunks):
-            result.append(_segment(chapter, len(result), chunk_index, text))
+        for span in _spans_for(chapter, spans):
+            voice = cast.voice_for(span.character_id)
+            text = chapter.text[span.start : span.end]
+            for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
+                result.append(
+                    _segment(
+                        chapter,
+                        len(result),
+                        chunk_index,
+                        chunk,
+                        speaker_id=span.character_id,
+                        voice_id=voice.id,
+                    )
+                )
     return tuple(result)
+
+
+def _spans_for(
+    chapter: ChapterInspection, spans: tuple[SpeakerSpan, ...]
+) -> tuple[SpeakerSpan, ...]:
+    """Return a chapter's ordered spans, or one narration span covering it."""
+    owned = tuple(span for span in spans if span.chapter_id == chapter.id)
+    if not owned:
+        return (SpeakerSpan(chapter.id, 0, len(chapter.text), None),)
+    ordered = tuple(sorted(owned, key=lambda span: span.start))
+    covered = "".join(chapter.text[span.start : span.end] for span in ordered)
+    if covered != chapter.text:
+        raise ValidationError(ErrorCode.EMPTY_SPEECH)
+    return ordered
 
 
 def _break_offset(text: str, start: int, stop: int) -> int:
@@ -336,14 +426,19 @@ def _separator_free_end(text: str, start: int, stop: int) -> int:
     return stop
 
 
-def _chunk_text(chapter: ChapterInspection) -> tuple[str, ...]:
+def _chunk_span(chapter: ChapterInspection, text: str) -> tuple[str, ...]:
+    """Apply the frozen tts-chunks-v2 chunker to one speaker span.
+
+    The chapter is still validated as a whole, because speech_characters
+    describes the chapter and not the span.
+    """
     if (
         not chapter.text
         or chapter.speech_characters is None
         or chapter.speech_characters != len(chapter.text)
+        or not text
     ):
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    text = chapter.text
     chunks: list[str] = []
     start = 0
     while start < len(text):
@@ -370,23 +465,31 @@ def _chunk_text(chapter: ChapterInspection) -> tuple[str, ...]:
     return tuple(chunks)
 
 
-def _segment(
-    chapter: ChapterInspection, ordinal: int, chunk_index: int, text: str
+def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
+    chapter: ChapterInspection,
+    ordinal: int,
+    chunk_index: int,
+    text: str,
+    *,
+    speaker_id: str | None = None,
+    voice_id: str = "",
 ) -> SpeechSegment:
     content_hash = _hash_utf8(text)
-    identity = json.dumps(
-        {
-            "chapter_id": _string_identity(chapter.id),
-            "chunk_index": chunk_index,
-            "chunking_schema": CHUNKING_SCHEMA_VERSION,
-            "content_hash": content_hash,
-            "normalization": NORMALIZATION_SCHEMA_VERSION,
-            "ordinal": ordinal,
-            "segment_id_version": _SEGMENT_ID_VERSION,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    fields: dict[str, object] = {
+        "chapter_id": _string_identity(chapter.id),
+        "chunk_index": chunk_index,
+        "chunking_schema": CHUNKING_SCHEMA_VERSION,
+        "content_hash": content_hash,
+        "normalization": NORMALIZATION_SCHEMA_VERSION,
+        "ordinal": ordinal,
+        "segment_id_version": _SEGMENT_ID_VERSION,
+    }
+    if speaker_id is not None:
+        # Added only for attributed speech, so single-voice identities -- and
+        # therefore every existing cache entry -- stay byte-identical.
+        fields["speaker_id"] = _string_identity(speaker_id)
+        fields["voice_id"] = _string_identity(voice_id)
+    identity = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     digest = _hash_utf8(identity)[:24]
     return SpeechSegment(
         id=f"seg-{NORMALIZATION_SCHEMA_VERSION}-{_SEGMENT_ID_VERSION}-{digest}",
@@ -395,6 +498,8 @@ def _segment(
         text=text,
         character_count=len(text),
         content_hash=content_hash,
+        speaker_id=speaker_id,
+        voice_id=voice_id,
     )
 
 
