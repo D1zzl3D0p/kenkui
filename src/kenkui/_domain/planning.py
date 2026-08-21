@@ -31,8 +31,37 @@ PARSER_SCHEMA_VERSION = "epub-visible-text-v1"
 NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
 PLANNING_SCHEMA_VERSION = "execution-plan-v2"
 RENDER_SCHEMA_VERSION = "m4b-render-v1"
-CHUNKING_SCHEMA_VERSION = "tts-chunks-v1"
+CHUNKING_SCHEMA_VERSION = "tts-chunks-v2"
 MAX_TTS_SEGMENT_CHARACTERS = 1000
+# Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
+# only then packs the pieces into bounded chunks. A run holding none of these is
+# indivisible to it, so an over-long one is generated past the model's own limit
+# and returns as unusable audio. Kenkui splits such a run itself while a natural
+# boundary is still available.
+POCKET_SEPARATORS = ".!?,;:"
+# Calibrated against the engine's own tokenizer, counting the way it does: it
+# replaces newlines with spaces before tokenizing, so a run is measured after
+# that collapse. Over one 594k-character book, leaving runs unsplit produced a
+# worst run of 320 tokens against a 50-token limit -- the case that generates
+# past the limit and returns unusable audio. A 100-character budget holds the
+# worst run to 58 tokens for about 30% more segments; tighter budgets fragment
+# ordinary prose for little further gain.
+MAX_SEPARATOR_FREE_CHARACTERS = 100
+# Break points ranked by how natural the resulting pause sounds. Each tier keeps
+# its separator in the preceding chunk so joining stays exact.
+_BREAK_TIERS = (
+    r"\n\s*",
+    r"[.!?][\"')\]]*\s+|[,;:][\"')\]]*\s+",
+    r"\s+",
+    r"[-\u2010-\u2015]",
+)
+# A better boundary is only worth taking when it still fills the window. Without
+# this, one early line break would strand a nearly empty chunk and multiply the
+# per-segment synthesis overhead across a book. Measured over one 594k-character
+# book, the share of breaks landing on a line break or clause boundary moves only
+# from 71% to 64% across fills of 0.5 to 0.8, while segment count falls 1211 to
+# 987, so the middle of that range buys most of the quality for less overhead.
+MIN_BREAK_FILL = 0.7
 _SEGMENT_ID_VERSION = "v2"
 _UTF8_HASH_CHUNK_CHARACTERS = 64 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -278,6 +307,35 @@ def _compile_segments(
     return tuple(result)
 
 
+def _break_offset(text: str, start: int, stop: int) -> int:
+    """Offset past the best boundary in ``text[start:stop]``, or 0 when none fits."""
+    window = text[start:stop]
+    if not window:
+        return 0
+    threshold = len(window) * MIN_BREAK_FILL
+    fullest = 0
+    for pattern in _BREAK_TIERS:
+        offsets = [match.end() for match in re.finditer(pattern, window)]
+        if not offsets:
+            continue
+        best = offsets[-1]
+        if best >= threshold:
+            return best
+        fullest = max(fullest, best)
+    return fullest
+
+
+def _separator_free_end(text: str, start: int, stop: int) -> int:
+    """Return where a run the engine cannot divide outgrows its chunk budget."""
+    run_start = start
+    for index in range(start, stop):
+        if text[index] in POCKET_SEPARATORS:
+            run_start = index + 1
+        elif index - run_start >= MAX_SEPARATOR_FREE_CHARACTERS:
+            return index
+    return stop
+
+
 def _chunk_text(chapter: ChapterInspection) -> tuple[str, ...]:
     if (
         not chapter.text
@@ -292,15 +350,17 @@ def _chunk_text(chapter: ChapterInspection) -> tuple[str, ...]:
         hard_end = min(start + MAX_TTS_SEGMENT_CHARACTERS, len(text))
         end = hard_end
         if hard_end < len(text):
-            # Keep separator characters in the preceding chunk so joining is exact.
-            opportunities = tuple(
-                match.end()
-                for match in re.finditer(
-                    r"(?:[.!?][\"')\]]*\s+|\s+)", text[start:hard_end]
-                )
-            )
-            if opportunities:
-                end = start + opportunities[-1]
+            offset = _break_offset(text, start, hard_end)
+            if offset:
+                end = start + offset
+        budget_end = _separator_free_end(text, start, hard_end)
+        if budget_end < end:
+            # Cutting needs a natural boundary. Without one the character bound
+            # still applies, which keeps an unbroken token from being split
+            # mid-word into two mispronounced halves.
+            forced = _break_offset(text, start, budget_end)
+            if forced:
+                end = start + forced
         if end <= start:  # Defensive hard fallback for arbitrarily long tokens.
             end = hard_end
         chunks.append(text[start:end])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import multiprocessing
 import os
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Literal, NoReturn
 from kenkui._tts.fake import DeterministicFakeEngine
 from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
 from kenkui.errors import ErrorCode, RenderError
+from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -27,7 +29,11 @@ if TYPE_CHECKING:
     from kenkui._tts.pocket import PocketEngineConfig
     from kenkui.cancellation import CancellationToken
 
-MAX_RENDER_WORKERS = 2
+# Each worker copies a private model snapshot and holds its own model instance
+# (~209 MiB for the english engine), so the ceiling is memory, not CPU.
+MAX_RENDER_WORKERS = 16
+# CPUs deliberately left to the rest of the system when resolving "auto".
+RESERVED_CPU_COUNT = 2
 _DEFAULT_WORKER_TIMEOUT_SECONDS = 30.0
 _WAIT_SLICE_SECONDS = 0.05
 _TERMINATE_GRACE_SECONDS = 0.1
@@ -41,6 +47,10 @@ _READ_CHUNK_BYTES = 64 * 1024
 _MAX_WORKER_TIMEOUT_SECONDS = 3600.0
 _MAX_TASK_COUNT = 100_000
 _MAX_TASK_INPUT_BYTES = 256 * 1024 * 1024
+_FAILURE_PREFIX = "failure-"
+_MAX_FAILURE_BYTES = 128
+
+_LOGGER = get_logger(__name__)
 
 
 class WorkerTestMode(StrEnum):
@@ -53,6 +63,7 @@ class WorkerTestMode(StrEnum):
     OVERSIZED_RESULT = "oversized_result"
     HANG = "hang"
     RAISE = "raise"
+    RAISE_CODED = "raise_coded"
     INVALID_AUDIO = "invalid_audio"
 
 
@@ -124,11 +135,42 @@ def _available_cpu_count() -> int:
     return max(1, os.cpu_count() or 1)
 
 
+# Inference libraries each start their own pool sized to the whole machine, so
+# N worker processes otherwise contend for N times the available cores. Dividing
+# the CPUs across workers keeps total threads near the core count.
+_THREAD_LIMIT_VARIABLES = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+def resolve_thread_limit(worker_count: int) -> int:
+    """Return the per-worker thread budget that keeps the pool from thrashing."""
+    if worker_count < 1:
+        return 1
+    return max(1, _available_cpu_count() // worker_count)
+
+
+def _apply_thread_limit(  # pragma: no cover - set inside spawned children.
+    thread_limit: int,
+) -> None:
+    """Bound this child's inference threads before any such library is imported."""
+    value = str(max(1, thread_limit))
+    for name in _THREAD_LIMIT_VARIABLES:
+        os.environ[name] = value
+
+
 def resolve_workers(workers: int | Literal["auto"], chapter_count: int) -> int:
     """Resolve public policy against chapters, available CPUs, and the hard cap."""
     if chapter_count < 1:
         return 0
-    requested = _available_cpu_count() if workers == "auto" else workers
+    if workers == "auto":
+        requested = max(1, _available_cpu_count() - RESERVED_CPU_COUNT)
+    else:
+        requested = workers
     return min(requested, chapter_count, MAX_RENDER_WORKERS)
 
 
@@ -193,13 +235,61 @@ def _write_wire_result(  # pragma: no cover - exercised by spawned integration t
         raise
 
 
+def _write_wire_failure(  # pragma: no cover - exercised by spawned tests.
+    failure_path: str, error: BaseException
+) -> None:
+    """Publish only a stable code: never provider text, a path, or a traceback."""
+    code = getattr(error, "code", None)
+    value = code.value if type(code) is ErrorCode else ErrorCode.SYNTHESIS_FAILED.value
+    with suppress(BaseException):
+        path = Path(failure_path)
+        temporary = path.with_suffix(".tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(value.encode("ascii"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+
+
+def _failure_code(path: Path, workspace: Path) -> ErrorCode:
+    """Read a bounded child failure code, falling back to the generic failure."""
+    try:
+        if path.parent != workspace or not path.is_relative_to(workspace):
+            raise OSError  # noqa: TRY301
+        named = path.lstat()
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or stat.S_ISLNK(named.st_mode)
+                or opened.st_nlink != 1
+                or opened.st_size > _MAX_FAILURE_BYTES
+            ):
+                raise OSError  # noqa: TRY301
+            raw = os.read(descriptor, _MAX_FAILURE_BYTES)
+        finally:
+            os.close(descriptor)
+        return ErrorCode(raw.decode("ascii").strip())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return ErrorCode.SYNTHESIS_FAILED
+
+
 def synthesis_worker_entry(  # noqa: C901, PLC0415, PLR0912, TRY301  # pragma: no cover
     workspace: str,
     specification: EngineSpecification,
     assignments: tuple[tuple[int, SynthesisTask], ...],
+    failure_path: str = "",
+    thread_limit: int = 1,
 ) -> None:
     """Construct one engine and publish acknowledged results for its static batch."""
     engine: object | None = None
+    _apply_thread_limit(thread_limit)
     try:
         if specification.kind == "pocket":
             if specification.pocket_config is None:
@@ -222,6 +312,10 @@ def synthesis_worker_entry(  # noqa: C901, PLC0415, PLR0912, TRY301  # pragma: n
                 return
             if mode is WorkerTestMode.RAISE:
                 raise RuntimeError  # noqa: TRY301 - deterministic child failure mode.
+            if mode is WorkerTestMode.RAISE_CODED:
+                raise RenderError(  # noqa: TRY301 - deterministic coded child failure.
+                    ErrorCode.POCKET_INFERENCE_FAILED
+                )
             engine = DeterministicFakeEngine()
 
         for index, task in assignments:
@@ -253,7 +347,8 @@ def synthesis_worker_entry(  # noqa: C901, PLC0415, PLR0912, TRY301  # pragma: n
             # can exist per worker even when a static batch contains many tasks.
             while result_path.exists():
                 time.sleep(_WAIT_SLICE_SECONDS)
-    except BaseException:  # noqa: BLE001 - child details never cross the boundary.
+    except BaseException as error:  # noqa: BLE001 - details never cross the boundary.
+        _write_wire_failure(failure_path, error)
         raise SystemExit(72) from None
     finally:
         close = getattr(engine, "close", None)
@@ -489,6 +584,7 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
         start = stop
 
     context = multiprocessing.get_context("spawn")
+    thread_limit = resolve_thread_limit(worker_count)
     active: dict[int, _Active] = {}
     ready: dict[int, WorkerRecord] = {}
     next_emit = 0
@@ -497,9 +593,16 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
         workspace = Path(workspace_name).resolve(strict=True)
         try:
             for worker_index, assignments in enumerate(batches):
+                failure_path = workspace / f"{_FAILURE_PREFIX}{worker_index}"
                 process = context.Process(
                     target=synthesis_worker_entry,
-                    args=(str(workspace), specification, assignments),
+                    args=(
+                        str(workspace),
+                        specification,
+                        assignments,
+                        str(failure_path),
+                        thread_limit,
+                    ),
                     name=f"kenkui-render-worker-{worker_index}",
                 )
                 try:
@@ -546,7 +649,12 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
                         if state.process.is_alive():
                             _fail(active)
                         if state.process.exitcode != 0 or state.pending:
-                            _fail(active)
+                            _fail(
+                                active,
+                                _reported_failure(
+                                    workspace, worker_index, state
+                                ),
+                            )
                         with suppress(BaseException):
                             state.process.close()
                         active.pop(worker_index)
@@ -595,6 +703,34 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
                     _poll_wait(wait_for)
         finally:
             _terminate_and_reap(active)
+
+
+def _reported_failure(
+    workspace: Path, worker_index: int, state: _Active
+) -> ErrorCode:
+    """Log why a worker failed, then return the code the caller should receive."""
+    code = _failure_code(
+        workspace / f"{_FAILURE_PREFIX}{worker_index}", workspace
+    )
+    pending = sorted(state.pending)
+    chapter_id = ""
+    for index, task in state.assignments:
+        if pending and index == pending[0]:
+            chapter_id = task.chapter_id
+            break
+    log_event(
+        _LOGGER,
+        "worker_failed",
+        level=logging.DEBUG,
+        context={
+            "error_code": code.value,
+            "worker_index": worker_index,
+            "exit_code": state.process.exitcode or 0,
+            "pending_segments": len(pending),
+            "chapter_id": chapter_id,
+        },
+    )
+    return code
 
 
 def _check_cancel(cancel: CancellationToken | None) -> None:

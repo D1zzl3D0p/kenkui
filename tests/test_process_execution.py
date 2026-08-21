@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from kenkui._execution.process_pool import (
+    MAX_RENDER_WORKERS,
     EngineSpecification,
     FakeEngineConfig,
     WorkerTestMode,
@@ -42,8 +43,8 @@ def test_specification_is_frozen_pickle_safe_and_workers_are_bounded(
     monkeypatch.setattr(
         "kenkui._execution.process_pool._available_cpu_count", lambda: 99
     )
-    assert resolve_workers("auto", 20) == 2
-    assert resolve_workers(99, 20) == 2
+    assert resolve_workers("auto", 20) == MAX_RENDER_WORKERS
+    assert resolve_workers(99, 20) == MAX_RENDER_WORKERS
     assert resolve_workers(2, 1) == 1
 
 
@@ -227,3 +228,89 @@ def test_terminate_resistant_process_is_killed_and_all_joins_are_bounded() -> No
     assert process.closed
     assert process.joins
     assert all(timeout is not None and timeout > 0 for timeout in process.joins)
+
+
+def test_child_error_code_survives_the_process_boundary() -> None:
+    """A coded child failure reaches the caller as its own code, not a generic one."""
+    before = {child.pid for child in multiprocessing.active_children()}
+    spec = EngineSpecification(
+        "fake", FakeEngineConfig(test_mode=WorkerTestMode.RAISE_CODED)
+    )
+    with pytest.raises(RenderError) as caught:
+        list(render_spawned(_tasks(), spec, 2, None))
+    assert caught.value.code == ErrorCode.POCKET_INFERENCE_FAILED
+    assert caught.value.__cause__ is None
+    assert {child.pid for child in multiprocessing.active_children()} == before
+
+
+def test_uncoded_child_failure_still_reports_the_generic_code() -> None:
+    """A child failure carrying no stable code stays generic rather than guessing."""
+    spec = EngineSpecification("fake", FakeEngineConfig(test_mode=WorkerTestMode.RAISE))
+    with pytest.raises(RenderError) as caught:
+        list(render_spawned(_tasks(), spec, 2, None))
+    assert caught.value.code == ErrorCode.SYNTHESIS_FAILED
+
+
+def test_worker_failure_is_logged_with_context(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The stable code is observable in logs even though the CLI stays generic."""
+    spec = EngineSpecification(
+        "fake", FakeEngineConfig(test_mode=WorkerTestMode.RAISE_CODED)
+    )
+    with caplog.at_level("DEBUG", logger="kenkui"), pytest.raises(RenderError):
+        list(render_spawned(_tasks(), spec, 2, None))
+    records = [r for r in caplog.records if getattr(r, "event", "") == "worker_failed"]
+    assert records
+    assert records[0].error_code == ErrorCode.POCKET_INFERENCE_FAILED.value
+    text = caplog.text
+    assert "exact task text" not in text
+    assert "Traceback" not in text
+
+
+@pytest.mark.parametrize(
+    ("cpus", "expected"),
+    [(1, 1), (2, 1), (3, 1), (4, 2), (12, 10), (99, MAX_RENDER_WORKERS)],
+)
+def test_auto_workers_reserve_two_cpus_and_never_fall_below_one(
+    monkeypatch: pytest.MonkeyPatch, cpus: int, expected: int
+) -> None:
+    """Auto leaves two CPUs for everything else without ever resolving to zero."""
+    monkeypatch.setattr(
+        "kenkui._execution.process_pool._available_cpu_count", lambda: cpus
+    )
+    assert resolve_workers("auto", 1000) == expected
+
+
+def test_auto_workers_still_yield_to_chapter_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short book never starts more workers than it has segments to render."""
+    monkeypatch.setattr(
+        "kenkui._execution.process_pool._available_cpu_count", lambda: 12
+    )
+    assert resolve_workers("auto", 3) == 3
+    assert resolve_workers("auto", 0) == 0
+
+
+@pytest.mark.parametrize(
+    ("cpus", "workers", "expected"),
+    [(12, 10, 1), (12, 2, 6), (12, 1, 12), (8, 3, 2), (2, 10, 1)],
+)
+def test_thread_limit_divides_cpus_across_workers(
+    monkeypatch: pytest.MonkeyPatch, cpus: int, workers: int, expected: int
+) -> None:
+    """Each worker gets a share of the CPUs so the pool cannot oversubscribe."""
+    monkeypatch.setattr(
+        "kenkui._execution.process_pool._available_cpu_count", lambda: cpus
+    )
+    assert process_pool.resolve_thread_limit(workers) == expected
+
+
+def test_thread_limit_never_drops_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A worker always gets at least one thread, whatever the arithmetic says."""
+    monkeypatch.setattr(
+        "kenkui._execution.process_pool._available_cpu_count", lambda: 1
+    )
+    assert process_pool.resolve_thread_limit(64) == 1
+    assert process_pool.resolve_thread_limit(0) == 1

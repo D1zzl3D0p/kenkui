@@ -633,3 +633,20 @@ def test_inspection_logs_safe_parse_context(
     assert record.chapter_count == 1
     assert str(source) not in caplog.text
     assert "Secret source text." not in caplog.text
+
+
+def test_textless_spine_items_are_skipped_not_fatal(tmp_path: Path) -> None:
+    """Image-only cover/title pages are skipped instead of failing the book."""
+    source = make_epub(
+        tmp_path / "image-front-matter.epub",
+        chapters={
+            "cover": xhtml('<div><img src="../images/cover.jpg" alt=""/></div>'),
+            "title": xhtml('<div><img src="../images/title.jpg" alt=""/></div>'),
+            "one": xhtml("<p>Real text.</p>"),
+            "two": xhtml("<p>More text.</p>"),
+        },
+        spine=["cover", "title", "one", "two"],
+    )
+    chapters = kk.epub(source).inspect().chapters
+    assert [chapter.text for chapter in chapters] == ["Real text.", "More text."]
+    assert [chapter.index for chapter in chapters] == [0, 1]

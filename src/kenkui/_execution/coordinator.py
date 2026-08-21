@@ -28,7 +28,12 @@ from kenkui._execution.process_pool import (
     resolve_workers,
 )
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ
-from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
+from kenkui._tts.protocols import (
+    SegmentAudio,
+    SynthesisTask,
+    SynthesizedAudio,
+    segment_audio,
+)
 from kenkui.api import ExecutionStats, Result
 from kenkui.observability import get_logger, log_event
 from kenkui.errors import (
@@ -61,8 +66,14 @@ _SHA256_HEX_LENGTH = 64
 _PRIVATE_DIRECTORY_MODE = 0o700
 MAX_COMPRESSED_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_SEGMENT_PCM_BYTES = 64 * 1024 * 1024
-MAX_TOTAL_PCM_BYTES = 512 * 1024 * 1024
-MAX_ARTIFACT_BYTES = MAX_TOTAL_PCM_BYTES + (16 * 1024 * 1024)
+# Rendered PCM is spilled per chapter, so the memory a run needs is bounded by
+# its largest chapter rather than by the whole book. 512 MiB is about three
+# hours of 24 kHz mono audio, far past any real chapter.
+MAX_CHAPTER_PCM_BYTES = 512 * 1024 * 1024
+# The whole-run bound is now a disk bound rather than a memory one, so it is
+# sized to stop a runaway instead of to fit in RAM.
+MAX_TOTAL_PCM_BYTES = 64 * 1024 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 16 * 1024 * 1024 * 1024
 _LOGGER = get_logger(__name__)
 
 
@@ -219,18 +230,20 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
         emitter.emit_stage_completed("planning")
         _check_cancel(cancel)
 
-        audio = _render(
+        audio, pcm_parts = _render(
             plan,
             bindings.engine_specification,
             resolve_workers(workers, len(plan.segments)),
             emitter,
             cancel,
+            workspace=workspace,
             cache_store=bindings.cache_store,
             cache_context=cache_context,
         )
         assembled = _assemble(
             plan,
             audio,
+            pcm_parts,
             snapshot,
             workspace,
             bindings.assembler,
@@ -283,7 +296,7 @@ def _make_workspace(parent: Path) -> Path:
 def _build_result(
     output: Path,
     plan: ExecutionPlan,
-    audio: tuple[SynthesizedAudio, ...],
+    audio: tuple[SegmentAudio, ...],
     assembled: AssemblyResult,
 ) -> Result:
     stats = ExecutionStats(
@@ -298,6 +311,34 @@ def _build_result(
     return Result(output, stats)
 
 
+def _cache_lookup(
+    plan: ExecutionPlan,
+    tasks: tuple[SynthesisTask, ...],
+    engine_specification: EngineSpecification,
+    cancel: CancellationToken | None,
+    cache_store: CacheStore | None,
+) -> tuple[dict[int, SynthesizedAudio], list[int], dict[int, str]]:
+    """Resolve which segments are already rendered before any worker starts."""
+    cached: dict[int, SynthesizedAudio] = {}
+    miss_indices: list[int] = []
+    cache_keys: dict[int, str] = {}
+    if cache_store is None:
+        miss_indices.extend(range(len(tasks)))
+        return cached, miss_indices, cache_keys
+    for index, (segment, task) in enumerate(zip(plan.segments, tasks, strict=True)):
+        _check_cancel(cancel)
+        key = cache_store.key_for(plan, segment, task, engine_specification)
+        cache_keys[index] = key
+        item = cache_store.lookup(key, segment, task)
+        if item is None:
+            miss_indices.append(index)
+            log_event(_LOGGER, "cache_miss", context={"boundary": "cache"})
+        else:
+            cached[index] = item
+            log_event(_LOGGER, "cache_hit", context={"boundary": "cache"})
+    return cached, miss_indices, cache_keys
+
+
 def _render(  # noqa: PLR0913
     plan: ExecutionPlan,
     engine_specification: EngineSpecification,
@@ -305,9 +346,10 @@ def _render(  # noqa: PLR0913
     emitter: _Emitter,
     cancel: CancellationToken | None,
     *,
+    workspace: Path,
     cache_store: CacheStore | None = None,
     cache_context: _RunContext | None = None,
-) -> tuple[SynthesizedAudio, ...]:
+) -> tuple[tuple[SegmentAudio, ...], tuple[Path, ...]]:
     emitter.emit_stage_started("render")
     _check_cancel(cancel)
     tasks = tuple(
@@ -326,34 +368,15 @@ def _render(  # noqa: PLR0913
         )
         for segment in plan.segments
     )
-    cached: dict[int, SynthesizedAudio] = {}
-    miss_indices: list[int] = []
-    cache_keys: dict[int, str] = {}
-    if cache_store is not None:
-        for index, (segment, task) in enumerate(zip(plan.segments, tasks, strict=True)):
-            _check_cancel(cancel)
-            key = cache_store.key_for(plan, segment, task, engine_specification)
-            cache_keys[index] = key
-            item = cache_store.lookup(key, segment, task)
-            if item is None:
-                miss_indices.append(index)
-                log_event(
-                    _LOGGER,
-                    "cache_miss",
-                    context={"boundary": "cache"},
-                )
-            else:
-                cached[index] = item
-                log_event(
-                    _LOGGER,
-                    "cache_hit",
-                    context={"boundary": "cache"},
-                )
-    else:
-        miss_indices.extend(range(len(tasks)))
-
-    rendered: list[SynthesizedAudio] = []
+    cached, miss_indices, cache_keys = _cache_lookup(
+        plan, tasks, engine_specification, cancel, cache_store
+    )
+    rendered: list[SegmentAudio] = []
+    parts: list[Path] = []
+    pending: list[bytes] = []
+    chapter_bytes = 0
     total_bytes = 0
+    spill_directory = _fresh_spill_directory(workspace)
     chapter_ids = tuple(chapter.id for chapter in plan.output.chapters)
     last_segment = {
         chapter_id: max(
@@ -380,21 +403,57 @@ def _render(  # noqa: PLR0913
         if item is None:
             item = next(records).audio
         item_bytes = _validate_audio(task, item)
+        chapter_bytes += item_bytes
         total_bytes += item_bytes
-        if total_bytes > MAX_TOTAL_PCM_BYTES:
+        if chapter_bytes > MAX_CHAPTER_PCM_BYTES or total_bytes > MAX_TOTAL_PCM_BYTES:
             raise RenderError(ErrorCode.INVALID_AUDIO)
-        rendered.append(item)
+        rendered.append(segment_audio(item))
+        pending.append(item.pcm_s16le)
         if cache_store is not None and index in cache_keys and index not in cached:
             cache_store.store(cache_keys[index], segment, task, item, cache_context)
         if last_segment[segment.chapter_id] == index:
+            # The chapter is complete, so its samples leave memory for good.
+            parts.append(
+                _spill_chapter(spill_directory, len(parts), tuple(pending))
+            )
+            pending.clear()
+            chapter_bytes = 0
             completed_chapters += 1
             emitter.emit_progress(
                 "render", completed_chapters, len(chapter_ids), segment.chapter_id
             )
         _check_cancel(cancel)
+    if pending or len(parts) != len(chapter_ids):
+        raise RenderError(ErrorCode.SYNTHESIS_FAILED)
     emitter.emit_stage_completed("render")
     _check_cancel(cancel)
-    return tuple(rendered)
+    return tuple(rendered), tuple(parts)
+
+
+def _fresh_spill_directory(workspace: Path) -> Path:
+    """Create the private directory that holds this run's chapter PCM parts."""
+    try:
+        directory = Path(tempfile.mkdtemp(prefix=".render-", dir=workspace))
+        directory.chmod(_PRIVATE_DIRECTORY_MODE)
+    except OSError:
+        raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
+    return directory
+
+
+def _spill_chapter(directory: Path, index: int, payloads: tuple[bytes, ...]) -> Path:
+    """Write one chapter's ordered segment PCM to its own part, then fsync it."""
+    path = directory / f"chapter-{index:05d}.pcm"
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            for payload in payloads:
+                stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError:
+        raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
+    return path
 
 
 def _preflight_assembler(assembler: ArtifactAssembler, *, expect_cover: bool) -> None:
@@ -412,7 +471,8 @@ def _preflight_assembler(assembler: ArtifactAssembler, *, expect_cover: bool) ->
 
 def _assemble(  # noqa: PLR0913, PLR0917 - explicit effect boundary.
     plan: ExecutionPlan,
-    audio: tuple[SynthesizedAudio, ...],
+    audio: tuple[SegmentAudio, ...],
+    pcm_parts: tuple[Path, ...],
     source_snapshot: Path,
     workspace: Path,
     assembler: ArtifactAssembler,
@@ -427,7 +487,7 @@ def _assemble(  # noqa: PLR0913, PLR0917 - explicit effect boundary.
     result: object | None = None
     try:
         result = assembler.assemble(
-            AssemblyRequest(plan, audio, candidate, source_snapshot)
+            AssemblyRequest(plan, audio, pcm_parts, candidate, source_snapshot)
         )
     except EncodingError as error:
         encoding_failure = error.code
@@ -510,7 +570,7 @@ def _validate_assembly(
     candidate: Path,
     workspace: Path,
     plan: ExecutionPlan,
-    audio: tuple[SynthesizedAudio, ...],
+    audio: tuple[SegmentAudio, ...],
 ) -> AssemblyResult:
     if type(result) is not AssemblyResult:
         _reject_assembly(candidate)
@@ -541,11 +601,10 @@ def _validate_assembly(
                 for item in typed_result.chapters
             )
             and type(audio) is tuple
-            and all(type(item) is SynthesizedAudio for item in audio)
+            and all(type(item) is SegmentAudio for item in audio)
             and all(
                 type(item.segment_id) is str
                 and type(item.chapter_id) is str
-                and type(item.pcm_s16le) is bytes
                 and type(item.sample_rate_hz) is int
                 and type(item.channels) is int
                 and type(item.frame_count) is int

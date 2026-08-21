@@ -26,9 +26,12 @@ Default hard limits are:
 XML uses `defusedxml`, forbids DTDs, applies work limits while iterating, and
 maps malformed/unsupported input to stable errors. Script, style, noscript,
 template, hidden, and `aria-hidden` content is excluded from speech. XHTML text
-is normalized before exact character counting. `archive_limit`,
-`unsafe_archive_path`, `malformed_epub`, and `empty_chapter` are expected safety
-outcomes rather than requests to relax limits for unknown files.
+is normalized before exact character counting. A spine item with no visible text
+is skipped rather than failing the book, because image-only covers and title
+pages are ordinary; `empty_chapter` is raised only when no spine item in the book
+yields text. `archive_limit`, `unsafe_archive_path`, `malformed_epub`, and
+`empty_chapter` are expected safety outcomes rather than requests to relax limits
+for unknown files.
 
 These controls reduce resource and path risks; they are not a general malware
 scanner or a guarantee that arbitrary hostile input is harmless. Run untrusted

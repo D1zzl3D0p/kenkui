@@ -31,6 +31,40 @@ class SynthesizedAudio:
     duration_ms: int
 
 
+@dataclass(frozen=True, slots=True)
+class SegmentAudio:
+    """One segment's audio metadata once its PCM has been spilled to disk.
+
+    Assembly needs frame counts and identities for chapter markers and probing,
+    but not the samples themselves, so carrying the payload past the render
+    stage is what forces a whole book into memory at once.
+    """
+
+    segment_id: str
+    chapter_id: str
+    sample_rate_hz: int
+    channels: int
+    frame_count: int
+    duration_ms: int
+
+    @property
+    def byte_count(self) -> int:
+        """Exact signed 16-bit interleaved payload size this metadata implies."""
+        return self.frame_count * self.channels * 2
+
+
+def segment_audio(audio: SynthesizedAudio) -> SegmentAudio:
+    """Drop a rendered segment's payload, keeping only what assembly reads."""
+    return SegmentAudio(
+        audio.segment_id,
+        audio.chapter_id,
+        audio.sample_rate_hz,
+        audio.channels,
+        audio.frame_count,
+        audio.duration_ms,
+    )
+
+
 @runtime_checkable
 class SynthesisEngine(Protocol):
     """Private provider-neutral synthesis boundary."""

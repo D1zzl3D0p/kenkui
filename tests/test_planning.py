@@ -361,3 +361,98 @@ def test_execution_plan_remains_internal() -> None:
     assert "VoicePlan" not in kk.__all__
     assert not hasattr(kk.Pipeline, "to_json")
     assert not hasattr(kk.Pipeline, "from_json")
+
+
+def _chunks(text: str) -> list[str]:
+    plan = _compile(inspection_=_inspection(text=text))
+    return [segment.text for segment in plan.segments]
+
+
+def _worst_separator_free_run(text: str) -> int:
+    longest = run = 0
+    for character in text:
+        run = 0 if character in planning.POCKET_SEPARATORS else run + 1
+        longest = max(longest, run)
+    return longest
+
+
+def test_separator_free_runs_are_split_at_line_breaks() -> None:
+    """A contents page has no separator Pocket-TTS can divide, so Kenkui divides it."""
+    text = "Contents\n\n" + "\n\n".join(f"Chapter {index}" for index in range(60))
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert len(chunks) > 1
+    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
+    for chunk in chunks:
+        assert _worst_separator_free_run(chunk) <= budget
+
+
+def test_comma_free_run_on_sentence_is_split_at_whitespace() -> None:
+    """A run-on sentence with no comma is indivisible to the engine without help."""
+    text = "and then " * 120
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert len(chunks) > 1
+    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
+    for chunk in chunks:
+        assert _worst_separator_free_run(chunk) <= budget
+
+
+def test_comma_bearing_prose_is_not_split_by_the_run_budget() -> None:
+    """Pocket-TTS sub-splits on commas, so comma-bearing prose keeps large chunks."""
+    text = ("Walking east, he counted the shuttered windows, " * 12).strip()
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert len(chunks) == 1
+
+
+def test_unbroken_token_keeps_the_character_bound() -> None:
+    """With no whitespace to cut on, the run budget defers to the character bound."""
+    text = "x" * (planning.MAX_TTS_SEGMENT_CHARACTERS + 1)
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert len(chunks) == EXPECTED_CHUNK_COUNT
+
+
+def test_line_break_is_preferred_over_a_later_space() -> None:
+    """A line break is the strongest boundary, so a full-enough one wins."""
+    sentence = "Sentence one. "
+    fill = planning.MAX_TTS_SEGMENT_CHARACTERS * planning.MIN_BREAK_FILL
+    head = sentence * (int(fill // len(sentence)) + 1)
+    text = head + "\n\n" + "Sentence two. " * 43
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert chunks[0] == head + "\n\n"
+
+
+def test_punctuation_adjacent_space_is_preferred_over_a_bare_space() -> None:
+    """A clause boundary beats an arbitrary space inside the same window."""
+    text = "Sentence. " * 90 + "word " * 30
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert chunks[0] == "Sentence. " * 90
+
+
+def test_early_line_break_yields_to_a_fuller_lower_tier_boundary() -> None:
+    """Boundary quality never collapses a window into a nearly empty chunk."""
+    text = "Sentence one. " * 7 + "\n\n" + "Sentence two. " * 80
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert "\n" in chunks[0]
+    assert len(chunks[0]) >= planning.MAX_TTS_SEGMENT_CHARACTERS // 2
+
+
+def test_dashes_break_text_that_offers_no_whitespace_at_all() -> None:
+    """With no space or line break, the dash family still beats a mid-word cut."""
+    text = "a-" * 700
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert all(chunk.endswith("-") for chunk in chunks[:-1])

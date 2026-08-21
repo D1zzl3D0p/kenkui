@@ -741,3 +741,58 @@ def test_execution_logs_structured_cache_context(
     )
     assert record.boundary == "cache"
     assert str(source) not in caplog.text
+
+
+class CapturingAssembler(FakeArtifactAssembler):
+    """Observe spill state while it exists, since the workspace is then removed."""
+
+    def __init__(self) -> None:
+        self.part_sizes: tuple[int, ...] = ()
+        self.expected_sizes: tuple[int, ...] = ()
+        self.audio: tuple[object, ...] = ()
+
+    def assemble(self, request: object) -> object:
+        self.part_sizes = tuple(
+            part.stat().st_size
+            for part in request.pcm_parts  # type: ignore[attr-defined]
+        )
+        totals: dict[str, int] = {}
+        order: list[str] = []
+        for item in request.audio:  # type: ignore[attr-defined]
+            if item.chapter_id not in totals:
+                totals[item.chapter_id] = 0
+                order.append(item.chapter_id)
+            totals[item.chapter_id] += item.byte_count
+        self.expected_sizes = tuple(totals[key] for key in order)
+        self.audio = tuple(request.audio)  # type: ignore[attr-defined]
+        return super().assemble(request)  # type: ignore[arg-type]
+
+
+def test_render_spills_one_exact_pcm_part_per_chapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chapter PCM reaches assembly on disk, sized exactly as its metadata claims."""
+    pipeline, _, _ = _pipeline(tmp_path)
+    assembler = CapturingAssembler()
+    _bind(monkeypatch, DeterministicFakeEngine(), assembler)
+
+    pipeline.write_m4b(tmp_path / "spilled.m4b")
+
+    assert len(assembler.part_sizes) == len(pipeline.inspect().chapters)
+    assert assembler.part_sizes == assembler.expected_sizes
+    assert all(size > 0 for size in assembler.part_sizes)
+
+
+def test_rendered_audio_reaching_assembly_carries_no_pcm_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Holding payloads past render is what forced a whole book into memory."""
+    pipeline, _, _ = _pipeline(tmp_path)
+    assembler = CapturingAssembler()
+    _bind(monkeypatch, DeterministicFakeEngine(), assembler)
+
+    pipeline.write_m4b(tmp_path / "no-payload.m4b")
+
+    assert assembler.audio
+    for item in assembler.audio:
+        assert not hasattr(item, "pcm_s16le")

@@ -22,6 +22,7 @@ from kenkui._execution.process_pool import (
 )
 from kenkui._tts.pocket import (
     MAX_OUTPUT_SAMPLES,
+    SAMPLE_TOLERANCE,
     PocketEngineConfig,
     PocketManifestFile,
     PocketTTSEngine,
@@ -350,7 +351,8 @@ def test_pcm_conversion_golden_is_deterministic() -> None:
     [
         FakeTensor([float("nan")] * 24),
         FakeTensor([float("inf")] * 24),
-        FakeTensor([1.01] * 24),
+        FakeTensor([2.5] * 24),
+        FakeTensor([-2.5] * 24),
         FakeTensor([0.0] * 24, dtype="torch.float64"),
         FakeTensor([0.0] * 24, ndim=2, shape=(1, 24)),
         object(),
@@ -361,6 +363,29 @@ def test_invalid_output_is_sanitized(output: object) -> None:
         tensor_to_pcm(output, FakeTensor, _task(), 24_000)
     assert caught.value.code == ErrorCode.INVALID_AUDIO
     assert caught.value.__cause__ is None
+
+
+def test_marginal_overshoot_clamps_instead_of_failing() -> None:
+    """Vocoder overshoot just past full scale hard-limits rather than failing."""
+    audio = tensor_to_pcm(
+        FakeTensor([1.0168930292129517, -1.0168930292129517] * 12),
+        FakeTensor,
+        _task(),
+        24_000,
+    )
+    assert audio.pcm_s16le == struct.pack("<hh", 32767, -32767) * 12
+
+
+def test_overshoot_at_tolerance_edge_clamps_but_beyond_it_fails() -> None:
+    """The tolerance band is the boundary between overshoot and corruption."""
+    audio = tensor_to_pcm(
+        FakeTensor([SAMPLE_TOLERANCE] * 24), FakeTensor, _task(), 24_000
+    )
+    assert audio.pcm_s16le == struct.pack("<h", 32767) * 24
+    beyond = FakeTensor([SAMPLE_TOLERANCE * 1.5] * 24)
+    with pytest.raises(RenderError) as caught:
+        tensor_to_pcm(beyond, FakeTensor, _task(), 24_000)
+    assert caught.value.code == ErrorCode.INVALID_AUDIO
 
 
 def test_output_bounds_checked_before_materialization() -> None:

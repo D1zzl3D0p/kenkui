@@ -18,9 +18,13 @@ to this exact normalized string.
 
 The pure planner consumes an immutable inspection, exact source-bytes SHA-256,
 resolved voice metadata, model revision, and ordered intent. Under frozen
-`tts-chunks-v1`, it splits every selected chapter into non-empty segments of at
-most 1000 characters, preferring whitespace/sentence opportunities and using a
-hard boundary for long tokens. Concatenating a chapter's segments exactly
+`tts-chunks-v2`, it splits every selected chapter into non-empty segments of at
+most 1000 characters, ranking break points by how natural the resulting pause
+sounds -- line break, then whitespace beside punctuation, then any whitespace,
+then the dash family -- and taking the best one that still fills most of the
+window, with a hard boundary for long tokens. It additionally caps runs holding
+none of `.!?,;:`, which the engine cannot subdivide, so no run reaches synthesis
+far enough over the engine's own chunk budget to generate past its limit. Concatenating a chapter's segments exactly
 reconstructs its normalized text. It emits schema versions, content hashes, stable segment
 identities, resolved metadata, and a canonical semantic fingerprint. Canonical
 JSON key ordering and bounded UTF-8 hashing make equivalent semantic inputs
@@ -39,13 +43,20 @@ constructs one engine, and reuses it serially for that batch. The parent never
 constructs an engine.
 
 Segments are worker/cache units, but public progress and output metadata remain
-semantic chapter units. Assembly concatenates plan-ordered segment PCM and
-aggregates exact frames into one M4B marker per selected chapter.
+semantic chapter units. As each chapter completes, its ordered segment PCM is
+spilled to a private part file in the run workspace and leaves memory, so a run
+holds at most one chapter of samples rather than a whole book. Only metadata --
+identities, frame counts, durations -- travels on to assembly, which concatenates
+the parts in one linear pass and aggregates exact frames into one M4B marker per
+selected chapter. Parts are untrusted like any other worker output: each must be
+a regular file whose size matches its chapter's metadata exactly.
 
-`workers="auto"` considers CPUs and chapter count; all requests are bounded by
-chapter count and a hard cap of two. The scheduler bounds combined live and
-completed-but-not-emitted work, validates per-segment and cumulative PCM budgets,
-accepts completion out of order, and emits results/events strictly in plan order.
+`workers="auto"` reserves two CPUs for the rest of the system and is bounded by
+chapter count and a hard cap of sixteen; the ceiling is memory, because each
+worker copies a private model snapshot and holds its own model instance. The
+scheduler bounds combined live and completed-but-not-emitted work, validates
+per-segment, per-chapter, and whole-run PCM budgets, accepts completion out of
+order, and emits results/events strictly in plan order.
 
 Worker audio never crosses a multiprocessing pipe. A worker writes one
 versioned, bounded header and raw PCM to a private result path using sibling-temp

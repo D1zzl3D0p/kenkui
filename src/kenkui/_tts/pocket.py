@@ -36,6 +36,11 @@ MAX_DIRECTORY_ENTRIES: Final = 8192
 MAX_RELATIVE_PATH_DEPTH: Final = 32
 MAX_RELATIVE_NAME_LENGTH: Final = 255
 MAX_OUTPUT_SAMPLES: Final = 32 * 1024 * 1024
+# Neural vocoders routinely overshoot full scale by a fraction of a percent.
+# Hard-limiting that back to the int16 domain is ordinary audio practice, but a
+# sample far outside the band is corruption rather than overshoot, so the band
+# keeps the fail-closed signal that a bare clamp would discard.
+SAMPLE_TOLERANCE: Final = 2.0
 MAX_TIMEOUT_SECONDS: Final = 3600.0
 _TENSOR_CHUNK_SAMPLES: Final = 64 * 1024
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
@@ -832,12 +837,13 @@ def tensor_to_pcm(
                 if (
                     type(value) is not float
                     or not math.isfinite(value)
-                    or value < -1.0
-                    or value > 1.0
+                    or value < -SAMPLE_TOLERANCE
+                    or value > SAMPLE_TOLERANCE
                 ):
                     raise ValueError
+                clamped = max(-1.0, min(value, 1.0))
                 struct.pack_into(
-                    "<h", pcm, (start + offset) * 2, round(value * 32767.0)
+                    "<h", pcm, (start + offset) * 2, round(clamped * 32767.0)
                 )
         duration = samples * 1000 // sample_rate_hz
         if duration <= 0:
