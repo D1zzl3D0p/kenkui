@@ -26,6 +26,9 @@ class ErrorCode(StrEnum):
     VOICE_UNKNOWN = "voice_unknown"
     ENGINE_NOT_CLONING_CAPABLE = "engine_not_cloning_capable"
     VOICE_VARIETY_INVALID = "voice_variety_invalid"
+    CASTING_METHOD_UNKNOWN = "casting_method_unknown"
+    CAST_POOL_EMPTY = "cast_pool_empty"
+    CHARACTER_UNKNOWN = "character_unknown"
     TTS_REQUIRED = "tts_required"
     EMPTY_SPEECH = "empty_speech"
     INVALID_SOURCE_HASH = "invalid_source_hash"
@@ -90,6 +93,9 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
         "The engine lacks voice-cloning weights required for this voice."
     ),
     ErrorCode.VOICE_VARIETY_INVALID: "The voice variety or state is not recognized.",
+    ErrorCode.CASTING_METHOD_UNKNOWN: "The casting method is not recognized.",
+    ErrorCode.CAST_POOL_EMPTY: "No loaded voice is available to cast characters.",
+    ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
     ErrorCode.TTS_REQUIRED: "Explicit TTS intent is required.",
     ErrorCode.EMPTY_SPEECH: "Selected speech must be non-empty and exactly counted.",
     ErrorCode.INVALID_SOURCE_HASH: "The source-bytes hash is invalid.",
