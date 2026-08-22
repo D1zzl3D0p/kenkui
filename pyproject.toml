@@ -93,6 +93,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
+# Build scripts, not library code: heavy imports stay lazy so --help is
+# instant, and pocket-tts ships no types to annotate its model against.
+"tools/**/*.py" = ["ANN401", "BLE001", "PLC0415", "T201"]
 "tests/test_pocket_tts*.py" = [
   "ANN401", "D107", "E501", "FBT003", "PT012", "PT018", "RUF005",
   "RUF100", "S301", "TRY003",
