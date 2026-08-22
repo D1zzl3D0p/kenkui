@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from kenkui.errors import ErrorCode, VoiceError
-from kenkui.voices.types import Voice
+from kenkui.voices.types import PerceivedGender, Voice
 
 EMBEDDING_REVISION: Final = "e041936c75475d350b405bc870bcf7c22da4e9e6"
 _EMBEDDING_REPO: Final = "kyutai/pocket-tts-without-voice-cloning"
@@ -44,6 +44,12 @@ class CatalogEntry:
     license_id: str
     commercial_use_allowed: bool
     voice_rights: str
+    # Unsourced for every entry below. kyutai's VCTK_Voice_Names.csv covers a
+    # different speaker selection than these voices, and VCTK's speaker-info.txt
+    # ships only inside the full corpus download. Sourced traits arrive with the
+    # pre-compiled voice pack; guessing from the display names above -- which
+    # Kenkui invented -- would be worse than admitting the gap.
+    perceived_gender: PerceivedGender = None
 
 
 def _vctk(voice_id: str, name: str, filename: str) -> CatalogEntry:
@@ -220,4 +226,5 @@ def catalog_voice(voice_id: str) -> Voice:
         language=entry.language,
         variety="built-in",
         state="registered",
+        perceived_gender=entry.perceived_gender,
     )

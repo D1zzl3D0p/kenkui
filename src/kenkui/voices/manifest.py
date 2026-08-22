@@ -17,7 +17,7 @@ from kenkui.errors import ErrorCode, ModelError
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from kenkui.voices.types import VoiceVariety
+    from kenkui.voices.types import PerceivedGender, VoiceVariety
 
 MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v2"
 
@@ -92,6 +92,7 @@ class VoiceRecord:
     asset_path: str | None = None
     asset_sha256: str | None = None
     compatible_model_revisions: tuple[str, ...] = ()
+    perceived_gender: PerceivedGender = None
 
 
 def default_manifest_path() -> Path:
@@ -219,6 +220,11 @@ def _voice_to(record: VoiceRecord) -> dict[str, Any]:
     if record.source_path is not None:
         payload["source_path"] = record.source_path
         payload["source_sha256"] = record.source_sha256
+    # Optional like the source keys above rather than a schema-version bump:
+    # absent means unsourced, and every manifest written before this field
+    # existed stays readable and renderable.
+    if record.perceived_gender is not None:
+        payload["perceived_gender"] = record.perceived_gender
     if record.state == "loaded":
         payload["asset_path"] = record.asset_path
         payload["asset_sha256"] = record.asset_sha256
@@ -234,5 +240,6 @@ def _voice_from(voice_id: str, payload: dict[str, Any]) -> VoiceRecord:
         asset_path=payload.get("asset_path"),
         asset_sha256=payload.get("asset_sha256"),
         compatible_model_revisions=tuple(payload.get("compatible_model_revisions", ())),
+        perceived_gender=payload.get("perceived_gender"),
         **{key: payload[key] for key in _VOICE_COMMON_KEYS},
     )

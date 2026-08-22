@@ -27,7 +27,12 @@ from kenkui.voices.manifest import (
     default_manifest_path,
 )
 from kenkui.voices.registry import CATALOG, catalog_voice, embedding_url
-from kenkui.voices.types import Engine, Voice, VoiceVariety
+from kenkui.voices.types import (
+    Engine,
+    PerceivedGender,
+    Voice,
+    VoiceVariety,
+)
 
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _IDENTIFIER = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
@@ -92,6 +97,7 @@ def add_voice(  # noqa: PLR0913
     license_id: str,
     commercial_use_allowed: bool,
     voice_rights: str,
+    perceived_gender: PerceivedGender = None,
     manifest: Path | None = None,
 ) -> Voice:
     """Register a local WAV or safetensors voice with explicit rights metadata.
@@ -121,6 +127,7 @@ def add_voice(  # noqa: PLR0913
         license_id=license_id,
         commercial_use_allowed=commercial_use_allowed,
         voice_rights=voice_rights,
+        perceived_gender=perceived_gender,
         source_path=str(source),
         source_sha256=_sha256(source),
     )
@@ -144,6 +151,7 @@ def add_voice(  # noqa: PLR0913
         language=language,
         variety=variety,
         state="registered",
+        perceived_gender=perceived_gender,
     )
 
 
@@ -315,6 +323,7 @@ def _loaded_view(record: VoiceRecord, engine: EngineRecord) -> Voice:
         state="loaded",
         asset_bytes=asset.stat().st_size if asset.is_file() else None,
         engine=_engine_view(engine),
+        perceived_gender=record.perceived_gender,
     )
 
 
@@ -332,6 +341,7 @@ def _registered_from_catalog(voice_id: str) -> VoiceRecord:
         license_id=entry.license_id,
         commercial_use_allowed=entry.commercial_use_allowed,
         voice_rights=entry.voice_rights,
+        perceived_gender=entry.perceived_gender,
     )
 
 
@@ -470,6 +480,7 @@ def _registered_view(record: VoiceRecord) -> Voice:
         language=record.language,
         variety=record.variety,
         state="registered",
+        perceived_gender=record.perceived_gender,
     )
 
 
@@ -486,6 +497,7 @@ def _unloaded(record: VoiceRecord) -> VoiceRecord:
         license_id=record.license_id,
         commercial_use_allowed=record.commercial_use_allowed,
         voice_rights=record.voice_rights,
+        perceived_gender=record.perceived_gender,
         source_path=record.source_path,
         source_sha256=record.source_sha256,
     )
