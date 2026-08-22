@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -43,6 +44,21 @@ PREVIEW_TEXT = (
     "of a good fortune, must be in want of a wife."
 )
 PROMPT_REPO = "kyutai/tts-voices"
+PACK_REPO = "D1zzl3D0p/kenkui-voices"
+
+# Preview generation is stochastic and fails in a specific, silent way: the
+# model runs to its generation limit without emitting EOS and returns audio
+# that is well formed but contains no words. Duration is the cheap signal for
+# it, so a preview far outside the plausible range for its phrase is retried
+# rather than written.
+PREVIEW_ATTEMPTS = 5
+MIN_PREVIEW_MS = 500
+MAX_PREVIEW_MS = 30_000
+MAX_PREVIEW_CHARS_PER_SECOND = 30
+# Full-scale in the float domain, and the share of it a real recording may hit
+# before the result is distortion rather than loudness.
+CLIP_LEVEL = 0.999
+MAX_CLIPPED_FRACTION = 0.01
 
 # Per-corpus terms. Both stay non-commercial by default: the licences differ,
 # but neither substitutes for the operator's own review of speaker consent.
@@ -133,6 +149,34 @@ def compile_voice(model: Any, source: Path, destination: Path) -> None:
     export_model_state(state, destination)
 
 
+class RetryablePreviewError(ValueError):
+    """A stochastic preview failure that a fresh generation may not repeat."""
+
+
+def check_preview(samples: list[float], rate: int, text: str) -> None:
+    """Reject a preview that cannot plausibly be the requested phrase."""
+    if not samples:
+        message = "preview audio is empty"
+        raise RetryablePreviewError(message)
+    if not all(math.isfinite(value) for value in samples):
+        message = "preview audio contains non-finite samples"
+        raise RetryablePreviewError(message)
+    duration_ms = len(samples) * 1000 / rate
+    # Speech cannot outrun this rate, so audio too short for its phrase is
+    # truncated and audio far too long ran past the limit without EOS.
+    floor_ms = max(MIN_PREVIEW_MS, len(text) * 1000 / MAX_PREVIEW_CHARS_PER_SECOND)
+    if duration_ms < floor_ms:
+        message = f"preview is {duration_ms:.0f}ms, too short for {len(text)} chars"
+        raise RetryablePreviewError(message)
+    if duration_ms > MAX_PREVIEW_MS:
+        message = f"preview is {duration_ms:.0f}ms, likely generated without EOS"
+        raise RetryablePreviewError(message)
+    clipped = sum(1 for value in samples if abs(value) >= CLIP_LEVEL)
+    if clipped / len(samples) > MAX_CLIPPED_FRACTION:
+        message = "preview audio has obvious clipping"
+        raise RetryablePreviewError(message)
+
+
 def render_preview(
     model: Any, compiled: Path, destination: Path, text: str
 ) -> int:
@@ -146,13 +190,24 @@ def render_preview(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     state = model.get_state_for_audio_prompt(compiled)
-    audio = model.generate_audio(state, text)
-    samples = audio.detach().cpu().flatten().tolist()
+    rate = int(model.sample_rate)
+    last: RetryablePreviewError | None = None
+    for _attempt in range(PREVIEW_ATTEMPTS):
+        audio = model.generate_audio(state, text)
+        samples = audio.detach().cpu().flatten().tolist()
+        try:
+            check_preview(samples, rate, text)
+        except RetryablePreviewError as error:
+            last = error
+            continue
+        break
+    else:
+        message = f"preview repeatedly failed validation: {last}"
+        raise ValueError(message)
     frames = b"".join(
         struct.pack("<h", round(max(-1.0, min(float(value), 1.0)) * 32767.0))
         for value in samples
     )
-    rate = int(model.sample_rate)
     with wave.open(str(destination), "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
@@ -198,15 +253,51 @@ def pack_entry(
     return entry
 
 
-def build(
+def require_version(expected: str | None) -> str:
+    """Return the installed pocket-tts version, asserting it if one was named.
+
+    A pack records the version it was compiled against, and a compiled
+    embedding is only meaningfully pinned if that record is true. Passing the
+    expected version turns a silent mismatch into a refusal.
+    """
+    from importlib import metadata
+
+    installed = metadata.version("pocket-tts")
+    if expected is not None and installed != expected:
+        fail(f"pocket-tts {expected} required, but {installed} is installed")
+    return installed
+
+
+def sync_to_huggingface(output_dir: Path, repo_id: str) -> str:
+    """Upload the built pack and return the resulting revision.
+
+    Uses the library rather than the `hf` command, which is not always
+    installed, and returns the revision so it can be pinned in the registry.
+    """
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    api.upload_folder(
+        folder_path=str(output_dir),
+        repo_id=repo_id,
+        repo_type="dataset",
+        commit_message="Rebuild voice pack",
+    )
+    return str(api.repo_info(repo_id, repo_type="dataset").sha)
+
+
+def build(  # noqa: PLR0913 - one call site; each flag is an independent knob.
     source_manifest: Path,
     output_dir: Path,
     *,
     previews: bool,
     force: bool,
     preview_text: str = PREVIEW_TEXT,
+    pocket_tts_version: str | None = None,
 ) -> int:
     """Compile every voice and write the pack manifest. Returns an exit code."""
+    # Asserted before any compiling, so a wrong interpreter costs no work.
+    require_version(pocket_tts_version)
     voices = load_source(source_manifest)
     compiled_dir = output_dir / "compiled"
     preview_dir = output_dir / "previews"
@@ -259,10 +350,8 @@ def build(
                     preview_entry["duration_ms"] = duration
         entries.append(pack_entry(voice, compiled, preview=preview_entry))
 
-    from importlib import metadata
-
     manifest = {
-        "pocket_tts_version": metadata.version("pocket-tts"),
+        "pocket_tts_version": require_version(pocket_tts_version),
         "preview_text": preview_text,
         "schema_version": SCHEMA_VERSION,
         "voice_pack_format_version": VOICE_PACK_FORMAT_VERSION,
@@ -299,18 +388,34 @@ def main() -> int:
         help="line rendered for each preview; changing it re-renders all of them",
     )
     parser.add_argument(
+        "--pocket-tts-version",
+        help="refuse to build unless exactly this pocket-tts is installed",
+    )
+    parser.add_argument(
+        "--sync-repo",
+        nargs="?",
+        const=PACK_REPO,
+        help=f"upload the built pack; defaults to {PACK_REPO}",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="recompile everything, as a pocket-tts version bump requires",
     )
     args = parser.parse_args()
-    return build(
+    code = build(
         args.source_manifest,
         args.output_dir,
         previews=not args.no_previews,
         force=args.force,
         preview_text=args.preview_text,
+        pocket_tts_version=args.pocket_tts_version,
     )
+    if code == 0 and args.sync_repo:
+        revision = sync_to_huggingface(args.output_dir, args.sync_repo)
+        print(f"\nuploaded to {args.sync_repo}")
+        print(f"pin this in kenkui/voices/registry.py:\n  PACK_REVISION = {revision!r}")
+    return code
 
 
 if __name__ == "__main__":
