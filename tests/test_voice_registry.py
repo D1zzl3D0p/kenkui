@@ -14,11 +14,16 @@ _NONCOMMERCIAL = ("jean", "cosette")
 
 
 def test_catalog_covers_every_upstream_voice() -> None:
-    assert set(registry.CATALOG) == set(_ORIGINS_OF_PREDEFINED_VOICES)
+    """Drift guard: an upstream bump must fail here, not at render time.
+
+    Compares the built-in catalog alone. The merged CATALOG also carries the
+    voice pack, which upstream knows nothing about.
+    """
+    assert set(registry.BUILT_IN_CATALOG) == set(_ORIGINS_OF_PREDEFINED_VOICES)
 
 
 def test_origin_urls_match_upstream_exactly() -> None:
-    for voice_id, entry in registry.CATALOG.items():
+    for voice_id, entry in registry.BUILT_IN_CATALOG.items():
         assert entry.origin_url == _ORIGINS_OF_PREDEFINED_VOICES[voice_id]
 
 

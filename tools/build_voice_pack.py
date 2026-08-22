@@ -36,9 +36,11 @@ from typing import Any, NoReturn
 
 VOICE_PACK_FORMAT_VERSION = 2
 SCHEMA_VERSION = 1
+# Matches the text the published pack was built with, so a rebuild does not
+# silently change every preview. Override with --preview-text.
 PREVIEW_TEXT = (
-    "The rain in Spain stays mainly in the plain. "
-    "How wonderful it is to simply speak and be heard."
+    "It is a truth universally acknowledged, that a single man in possession "
+    "of a good fortune, must be in want of a wife."
 )
 PROMPT_REPO = "kyutai/tts-voices"
 
@@ -131,8 +133,10 @@ def compile_voice(model: Any, source: Path, destination: Path) -> None:
     export_model_state(state, destination)
 
 
-def render_preview(model: Any, compiled: Path, destination: Path) -> None:
-    """Render the preview line in the compiled voice.
+def render_preview(
+    model: Any, compiled: Path, destination: Path, text: str
+) -> int:
+    """Render the preview line in the compiled voice, returning its duration.
 
     Written with the standard library rather than soundfile: a preview is
     cosmetic, and a mono 16-bit WAV needs no dependency to produce.
@@ -142,17 +146,19 @@ def render_preview(model: Any, compiled: Path, destination: Path) -> None:
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     state = model.get_state_for_audio_prompt(compiled)
-    audio = model.generate_audio(state, PREVIEW_TEXT)
+    audio = model.generate_audio(state, text)
     samples = audio.detach().cpu().flatten().tolist()
     frames = b"".join(
         struct.pack("<h", round(max(-1.0, min(float(value), 1.0)) * 32767.0))
         for value in samples
     )
+    rate = int(model.sample_rate)
     with wave.open(str(destination), "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
-        handle.setframerate(int(model.sample_rate))
+        handle.setframerate(rate)
         handle.writeframes(frames)
+    return len(samples) * 1000 // rate
 
 
 def digest(path: Path) -> str:
@@ -165,7 +171,7 @@ def digest(path: Path) -> str:
 
 
 def pack_entry(
-    voice: dict[str, Any], compiled: Path, *, preview: str | None
+    voice: dict[str, Any], compiled: Path, *, preview: dict[str, Any] | None
 ) -> dict[str, Any]:
     """Build one manifest entry, carrying rights alongside identity."""
     license_id, rights = _RIGHTS[voice["dataset"]]
@@ -182,7 +188,7 @@ def pack_entry(
         "path": f"compiled/{compiled.name}",
         "sha256": digest(compiled),
         "size_bytes": compiled.stat().st_size,
-        "status": "ok",
+        "status": "available",
         "license_id": license_id,
         "commercial_use_allowed": False,
         "voice_rights": rights,
@@ -198,6 +204,7 @@ def build(
     *,
     previews: bool,
     force: bool,
+    preview_text: str = PREVIEW_TEXT,
 ) -> int:
     """Compile every voice and write the pack manifest. Returns an exit code."""
     voices = load_source(source_manifest)
@@ -232,24 +239,31 @@ def build(
         else:
             print(f"[{index}/{len(voices)}] reusing {voice_id}")
 
-        preview_name: str | None = None
+        preview_entry: dict[str, Any] | None = None
         if previews:
             preview = preview_dir / f"{voice_id}.wav"
+            duration: int | None = None
             if not preview.is_file() or force:
                 try:
-                    render_preview(model, compiled, preview)
+                    duration = render_preview(model, compiled, preview, preview_text)
                 except Exception as error:
                     # A missing preview is cosmetic; the voice still renders.
                     print(f"    preview failed: {type(error).__name__}: {error}")
             if preview.is_file():
-                preview_name = f"previews/{preview.name}"
-        entries.append(pack_entry(voice, compiled, preview=preview_name))
+                preview_entry = {
+                    "path": f"previews/{preview.name}",
+                    "sha256": digest(preview),
+                    "text": preview_text,
+                }
+                if duration is not None:
+                    preview_entry["duration_ms"] = duration
+        entries.append(pack_entry(voice, compiled, preview=preview_entry))
 
     from importlib import metadata
 
     manifest = {
         "pocket_tts_version": metadata.version("pocket-tts"),
-        "preview_text": PREVIEW_TEXT,
+        "preview_text": preview_text,
         "schema_version": SCHEMA_VERSION,
         "voice_pack_format_version": VOICE_PACK_FORMAT_VERSION,
         "voices": entries,
@@ -280,6 +294,11 @@ def main() -> int:
         "--no-previews", action="store_true", help="skip preview rendering"
     )
     parser.add_argument(
+        "--preview-text",
+        default=PREVIEW_TEXT,
+        help="line rendered for each preview; changing it re-renders all of them",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="recompile everything, as a pocket-tts version bump requires",
@@ -290,6 +309,7 @@ def main() -> int:
         args.output_dir,
         previews=not args.no_previews,
         force=args.force,
+        preview_text=args.preview_text,
     )
 
 

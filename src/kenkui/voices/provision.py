@@ -26,7 +26,7 @@ from kenkui.voices.manifest import (
     VoiceRecord,
     default_manifest_path,
 )
-from kenkui.voices.registry import CATALOG, catalog_voice, embedding_url
+from kenkui.voices.registry import CATALOG, asset_url, catalog_voice
 from kenkui.voices.types import (
     Engine,
     PerceivedGender,
@@ -407,7 +407,9 @@ def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> Voice
     destination = root / "voices" / record.language / f"{record.id}.safetensors"
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if record.variety == "built-in":
-        fetched = _fetch(embedding_url(record.language, record.id))
+        # Pack voices carry their own pinned URL; kyutai catalog names derive
+        # theirs. Both are catalog voices fetched by URL, so one branch serves.
+        fetched = _fetch(asset_url(record.id, record.language))
         shutil.copyfile(fetched, destination)
     else:
         source = Path(record.source_path or "")

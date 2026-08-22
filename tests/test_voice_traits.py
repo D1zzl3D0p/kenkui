@@ -18,7 +18,7 @@ from kenkui._tts.production import default_cache_root as _cache_root
 
 if TYPE_CHECKING:
     from pathlib import Path
-from kenkui.voices.registry import CATALOG
+from kenkui.voices.registry import BUILT_IN_CATALOG, CATALOG
 from kenkui.voices.types import Voice
 
 
@@ -55,19 +55,29 @@ def test_every_catalog_entry_declares_the_trait_explicitly(entry_id: str) -> Non
     assert CATALOG[entry_id].perceived_gender in {"feminine", "masculine", None}
 
 
-def test_catalog_traits_are_unsourced_for_now() -> None:
-    """The upstream corpora ship speaker metadata this catalog cannot reach.
+def test_built_in_traits_remain_unsourced() -> None:
+    """The kyutai catalog entries carry no trait Kenkui could source.
 
-    kyutai's VCTK_Voice_Names.csv covers a different speaker selection than
-    these entries, and speaker-info.txt is only distributed inside the full
-    corpus download. Until a sourced trait exists, None is the correct value,
-    and the pre-compiled voice pack is where sourced traits will come from.
+    VCTK_Voice_Names.csv covers a different speaker selection than these
+    entries, and speaker-info.txt ships only inside the full corpus download.
+    Sourced traits come from the voice pack instead, which is why the merged
+    catalog does have them and these twenty-six still do not.
     """
-    assert all(entry.perceived_gender is None for entry in CATALOG.values())
+    assert all(
+        entry.perceived_gender is None for entry in BUILT_IN_CATALOG.values()
+    )
+
+
+def test_the_merged_catalog_does_carry_sourced_traits() -> None:
+    """Without this the gendered method would have nothing to filter on."""
+    sourced = [e for e in CATALOG.values() if e.perceived_gender is not None]
+    assert len(sourced) >= _SOURCED_MINIMUM
 
 
 _HEADER = b'{"v":{}}'
 _EMBEDDING_BYTES = len(_HEADER).to_bytes(8, "little") + _HEADER + b"\0" * 16
+# The voice pack supplies 95 sourced traits; allow a little slack for churn.
+_SOURCED_MINIMUM = 90
 
 
 def test_added_voice_round_trips_its_trait(tmp_path: Path) -> None:
