@@ -67,6 +67,7 @@ class ErrorCode(StrEnum):
     ASSEMBLY_FAILED = "assembly_failed"
     ENCODING_FAILED = "encoding_failed"
     COVER_FAILED = "cover_failed"
+    COVER_INVALID = "cover_invalid"
     PROBE_FAILED = "probe_failed"
     DECODE_FAILED = "decode_failed"
     INVALID_ARTIFACT = "invalid_artifact"
@@ -149,6 +150,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_AUDIO: "Synthesized audio is invalid or inconsistent.",
     ErrorCode.ASSEMBLY_FAILED: "Audiobook assembly failed.",
     ErrorCode.ENCODING_FAILED: "FFmpeg could not encode the audiobook.",
+    ErrorCode.COVER_INVALID: ("The cover image is unreadable or unsupported."),
     ErrorCode.COVER_FAILED: "The requested source cover could not be materialized.",
     ErrorCode.PROBE_FAILED: "The encoded audiobook could not be probed.",
     ErrorCode.DECODE_FAILED: "The encoded audiobook did not fully decode.",
