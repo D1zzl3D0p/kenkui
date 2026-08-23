@@ -240,13 +240,13 @@ def _chapter_text(
     body: Element,
     fragments: dict[str, Element | None],
     fragment: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, tuple[str, ...]]:
     scope = _body_scope(body, fragments, fragment)
     emitter = _TextEmitter()
     _emit_element(scope, emitter)
     text = normalize_text(emitter.value())
     if not text:
-        return "", ""
+        return "", "", ()
     headings = _visible_headings(scope)
     title = headings[0] if headings else ""
     if not title:
@@ -258,7 +258,7 @@ def _chapter_text(
             if document_titles
             else ""
         )
-    return title, text
+    return title, text, tuple(headings)
 
 
 def _member_map(archive: TypedZipFile) -> dict[str, str]:
@@ -341,7 +341,7 @@ def _spine_chapters(
     if len(spine_items) > MAX_SPINE_CHAPTERS:
         raise SourceError(ErrorCode.ARCHIVE_LIMIT)
     occurrences: Counter[tuple[str, str]] = Counter()
-    material_cache: dict[tuple[str, str], tuple[str, str]] = {}
+    material_cache: dict[tuple[str, str], tuple[str, str, tuple[str, ...]]] = {}
     document_cache: dict[str, tuple[Element, Element, dict[str, Element | None]]] = {}
     speech_characters = 0
     chapters: list[ChapterInspection] = []
@@ -361,7 +361,7 @@ def _spine_chapters(
             document = _document(archive, members, member, document_cache)
             material = _chapter_text(*document, fragment)
             material_cache[identity] = material
-        title, text = material
+        title, text, headings = material
         if not text:
             # Image-only pages (covers, title pages, plates) carry no speech.
             continue
@@ -376,6 +376,7 @@ def _spine_chapters(
                 title or f"Chapter {index + 1}",
                 len(text),
                 text,
+                headings,
             )
         )
     if not chapters:

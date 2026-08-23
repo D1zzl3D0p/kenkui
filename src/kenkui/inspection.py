@@ -21,6 +21,10 @@ class ChapterInspection:
     title: str
     speech_characters: int | None
     text: str = ""
+    # Normalized heading strings in document order, title first. Recorded
+    # rather than character offsets: normalize_text() collapses whitespace
+    # across the whole chapter, so raw offsets do not survive it.
+    headings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

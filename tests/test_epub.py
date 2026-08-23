@@ -651,3 +651,29 @@ def test_textless_spine_items_are_skipped_not_fatal(tmp_path: Path) -> None:
     chapters = kk.epub(source).inspect().chapters
     assert [chapter.text for chapter in chapters] == ["Real text.", "More text."]
     assert [chapter.index for chapter in chapters] == [0, 1]
+
+
+def test_chapter_records_every_visible_heading(tmp_path: Path) -> None:
+    """Headings are captured as normalized strings, title first."""
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={
+            "one": xhtml(
+                "<h1>Chapter One</h1><p>He woke.</p><h2>A Section</h2><p>She slept.</p>"
+            )
+        },
+        spine=["one"],
+    )
+    chapter = epub_parser.inspect_epub(source).chapters[0]
+    assert chapter.headings == ("Chapter One", "A Section")
+    assert chapter.title == "Chapter One"
+
+
+def test_chapter_without_headings_records_none(tmp_path: Path) -> None:
+    """A chapter with no h1-h6 carries an empty heading tuple."""
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml("<p>Just prose.</p>")},
+        spine=["one"],
+    )
+    assert epub_parser.inspect_epub(source).chapters[0].headings == ()
