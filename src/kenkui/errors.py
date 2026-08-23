@@ -38,6 +38,8 @@ class ErrorCode(StrEnum):
     INVALID_SOURCE_HASH = "invalid_source_hash"
     INVALID_MODEL_REVISION = "invalid_model_revision"
     INVALID_METADATA = "invalid_metadata"
+    INVALID_PRONUNCIATION = "invalid_pronunciation"
+    INVALID_PAUSE = "invalid_pause"
     INVALID_WORKERS = "invalid_workers"
     INVALID_OUTPUT = "invalid_output"
     OUTPUT_EXISTS = "output_exists"
@@ -99,9 +101,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.VOICE_VARIETY_INVALID: "The voice variety or state is not recognized.",
     ErrorCode.CASTING_METHOD_UNKNOWN: "The casting method is not recognized.",
     ErrorCode.CAST_POOL_EMPTY: "No loaded voice is available to cast characters.",
-    ErrorCode.CAST_LANGUAGE_MIXED: (
-        "Every voice in one cast must share a language."
-    ),
+    ErrorCode.CAST_LANGUAGE_MIXED: ("Every voice in one cast must share a language."),
     ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
     ErrorCode.MODEL_CALL_FAILED: "The language model could not be reached.",
     ErrorCode.MODEL_RESPONSE_INVALID: (
@@ -115,6 +115,8 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_SOURCE_HASH: "The source-bytes hash is invalid.",
     ErrorCode.INVALID_MODEL_REVISION: "The model revision is invalid.",
     ErrorCode.INVALID_METADATA: "The metadata intent is invalid.",
+    ErrorCode.INVALID_PRONUNCIATION: "The pronunciation entry is invalid.",
+    ErrorCode.INVALID_PAUSE: "The pause duration is invalid.",
     ErrorCode.INVALID_WORKERS: "Workers must be 'auto' or a positive integer.",
     ErrorCode.INVALID_OUTPUT: "The output must be an M4B path.",
     ErrorCode.OUTPUT_EXISTS: "The output already exists.",
