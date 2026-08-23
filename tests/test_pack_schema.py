@@ -30,10 +30,11 @@ _REQUIRED = (
 _EXPECTED_VOICES = 95
 _SHA256_LENGTH = 64
 _REVISION_LENGTH = 40
+_SCHEMA_VERSION = 2
 
 
 def test_the_document_declares_its_schema_and_range() -> None:
-    assert _PACK["schema_version"] == 2
+    assert _PACK["schema_version"] == _SCHEMA_VERSION
     assert _PACK["pocket_tts"] == ">=2.0.0,<3.0.0"
     assert _PACK["built_with"] in _PACK["verified_versions"]
 

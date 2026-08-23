@@ -5,15 +5,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
 
 from kenkui.voices import registry
-
-if TYPE_CHECKING:
-    pass
 
 _BUILTIN_PATH = Path(registry.__file__).with_name("builtin.json")
 
@@ -43,7 +39,7 @@ def test_builtin_entries_carry_no_asset_url() -> None:
 
 def test_embedding_revision_comes_from_the_file() -> None:
     document = json.loads(_BUILTIN_PATH.read_text(encoding="utf-8"))
-    assert registry.EMBEDDING_REVISION == document["embedding"]["revision"]
+    assert document["embedding"]["revision"] == registry.EMBEDDING_REVISION
 
 
 def test_an_unreadable_builtin_file_fails_loudly(
@@ -53,7 +49,7 @@ def test_an_unreadable_builtin_file_fails_loudly(
     monkeypatch.setattr(registry, "_BUILTIN_MANIFEST", tmp_path / "absent.json")
     registry.load_builtin.cache_clear()
     try:
-        with pytest.raises(OSError):
+        with pytest.raises(OSError, match="builtin"):
             registry.load_builtin()
     finally:
         registry.load_builtin.cache_clear()
