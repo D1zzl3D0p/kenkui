@@ -17,6 +17,7 @@ from kenkui._domain.planning import ExecutionPlan, compile_execution_plan
 GOLDEN = Path(__file__).parent / "data" / "identity-golden.json"
 SOURCE_HASH = "1" * 64
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
+PARAGRAPH_MS = 250
 _PARAGRAPH_ONE = (
     "It was 100,000 to one. The cello sounded in 1984, and the 3rd "
     "movement began. He waited by the door for a long while, thinking of "
@@ -156,3 +157,58 @@ def test_spoken_form_absent_from_fingerprint_payload_when_off() -> None:
     assert plain_plan().schema_versions.spoken_form is None
     assert spoken_plan().schema_versions.spoken_form is not None
     assert plain_plan().semantic_fingerprint != spoken_plan().semantic_fingerprint
+
+
+def paused_plan(**kwargs: int) -> ExecutionPlan:
+    """Compile the same book with a pauses() request attached."""
+    return compile_for(
+        kk.epub("book.epub").pauses(**kwargs).assign_voice("eponine").tts()
+    )
+
+
+def test_chapter_pause_alone_keeps_v2_identity() -> None:
+    """chapter_ms forces no chunk break, so every cache entry stays valid."""
+    plain = [segment.id for segment in plain_plan().segments]
+    paused = paused_plan(chapter_ms=1500)
+    assert [segment.id for segment in paused.segments] == plain
+
+
+def test_paragraph_pause_changes_identity_and_adds_silence() -> None:
+    """Enabling a break tier re-chunks and records a gap on the right segment."""
+    plain = {segment.id for segment in plain_plan().segments}
+    paused = paused_plan(paragraph_ms=PARAGRAPH_MS)
+    assert {segment.id for segment in paused.segments}.isdisjoint(plain)
+    silence = paused.trailing_silence_ms
+    assert len(silence) == len(paused.segments)
+    assert PARAGRAPH_MS in silence
+
+
+def test_silence_table_is_all_zero_without_pauses() -> None:
+    """A plain pipeline records no silence anywhere."""
+    assert set(plain_plan().trailing_silence_ms) == {0}
+
+
+def test_final_segment_has_no_trailing_silence() -> None:
+    """A book must not end on dead air."""
+    plan = paused_plan(chapter_ms=1500, paragraph_ms=250)
+    assert plan.trailing_silence_ms[-1] == 0
+
+
+def test_retuning_a_duration_does_not_change_identity() -> None:
+    """Changing 250ms to 600ms must cost no re-synthesis."""
+    first = [segment.id for segment in paused_plan(paragraph_ms=250).segments]
+    second = [segment.id for segment in paused_plan(paragraph_ms=600).segments]
+    assert first == second
+
+
+def test_retuning_a_duration_does_change_the_fingerprint() -> None:
+    """The audio differs, so plan identity must differ even though chunks do not."""
+    first = paused_plan(paragraph_ms=250).semantic_fingerprint
+    second = paused_plan(paragraph_ms=600).semantic_fingerprint
+    assert first != second
+
+
+def test_pieces_join_to_the_canonical_chapter_text() -> None:
+    """Exactness survives the split: chunks still reconstruct the source."""
+    plan = paused_plan(paragraph_ms=250, line_ms=100)
+    assert "".join(segment.text for segment in plan.segments) == TEXT

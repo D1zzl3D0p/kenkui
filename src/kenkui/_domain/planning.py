@@ -13,6 +13,7 @@ from kenkui._domain.operations import (
     AssignVoices,
     MetadataIntent,
     Operation,
+    Pauses,
     SpokenForm,
     SynthesizeSpeech,
 )
@@ -20,6 +21,13 @@ from kenkui._domain.spoken import (
     SPOKEN_FORM_VERSION,
     spoken_identity,
     to_spoken,
+)
+from kenkui._domain.structure import (
+    CHAPTER,
+    STRUCTURE_SCHEMA_VERSION,
+    break_tiers,
+    gap_ms,
+    split_structural,
 )
 from kenkui._domain.text import NORMALIZATION_VERSION
 from kenkui.errors import (
@@ -41,6 +49,8 @@ NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
 PLANNING_SCHEMA_VERSION = "execution-plan-v2"
 RENDER_SCHEMA_VERSION = "m4b-render-v1"
 CHUNKING_SCHEMA_VERSION = "tts-chunks-v2"
+CHUNKING_V3_SCHEMA_VERSION = "tts-chunks-v3"
+_NO_PAUSES = Pauses()
 MAX_TTS_SEGMENT_CHARACTERS = 1000
 # Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
 # only then packs the pieces into bounded chunks. A run holding none of these is
@@ -114,6 +124,7 @@ class SchemaVersions:
     planning: str
     render: str
     spoken_form: str | None = None
+    structure: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +233,10 @@ class ExecutionPlan:
     output: OutputMetadata
     total_speech_characters: int
     semantic_fingerprint: str
+    # One entry per segment: the gap AFTER that segment, in milliseconds.
+    # Excluded from segment identity -- silence never reaches a worker or the
+    # cache, so retuning a duration costs no re-synthesis.
+    trailing_silence_ms: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +250,7 @@ class _PlanMaterial:
     segments: tuple[SpeechSegment, ...]
     output: OutputMetadata
     total: int
+    trailing_silence: tuple[int, ...] = ()
 
 
 def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
@@ -280,7 +296,10 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         # asking the caller to know this.
         spoken = None
 
-    segments = _compile_segments(inspection.chapters, spans, cast, spoken)
+    pauses = _one_operation(pipeline.operations, Pauses) or _NO_PAUSES
+    segments, trailing_silence = _compile_segments(
+        inspection.chapters, spans, cast, spoken, pauses
+    )
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
     # Canonical characters, not spoken characters: this is the bill, and it
@@ -296,6 +315,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         planning=PLANNING_SCHEMA_VERSION,
         render=RENDER_SCHEMA_VERSION,
         spoken_form=SPOKEN_FORM_VERSION if spoken is not None else None,
+        structure=STRUCTURE_SCHEMA_VERSION if break_tiers(pauses) else None,
     )
     material = _PlanMaterial(
         schemas,
@@ -305,6 +325,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         segments,
         metadata,
         total,
+        trailing_silence,
     )
     return ExecutionPlan(
         schema_versions=schemas,
@@ -315,6 +336,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         output=metadata,
         total_speech_characters=total,
         semantic_fingerprint=_fingerprint(material),
+        trailing_silence_ms=trailing_silence,
     )
 
 
@@ -382,7 +404,8 @@ def _compile_segments(
     spans: tuple[SpeakerSpan, ...],
     cast_plan: CastPlan,
     spoken: SpokenForm | None = None,
-) -> tuple[SpeechSegment, ...]:
+    pauses: Pauses = _NO_PAUSES,
+) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
     """Split each speaker span while assigning one global plan-order ordinal.
 
     Spans partition a chapter, and the frozen chunker runs inside each one, so
@@ -390,31 +413,47 @@ def _compile_segments(
     with no spans is one narration span, which is byte-for-byte the behaviour
     that existed before attribution.
     """
+    tiers = break_tiers(pauses)
     result: list[SpeechSegment] = []
-    for chapter in chapters:
+    silence: list[int] = []
+    for chapter_index, chapter in enumerate(chapters):
+        headings = frozenset(chapter.headings)
         for span in _spans_for(chapter, spans):
             voice = cast_plan.voice_for(span.character_id)
-            text = chapter.text[span.start : span.end]
-            if spoken is not None:
-                text = to_spoken(
-                    text,
-                    numbers=cast("NumberTier", spoken.numbers),
-                    lexicon=spoken.lexicon,
-                    builtin=spoken.builtin_lexicon,
-                )
-            for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
-                result.append(
-                    _segment(
-                        chapter,
-                        len(result),
-                        chunk_index,
-                        chunk,
-                        speaker_id=span.character_id,
-                        voice_id=voice.id,
-                        spoken=spoken,
+            span_text = chapter.text[span.start : span.end]
+            for piece in split_structural(span_text, headings, pauses):
+                text = piece.text
+                if spoken is not None:
+                    text = to_spoken(
+                        text,
+                        numbers=cast("NumberTier", spoken.numbers),
+                        lexicon=spoken.lexicon,
+                        builtin=spoken.builtin_lexicon,
                     )
-                )
-    return tuple(result)
+                for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
+                    result.append(
+                        _segment(
+                            chapter,
+                            len(result),
+                            chunk_index,
+                            chunk,
+                            speaker_id=span.character_id,
+                            voice_id=voice.id,
+                            spoken=spoken,
+                            tiers=tiers,
+                        )
+                    )
+                    silence.append(0)
+                if silence:
+                    silence[-1] = gap_ms(piece.reasons, pauses)
+        # The inter-chapter gap folds into this chapter's last segment, so
+        # chapter N+1 begins exactly on its first spoken word. Max, not sum:
+        # a chapter end meeting a heading-before pause is one gap.
+        if silence and chapter_index + 1 < len(chapters):
+            silence[-1] = max(silence[-1], gap_ms(frozenset({CHAPTER}), pauses))
+    if silence:
+        silence[-1] = 0  # A book must not end on dead air.
+    return tuple(result), tuple(silence)
 
 
 def _spans_for(
@@ -508,12 +547,15 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     speaker_id: str | None = None,
     voice_id: str = "",
     spoken: SpokenForm | None = None,
+    tiers: tuple[str, ...] = (),
 ) -> SpeechSegment:
     content_hash = _hash_utf8(text)
     fields: dict[str, object] = {
         "chapter_id": _string_identity(chapter.id),
         "chunk_index": chunk_index,
-        "chunking_schema": CHUNKING_SCHEMA_VERSION,
+        "chunking_schema": (
+            CHUNKING_V3_SCHEMA_VERSION if tiers else CHUNKING_SCHEMA_VERSION
+        ),
         "content_hash": content_hash,
         "normalization": NORMALIZATION_SCHEMA_VERSION,
         "ordinal": ordinal,
@@ -524,6 +566,11 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
         # therefore every existing cache entry -- stay byte-identical.
         fields["speaker_id"] = _string_identity(speaker_id)
         fields["voice_id"] = _string_identity(voice_id)
+    if tiers:
+        # Added only when a break tier is active, so a plain pipeline's
+        # identities stay byte-identical.
+        fields["structure_schema"] = STRUCTURE_SCHEMA_VERSION
+        fields["break_tiers"] = list(tiers)
     if spoken is not None:
         # Added only when the stage is active, so a plain pipeline's identities
         # -- and therefore every existing cache entry -- stay byte-identical.
@@ -610,6 +657,8 @@ def _fingerprint(material: _PlanMaterial) -> str:
         "planning": schemas.planning,
         "render": schemas.render,
     }
+    if schemas.structure is not None:
+        schema_versions["structure"] = schemas.structure
     if schemas.spoken_form is not None:
         # Present only when the stage is active. Emitting an explicit null
         # would change the canonical JSON -- and so the fingerprint -- for
@@ -659,6 +708,8 @@ def _fingerprint(material: _PlanMaterial) -> str:
         },
         "total_speech_characters": material.total,
     }
+    if any(material.trailing_silence):
+        payload["trailing_silence_ms"] = list(material.trailing_silence)
     canonical = json.dumps(
         payload,
         ensure_ascii=True,
