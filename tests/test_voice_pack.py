@@ -7,15 +7,15 @@ here reaches the network.
 
 from __future__ import annotations
 
+import json
 import socket
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kenkui.voices import registry
-from kenkui.voices.registry import CATALOG, PACK_REVISION, asset_url
+from kenkui.voices.registry import CATALOG, asset_url
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import pytest
 
     from kenkui.voices.types import PerceivedGender
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 _MERGED_MINIMUM = 100
 _POOL_MINIMUM = 40
 _SOURCED_MINIMUM = 90
+_REVISION_LENGTH = 40
 
 
 def test_pack_voices_join_the_catalog() -> None:
@@ -69,9 +70,14 @@ def test_every_catalog_id_is_unique_and_nonempty() -> None:
 
 def test_pack_asset_urls_are_pinned() -> None:
     """A moving revision would silently change which bytes are fetched."""
+    payload = json.loads(
+        Path(registry.__file__).with_name("pack.json").read_text(encoding="utf-8")
+    )
+    revision = payload["assets"]["revision"]
     url = asset_url("alasdair", "english")
     assert url.startswith("hf://D1zzl3D0p/kenkui-voices/compiled/")
-    assert url.endswith(f"@{PACK_REVISION}")
+    assert url.endswith(f"@{revision}")
+    assert len(revision) == _REVISION_LENGTH
 
 
 def test_builtin_asset_urls_still_resolve_to_kyutai() -> None:
@@ -98,7 +104,7 @@ def test_loading_the_pack_touches_no_network(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(socket, "socket", deny)
     registry.load_pack.cache_clear()
-    assert registry.load_pack()
+    assert registry.load_pack().entries
 
 
 def test_a_missing_pack_degrades_to_the_built_ins(
@@ -107,5 +113,9 @@ def test_a_missing_pack_degrades_to_the_built_ins(
     """The pack is an addition; Kenkui must import and render without it."""
     monkeypatch.setattr(registry, "_PACK_MANIFEST", tmp_path / "absent.json")
     registry.load_pack.cache_clear()
-    assert registry.load_pack() == ()
-    registry.load_pack.cache_clear()
+    registry._withheld_pack_ids.cache_clear()  # noqa: SLF001
+    try:
+        assert registry.load_pack().entries == ()
+    finally:
+        registry.load_pack.cache_clear()
+        registry._withheld_pack_ids.cache_clear()  # noqa: SLF001
