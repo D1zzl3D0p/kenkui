@@ -101,6 +101,33 @@ except KenkuiError as error:
         raise
 ```
 
+### Casting characters
+
+One voice is the degenerate cast. For a full one, add inference and
+attribution, and let the solver assign the rest:
+
+```python
+from kenkui import epub, list_voices, load_voice
+
+for voice in list_voices():
+    if voice.perceived_gender is not None:
+        load_voice(voice.id)  # one-time; the pool casting draws from
+
+result = (
+    epub("book.epub")
+    .infer_characters(model="anthropic/claude-sonnet-5")
+    .attribute_quotes(model="anthropic/claude-sonnet-5")
+    .assign_voices(narrator="eponine", method="gendered")
+    .tts()
+    .write("book.m4b")
+)
+```
+
+Characters speaking in the same chapter never share a voice, and dialogue that
+could not be placed is narrated rather than guessed at. Attribution is stored,
+so re-rendering the same book costs no further model calls.
+
+
 `write()` is an alias for `write_m4b()`. Output must end in `.m4b` and its parent
 must exist. Existing output is rejected unless `overwrite=True`; publication is
 atomic, and cancellation or failure does not publish a candidate. `workers` is a

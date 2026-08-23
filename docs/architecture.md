@@ -125,3 +125,34 @@ generic-log records and cannot revoke durable success. Publish failure emits no
 publication completion. Logs contain only generic stage/cache categories and
 terminal stable codes: cache keys/ordinals, source/output paths, text,
 voice/model paths, and provider diagnostics are excluded.
+
+## Attribution as a resolved input
+
+Character inference and dialogue attribution call a language model, which the
+pure planner must not do. They are resolved in the shell and handed to the
+planner as finished values, exactly as voice metadata already is: the planner
+receives a roster, speaker spans, and a cast, and reaches neither a model nor
+a store.
+
+`resolve()` and `write()` are two entry points into one resolution
+implementation, not two paths. A pipeline carrying resolved values renders
+identically to one that resolves during `write()`; appending any operation
+discards them, because changing intent invalidates them and re-resolving
+against a populated store is a lookup.
+
+All model traffic happens in the parent process, beside the network voice
+provisioning already performs. The render path is unchanged: spawned workers
+install a socket-denying audit hook and set the offline environment variables,
+so no credential and no request can reach them.
+
+## Span-then-chunk segmentation
+
+Attribution produces speaker spans that partition a chapter. The frozen
+`tts-chunks-v2` chunker then runs inside each span, so concatenating every
+chunk still reproduces the chapter exactly.
+
+A chapter with no attributed dialogue is one span, which is byte-for-byte what
+the chunker saw before attribution existed. Speaker and voice enter a segment's
+identity only for attributed speech, so single-voice segment identities and
+plan fingerprints are unchanged and no previously cached segment is
+invalidated.

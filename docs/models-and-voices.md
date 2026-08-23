@@ -134,3 +134,18 @@ Provisioned assets live under `~/Library/Caches/kenkui/v1` (macOS) or
 manifest. A per-language engine is roughly 225 MB; each embedding is roughly
 6.5 MB. `unload_voice` and `remove_voice` prune an engine once no loaded voice
 references it. Cache schema and location are not public API.
+
+## Perceived gender
+
+Voices carry `perceived_gender`, which the `gendered` casting method filters
+on. It is `"feminine"`, `"masculine"`, or `None`.
+
+It is sourced or absent, never inferred. The 95 voices in the pre-compiled
+pack carry gender recorded when the pack was built. The 26 kyutai catalog
+entries carry `None`: kyutai's `VCTK_Voice_Names.csv` covers a different
+speaker selection than those entries, and VCTK's `speaker-info.txt` ships only
+inside the full corpus download. Their display names are Kenkui's own
+inventions and say nothing about the speaker.
+
+A voice with no trait never joins a gendered pool. Guessing would be worse
+than the gap: a wrong voice is audible, a missing one just widens the pool.

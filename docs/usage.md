@@ -160,7 +160,8 @@ A voice is `registered`, `loaded`, or — reported by `list_voices` only —
 are implicitly registered by the catalog, so `load_voice` works on them
 directly. `unload_voice` keeps your rights metadata; `remove_voice` discards it.
 
-There are no bulk verbs. Multi-voice work composes over `list_voices()`:
+There are no bulk provisioning verbs. Provisioning several voices at once
+composes over `list_voices()`:
 
 ```python
 for voice in kk.list_voices():
@@ -174,6 +175,99 @@ disk = sum(e.size_bytes for e in engines)
 Engines are derived state with no verbs of their own: they are provisioned when
 a voice needs one and pruned when the last loaded voice referencing one goes
 away. `Voice.engine` exposes the engine a loaded voice uses.
+
+## Casting characters
+
+One voice is the degenerate cast. These two are the same pipeline:
+
+```python
+kk.epub("book.epub").assign_voice("eponine")
+kk.epub("book.epub").assign_voices(narrator="eponine")
+```
+
+A full cast adds character inference and dialogue attribution, both of which
+name the model to use:
+
+```python
+result = (
+    kk.epub("book.epub")
+    .infer_characters(model="anthropic/claude-sonnet-5")
+    .attribute_quotes(model="anthropic/claude-sonnet-5")
+    .assign_voices(narrator="eponine", method="gendered")
+    .tts()
+    .write("book.m4b")
+)
+```
+
+Order does not matter. Only `tts()` must come last.
+
+### Roles
+
+`narrator` speaks everything that is not attributed dialogue. `unknown` speaks
+dialogue nobody could be placed for, and defaults to the narrator's voice, so
+an unplaced line sounds like narration rather than like a third character. Set
+it separately to make the distinction audible:
+
+```python
+.assign_voices(narrator="eponine", unknown="paul")
+```
+
+Both roles are excluded from the pool characters are cast from. The narrator
+speaks in every chapter, so sharing its voice with a character would collide
+everywhere.
+
+### Methods
+
+A method decides which voices a character is eligible for. The shared solver
+then does the assigning.
+
+| Method | Eligible voices |
+| --- | --- |
+| `gendered` | voices whose `perceived_gender` matches the character's |
+| `random` | the whole pool |
+
+Neither is random in the sense of varying between runs. Same book, same
+method, same pool always gives the same cast: reproducibility is required, and
+the solver's ordering supplies the variation instead.
+
+A character whose gender was never inferred falls back to the whole pool. A
+voice whose gender was never *sourced* never joins a gendered pool, because a
+missing trait is an admission of ignorance rather than a wildcard.
+
+### Pinning a choice
+
+```python
+.assign_voices(narrator="eponine", cast={"javert": "charles"})
+```
+
+Pinned entries are constraints on the solver, not suggestions.
+
+### How voices are chosen
+
+Characters who speak in the same chapter never share a voice. Among the voices
+still free, the solver takes the least-used one, weighted by how much each
+character actually speaks — so a lead does not land on the voice a walk-on
+already holds. Voices spread before they repeat, and repeat only once the pool
+is under pressure.
+
+When the pool cannot satisfy that, the solver minimises the clash and logs
+`cast_collision`. It is not raised and not reported to the caller: a collision
+means the pool ran short, which is fixed by provisioning more voices.
+
+### Stored work
+
+Attribution is expensive; casting is free. Both are stored in
+`casting.sqlite3` beside the voice manifest, keyed so that exploring ten
+castings of one book costs one model pass.
+
+```python
+kk.list_castings()
+kk.remove_casting(casting_id)      # free to rebuild
+kk.remove_attribution(attribution_id)  # cascades; costs a fresh model pass
+```
+
+The two removal verbs are separate because their costs differ by orders of
+magnitude.
 
 ### Registering your own voice
 

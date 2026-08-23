@@ -107,3 +107,22 @@ assessed.
 Kenkui still pins conservatively: the compiling engine's revision goes into the
 voice's `compatible_model_revisions` and the revision check rejects a mismatch.
 Relaxing that is now an evidenced follow-up.
+
+## One engine, many voices
+
+An engine config carries a collection of voice assets rather than one. The
+engine constructs a single model and derives a conditioning state per voice on
+first use, keyed by asset digest.
+
+That is what makes a cast affordable: a language engine is roughly 225 MB of
+weights against roughly 6.5 MB per speaker embedding, so a ten-voice cast
+costs about 65 MB more than a single voice, not ten models. One model per
+worker is also required — the scheduler rejects any worker reporting more than
+one engine initialisation.
+
+Each synthesis task names the digest of the voice that renders it. A worker
+that had to guess would produce well-formed audio in the wrong voice, which no
+automated check would catch.
+
+Every voice in one cast must share an engine and revision. A cast spanning
+languages is refused rather than silently loading a second engine per worker.
