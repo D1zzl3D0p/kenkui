@@ -238,11 +238,13 @@ class Pipeline:
         *,
         title: str | None = None,
         author: str | None = None,
-        cover: Literal["source"] | None = "source",
+        cover: Literal["source"] | os.PathLike[str] | None = "source",
     ) -> Pipeline:
         """Return a branch with output metadata inheritance and overrides."""
-        if cover not in ("source", None):
+        if isinstance(cover, str) and cover != "source":
             raise ValidationError(ErrorCode.INVALID_METADATA)
+        if cover is not None and cover != "source":
+            cover = Path(cover)
         if title is not None and not title.strip():
             raise ValidationError(ErrorCode.INVALID_METADATA)
         if author is not None and not author.strip():

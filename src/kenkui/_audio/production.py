@@ -9,7 +9,11 @@ import stat
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from kenkui._audio.cover import materialize_source_cover
+from kenkui._audio.cover import (
+    materialize_file_cover,
+    materialize_source_cover,
+    read_cover,
+)
 from kenkui._audio.ffmpeg import FFmpegTools
 from kenkui._audio.m4b import (
     AssemblyResult,
@@ -53,15 +57,21 @@ class FFmpegM4BAssembler:
             expect_cover = (
                 request.plan.output.cover is CoverIntent.SOURCE
                 and request.plan.output.source_cover_available
-            )
+            ) or request.plan.output.cover is CoverIntent.FILE
             tools = self._tools.preflight(expect_cover=expect_cover)
             _require_absent_candidate(candidate)
             _write_pcm(pcm, request)
             _write_metadata(metadata, request)
             if expect_cover:
-                if request.source_epub is None:
+                if request.plan.output.cover is CoverIntent.FILE:
+                    if request.cover_file is None:
+                        raise EncodingError(ErrorCode.COVER_INVALID)  # noqa: TRY301
+                    payload, _ = read_cover(request.cover_file)
+                    materialize_file_cover(payload, cover)
+                elif request.source_epub is None:
                     raise EncodingError(ErrorCode.COVER_FAILED)  # noqa: TRY301
-                materialize_source_cover(request.source_epub, cover)
+                else:
+                    materialize_source_cover(request.source_epub, cover)
             argv = _encode_argv(
                 tools.ffmpeg,
                 pcm,

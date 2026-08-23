@@ -14,6 +14,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from kenkui._audio.cover import read_cover
 from kenkui._audio.m4b import (
     ArtifactAssembler,
     AssemblyRequest,
@@ -56,6 +57,7 @@ from kenkui.observability import get_logger, log_event
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
 
+    from kenkui._domain.operations import MetadataIntent
     from kenkui._domain.planning import SpeakerSpan
     from kenkui._execution.cache import CacheStore, _RunContext
     from kenkui._execution.process_pool import WorkerRecord
@@ -203,9 +205,12 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
 ) -> Result:
     """Execute one immutable plan in order and transactionally publish its artifact."""
     metadata_intent = pipeline.metadata_intent
+    cover_file, cover_content_hash = _resolve_cover(metadata_intent)
     _preflight_assembler(
         bindings.assembler,
-        expect_cover=metadata_intent is None or metadata_intent.cover == "source",
+        expect_cover=metadata_intent is None
+        or metadata_intent.cover == "source"
+        or cover_file is not None,
     )
     emitter = _Emitter(on_event)
     workspace = _make_workspace(output.parent)
@@ -234,6 +239,7 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
             assignments=assignments,
             unknown_voice_id=unknown_voice_id,
             spans=spans,
+            cover_content_hash=cover_content_hash,
         )
         emitter.emit_cast_resolved(plan)
         # Emitted before the worker pool exists, so cancelling from the
@@ -275,6 +281,7 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
             bindings.assembler,
             emitter,
             cancel,
+            cover_file,
         )
         result = _build_result(output, plan, audio, assembled)
 
@@ -305,6 +312,19 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
         raise
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _resolve_cover(
+    metadata_intent: MetadataIntent | None,
+) -> tuple[Path | None, str | None]:
+    """Validate a caller-supplied cover before anything expensive starts.
+
+    Resolved here rather than at assembly so an unreadable image fails while
+    no worker is running and nothing has been written.
+    """
+    if metadata_intent is None or not isinstance(metadata_intent.cover, Path):
+        return None, None
+    return metadata_intent.cover, read_cover(metadata_intent.cover)[1]
 
 
 def _make_workspace(parent: Path) -> Path:
@@ -535,6 +555,7 @@ def _assemble(  # noqa: PLR0913, PLR0917 - explicit effect boundary.
     assembler: ArtifactAssembler,
     emitter: _Emitter,
     cancel: CancellationToken | None,
+    cover_file: Path | None = None,
 ) -> AssemblyResult:
     emitter.emit_stage_started("assembly")
     _check_cancel(cancel)
@@ -544,7 +565,9 @@ def _assemble(  # noqa: PLR0913, PLR0917 - explicit effect boundary.
     result: object | None = None
     try:
         result = assembler.assemble(
-            AssemblyRequest(plan, audio, pcm_parts, candidate, source_snapshot)
+            AssemblyRequest(
+                plan, audio, pcm_parts, candidate, source_snapshot, cover_file
+            )
         )
     except EncodingError as error:
         encoding_failure = error.code

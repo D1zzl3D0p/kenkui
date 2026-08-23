@@ -31,6 +31,7 @@ class AssemblyRequest:
     pcm_parts: tuple[Path, ...]
     workspace_output: Path
     source_epub: Path | None = None
+    cover_file: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)

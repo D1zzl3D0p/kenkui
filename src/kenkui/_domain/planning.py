@@ -112,6 +112,7 @@ class CoverIntent(StrEnum):
     """Renderer-neutral choice for source cover inheritance."""
 
     SOURCE = "source"
+    FILE = "file"
     NONE = "none"
 
 
@@ -216,6 +217,9 @@ class OutputMetadata:
     chapters: tuple[OutputChapter, ...]
     cover: CoverIntent
     source_cover_available: bool
+    # The content digest, never the path: core spec 14 requires that where an
+    # output lives cannot change what it means.
+    cover_content_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +268,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     assignments: Mapping[str, str] | None = None,
     unknown_voice_id: str | None = None,
     spans: tuple[SpeakerSpan, ...] = (),
+    cover_content_hash: str | None = None,
 ) -> ExecutionPlan:
     """Compile supplied material without filesystem, provider, or process effects."""
     source_hash = _validated_hash(source_bytes_hash)
@@ -308,6 +313,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     metadata = _output_metadata(
         inspection,
         _one_operation(pipeline.operations, MetadataIntent),
+        cover_content_hash,
     )
     schemas = SchemaVersions(
         parser=PARSER_SCHEMA_VERSION,
@@ -596,7 +602,9 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
 
 
 def _output_metadata(
-    inspection: BookInspection, intent: MetadataIntent | None
+    inspection: BookInspection,
+    intent: MetadataIntent | None,
+    cover_content_hash: str | None = None,
 ) -> OutputMetadata:
     title = inspection.metadata.title
     author = inspection.metadata.author
@@ -604,7 +612,12 @@ def _output_metadata(
     if intent is not None:
         title = intent.title.strip() if intent.title is not None else title
         author = intent.author.strip() if intent.author is not None else author
-        cover = CoverIntent.SOURCE if intent.cover == "source" else CoverIntent.NONE
+        if intent.cover == "source":
+            cover = CoverIntent.SOURCE
+        elif intent.cover is None:
+            cover = CoverIntent.NONE
+        else:
+            cover = CoverIntent.FILE
     chapters = tuple(
         OutputChapter(
             id=chapter.id,
@@ -620,6 +633,7 @@ def _output_metadata(
         chapters=chapters,
         cover=cover,
         source_cover_available=inspection.metadata.cover_available,
+        cover_content_hash=cover_content_hash,
     )
 
 
@@ -710,6 +724,10 @@ def _fingerprint(material: _PlanMaterial) -> str:
     }
     if any(material.trailing_silence):
         payload["trailing_silence_ms"] = list(material.trailing_silence)
+    if output.cover_content_hash is not None:
+        # Absent rather than null: an explicit null would change the
+        # fingerprint of every pipeline that never supplied a cover file.
+        payload["cover_content_hash"] = output.cover_content_hash
     canonical = json.dumps(
         payload,
         ensure_ascii=True,

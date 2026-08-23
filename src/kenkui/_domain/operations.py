@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypeVar
 
 from kenkui.errors import ErrorCode, ValidationError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +103,7 @@ class MetadataIntent:
 
     title: str | None = None
     author: str | None = None
-    cover: Literal["source"] | None = "source"
+    cover: Literal["source"] | Path | None = "source"
 
 
 Operation: TypeAlias = (
