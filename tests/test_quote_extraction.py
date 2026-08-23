@@ -5,6 +5,8 @@ model-driven step. Keeping extraction model-free means its correctness never
 depends on a provider, and Task 3's segmentation depends on the partition
 being exact -- a gap silently drops audio, an overlap silently duplicates it.
 """
+# ruff: noqa: RUF001, RUF002 - the typographic quotes are the data under test;
+# writing them as escapes would make every case unreadable.
 
 from __future__ import annotations
 
@@ -111,3 +113,57 @@ def test_the_chapter_id_is_carried_on_every_span() -> None:
     """Spans from many chapters are pooled, so each must name its own."""
     spans = extract_spans("ch-7", 'He said, "Go away." She left.')
     assert {s.chapter_id for s in spans} == {"ch-7"}
+
+
+# Scare quotes and acronyms are quoted but nobody says them. Marking them as
+# dialogue would render an aside in a character's voice, which is audible.
+SCARE_CASES = [
+    pytest.param('He was what they called "gifted" then.', id="called"),
+    pytest.param("She is a so-called “expert” now.", id="so-called"),
+    pytest.param('The device, known as "the loom", hummed.', id="known-as"),
+    pytest.param('A ship dubbed "Perseverance" sailed.', id="dubbed"),
+    pytest.param('She works for "NATO" now.', id="acronym"),
+    pytest.param('He studied "DNA" for years.', id="short-acronym"),
+]
+
+
+@pytest.mark.parametrize("text", SCARE_CASES)
+def test_scare_quotes_are_not_dialogue(text: str) -> None:
+    """A term being labelled is written but never said aloud."""
+    spans = extract_spans("ch1", text)
+    assert not any(s.is_dialogue for s in spans), text
+
+
+@pytest.mark.parametrize("text", SCARE_CASES)
+def test_scare_quotes_still_partition_exactly(text: str) -> None:
+    """Declining to mark them dialogue must not drop the quote marks."""
+    spans = extract_spans("ch1", text)
+    assert "".join(text[s.start : s.end] for s in spans) == text
+
+
+def test_real_dialogue_is_not_mistaken_for_a_scare_quote() -> None:
+    """The label heuristic must not swallow ordinary speech."""
+    spans = extract_spans("ch1", 'She called out. "Go away," he said.')
+    assert sum(1 for s in spans if s.is_dialogue) == 1
+
+
+def test_curly_single_quotes_are_dialogue() -> None:
+    """British typography: ‘...’ is speech, unlike the straight form."""
+    spans = extract_spans("ch1", "Before ‘Go away,’ he said.")
+    dialogue = [s for s in spans if s.is_dialogue]
+    assert len(dialogue) == 1
+
+
+def test_a_curly_apostrophe_does_not_open_dialogue() -> None:
+    """Don’t and Darcy’s are far commoner than single-quoted speech."""
+    text = "Don’t touch Darcy’s horse."
+    spans = extract_spans("ch1", text)
+    assert not any(s.is_dialogue for s in spans)
+
+
+def test_curly_single_quotes_inside_dialogue_stay_inside() -> None:
+    """A nested quotation is part of the utterance, not a second one."""
+    text = "“She said ‘go away’ to me.”"
+    spans = extract_spans("ch1", text)
+    assert len(spans) == 1
+    assert spans[0].is_dialogue is True
