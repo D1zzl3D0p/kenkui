@@ -148,7 +148,9 @@ def production_bindings_from_environment(
         device=_string(engine["device"]),
         timeout_seconds=_floating(engine["timeout_seconds"]),
     )
-    return pocket_production_bindings(config, voice, _cast_voices(root, also, revision))
+    return pocket_production_bindings(
+        config, voice, _cast_voices(root, voice_id, also, revision)
+    )
 
 
 def _voice_asset(voice_data: dict[str, object]) -> VoiceAsset:
@@ -200,11 +202,19 @@ def _validated_cast_voice(
 
 
 def _cast_voices(
-    root: dict[str, object], also: Sequence[str], revision: str
+    root: dict[str, object], narrator_id: str, also: Sequence[str], revision: str
 ) -> tuple[Voice, ...]:
-    """Return resolved public metadata for each cast voice."""
+    """Return resolved public metadata for each cast voice bar the narrator.
+
+    The narrator is excluded to match ExecutionBindings.cast_voices, which is
+    documented as "the rest of the cast". ``also`` always begins with the
+    unknown voice, which defaults to the narrator, so including it would put
+    the narrator in the cast plan twice on every attributed run.
+    """
     resolved: list[Voice] = []
     for voice_id in dict.fromkeys(also):
+        if voice_id == narrator_id:
+            continue
         voice_data = _validated_cast_voice(root, voice_id, revision)
         resolved.append(
             Voice(

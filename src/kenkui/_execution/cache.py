@@ -146,7 +146,10 @@ class CacheStore:
         material = {
             "audio_contract_version": AUDIO_CONTRACT_VERSION,
             "cache_schema_version": CACHE_SCHEMA_VERSION,
-            "engine": _engine_material(specification),
+            "engine": _engine_material(
+                specification,
+                plan.cast.voice_for(segment.speaker_id).content_fingerprint,
+            ),
             "model_revision": plan.model_revision,
             "normalization_schema": plan.schema_versions.normalization,
             "render_schema": plan.schema_versions.render,
@@ -985,15 +988,28 @@ def _voice_material(
     }
 
 
-def _engine_material(specification: EngineSpecification) -> dict[str, object]:
+def _engine_material(
+    specification: EngineSpecification, voice_sha256: str = ""
+) -> dict[str, object]:
+    """Return engine identity, narrowed to the voice that renders one segment.
+
+    The pocket config lists the whole cast. Keying every segment on all of it
+    would make adding one character voice change the key of every segment in
+    the book, including narration that did not change, so a re-cast would
+    re-synthesize work already paid for. The rendering voice is carried by the
+    separate "voice" key, which is where a cast difference belongs.
+    """
     if specification.kind == "pocket":
         pocket = specification.pocket_config
-        return {
-            "kind": specification.kind,
-            "semantic_config": pocket.semantic_material()
-            if pocket is not None
-            else None,
-        }
+        material = pocket.semantic_material() if pocket is not None else None
+        voices = material.get("voices") if material is not None else None
+        if voice_sha256 and isinstance(voices, tuple) and material is not None:
+            material["voices"] = tuple(
+                item
+                for item in voices
+                if isinstance(item, dict) and item.get("sha256") == voice_sha256
+            )
+        return {"kind": specification.kind, "semantic_config": material}
     config = specification.fake_config
     return {
         "kind": specification.kind,

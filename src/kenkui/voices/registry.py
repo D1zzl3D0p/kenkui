@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import metadata
@@ -13,7 +15,10 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from kenkui.errors import ErrorCode, VoiceError
+from kenkui.observability import get_logger, log_event
 from kenkui.voices.types import PerceivedGender, Voice
+
+_LOGGER = get_logger(__name__)
 
 _BUILTIN_MANIFEST: Final = Path(__file__).with_name("builtin.json")
 
@@ -171,21 +176,35 @@ def load_pack() -> PackLoad:
 
     built_in = {entry.id for entry in load_builtin()}
     entries: list[CatalogEntry] = []
-    for voice in voices:
-        # A voice with no compiled block is unpublished: a gap in the pack,
-        # not a reason to abandon the other ninety-four.
-        if not voice.get("compiled"):
-            continue
-        # Short display names read far better at a call site than the full
-        # slug. Where one would shadow a built-in the pack voice keeps its
-        # slug: they are different speakers who happen to share a name, so
-        # dropping either would lose a voice.
-        short = str(voice["display_name"]).lower()
-        entries.append(
-            _pack_entry(
-                voice, voice["voice_id"] if short in built_in else short, assets
+    try:
+        for voice in voices:
+            # A voice with no compiled block is unpublished: a gap in the pack,
+            # not a reason to abandon the other ninety-four.
+            if not voice.get("compiled"):
+                continue
+            # Short display names read far better at a call site than the full
+            # slug. Where one would shadow a built-in the pack voice keeps its
+            # slug: they are different speakers who happen to share a name, so
+            # dropping either would lose a voice.
+            short = str(voice["display_name"]).lower()
+            entries.append(
+                _pack_entry(
+                    voice, voice["voice_id"] if short in built_in else short, assets
+                )
             )
+    except (KeyError, TypeError, AttributeError):
+        # One malformed record makes the whole pack untrustworthy, and the
+        # catalog is built at import: raising here would break `import kenkui`
+        # rather than degrade to the built-in voices this promises. Logged
+        # because the returned shape is identical to an absent pack, and an
+        # operator whose ninety-five voices vanished needs to know why.
+        log_event(
+            _LOGGER,
+            "voice_pack_malformed",
+            level=logging.WARNING,
+            context={"boundary": "voices", "path": _PACK_MANIFEST.name},
         )
+        return PackLoad((), None)
     return PackLoad(tuple(entries), None)
 
 
@@ -199,10 +218,20 @@ def _withheld_pack_ids() -> frozenset[str]:
     except (OSError, ValueError):
         return frozenset()
     ids: set[str] = set()
-    for voice in payload.get("voices", ()):
-        ids.add(voice["voice_id"])
-        ids.add(str(voice["display_name"]).lower())
+    # Per record rather than around the loop: aborting on the first malformed
+    # entry would leave every later voice unguarded, so an incompatible pack
+    # would raise VOICE_UNKNOWN for them instead of VOICE_INCOMPATIBLE and its
+    # rebuild hint.
+    for voice in _iterable(payload.get("voices", ())):
+        with suppress(KeyError, TypeError, AttributeError):
+            ids.add(voice["voice_id"])
+            ids.add(str(voice["display_name"]).lower())
     return frozenset(ids)
+
+
+def _iterable(value: object) -> tuple[Any, ...]:
+    """Return a safely iterable view of a manifest collection."""
+    return tuple(value) if isinstance(value, list) else ()
 
 
 def pack_voice_guard(voice_id: str) -> None:

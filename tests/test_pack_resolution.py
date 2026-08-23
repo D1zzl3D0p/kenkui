@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -170,3 +171,41 @@ def test_a_missing_pack_degrades_to_the_built_ins(
     finally:
         registry.load_pack.cache_clear()
         registry._withheld_pack_ids.cache_clear()  # noqa: SLF001
+
+
+def test_a_malformed_record_degrades_to_the_built_in_voices(
+    pack_at: Callable[[dict[str, Any]], None],
+) -> None:
+    """A record missing a required key must not break `import kenkui`."""
+    broken = {**_PACK["voices"][0]}
+    del broken["display_name"]
+    pack_at({**_PACK, "voices": [broken]})
+    loaded = registry.load_pack()
+    assert loaded.entries == ()
+    assert loaded.incompatible is None
+
+
+def test_a_malformed_record_is_logged(
+    pack_at: Callable[[dict[str, Any]], None],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The degraded shape is identical to an absent pack, so it must say so."""
+    broken = {**_PACK["voices"][0]}
+    del broken["display_name"]
+    pack_at({**_PACK, "voices": [broken]})
+    with caplog.at_level(logging.WARNING, logger="kenkui.voices.registry"):
+        registry.load_pack()
+    assert "voice_pack_malformed" in caplog.text
+
+
+def test_one_malformed_record_still_withholds_the_others(
+    pack_at: Callable[[dict[str, Any]], None],
+) -> None:
+    """Aborting the scan would report VOICE_UNKNOWN instead of the rebuild hint."""
+    broken = {**_PACK["voices"][0], "voice_id": "broken"}
+    del broken["display_name"]
+    good = {**_PACK["voices"][0], "voice_id": "kept", "display_name": "Kept"}
+    pack_at({**_PACK, "pocket_tts": ">=99.0.0", "voices": [broken, good]})
+    with pytest.raises(VoiceError) as excinfo:
+        registry.pack_voice_guard("kept")
+    assert excinfo.value.code is ErrorCode.VOICE_INCOMPATIBLE

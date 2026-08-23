@@ -235,3 +235,36 @@ def test_tiers_are_cumulative() -> None:
     """Every tier still converts everything the conservative tier does."""
     for tier in ("conservative", "standard", "aggressive"):
         assert apply_rules(number_rules(tier), "100,000") == "one hundred thousand"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("1 ft", "one foot"),
+        ("3 ft", "three feet"),
+    ],
+)
+def test_foot_has_a_singular_form(source: str, expected: str) -> None:
+    """A single foot is a foot, not a feet."""
+    assert apply_rules(conservative_rules(), source) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("$3 million", "three million dollars"),
+        ("$1.5 billion", "one point five billion dollars"),
+        ("£5 million", "five million pounds"),
+        ("$1.5", "one point five dollars"),
+    ],
+)
+def test_currency_reads_scale_words_and_short_decimals(
+    source: str, expected: str
+) -> None:
+    """The amount and its scale precede the currency, and cents are not assumed.
+
+    Without this the symbol binds only the leading integer, so the scale word
+    strands after the currency ("three dollars million") and a one-digit
+    decimal falls out of the match entirely ("one dollar.five billion").
+    """
+    assert apply_rules(conservative_rules(), source) == expected

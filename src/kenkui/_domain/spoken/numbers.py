@@ -187,10 +187,13 @@ _UNITS = {
     "mg": ("milligram", "milligrams"),
     "lb": ("pound", "pounds"),
     "oz": ("ounce", "ounces"),
-    "ft": ("feet", "feet"),
+    "ft": ("foot", "feet"),
     "mph": ("mile per hour", "miles per hour"),
     "kW": ("kilowatt", "kilowatts"),
 }
+# Two digits after the point is a cents amount. Any other length is an
+# ordinary decimal, which is read as one number rather than as cents.
+_CENTS_DIGITS = 2
 _TEEN_ORDINALS = (11, 12, 13)
 _ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
 
@@ -211,16 +214,31 @@ def _ordinal_suffix(value: int) -> str:
 
 
 def _currency(match: re.Match[str]) -> str | None:
-    """Read a leading currency symbol with optional cents."""
+    """Read a leading currency symbol with optional cents, decimal, or scale.
+
+    The symbol precedes its amount in writing but follows it in speech, so a
+    scale word has to be pulled inside the match: bound to the integer alone,
+    "$3 million" reads as "three dollars million".
+    """
     singular, plural = _CURRENCY[match.group(1)]
     whole = _plain(match.group(2))
     if whole is None:
         return None
+    fraction, scale = match.group(3), match.group(4)
+    if scale is not None:
+        head = (
+            decimal_words(str(whole), fraction) if fraction else cardinal_words(whole)
+        )
+        return f"{head} {scale} {plural}"
+    if fraction is None:
+        return f"{cardinal_words(whole)} {singular if whole == 1 else plural}"
+    if len(fraction) != _CENTS_DIGITS:
+        return f"{decimal_words(str(whole), fraction)} {plural}"
     unit = singular if whole == 1 else plural
-    cents = match.group(3)
-    if cents is None or int(cents) == 0:
+    cents = int(fraction)
+    if cents == 0:
         return f"{cardinal_words(whole)} {unit}"
-    return f"{cardinal_words(whole)} {unit} {cardinal_words(int(cents))}"
+    return f"{cardinal_words(whole)} {unit} {cardinal_words(cents)}"
 
 
 def _percent(match: re.Match[str]) -> str | None:
@@ -288,8 +306,12 @@ def conservative_rules() -> tuple[Rule, ...]:
     their leading digits.
     """
     units = "|".join(sorted(_UNITS, key=len, reverse=True))
+    scales = "|".join(name for _, name in _SCALES)
     return (
-        (re.compile(rf"{_LB}([$£€])({_INT})(?:\.(\d{{2}}))?{_RB}"), _currency),
+        (
+            re.compile(rf"{_LB}([$£€])({_INT})(?:\.(\d+))?(?:[ ]({scales}))?{_RB}"),
+            _currency,
+        ),
         (re.compile(rf"{_LB}({_INT})(?:\.(\d+))?%"), _percent),
         (re.compile(rf"{_LB}({_INT})(st|nd|rd|th){_RB}"), _ordinal),
         (re.compile(rf"{_LB}(-)?({_INT})(?:\.(\d+))?[  ]?({units}){_RB}"), _unit),

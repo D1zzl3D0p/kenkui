@@ -131,3 +131,28 @@ def test_validate_rejects_too_many_entries() -> None:
 def test_validate_returns_sorted_pairs() -> None:
     """Order is canonical so identity does not depend on caller dict order."""
     assert validate_entries({"b": "2", "a": "1"}) == (("a", "1"), ("b", "2"))
+
+
+def test_entries_differing_only_in_diacritics_both_survive() -> None:
+    """Caller entries are diacritic-sensitive, so neither spelling is lost.
+
+    The replacement table was keyed on the folded form, which strips accents,
+    so the second entry overwrote the first and one spelling silently vanished.
+    """
+    rules = lexicon_rules(
+        validate_entries({"grace": "grayss", "grâce": "grahss"}), builtin=False
+    )
+    assert apply_rules(rules, "grâce") == "grahss"
+    assert apply_rules(rules, "grace") == "grayss"
+
+
+def test_validate_rejects_entries_differing_only_in_case() -> None:
+    """Two entries that match the same text cannot both be honored.
+
+    Matching is case-insensitive, so "US" and "us" are one key with two
+    replacements. Refusing is the only honest answer; silently keeping the
+    last one loses an entry the caller asked for.
+    """
+    with pytest.raises(ValidationError) as error:
+        validate_entries({"US": "United States", "us": "you ess"})
+    assert error.value.code is ErrorCode.INVALID_PRONUNCIATION

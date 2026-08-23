@@ -21,6 +21,11 @@ from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import PROMPT_VERSION, ROSTER_PROMPT
 from kenkui._characters.quotes import extract_spans
 from kenkui._characters.store import AttributionRecord
+from kenkui._domain.casting import CastingOutcome, CastingRequest, solve
+from kenkui._domain.planning import (
+    NORMALIZATION_SCHEMA_VERSION,
+    PARSER_SCHEMA_VERSION,
+)
 from kenkui.errors import ModelError
 
 if TYPE_CHECKING:
@@ -95,11 +100,46 @@ def _measured(
     )
 
 
-def resolve_attribution(
+def resolve_cast(record: AttributionRecord, request: CastingRequest) -> CastingOutcome:
+    """Solve one cast and store it beneath the attribution it was solved from.
+
+    Solving is pure and cheap, so the row is not a cache: it is what makes the
+    cast a thing the caller can name later. ``list_castings`` and
+    ``remove_casting`` are public verbs, and without this write the first
+    always answers empty and the second is always a no-op.
+
+    The write is allowed to fail loud, matching the store's own rule: losing a
+    cast silently means a later render re-casts the book without saying so.
+    """
+    outcome = solve(request)
+    store.write_cast(
+        store.CastRecord(
+            cast_id=store.cast_key(
+                record.attribution_id,
+                request.method,
+                request.explicit,
+                request.narrator_voice_id,
+                request.unknown_voice_id,
+            ),
+            attribution_id=record.attribution_id,
+            method=request.method,
+            narrator_voice_id=request.narrator_voice_id,
+            unknown_voice_id=request.unknown_voice_id,
+            assignments=tuple(
+                (character_id, voice_id, character_id in request.explicit)
+                for character_id, voice_id in sorted(outcome.assignments.items())
+            ),
+        )
+    )
+    return outcome
+
+
+def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     inspection: BookInspection,
     source_hash: str,
     model_id: str,
     *,
+    roster_model_id: str | None = None,
     client: Client | None = None,
     cancel: CancellationToken | None = None,
 ) -> AttributionRecord:
@@ -108,11 +148,32 @@ def resolve_attribution(
     Called only from the shell. Cancellation is checked between chapters
     because a long book is a long sequence of model calls, and the only other
     check happens once before rendering starts.
+
+    ``roster_model_id`` names the model that infers characters, which the
+    caller may choose independently of the one that attributes quotes. It
+    keys the record too: a roster derived by a different model is different
+    material, not a cache hit.
     """
-    key = store.attribution_key(source_hash, model_id, PROMPT_VERSION, PARAMS)
+    roster_model = roster_model_id or model_id
+    key = store.attribution_key(
+        source_hash,
+        model_id,
+        PROMPT_VERSION,
+        PARAMS,
+        tuple(chapter.id for chapter in inspection.chapters),
+        (PARSER_SCHEMA_VERSION, NORMALIZATION_SCHEMA_VERSION),
+        roster_model_id=roster_model,
+    )
     cached = store.read_attribution(key)
     if cached is not None:
         return cached
+
+    # Extracted once and reused: both passes below need the same partition,
+    # and scanning a 600k-character book twice for it is pure waste.
+    extracted = {
+        chapter.id: extract_spans(chapter.id, chapter.text)
+        for chapter in inspection.chapters
+    }
 
     rosters: list[tuple[CharacterProfile, ...]] = []
     for chapter in inspection.chapters:
@@ -121,11 +182,9 @@ def resolve_attribution(
         # A chapter with no quoted speech has no speaker to attribute, so its
         # roster is never consulted. Front matter and purely descriptive
         # chapters are common enough that asking about them is real spend.
-        if not any(
-            span.is_dialogue for span in extract_spans(chapter.id, chapter.text)
-        ):
+        if not any(span.is_dialogue for span in extracted[chapter.id]):
             continue
-        rosters.append(_roster_for(chapter.text, model_id, client))
+        rosters.append(_roster_for(chapter.text, roster_model, client))
     characters = merge_rosters(tuple(rosters))
 
     spans: list[SpeakerSpan] = []
@@ -134,7 +193,12 @@ def resolve_attribution(
         if cancel is not None:
             cancel.raise_if_cancelled()
         chapter_spans, recent = attribute_chapter(
-            chapter, characters, model_id, client=client, recent=recent
+            chapter,
+            characters,
+            model_id,
+            client=client,
+            recent=recent,
+            spans=extracted[chapter.id],
         )
         spans.extend(chapter_spans)
 

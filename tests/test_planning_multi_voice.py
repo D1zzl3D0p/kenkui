@@ -7,6 +7,8 @@ partition is still a partition.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import kenkui as kk
 from kenkui._domain.planning import (
     ExecutionPlan,
@@ -15,7 +17,15 @@ from kenkui._domain.planning import (
 )
 from kenkui._execution.cache import CacheStore
 from kenkui._execution.process_pool import EngineSpecification
+from kenkui._tts.pocket import (
+    PocketEngineConfig,
+    PocketManifestFile,
+    VoiceAsset,
+)
 from kenkui._tts.protocols import SynthesisTask
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 SOURCE_HASH = "1" * 64
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
@@ -68,9 +78,13 @@ def _compile(
     *,
     spans: tuple[SpeakerSpan, ...] = (),
     text: str = TEXT,
+    paragraph_ms: int = 0,
 ) -> ExecutionPlan:
+    source = kk.epub("ignored-location.epub")
+    if paragraph_ms:
+        source = source.pauses(paragraph_ms=paragraph_ms)
     return compile_execution_plan(
-        kk.epub("ignored-location.epub").assign_voice("eponine").tts(),
+        source.assign_voice("eponine").tts(),
         _inspection(text),
         source_bytes_hash=SOURCE_HASH,
         resolved_voice=NARRATOR,
@@ -173,3 +187,126 @@ def test_worker_task_carries_each_segment_s_own_voice_digest() -> None:
         JAVERT.content_fingerprint,
         NARRATOR.content_fingerprint,
     ]
+
+
+def _pocket_spec(root: Path, *digests: str) -> EngineSpecification:
+    """Build a pocket specification whose cast holds exactly these digests."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "english.yaml").write_text("model: english\n")
+    voices = root / "voices"
+    voices.mkdir(exist_ok=True)
+    assets = []
+    for digest in digests:
+        (voices / f"{digest[:4]}.safetensors").write_bytes(b"\x00" * 8)
+        assets.append(
+            VoiceAsset(
+                path=str(voices / f"{digest[:4]}.safetensors"),
+                sha256=digest,
+                variety="built-in",
+                provenance="Project-owned recording by Test Speaker",
+                license_id="CC0-1.0",
+                rights="Test rights.",
+                commercial_use_allowed=True,
+            )
+        )
+    return EngineSpecification.pocket(
+        PocketEngineConfig(
+            model_root=str(root),
+            config_path=str(root / "english.yaml"),
+            model_revision=MODEL_REVISION,
+            package_version="2.1.0",
+            files=(PocketManifestFile("english.yaml", 10, "d" * 64),),
+            voices=tuple(assets),
+            cloning_capable=False,
+            sample_rate_hz=24_000,
+        )
+    )
+
+
+def test_adding_a_cast_voice_does_not_rekey_narration(tmp_path: Path) -> None:
+    """A re-cast must not re-synthesize prose the new voice never speaks.
+
+    The engine config lists the whole cast. If all of it entered every
+    segment's key, casting one more character would invalidate every
+    narration entry already rendered and paid for.
+    """
+    plan = _compile(spans=_spans())
+    store = CacheStore.__new__(CacheStore)
+    narration = plan.segments[0]
+    task = SynthesisTask(
+        narration.id,
+        narration.chapter_id,
+        narration.text,
+        24_000,
+        1,
+        1024,
+        NARRATOR.content_fingerprint,
+    )
+    alone = _pocket_spec((tmp_path / "alone").resolve(), NARRATOR.content_fingerprint)
+    with_cast = _pocket_spec(
+        (tmp_path / "cast").resolve(),
+        NARRATOR.content_fingerprint,
+        JAVERT.content_fingerprint,
+    )
+    assert store.key_for(plan, narration, task, alone) == store.key_for(
+        plan, narration, task, with_cast
+    )
+
+
+def test_the_rendering_voice_still_enters_the_key(tmp_path: Path) -> None:
+    """Narrowing the engine material must not drop voice identity entirely."""
+    plan = _compile(spans=_spans())
+    store = CacheStore.__new__(CacheStore)
+    spec = _pocket_spec(
+        (tmp_path / "cast").resolve(),
+        NARRATOR.content_fingerprint,
+        JAVERT.content_fingerprint,
+    )
+
+    def key(index: int) -> str:
+        segment = plan.segments[index]
+        return store.key_for(
+            plan,
+            segment,
+            SynthesisTask(
+                segment.id, segment.chapter_id, segment.text, 24_000, 1, 1024, ""
+            ),
+            spec,
+        )
+
+    assert key(0) != key(1)
+
+
+PARAGRAPH_MS = 500
+PARA_NARRATION = "He waited.\n\n"
+PARA_DIALOGUE = '"You are late."'
+PARA_TAIL = " She left."
+PARA_TEXT = PARA_NARRATION + PARA_DIALOGUE + PARA_TAIL
+
+
+def _para_spans() -> tuple[SpeakerSpan, ...]:
+    start = len(PARA_NARRATION)
+    stop = start + len(PARA_DIALOGUE)
+    return (
+        SpeakerSpan("ch-v1-one", 0, start, None),
+        SpeakerSpan("ch-v1-one", start, stop, "javert"),
+        SpeakerSpan("ch-v1-one", stop, len(PARA_TEXT), None),
+    )
+
+
+def test_paragraph_pause_survives_a_span_boundary() -> None:
+    """A structural gap belongs to the chapter, not to the span it falls in.
+
+    Deciding pauses inside each span makes that span's last block look like
+    the end of the text, so the gap is suppressed. A paragraph break before a
+    line of dialogue is exactly that shape, which is most dialogue in a book.
+    """
+    plan = _compile(spans=_para_spans(), text=PARA_TEXT, paragraph_ms=PARAGRAPH_MS)
+    assert plan.segments[0].text == PARA_NARRATION
+    assert plan.trailing_silence_ms[0] == PARAGRAPH_MS
+
+
+def test_spans_with_pauses_still_partition_chapter_text() -> None:
+    """Deciding gaps chapter-wide must not disturb the partition."""
+    plan = _compile(spans=_para_spans(), text=PARA_TEXT, paragraph_ms=PARAGRAPH_MS)
+    assert "".join(segment.text for segment in plan.segments) == PARA_TEXT

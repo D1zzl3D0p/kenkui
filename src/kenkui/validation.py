@@ -28,6 +28,25 @@ def source_validation_error(path: Path) -> ErrorCode | None:
     return None
 
 
+def _names_an_unreachable_voice(operations: tuple[Operation, ...]) -> bool:
+    """Return whether a voice only attributed spans could reach was named.
+
+    A cast entry speaks when a span carries its character, and the unknown
+    voice speaks when a span carries a character nobody placed. Neither span
+    exists without attribution, so both voices are dead intent: the book
+    renders entirely in the narrator's voice while the caller believes
+    otherwise. A narrator-only assignment names no such voice, which keeps
+    single-voice rendering free of this rule.
+    """
+    if has_operation(operations, AttributeQuotes):
+        return False
+    return any(
+        bool(item.cast) or item.unknown_voice_id != item.narrator_voice_id
+        for item in operations
+        if isinstance(item, AssignVoices)
+    )
+
+
 def render_intent_errors(operations: tuple[Operation, ...]) -> tuple[ErrorCode, ...]:
     """Return missing explicit rendering requirements in stable order."""
     errors: list[ErrorCode] = []
@@ -40,6 +59,8 @@ def render_intent_errors(operations: tuple[Operation, ...]) -> tuple[ErrorCode, 
         operations, InferCharacters
     ):
         errors.append(ErrorCode.ATTRIBUTION_UNAVAILABLE)
+    if _names_an_unreachable_voice(operations):
+        errors.append(ErrorCode.CAST_UNATTRIBUTED)
     if not has_operation(operations, SynthesizeSpeech):
         errors.append(ErrorCode.TTS_REQUIRED)
     return tuple(errors)

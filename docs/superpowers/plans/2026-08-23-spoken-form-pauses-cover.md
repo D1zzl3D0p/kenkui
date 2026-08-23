@@ -126,7 +126,10 @@ from kenkui._domain.spoken.numbers import (
         (1000, "one thousand"),
         (100_000, "one hundred thousand"),
         (1_000_000, "one million"),
-        (1_234_567, "one million two hundred thirty-four thousand five hundred sixty-seven"),
+        (
+            1_234_567,
+            "one million two hundred thirty-four thousand five hundred sixty-seven",
+        ),
         (-5, "minus five"),
     ],
 )
@@ -775,10 +778,29 @@ _TITLE_WORDS = "Chapter|Part|Book|Act|Scene|Volume|Section|Appendix"
 # Valid canonical numerals that are also ordinary English words or common
 # abbreviations. Without this, "MIX" and "CIVIC" read as numbers.
 _ROMAN_STOPLIST = frozenset(
-    {"MIX", "DID", "CIVIC", "MILD", "DIM", "LID", "MI", "DI", "CD", "MM",
-     "LI", "MC", "ID", "MD", "CI"}
+    {
+        "MIX",
+        "DID",
+        "CIVIC",
+        "MILD",
+        "DIM",
+        "LID",
+        "MI",
+        "DI",
+        "CD",
+        "MM",
+        "LI",
+        "MC",
+        "ID",
+        "MD",
+        "CI",
+    }
 )
-_DENOMINATORS = {2: ("half", "halves"), 3: ("third", "thirds"), 4: ("quarter", "quarters")}
+_DENOMINATORS = {
+    2: ("half", "halves"),
+    3: ("third", "thirds"),
+    4: ("quarter", "quarters"),
+}
 # conservative_rules() ends with the decimal and integer catch-alls. Higher
 # tiers splice their more specific forms in front of those two so a bare year
 # is not swallowed as a plain integer.
@@ -1167,9 +1189,7 @@ _RB = r"(?![0-9A-Za-z])"
 def _fold(value: str) -> str:
     """Return a case- and diacritic-insensitive lookup key."""
     decomposed = unicodedata.normalize("NFD", value)
-    stripped = "".join(
-        char for char in decomposed if not unicodedata.combining(char)
-    )
+    stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
     return stripped.casefold()
 
 
@@ -1220,9 +1240,7 @@ def _rule(entries: tuple[tuple[str, str], ...], *, folded: bool) -> Rule | None:
             table[_fold(form)] = value
             alternatives.append(re.escape(form))
     alternatives.sort(key=len, reverse=True)
-    pattern = re.compile(
-        rf"{_LB}(?:{'|'.join(alternatives)}){_RB}", re.IGNORECASE
-    )
+    pattern = re.compile(rf"{_LB}(?:{'|'.join(alternatives)}){_RB}", re.IGNORECASE)
 
     def handler(match: re.Match[str]) -> str | None:
         source = match.group(0)
@@ -2023,8 +2041,7 @@ def test_chapter_records_every_visible_heading() -> None:
     book = build_epub(
         {
             "chapter1.xhtml": (
-                "<h1>Chapter One</h1><p>He woke.</p>"
-                "<h2>A Section</h2><p>She slept.</p>"
+                "<h1>Chapter One</h1><p>He woke.</p><h2>A Section</h2><p>She slept.</p>"
             )
         }
     )
@@ -2964,19 +2981,17 @@ In `_render`, replace the three lines beginning `rendered.append(segment_audio(i
 with:
 
 ```python
-        entry, padding = _padded(
-            segment_audio(item), plan.trailing_silence_ms[index]
-        )
-        # Silence occupies real bytes and must be charged against the budgets.
-        item_bytes += len(padding)
-        chapter_bytes += len(padding)
-        total_bytes += len(padding)
-        if chapter_bytes > MAX_CHAPTER_PCM_BYTES or total_bytes > MAX_TOTAL_PCM_BYTES:
-            raise RenderError(ErrorCode.INVALID_AUDIO)
-        rendered.append(entry)
-        pending.append(item.pcm_s16le)
-        if padding:
-            pending.append(padding)
+entry, padding = _padded(segment_audio(item), plan.trailing_silence_ms[index])
+# Silence occupies real bytes and must be charged against the budgets.
+item_bytes += len(padding)
+chapter_bytes += len(padding)
+total_bytes += len(padding)
+if chapter_bytes > MAX_CHAPTER_PCM_BYTES or total_bytes > MAX_TOTAL_PCM_BYTES:
+    raise RenderError(ErrorCode.INVALID_AUDIO)
+rendered.append(entry)
+pending.append(item.pcm_s16le)
+if padding:
+    pending.append(padding)
 ```
 
 and delete the now-duplicated budget check that preceded it, so the budget is

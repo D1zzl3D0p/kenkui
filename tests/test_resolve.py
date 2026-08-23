@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import kenkui as kk
 from kenkui._domain.operations import AssignVoices, AttributeQuotes, InferCharacters
 
@@ -133,3 +135,59 @@ def test_operations_are_named_for_what_they_do() -> None:
     """The three character operations, and nothing else."""
     kinds = {type(op) for op in _pipeline().operations}
     assert kinds == {InferCharacters, AttributeQuotes, AssignVoices}
+
+
+def test_an_unknown_casting_method_is_rejected_at_intent_time() -> None:
+    """A typo must fail where it is written, not silently render one voice.
+
+    The solver checks the method too, but it only runs when attribution is
+    configured and some character is left for it to place. A single-voice
+    pipeline reaches neither, so without this the run just narrates.
+    """
+    with pytest.raises(kk.ValidationError) as caught:
+        kk.epub("book.epub").assign_voices(narrator="eponine", method="astrology")
+    assert caught.value.code is kk.ErrorCode.CASTING_METHOD_UNKNOWN
+
+
+def test_a_non_path_cover_is_invalid_intent_rather_than_a_crash() -> None:
+    """metadata() validates its own argument instead of raising TypeError."""
+    with pytest.raises(kk.ValidationError) as caught:
+        kk.epub("book.epub").metadata(cover=17)  # type: ignore[arg-type]
+    assert caught.value.code is kk.ErrorCode.INVALID_METADATA
+
+
+def test_a_cast_without_attribution_is_rejected() -> None:
+    """Named characters are unreachable when nothing attributes quotes.
+
+    Resolution returns early with no assignments when attribution is absent,
+    so the cast and a distinct unknown voice are discarded in silence and the
+    book renders entirely in the narrator's voice.
+    """
+    issues = (
+        kk.epub("book.epub")
+        .assign_voices(narrator="eponine", cast={"javert": "charles"})
+        .tts()
+        .validate()
+        .issues
+    )
+    assert kk.ErrorCode.CAST_UNATTRIBUTED in {issue.code for issue in issues}
+
+
+def test_a_distinct_unknown_voice_without_attribution_is_rejected() -> None:
+    """The unknown voice only ever speaks lines attribution failed to place."""
+    issues = (
+        kk.epub("book.epub")
+        .assign_voices(narrator="eponine", unknown="charles")
+        .tts()
+        .validate()
+        .issues
+    )
+    assert kk.ErrorCode.CAST_UNATTRIBUTED in {issue.code for issue in issues}
+
+
+def test_a_narrator_alone_is_not_a_cast() -> None:
+    """Single-voice rendering must stay the frictionless default."""
+    issues = (
+        kk.epub("book.epub").assign_voices(narrator="eponine").tts().validate().issues
+    )
+    assert kk.ErrorCode.CAST_UNATTRIBUTED not in {issue.code for issue in issues}

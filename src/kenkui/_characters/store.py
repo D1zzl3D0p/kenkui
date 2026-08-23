@@ -127,24 +127,44 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def attribution_key(
-    book_id: str, model_id: str, prompt_version: str, params: Mapping[str, Any]
+def attribution_key(  # noqa: PLR0913, PLR0917 - every input that determines content.
+    book_id: str,
+    model_id: str,
+    prompt_version: str,
+    params: Mapping[str, Any],
+    chapters: tuple[str, ...] = (),
+    schemas: tuple[str, ...] = (),
+    *,
+    roster_model_id: str = "",
 ) -> str:
     """Key attribution by everything that determines its content.
 
     The prompt version is included deliberately: without it, editing a prompt
     would silently reuse output produced by the previous one.
+
+    ``chapters`` and ``schemas`` matter for the same reason. Spans are offsets
+    into one chapter's normalized text, so a record derived over a selection
+    reused for the whole book leaves every other chapter unattributed, and a
+    record derived under an earlier parser or normalizer carries offsets that
+    no longer land where they did. Both are absent by default so a caller that
+    supplies neither keys exactly as before.
     """
-    return hashlib.sha256(
-        _canonical(
-            {
-                "book_id": book_id,
-                "model_id": model_id,
-                "params": dict(params),
-                "prompt_version": prompt_version,
-            }
-        ).encode()
-    ).hexdigest()
+    material: dict[str, Any] = {
+        "book_id": book_id,
+        "model_id": model_id,
+        "params": dict(params),
+        "prompt_version": prompt_version,
+    }
+    if chapters:
+        material["chapters"] = list(chapters)
+    if schemas:
+        material["schemas"] = list(schemas)
+    if roster_model_id and roster_model_id != model_id:
+        # Absent when one model does both, so the common case keys exactly as
+        # before. A separately named roster model is different material: the
+        # characters it invents decide who every later attribution can name.
+        material["roster_model_id"] = roster_model_id
+    return hashlib.sha256(_canonical(material).encode()).hexdigest()
 
 
 def cast_key(

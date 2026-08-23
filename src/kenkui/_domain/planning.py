@@ -418,40 +418,27 @@ def _compile_segments(
     concatenating every chunk still reproduces the chapter exactly. A chapter
     with no spans is one narration span, which is byte-for-byte the behaviour
     that existed before attribution.
+
+    A piece holding no speakable character is never a segment of its own. Two
+    adjacent quotations are separated by exactly such a piece, and an engine
+    handed pure whitespace returns no samples, which fails the whole render.
+    The text is carried onto the next segment instead, so the partition still
+    reproduces the chapter exactly.
     """
     tiers = break_tiers(pauses)
     result: list[SpeechSegment] = []
     silence: list[int] = []
     for chapter_index, chapter in enumerate(chapters):
-        headings = frozenset(chapter.headings)
-        for span in _spans_for(chapter, spans):
-            voice = cast_plan.voice_for(span.character_id)
-            span_text = chapter.text[span.start : span.end]
-            for piece in split_structural(span_text, headings, pauses):
-                text = piece.text
-                if spoken is not None:
-                    text = to_spoken(
-                        text,
-                        numbers=cast("NumberTier", spoken.numbers),
-                        lexicon=spoken.lexicon,
-                        builtin=spoken.builtin_lexicon,
-                    )
-                for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
-                    result.append(
-                        _segment(
-                            chapter,
-                            len(result),
-                            chunk_index,
-                            chunk,
-                            speaker_id=span.character_id,
-                            voice_id=voice.id,
-                            spoken=spoken,
-                            tiers=tiers,
-                        )
-                    )
-                    silence.append(0)
-                if silence:
-                    silence[-1] = gap_ms(piece.reasons, pauses)
+        _append_chapter(
+            chapter,
+            _spans_for(chapter, spans),
+            cast_plan,
+            spoken=spoken,
+            pauses=pauses,
+            tiers=tiers,
+            result=result,
+            silence=silence,
+        )
         # The inter-chapter gap folds into this chapter's last segment, so
         # chapter N+1 begins exactly on its first spoken word. Max, not sum:
         # a chapter end meeting a heading-before pause is one gap.
@@ -460,6 +447,104 @@ def _compile_segments(
     if silence:
         silence[-1] = 0  # A book must not end on dead air.
     return tuple(result), tuple(silence)
+
+
+def _structural_pieces(
+    chapter: ChapterInspection, pauses: Pauses
+) -> tuple[tuple[int, int, frozenset[str]], ...]:
+    """Return each structural piece of a chapter as (start, end, reasons).
+
+    Decided once over the whole chapter, because a gap belongs to the text and
+    not to whoever happens to speak either side of it. Deciding it inside a
+    span makes that span's final block look like the end of the text, which
+    suppresses the gap after it -- and a paragraph break before a line of
+    dialogue is exactly that shape.
+    """
+    headings = frozenset(chapter.headings)
+    pieces: list[tuple[int, int, frozenset[str]]] = []
+    position = 0
+    for piece in split_structural(chapter.text, headings, pauses):
+        end = position + len(piece.text)
+        pieces.append((position, end, piece.reasons))
+        position = end
+    return tuple(pieces)
+
+
+def _fragments(
+    pieces: tuple[tuple[int, int, frozenset[str]], ...], span: SpeakerSpan
+) -> tuple[tuple[int, int, frozenset[str]], ...]:
+    """Clip chapter pieces to one span, keeping a gap only where a piece ends.
+
+    A fragment that stops early stops because the speaker changed, which is
+    not a structural boundary and carries no silence of its own.
+    """
+    out: list[tuple[int, int, frozenset[str]]] = []
+    for start, end, reasons in pieces:
+        lower, upper = max(start, span.start), min(end, span.end)
+        if lower >= upper:
+            continue
+        out.append((lower, upper, reasons if upper == end else frozenset()))
+    return tuple(out)
+
+
+def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
+    chapter: ChapterInspection,
+    spans: tuple[SpeakerSpan, ...],
+    cast_plan: CastPlan,
+    *,
+    spoken: SpokenForm | None,
+    pauses: Pauses,
+    tiers: tuple[str, ...],
+    result: list[SpeechSegment],
+    silence: list[int],
+) -> None:
+    """Append one chapter's segments and their trailing gaps, in plan order."""
+    pieces = _structural_pieces(chapter, pauses)
+    carried = ""
+    for span in spans:
+        voice = cast_plan.voice_for(span.character_id)
+        for start, end, reasons in _fragments(pieces, span):
+            text = chapter.text[start:end]
+            if spoken is not None:
+                text = to_spoken(
+                    text,
+                    numbers=cast("NumberTier", spoken.numbers),
+                    lexicon=spoken.lexicon,
+                    builtin=spoken.builtin_lexicon,
+                )
+            text = f"{carried}{text}"
+            carried = ""
+            if not text.strip():
+                # Nothing to say. Hold the characters for the next fragment
+                # and let this fragment's gap land on the last real segment.
+                carried = text
+                if silence:
+                    silence[-1] = max(silence[-1], gap_ms(reasons, pauses))
+                continue
+            for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
+                result.append(
+                    _segment(
+                        chapter,
+                        len(result),
+                        chunk_index,
+                        chunk,
+                        speaker_id=span.character_id,
+                        voice_id=voice.id,
+                        spoken=spoken,
+                        tiers=tiers,
+                    )
+                )
+                silence.append(0)
+            if silence:
+                silence[-1] = max(silence[-1], gap_ms(reasons, pauses))
+    if carried:
+        # Unreachable for normalized text, which never ends a chapter in
+        # whitespace. Emitting rather than dropping keeps the partition
+        # exact if it ever becomes reachable.
+        result.append(
+            _segment(chapter, len(result), 0, carried, spoken=spoken, tiers=tiers)
+        )
+        silence.append(0)
 
 
 def _spans_for(

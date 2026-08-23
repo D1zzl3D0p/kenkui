@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from kenkui._characters import store
-from kenkui._domain.casting import CharacterProfile
+import kenkui as kk
+from kenkui._characters import resolve_cast, store
+from kenkui._domain.casting import CastingRequest, CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
 from kenkui._tts import production
 
@@ -197,3 +198,68 @@ def test_the_store_path_follows_a_redirected_cache_root(
     """
     monkeypatch.setattr(production, "default_cache_root", lambda: tmp_path)
     assert store.default_store_path() == tmp_path / store.STORE_NAME
+
+
+def _voice(voice_id: str, traits: str) -> kk.Voice:
+    """A loaded voice the solver can draw from."""
+    return kk.Voice(
+        id=voice_id,
+        name=voice_id.title(),
+        enabled=True,
+        provenance="Project-owned recording by Test Speaker",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en-US",
+        content_fingerprint="9" * 64,
+        compatible_model_revisions=("pocket-tts/model@0123456789abcdef",),
+        state="loaded",
+        perceived_gender=traits,
+    )
+
+
+def test_resolving_a_cast_stores_it_beneath_its_attribution(
+    attribution: store.AttributionRecord,
+) -> None:
+    """Solving without storing leaves the public cast verbs answering for nothing.
+
+    list_castings and remove_casting are exported, so a solved cast that is
+    never written makes the first always empty and the second always a no-op.
+    """
+    store.write_attribution(attribution)
+    outcome = resolve_cast(
+        attribution,
+        CastingRequest(
+            characters=attribution.characters,
+            pool=(_voice("anna", "feminine"), _voice("charles", "masculine")),
+            explicit={"elizabeth": "anna"},
+            narrator_voice_id="eponine",
+            unknown_voice_id="eponine",
+            method="gendered",
+        ),
+    )
+    stored = store.list_castings()
+    assert len(stored) == 1
+    assert dict(outcome.assignments) == {
+        character: voice for character, voice, _ in stored[0].assignments
+    }
+
+
+def test_a_stored_cast_records_which_choices_the_caller_pinned(
+    attribution: store.AttributionRecord,
+) -> None:
+    """An explicit entry must come back pinned, so a re-solve cannot move it."""
+    store.write_attribution(attribution)
+    resolve_cast(
+        attribution,
+        CastingRequest(
+            characters=attribution.characters,
+            pool=(_voice("anna", "feminine"), _voice("charles", "masculine")),
+            explicit={"elizabeth": "anna"},
+            narrator_voice_id="eponine",
+            unknown_voice_id="eponine",
+            method="gendered",
+        ),
+    )
+    pinned = {c: p for c, _, p in store.list_castings()[0].assignments}
+    assert pinned["elizabeth"] is True
+    assert pinned["darcy"] is False

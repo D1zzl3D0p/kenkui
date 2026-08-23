@@ -56,38 +56,54 @@ def builtin_entries() -> tuple[tuple[str, str], ...]:
 
 
 def validate_entries(mapping: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
-    """Bound and canonicalize caller entries, refusing malformed input."""
+    """Bound and canonicalize caller entries, refusing malformed input.
+
+    Two keys differing only in case are refused rather than resolved. Matching
+    is case-insensitive, so they name one position with two replacements, and
+    silently keeping either one drops an entry the caller asked for.
+    """
     items = tuple(sorted(mapping.items()))
     if len(items) > MAX_LEXICON_ENTRIES:
         raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+    seen: set[str] = set()
     for key, value in items:
         if (
             not key.strip()
             or not value.strip()
             or len(key) > MAX_PHRASE_CHARACTERS
             or len(value) > MAX_PHRASE_CHARACTERS
+            or key.casefold() in seen
         ):
             raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+        seen.add(key.casefold())
     return items
 
 
 def _rule(entries: tuple[tuple[str, str], ...], *, folded: bool) -> Rule | None:
-    """Compile one alternation, longest phrase first so it wins the position."""
+    """Compile one alternation, longest phrase first so it wins the position.
+
+    ``folded`` decides how wide a key reaches. Built-in entries also answer to
+    their unaccented spelling, so they are indexed by the fully folded form.
+    Caller entries are not: "grace" and "grâce" are two entries the caller
+    wrote deliberately, and indexing them by a form that strips the accent
+    collapses them into one and loses whichever sorts first.
+    """
     if not entries:
         return None
+    index = _fold if folded else str.casefold
     table: dict[str, str] = {}
     alternatives: list[str] = []
     for key, value in entries:
         forms = {key, _fold(key)} if folded else {key}
         for form in forms:
-            table[_fold(form)] = value
+            table[index(form)] = value
             alternatives.append(re.escape(form))
     alternatives.sort(key=len, reverse=True)
     pattern = re.compile(rf"{_LB}(?:{'|'.join(alternatives)}){_RB}", re.IGNORECASE)
 
     def handler(match: re.Match[str]) -> str | None:
         source = match.group(0)
-        replacement = table.get(_fold(source))
+        replacement = table.get(index(source))
         if replacement is None:
             return None
         return _shaped(source, replacement)

@@ -12,7 +12,7 @@ method later means writing one filter rather than a second solver.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from kenkui.errors import ErrorCode, ValidationError
 
@@ -70,6 +70,18 @@ class CastingOutcome:
     collisions: tuple[Collision, ...]
 
 
+def validate_method(method: str) -> CastingMethod:
+    """Return the method, or raise if it names no known strategy.
+
+    Callable at intent time. Checking only inside ``candidates`` lets a typo
+    survive any pipeline that never reaches the solver -- a single-voice run,
+    or one where every character is explicitly cast -- and silently render.
+    """
+    if method not in _METHODS:
+        raise ValidationError(ErrorCode.CASTING_METHOD_UNKNOWN)
+    return cast("CastingMethod", method)
+
+
 def candidates(
     method: str, character: CharacterProfile, pool: tuple[Voice, ...]
 ) -> tuple[Voice, ...]:
@@ -81,8 +93,7 @@ def candidates(
     pool, since a missing trait is an admission of ignorance rather than a
     wildcard.
     """
-    if method not in _METHODS:
-        raise ValidationError(ErrorCode.CASTING_METHOD_UNKNOWN)
+    validate_method(method)
     if method == "random" or character.gender is None:
         return pool
     matched = tuple(

@@ -78,7 +78,7 @@ bounded budgets (4096 entries, 512 MB). Losing a cached segment costs time.
 State whose loss would change output cannot live there.
 
 **Preflight is meant to be free.** `_preflight` builds its own minimal pipeline
-rather than reusing `pipeline_from_job` (`kenkui-server-v2/.../api/jobs.py:73-79`),
+rather than reusing `pipeline_from_job` (`kenkui-server/.../api/jobs.py:73-79`),
 and the route docstring is *"Validate executable local intent without creating a
 Job or reservation."*
 
@@ -270,17 +270,19 @@ Performs voice-pool, attribution, and cast resolution and returns a new
 `resolve()` exists only to pay early and inspect the outcome.
 
 ```python
-p = (kk.epub(path)
-      .infer_characters(model=m)
-      .attribute_quotes(model=m)
-      .assign_voices(narrator="eponine", method="gendered"))
+p = (
+    kk.epub(path)
+    .infer_characters(model=m)
+    .attribute_quotes(model=m)
+    .assign_voices(narrator="eponine", method="gendered")
+)
 
-p.inspect()                 # free. attribution: pending
-resolved = p.resolve()      # effect: model calls on a store miss, store write
-resolved.inspect()          # free, complete
-resolved.write("out.m4b")   # reuses; no further model spend
+p.inspect()  # free. attribution: pending
+resolved = p.resolve()  # effect: model calls on a store miss, store write
+resolved.inspect()  # free, complete
+resolved.write("out.m4b")  # reuses; no further model spend
 
-p.write("out.m4b")          # equally valid — resolves internally
+p.write("out.m4b")  # equally valid — resolves internally
 ```
 
 Per decision 13 it is immutable, idempotent, and intent-preserving, and per
@@ -313,7 +315,7 @@ one.
 ```python
 @dataclass(frozen=True, slots=True)
 class Casting:
-    id: str                       # cast_id
+    id: str  # cast_id
     attribution_id: str
     book_id: str
     model_id: str
@@ -459,7 +461,8 @@ one book costs exactly one model pass. That is what makes branching cheap:
 base = kk.epub(path).infer_characters(model=m).attribute_quotes(model=m)
 a = base.assign_voices(narrator="eponine", method="gendered")
 b = base.assign_voices(narrator="eponine", cast={"darcy": "michael"}, method="gendered")
-a.inspect(); b.inspect()   # one attribution, two casts
+a.inspect()
+b.inspect()  # one attribution, two casts
 ```
 
 The store is written through a temporary file, `fsync`, and `rename` at mode
@@ -567,7 +570,7 @@ requires attribution; `character_unknown` therefore surfaces at plan time.
 `CastingCapabilities.mode: Literal["single"]` becomes
 `modes: list[Literal["single", "characters"]]` defaulting to `["single"]`. This
 is a breaking OpenAPI change and regenerates
-`kenkui-web-v2/src/api/generated/v1.ts`. `"characters"` is advertised only when
+`kenkui-web/src/api/generated/v1.ts`. `"characters"` is advertised only when
 the deployment has both a non-empty LLM model allowlist and at least two loaded
 voices.
 
@@ -598,7 +601,7 @@ preflight. That is the v1 casting visibility story.
 **Per-character overrides are out of scope for v1**, for a structural reason:
 the roster does not exist until attribution runs, and `_preflight` is
 contractually free of Jobs and reservations
-(`kenkui-server-v2/.../api/jobs.py:86-88`). Offering overrides requires a
+(`kenkui-server/.../api/jobs.py:86-88`). Offering overrides requires a
 preflight that resolves attribution, which means metering it. Section 17 records
 this as the follow-on.
 

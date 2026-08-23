@@ -12,7 +12,7 @@ from ._domain.casting import (
     CastingMethod,
     CastingRequest,
     Collision,
-    solve,
+    validate_method,
 )
 from ._domain.operations import (
     AssignVoices,
@@ -212,6 +212,10 @@ class Pipeline:
         place sounds like narration rather than vanishing.
         """
         narrator_id = _voice_id(narrator)
+        # Checked here rather than only in the solver: a typo must fail when
+        # the caller writes it, not silently render single-voice because no
+        # character ever reached a method.
+        validate_method(method)
         return self._append(
             AssignVoices(
                 narrator_voice_id=narrator_id,
@@ -244,7 +248,11 @@ class Pipeline:
         if isinstance(cover, str) and cover != "source":
             raise ValidationError(ErrorCode.INVALID_METADATA)
         if cover is not None and cover != "source":
-            cover = Path(cover)
+            try:
+                cover = Path(cover)
+            except TypeError:
+                # Anything that is not a path is invalid intent, not a crash.
+                raise ValidationError(ErrorCode.INVALID_METADATA) from None
         if title is not None and not title.strip():
             raise ValidationError(ErrorCode.INVALID_METADATA)
         if author is not None and not author.strip():
@@ -357,7 +365,9 @@ class Pipeline:
         # unprovisioned or unknown voice must fail before any worker spawns,
         # and that ordering should be legible rather than an artifact of
         # argument-evaluation order.
-        resolved = self._resolved if self._resolved is not None else _resolve_all(self)
+        resolved = (
+            self._resolved if self._resolved is not None else _resolve_all(self, cancel)
+        )
         _log_collisions(resolved.collisions)
         return execute_sequential(
             self,
@@ -412,13 +422,21 @@ def _issue(code: ErrorCode) -> ValidationIssue:
     return ValidationIssue(code, str(ValidationError(code)))
 
 
-def _resolve_all(pipeline: Pipeline) -> Resolved:
+def _resolve_all(
+    pipeline: Pipeline, cancel: CancellationToken | None = None
+) -> Resolved:
     """Resolve voices, attribution, and casting for one pipeline.
 
     The single resolution implementation. ``resolve()`` and ``write()`` are
     two entry points into it, not two code paths.
+
+    ``cancel`` reaches attribution, which is where a long book spends hours in
+    model calls. Without it a caller who cancels waits for the whole pass.
     """
-    from ._characters import resolve_attribution  # noqa: PLC0415 - see below
+    from ._characters import (  # noqa: PLC0415 - see below
+        resolve_attribution,
+        resolve_cast,
+    )
     from .voices.provision import list_voices  # noqa: PLC0415 - resolved per
     # call so the managed cache root can be redirected, as the store is.
 
@@ -438,16 +456,28 @@ def _resolve_all(pipeline: Pipeline) -> Resolved:
             bindings=bindings,
         )
 
+    inferring = next(
+        (item for item in pipeline.operations if isinstance(item, InferCharacters)),
+        None,
+    )
     inspection = pipeline.inspect()
     record = resolve_attribution(
-        inspection, _source_digest(pipeline.source.path), attributing.model_id
+        inspection,
+        _source_digest(pipeline.source.path),
+        attributing.model_id,
+        roster_model_id=inferring.model_id if inferring is not None else None,
+        cancel=cancel,
     )
     pool = tuple(
         voice
         for voice in list_voices()
         if voice.state == "loaded" and voice.language == bindings.voice.language
     )
-    outcome = solve(
+    # Stored, not just solved: the cast is what list_castings names and what
+    # remove_casting discards, and neither can see a cast that only ever
+    # existed for the duration of one render.
+    outcome = resolve_cast(
+        record,
         CastingRequest(
             characters=record.characters,
             pool=pool,
@@ -455,7 +485,7 @@ def _resolve_all(pipeline: Pipeline) -> Resolved:
             narrator_voice_id=casting.narrator_voice_id,
             unknown_voice_id=casting.unknown_voice_id,
             method=cast("CastingMethod", casting.method),
-        )
+        ),
     )
     # Re-resolve with the whole cast so every assigned voice's asset reaches
     # the engine config; one worker then holds one model and N states.
@@ -514,7 +544,15 @@ def _resolved_execution_bindings(
         return _execution_bindings(voice_id, also=also)
     except TypeError:
         # Older test doubles accept fewer arguments. Falling back keeps them
-        # working, and a single-voice run needs nothing more.
+        # working, and a single-voice run needs nothing more. Logged because a
+        # TypeError raised *inside* resolution looks identical here, and
+        # silently dropping the cast would render the book in one voice.
+        log_event(
+            _LOGGER,
+            "cast_binding_fallback",
+            level=logging.WARNING,
+            context={"boundary": "casting", "cast_size": len(tuple(also))},
+        )
         try:
             return _execution_bindings(voice_id)
         except TypeError:

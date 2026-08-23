@@ -57,20 +57,26 @@ def _resolve(speaker: object, known: frozenset[str]) -> str | None:
     return candidate if candidate in known else None
 
 
-def attribute_chapter(
+def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     chapter: ChapterInspection,
     characters: Sequence[CharacterProfile],
     model_id: str,
     *,
     client: Client | None = None,
     recent: Sequence[str] = (),
+    spans: tuple[TextSpan, ...] | None = None,
 ) -> tuple[tuple[SpeakerSpan, ...], tuple[str, ...]]:
     """Return one chapter's speaker spans and the speakers that ended it.
 
     The trailing speakers feed the next chapter's prompt, so a conversation
     running across a chapter boundary keeps its alternation.
+
+    ``spans`` accepts an already-extracted partition, so a caller that had to
+    look for dialogue before deciding to call does not pay for a second scan.
+    Extraction is pure, so supplying it changes nothing but the cost.
     """
-    spans = extract_spans(chapter.id, chapter.text)
+    if spans is None:
+        spans = extract_spans(chapter.id, chapter.text)
     dialogue = [span for span in spans if span.is_dialogue]
     if not dialogue or not characters:
         # Nothing to attribute, so nothing is worth a model call.

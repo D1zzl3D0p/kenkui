@@ -66,7 +66,13 @@ class FFmpegM4BAssembler:
                 if request.plan.output.cover is CoverIntent.FILE:
                     if request.cover_file is None:
                         raise EncodingError(ErrorCode.COVER_INVALID)  # noqa: TRY301
-                    payload, _ = read_cover(request.cover_file)
+                    payload, digest = read_cover(request.cover_file)
+                    # The plan named a digest, not a path. A file swapped
+                    # between planning and here would otherwise be embedded
+                    # while the fingerprint still claims the original.
+                    expected = request.plan.output.cover_content_hash
+                    if expected is not None and digest != expected:
+                        raise EncodingError(ErrorCode.COVER_INVALID)  # noqa: TRY301
                     materialize_file_cover(payload, cover)
                 elif request.source_epub is None:
                     raise EncodingError(ErrorCode.COVER_FAILED)  # noqa: TRY301

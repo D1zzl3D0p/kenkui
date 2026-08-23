@@ -66,8 +66,8 @@
 | `src/kenkui/events.py` | MOD — `CastResolved` |
 | `src/kenkui/inspection.py` | MOD — optional casting fields |
 | `src/kenkui/__init__.py` | MOD — exports |
-| `kenkui-server-v2/src/kenkui_server/...` | MOD — capabilities, `CharacterCasting`, allowlist |
-| `kenkui-web-v2/src/...` | MOD — casting UI, regenerated OpenAPI types |
+| `kenkui-server/src/kenkui_server/...` | MOD — capabilities, `CharacterCasting`, allowlist |
+| `kenkui-web/src/...` | MOD — casting UI, regenerated OpenAPI types |
 
 ---
 
@@ -284,17 +284,17 @@ class _RecordingModel:
 
 def _engine(monkeypatch: Any, config: pocket.PocketEngineConfig) -> Any:
     engine = object.__new__(pocket.PocketTTSEngine)
-    engine._config = config          # noqa: SLF001
+    engine._config = config  # noqa: SLF001
     engine._model = _RecordingModel()  # noqa: SLF001
-    engine._states = {}              # noqa: SLF001
-    engine._snapshot = None          # noqa: SLF001
-    engine._patched = []             # noqa: SLF001
+    engine._states = {}  # noqa: SLF001
+    engine._snapshot = None  # noqa: SLF001
+    engine._patched = []  # noqa: SLF001
     return engine
 
 
 def test_each_voice_derives_its_own_state(monkeypatch, two_voice_config):
     engine = _engine(monkeypatch, two_voice_config)
-    first = engine._voice_state(_SHA_A)   # noqa: SLF001
+    first = engine._voice_state(_SHA_A)  # noqa: SLF001
     second = engine._voice_state(_SHA_B)  # noqa: SLF001
     assert first != second
     assert len(engine._model.derived) == 2  # noqa: SLF001
@@ -348,6 +348,7 @@ class SynthesisTask:
 # src/kenkui/_tts/pocket.py — in __init__, replace `self._state = None`
 self._states: dict[str, Any] = {}
 
+
 def _voice_state(self, voice_asset_sha256: str) -> Any:
     """Derive one conditioning state per voice and reuse each for every segment.
 
@@ -369,6 +370,7 @@ def _voice_state(self, voice_asset_sha256: str) -> Any:
         raise VoiceError(ErrorCode.POCKET_VOICE_LOAD_FAILED) from None
     self._states[voice_asset_sha256] = state
     return state
+
 
 def synthesize(self, task: SynthesisTask) -> SynthesizedAudio:
     state = self._voice_state(task.voice_asset_sha256)
@@ -427,9 +429,12 @@ def test_chunking_schema_version_is_frozen():
 def test_single_voice_segments_are_unchanged(single_voice_plan_inputs):
     """A pipeline with no attribution must produce the exact prior segments."""
     plan = compile_execution_plan(**single_voice_plan_inputs)
-    assert [segment.id for segment in plan.segments] == [
-        # Paste the exact IDs printed by the pre-change run in Step 2.
-    ]
+    assert (
+        [segment.id for segment in plan.segments]
+        == [
+            # Paste the exact IDs printed by the pre-change run in Step 2.
+        ]
+    )
     assert all(segment.speaker_id is None for segment in plan.segments)
 
 
@@ -678,7 +683,7 @@ from kenkui.voices.registry import CATALOG
 
 def test_vctk_voices_carry_sourced_gender():
     """VCTK ships speaker-info.txt, so these twelve are documented, not guessed."""
-    assert CATALOG["eponine"].perceived_gender == "feminine"   # p262, F
+    assert CATALOG["eponine"].perceived_gender == "feminine"  # p262, F
     assert CATALOG["charles"].perceived_gender == "masculine"  # p254, M
 
 
@@ -827,10 +832,12 @@ def test_random_method_admits_the_whole_pool():
 
 def test_same_chapter_characters_never_share_a_voice():
     outcome = solve(
-        _request((
-            _character("darcy", "masculine", 400, ("ch1",)),
-            _character("bingley", "masculine", 300, ("ch1",)),
-        ))
+        _request(
+            (
+                _character("darcy", "masculine", 400, ("ch1",)),
+                _character("bingley", "masculine", 300, ("ch1",)),
+            )
+        )
     )
     assert outcome.assignments["darcy"] != outcome.assignments["bingley"]
     assert outcome.collisions == ()
@@ -838,10 +845,12 @@ def test_same_chapter_characters_never_share_a_voice():
 
 def test_characters_in_different_chapters_may_share():
     outcome = solve(
-        _request((
-            _character("darcy", "masculine", 400, ("ch1",)),
-            _character("wickham", "masculine", 300, ("ch2",)),
-        ))
+        _request(
+            (
+                _character("darcy", "masculine", 400, ("ch1",)),
+                _character("wickham", "masculine", 300, ("ch2",)),
+            )
+        )
     )
     assert outcome.assignments["darcy"] == outcome.assignments["wickham"]
 
@@ -849,11 +858,13 @@ def test_characters_in_different_chapters_may_share():
 def test_least_used_prefers_the_quietest_voice_by_speech_volume():
     """A lead must not land on the voice a talkative character already holds."""
     outcome = solve(
-        _request((
-            _character("darcy", "masculine", 5000, ("ch1",)),
-            _character("collins", "masculine", 50, ("ch2",)),
-            _character("wickham", "masculine", 4000, ("ch3",)),
-        ))
+        _request(
+            (
+                _character("darcy", "masculine", 5000, ("ch1",)),
+                _character("collins", "masculine", 50, ("ch2",)),
+                _character("wickham", "masculine", 4000, ("ch3",)),
+            )
+        )
     )
     assert outcome.assignments["wickham"] == outcome.assignments["collins"]
     assert outcome.assignments["wickham"] != outcome.assignments["darcy"]
@@ -1343,9 +1354,7 @@ def test_spans_partition_the_text_exactly(text: str, expected: int):
 @pytest.mark.parametrize(("text", "expected"), CASES)
 def test_spans_are_ordered_and_non_overlapping(text: str, expected: int):
     spans = extract_spans("ch1", text)
-    assert all(
-        earlier.end == later.start for earlier, later in zip(spans, spans[1:])
-    )
+    assert all(earlier.end == later.start for earlier, later in zip(spans, spans[1:]))
 
 
 def test_empty_text_yields_no_spans():
@@ -1479,9 +1488,7 @@ def test_transient_failure_is_retried_then_succeeds():
             return '{"characters": []}'
 
     client = Flaky()
-    assert complete_json("fake/model", "p", SCHEMA, client=client) == {
-        "characters": []
-    }
+    assert complete_json("fake/model", "p", SCHEMA, client=client) == {"characters": []}
     assert len(client.calls) == 2
 
 
@@ -1507,7 +1514,10 @@ def test_roster_is_normalised_to_stable_slugs(two_chapter_inspection, fake_clien
     record = resolve_attribution(
         two_chapter_inspection, "a" * 64, "fake/model", client=fake_client
     )
-    assert [c.id for c in record.characters] == ["elizabeth-bennet", "fitzwilliam-darcy"]
+    assert [c.id for c in record.characters] == [
+        "elizabeth-bennet",
+        "fitzwilliam-darcy",
+    ]
 
 
 def test_unattributed_spans_stay_none(two_chapter_inspection, fake_client):
@@ -1541,9 +1551,7 @@ def test_second_call_hits_the_store_and_makes_no_model_call(
     assert len(fake_client.calls) == before
 
 
-def test_cancellation_is_honoured_between_chapters(
-    two_chapter_inspection, fake_client
-):
+def test_cancellation_is_honoured_between_chapters(two_chapter_inspection, fake_client):
     """A long book must not ignore Ctrl-C for the whole attribution pass."""
     token = CancellationToken()
     token.cancel()
@@ -1612,9 +1620,7 @@ def resolve_attribution(
     for chapter in inspection.chapters:
         if cancel is not None:
             cancel.raise_if_cancelled()
-        spans.extend(
-            attribute_chapter(chapter, characters, model_id, client=client)
-        )
+        spans.extend(attribute_chapter(chapter, characters, model_id, client=client))
     record = AttributionRecord(
         attribution_id=key,
         book_id=source_hash,
@@ -1890,7 +1896,8 @@ class Pipeline:
         conservative rule costs nothing.
         """
         return Pipeline(
-            self.source, append_unique(self.operations, operation, before_tts=before_tts)
+            self.source,
+            append_unique(self.operations, operation, before_tts=before_tts),
         )
 ```
 
@@ -1993,9 +2000,9 @@ git commit -m "feat: wire multi-voice casting through the pipeline"
 ## Task 10: Server character casting
 
 **Files:**
-- Modify: `kenkui-server-v2/src/kenkui_server/config.py:41-62`, `jobs/models.py:17-24,50-67`, `api/schemas.py:43-58`, `api/jobs.py:53,72`, `jobs/pipeline.py:17`, `storage/repositories.py:44,56`
-- Modify: `kenkui-server-v2/openapi/v1.json` (regenerated)
-- Test: `kenkui-server-v2/tests/test_character_casting.py` (new)
+- Modify: `kenkui-server/src/kenkui_server/config.py:41-62`, `jobs/models.py:17-24,50-67`, `api/schemas.py:43-58`, `api/jobs.py:53,72`, `jobs/pipeline.py:17`, `storage/repositories.py:44,56`
+- Modify: `kenkui-server/openapi/v1.json` (regenerated)
+- Test: `kenkui-server/tests/test_character_casting.py` (new)
 
 **Interfaces:**
 - Consumes: `kk.Pipeline.assign_voices`, `kk.CastResolved` from Task 9.
@@ -2004,7 +2011,7 @@ git commit -m "feat: wire multi-voice casting through the pipeline"
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-# kenkui-server-v2/tests/test_character_casting.py
+# kenkui-server/tests/test_character_casting.py
 from __future__ import annotations
 
 
@@ -2066,7 +2073,7 @@ def test_preflight_makes_no_model_call(character_client, source_id, model_spy):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd kenkui-server-v2 && uv run pytest tests/test_character_casting.py -v`
+Run: `cd kenkui-server && uv run pytest tests/test_character_casting.py -v`
 Expected: FAIL — capabilities expose `mode`, not `modes`
 
 - [ ] **Step 3: Write the implementation**
@@ -2099,7 +2106,9 @@ class CharacterCasting:
             "narrator_voice_id",
             _required(self.narrator_voice_id, "invalid_voice_id"),
         )
-        object.__setattr__(self, "model_id", _required(self.model_id, "invalid_model_id"))
+        object.__setattr__(
+            self, "model_id", _required(self.model_id, "invalid_model_id")
+        )
 
 
 Casting = SingleVoiceCasting | CharacterCasting
@@ -2134,13 +2143,13 @@ Add `model_allowlist: list[str]` to server config. `_preflight` rejects a `model
 
 - [ ] **Step 4: Regenerate the OpenAPI document**
 
-Run: `cd kenkui-server-v2 && uv run python -m kenkui_server.openapi > openapi/v1.json`
+Run: `cd kenkui-server && uv run python -m kenkui_server.openapi > openapi/v1.json`
 Expected: `CastingCapabilities.modes` replaces `mode`; `CastingRequest` gains the optional character fields.
 
 - [ ] **Step 5: Run tests and commit**
 
 ```bash
-cd kenkui-server-v2
+cd kenkui-server
 uv run ruff check . && uv run mypy && uv run pytest
 git add src tests openapi
 git commit -m "feat: add capability-gated character casting"
@@ -2151,8 +2160,8 @@ git commit -m "feat: add capability-gated character casting"
 ## Task 11: Web casting UI
 
 **Files:**
-- Modify: `kenkui-web-v2/src/api/generated/v1.ts` (regenerated), `src/components/casting.tsx`, `src/pages/new-job.tsx:29,53`, `src/pages/job.tsx`
-- Test: `kenkui-web-v2/tests/casting.test.tsx` (new)
+- Modify: `kenkui-web/src/api/generated/v1.ts` (regenerated), `src/components/casting.tsx`, `src/pages/new-job.tsx:29,53`, `src/pages/job.tsx`
+- Test: `kenkui-web/tests/casting.test.tsx` (new)
 
 **Interfaces:**
 - Consumes: the Task 10 OpenAPI contract.
@@ -2161,13 +2170,13 @@ Per spec section 13, v1 offers narrator, unknown, and method — **not** per-cha
 
 - [ ] **Step 1: Regenerate types from the server contract**
 
-Run: `cd kenkui-web-v2 && npm run generate:api`
+Run: `cd kenkui-web && npm run generate:api`
 Expected: `VoiceResponse` unchanged; `CastingCapabilities` now has `modes`.
 
 - [ ] **Step 2: Write the failing tests**
 
 ```tsx
-// kenkui-web-v2/tests/casting.test.tsx
+// kenkui-web/tests/casting.test.tsx
 import { render, screen } from "@testing-library/react";
 import { Casting } from "../src/components/casting";
 
@@ -2207,7 +2216,7 @@ test("no per-character override controls exist in v1", () => {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd kenkui-web-v2 && npm test -- casting`
+Run: `cd kenkui-web && npm test -- casting`
 Expected: FAIL — `Casting` takes a `mode` string, not `modes`
 
 - [ ] **Step 4: Implement the component and wire the payload**
@@ -2216,13 +2225,13 @@ Replace `casting.tsx` with a real form. `new-job.tsx:29` builds a `casting` payl
 
 - [ ] **Step 5: Run unit and E2E tests**
 
-Run: `cd kenkui-web-v2 && npm test && npx playwright test`
+Run: `cd kenkui-web && npm test && npx playwright test`
 Expected: PASS, including the existing capability-shell E2E against a real local server.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd kenkui-web-v2
+cd kenkui-web
 git add src tests
 git commit -m "feat: add capability-gated casting controls"
 ```
@@ -2280,8 +2289,8 @@ Before declaring the feature complete:
 
 ```bash
 cd kenkui           && uv run ruff check . && uv run mypy && uv run pytest
-cd ../kenkui-server-v2 && uv run ruff check . && uv run mypy && uv run pytest
-cd ../kenkui-web-v2    && npm test && npx playwright test
+cd ../kenkui-server && uv run ruff check . && uv run mypy && uv run pytest
+cd ../kenkui-web    && npm test && npx playwright test
 ```
 
 Then the two checks no automated suite covers:

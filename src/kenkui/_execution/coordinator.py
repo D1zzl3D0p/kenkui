@@ -520,15 +520,20 @@ def _padded(item: SegmentAudio, silence_ms: int) -> tuple[SegmentAudio, bytes]:
 def _spill_chapter(directory: Path, index: int, payloads: tuple[bytes, ...]) -> Path:
     """Write one chapter's ordered segment PCM to its own part, then fsync it."""
     path = directory / f"chapter-{index:05d}.pcm"
+    descriptor = -1
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         descriptor = os.open(path, flags, 0o600)
         with os.fdopen(descriptor, "wb") as stream:
+            # Ownership passed to the stream, which closes it on every path.
+            descriptor = -1
             for payload in payloads:
                 stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
     except OSError:
+        if descriptor >= 0:
+            os.close(descriptor)
         raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
     return path
 
