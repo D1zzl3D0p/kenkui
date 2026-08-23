@@ -707,6 +707,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "defusedxml" },
+    { name = "packaging" },
     { name = "pocket-tts" },
     { name = "pyyaml" },
 ]
@@ -731,6 +732,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "defusedxml", specifier = "==0.7.1" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pocket-tts", specifier = "==2.1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]

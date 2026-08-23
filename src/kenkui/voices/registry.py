@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Final
+
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 from kenkui.errors import ErrorCode, VoiceError
 from kenkui.voices.types import PerceivedGender, Voice
@@ -22,14 +26,16 @@ def _embedding_pin() -> tuple[str, str]:
 
 _EMBEDDING_REPO, EMBEDDING_REVISION = _embedding_pin()
 
-# The pre-compiled Kenkui voice pack. Pinned so a repository update cannot
-# silently change which bytes a load fetches, exactly as EMBEDDING_REVISION
-# pins the kyutai embeddings.
-PACK_REVISION: Final = "33f00bc5d8608de365592edc789d1aee2de4815a"
-_PACK_REPO: Final = "D1zzl3D0p/kenkui-voices"
-_PACK_MANIFEST: Final = Path(__file__).with_name("manifest.json")
-# Every pack voice is English; the corpora behind it are VCTK and EARS.
-_PACK_LANGUAGE: Final = "english"
+# The pre-compiled Kenkui voice pack. Where it lives and which revision it
+# pins are data in the manifest, not constants here: a constant in Python
+# source is what previously let the pack and the runtime diverge in silence.
+_PACK_MANIFEST: Final = Path(__file__).with_name("pack.json")
+_REBUILD_HINT: Final = (
+    "Rebuild the pack for this pocket-tts: "
+    "hf download D1zzl3D0p/kenkui-voices --repo-type dataset "
+    "--local-dir kenkui-voices && cd kenkui-voices/tools && uv sync && "
+    "uv run python rebuild.py --all --force"
+)
 _GENDERS: Final[dict[str, PerceivedGender]] = {
     "Male": "masculine",
     "Female": "feminine",
@@ -83,53 +89,132 @@ def load_builtin() -> tuple[CatalogEntry, ...]:
     return tuple(_builtin_entry(voice) for voice in payload["voices"])
 
 
-def _pack_entry(voice: dict[str, Any], voice_id: str) -> CatalogEntry:
+@dataclass(frozen=True, slots=True)
+class PackLoad:
+    """The pack as resolved against the installed pocket-tts.
+
+    `incompatible` is None when the pack loaded or was simply absent, and a
+    message naming both versions when the pack exists but cannot be used. The
+    distinction matters: an absent pack is a degraded install, an incompatible
+    one is a misconfiguration that must not fail quietly.
+    """
+
+    entries: tuple[CatalogEntry, ...]
+    incompatible: str | None
+
+
+def installed_pocket_version() -> str:
+    """Return the installed pocket-tts version."""
+    return metadata.version("pocket-tts")
+
+
+def _incompatibility(declared: str) -> str | None:
+    """Return why the installed pocket-tts cannot use this pack, or None."""
+    installed = installed_pocket_version()
+    try:
+        if Version(installed) in SpecifierSet(declared):
+            return None
+    except (InvalidSpecifier, InvalidVersion):
+        return (
+            f"the voice pack declares an unreadable pocket-tts range "
+            f"{declared!r}; installed is {installed}. {_REBUILD_HINT}"
+        )
+    return (
+        f"the voice pack was compiled for pocket-tts {declared} but "
+        f"{installed} is installed. Its embeddings would load without error "
+        f"and render audio containing no words. {_REBUILD_HINT}"
+    )
+
+
+def _pack_entry(
+    voice: dict[str, Any], voice_id: str, assets: dict[str, str]
+) -> CatalogEntry:
     """Convert one pack manifest record into a catalog entry."""
-    slug = voice["voice_id"]
+    repo = assets["repo_id"]
+    revision = assets["revision"]
     return CatalogEntry(
         id=voice_id,
         name=voice["display_name"],
-        language=_PACK_LANGUAGE,
-        origin_url=f"hf://{_PACK_REPO}/{voice['path']}@{PACK_REVISION}",
+        language=voice["language"],
+        origin_url=f"hf://{voice['source']['repo_id']}/{voice['source']['path']}",
         license_id=voice["license_id"],
         commercial_use_allowed=bool(voice["commercial_use_allowed"]),
         voice_rights=voice["voice_rights"],
-        asset_url=f"hf://{_PACK_REPO}/compiled/{slug}.safetensors@{PACK_REVISION}",
+        asset_url=f"hf://{repo}/{voice['compiled']['path']}@{revision}",
         perceived_gender=_GENDERS.get(voice["gender"]),
     )
 
 
 @lru_cache(maxsize=1)
-def load_pack() -> tuple[CatalogEntry, ...]:
-    """Read the bundled voice pack, or return nothing if it is not shipped.
+def load_pack() -> PackLoad:
+    """Read the bundled voice pack and resolve it against pocket-tts.
 
     Static package data, not a network or user source: no request is made and
     no path comes from a caller. A missing or unreadable manifest degrades to
     the built-in catalog rather than failing an import, because the pack is an
-    addition and Kenkui must work without it.
+    addition and Kenkui must work without it. A pack that is present but
+    compiled for a different pocket-tts major is a different matter: its
+    voices are withheld and the reason is kept, so using one raises instead of
+    rendering silence.
     """
     try:
         payload = json.loads(_PACK_MANIFEST.read_text(encoding="utf-8"))
         voices = payload["voices"]
+        assets = payload["assets"]
+        declared = payload["pocket_tts"]
     except (OSError, ValueError, KeyError, TypeError):
-        return ()
+        return PackLoad((), None)
+
+    incompatible = _incompatibility(declared)
+    if incompatible is not None:
+        return PackLoad((), incompatible)
+
     built_in = {entry.id for entry in load_builtin()}
     entries: list[CatalogEntry] = []
     for voice in voices:
+        # A voice with no compiled block is unpublished: a gap in the pack,
+        # not a reason to abandon the other ninety-four.
+        if not voice.get("compiled"):
+            continue
         # Short display names read far better at a call site than the full
         # slug. Where one would shadow a built-in the pack voice keeps its
         # slug: they are different speakers who happen to share a name, so
         # dropping either would lose a voice.
         short = str(voice["display_name"]).lower()
         entries.append(
-            _pack_entry(voice, voice["voice_id"] if short in built_in else short)
+            _pack_entry(
+                voice, voice["voice_id"] if short in built_in else short, assets
+            )
         )
-    return tuple(entries)
+    return PackLoad(tuple(entries), None)
+
+
+@lru_cache(maxsize=1)
+def _withheld_pack_ids() -> frozenset[str]:
+    """Return the voice IDs an incompatible pack is keeping out of the catalog."""
+    if load_pack().incompatible is None:
+        return frozenset()
+    try:
+        payload = json.loads(_PACK_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    ids: set[str] = set()
+    for voice in payload.get("voices", ()):
+        ids.add(voice["voice_id"])
+        ids.add(str(voice["display_name"]).lower())
+    return frozenset(ids)
+
+
+def pack_voice_guard(voice_id: str) -> None:
+    """Raise if this ID names a voice an incompatible pack is withholding."""
+    reason = load_pack().incompatible
+    if reason is not None and voice_id in _withheld_pack_ids():
+        raise VoiceError(ErrorCode.VOICE_INCOMPATIBLE, reason)
 
 
 def _catalog() -> dict[str, CatalogEntry]:
     """Merge the built-in catalog with the pack, built-ins winning."""
-    merged = {entry.id: entry for entry in load_pack()}
+    merged = {entry.id: entry for entry in load_pack().entries}
     merged.update({entry.id: entry for entry in load_builtin()})
     return merged
 
@@ -157,6 +242,7 @@ def asset_url(voice_id: str, language: str) -> str:
     Pack voices carry their own pinned URL; kyutai built-ins derive theirs
     from the language and catalog name.
     """
+    pack_voice_guard(voice_id)
     entry = CATALOG.get(voice_id)
     if entry is not None and entry.asset_url is not None:
         return entry.asset_url
@@ -165,6 +251,7 @@ def asset_url(voice_id: str, language: str) -> str:
 
 def catalog_voice(voice_id: str) -> Voice:
     """Return catalog metadata for one built-in voice as a registered Voice."""
+    pack_voice_guard(voice_id)
     entry = CATALOG.get(voice_id)
     if entry is None:
         raise VoiceError(ErrorCode.VOICE_UNKNOWN)
