@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from kenkui._domain.spoken.numbers import (
+    Rule,
     cardinal_words,
+    conservative_rules,
     decimal_words,
     ordinal_words,
     roman_value,
@@ -103,3 +105,66 @@ def test_year_words(value: int, expected: str) -> None:
 def test_roman_value(token: str, expected: int | None) -> None:
     """Only canonical uppercase numerals convert; anything else declines."""
     assert roman_value(token) == expected
+
+
+def apply_rules(rules: tuple[Rule, ...], text: str) -> str:
+    """Drive ordered rules across text the way the Task 5 matcher will.
+
+    Deliberately duplicated here rather than imported: these tests must fail
+    when the rules break, not when the matcher does.
+    """
+    out: list[str] = []
+    position = 0
+    while position < len(text):
+        for pattern, handler in rules:
+            match = pattern.match(text, position)
+            if match is None:
+                continue
+            replacement = handler(match)
+            if replacement is None:
+                continue
+            out.append(replacement)
+            position = match.end()
+            break
+        else:
+            out.append(text[position])
+            position += 1
+    return "".join(out)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("100,000", "one hundred thousand"),
+        ("He had 3 apples.", "He had three apples."),
+        ("3.14", "three point one four"),
+        ("-5 degrees", "minus five degrees"),
+        ("the 3rd time", "the third time"),
+        ("the 21st time", "the twenty-first time"),
+        ("the 11th time", "the eleventh time"),
+        ("40%", "forty percent"),
+        ("$1.50", "one dollar fifty"),
+        ("$2", "two dollars"),
+        ("5 km", "five kilometers"),
+        ("1 km", "one kilometer"),
+    ],
+)
+def test_conservative_tier_converts(source: str, expected: str) -> None:
+    """Unambiguous numeric forms convert under the conservative tier."""
+    assert apply_rules(conservative_rules(), source) == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "the 3th time",
+        "COVID19",
+        "3D printing",
+        "1234567890123456789",
+        "St. Mary",
+        "Dr. Who",
+    ],
+)
+def test_conservative_tier_declines(source: str) -> None:
+    """Ambiguous or out-of-range forms are left exactly as written."""
+    assert apply_rules(conservative_rules(), source) == source
