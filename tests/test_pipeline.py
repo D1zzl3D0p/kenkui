@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, cast, get_args
 import pytest
 
 import kenkui as kk
-from kenkui._domain.operations import SpokenForm
+from kenkui._domain.operations import Pauses, SpokenForm
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 
 EXPECTED_OPERATION_COUNT = 5
 IO_ERROR_MESSAGE = "pipeline construction performed I/O"
+PAUSE_CHAPTER_MS = 1500
+PAUSE_HEADING_MS = 600
+PAUSE_PARAGRAPH_MS = 250
 
 
 def test_construction_is_lazy_and_book_dispatches_without_reading(
@@ -343,3 +346,39 @@ def test_pronounce_cannot_be_requested_twice() -> None:
     with pytest.raises(kk.ValidationError) as error:
         kk.epub("book.epub").pronounce().pronounce()
     assert error.value.code is kk.ErrorCode.DUPLICATE_OPERATION
+
+
+def test_pauses_records_five_independent_durations() -> None:
+    """Each boundary kind is separately variable."""
+    pipeline = kk.epub("book.epub").pauses(
+        chapter_ms=1500, heading_after_ms=600, paragraph_ms=250
+    )
+    recorded = pipeline.operations[0]
+    assert isinstance(recorded, Pauses)
+    assert recorded.chapter_ms == PAUSE_CHAPTER_MS
+    assert recorded.heading_after_ms == PAUSE_HEADING_MS
+    assert recorded.paragraph_ms == PAUSE_PARAGRAPH_MS
+    assert recorded.heading_before_ms == 0
+    assert recorded.line_ms == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"chapter_ms": -1},
+        {"line_ms": -100},
+        {"paragraph_ms": 60_001},
+    ],
+)
+def test_pauses_rejects_out_of_range_durations(kwargs: dict[str, int]) -> None:
+    """Negative and absurd durations are refused at the Pipeline boundary."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pauses(**kwargs)
+    assert error.value.code is kk.ErrorCode.INVALID_PAUSE
+
+
+def test_pauses_defaults_to_silence_free() -> None:
+    """Calling pauses with no argument enables nothing."""
+    recorded = kk.epub("book.epub").pauses().operations[0]
+    assert isinstance(recorded, Pauses)
+    assert recorded == Pauses()

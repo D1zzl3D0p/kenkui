@@ -21,6 +21,7 @@ from ._domain.operations import (
     MetadataIntent,
     NormalizeText,
     Operation,
+    Pauses,
     SelectChapterRange,
     SelectChapters,
     SpokenForm,
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
 _LOGGER = get_logger(__name__)
 _HASH_CHUNK_BYTES = 1024 * 1024
 _NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
+_MAX_PAUSE_MS = 60_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +149,38 @@ class Pipeline:
             ),
             before_tts=True,
         )
+
+    def pauses(
+        self,
+        *,
+        chapter_ms: int = 0,
+        heading_before_ms: int = 0,
+        heading_after_ms: int = 0,
+        paragraph_ms: int = 0,
+        line_ms: int = 0,
+    ) -> Pipeline:
+        """Return a branch requesting silence at structural boundaries.
+
+        Off unless called. Durations are retunable without re-synthesis: only
+        turning a tier on or off changes segment identity, because only that
+        changes where a segment ends.
+        """
+        requested = (
+            chapter_ms,
+            heading_before_ms,
+            heading_after_ms,
+            paragraph_ms,
+            line_ms,
+        )
+        for duration in requested:
+            if (
+                isinstance(duration, bool)
+                or not isinstance(duration, int)
+                or duration < 0
+                or duration > _MAX_PAUSE_MS
+            ):
+                raise ValidationError(ErrorCode.INVALID_PAUSE)
+        return self._append(Pauses(*requested), before_tts=True)
 
     def infer_characters(self, model: str) -> Pipeline:
         """Return a branch that will derive a character roster."""

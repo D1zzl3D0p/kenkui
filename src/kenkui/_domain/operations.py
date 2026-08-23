@@ -44,6 +44,21 @@ class SpokenForm:
 
 
 @dataclass(frozen=True, slots=True)
+class Pauses:
+    """Silence durations for each structural boundary, in milliseconds.
+
+    Zero disables a tier completely, including the chunk-break cost it would
+    otherwise impose. Structurally satisfies the domain ``PauseSpec`` protocol.
+    """
+
+    chapter_ms: int = 0
+    heading_before_ms: int = 0
+    heading_after_ms: int = 0
+    paragraph_ms: int = 0
+    line_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class InferCharacters:
     """Derive a character roster with the named model."""
 
@@ -93,6 +108,7 @@ Operation: TypeAlias = (
     | SelectChapterRange
     | NormalizeText
     | SpokenForm
+    | Pauses
     | InferCharacters
     | AttributeQuotes
     | AssignVoices
