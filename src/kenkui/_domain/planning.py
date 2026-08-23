@@ -13,7 +13,13 @@ from kenkui._domain.operations import (
     AssignVoices,
     MetadataIntent,
     Operation,
+    SpokenForm,
     SynthesizeSpeech,
+)
+from kenkui._domain.spoken import (
+    SPOKEN_FORM_VERSION,
+    spoken_identity,
+    to_spoken,
 )
 from kenkui._domain.text import NORMALIZATION_VERSION
 from kenkui.errors import (
@@ -26,6 +32,7 @@ from kenkui.errors import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from kenkui._domain.spoken.numbers import NumberTier
     from kenkui.inspection import BookInspection, ChapterInspection
     from kenkui.voices import Voice
 
@@ -106,6 +113,7 @@ class SchemaVersions:
     normalization: str
     planning: str
     render: str
+    spoken_form: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,10 +273,19 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     )
     voice = narrator
 
-    segments = _compile_segments(inspection.chapters, spans, cast)
+    spoken = _one_operation(pipeline.operations, SpokenForm)
+    if spoken is not None and not narrator.language.lower().startswith("en"):
+        # The number words and lexicon are English. Mangling a French book is
+        # worse than leaving it, so the stage disables itself rather than
+        # asking the caller to know this.
+        spoken = None
+
+    segments = _compile_segments(inspection.chapters, spans, cast, spoken)
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    total = sum(segment.character_count for segment in segments)
+    # Canonical characters, not spoken characters: this is the bill, and it
+    # must describe the book the caller supplied.
+    total = sum(len(chapter.text) for chapter in inspection.chapters)
     metadata = _output_metadata(
         inspection,
         _one_operation(pipeline.operations, MetadataIntent),
@@ -278,6 +295,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         normalization=NORMALIZATION_SCHEMA_VERSION,
         planning=PLANNING_SCHEMA_VERSION,
         render=RENDER_SCHEMA_VERSION,
+        spoken_form=SPOKEN_FORM_VERSION if spoken is not None else None,
     )
     material = _PlanMaterial(
         schemas,
@@ -362,7 +380,8 @@ def _resolve_voice(
 def _compile_segments(
     chapters: tuple[ChapterInspection, ...],
     spans: tuple[SpeakerSpan, ...],
-    cast: CastPlan,
+    cast_plan: CastPlan,
+    spoken: SpokenForm | None = None,
 ) -> tuple[SpeechSegment, ...]:
     """Split each speaker span while assigning one global plan-order ordinal.
 
@@ -374,8 +393,15 @@ def _compile_segments(
     result: list[SpeechSegment] = []
     for chapter in chapters:
         for span in _spans_for(chapter, spans):
-            voice = cast.voice_for(span.character_id)
+            voice = cast_plan.voice_for(span.character_id)
             text = chapter.text[span.start : span.end]
+            if spoken is not None:
+                text = to_spoken(
+                    text,
+                    numbers=cast("NumberTier", spoken.numbers),
+                    lexicon=spoken.lexicon,
+                    builtin=spoken.builtin_lexicon,
+                )
             for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
                 result.append(
                     _segment(
@@ -385,6 +411,7 @@ def _compile_segments(
                         chunk,
                         speaker_id=span.character_id,
                         voice_id=voice.id,
+                        spoken=spoken,
                     )
                 )
     return tuple(result)
@@ -480,6 +507,7 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     *,
     speaker_id: str | None = None,
     voice_id: str = "",
+    spoken: SpokenForm | None = None,
 ) -> SpeechSegment:
     content_hash = _hash_utf8(text)
     fields: dict[str, object] = {
@@ -496,6 +524,16 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
         # therefore every existing cache entry -- stay byte-identical.
         fields["speaker_id"] = _string_identity(speaker_id)
         fields["voice_id"] = _string_identity(voice_id)
+    if spoken is not None:
+        # Added only when the stage is active, so a plain pipeline's identities
+        # -- and therefore every existing cache entry -- stay byte-identical.
+        fields.update(
+            spoken_identity(
+                numbers=cast("NumberTier", spoken.numbers),
+                lexicon=spoken.lexicon,
+                builtin=spoken.builtin_lexicon,
+            )
+        )
     identity = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     digest = _hash_utf8(identity)[:24]
     return SpeechSegment(
@@ -566,13 +604,19 @@ def _fingerprint(material: _PlanMaterial) -> str:
     voice = material.voice
     segments = material.segments
     output = material.output
+    schema_versions: dict[str, object] = {
+        "parser": schemas.parser,
+        "normalization": schemas.normalization,
+        "planning": schemas.planning,
+        "render": schemas.render,
+    }
+    if schemas.spoken_form is not None:
+        # Present only when the stage is active. Emitting an explicit null
+        # would change the canonical JSON -- and so the fingerprint -- for
+        # every pipeline that never asked for spoken form.
+        schema_versions["spoken_form"] = schemas.spoken_form
     payload = {
-        "schema_versions": {
-            "parser": schemas.parser,
-            "normalization": schemas.normalization,
-            "planning": schemas.planning,
-            "render": schemas.render,
-        },
+        "schema_versions": schema_versions,
         "source_bytes_hash": material.source_bytes_hash,
         "model_revision": _string_identity(material.model_revision),
         "voice": {

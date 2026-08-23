@@ -105,3 +105,54 @@ def test_plain_pipeline_identity_is_unchanged() -> None:
 def test_billable_total_equals_canonical_text_length() -> None:
     """normalized_speech_characters describes the source, not the spoken form."""
     assert plain_plan().total_speech_characters == len(TEXT)
+
+
+def spoken_plan(language: str = "en-US") -> ExecutionPlan:
+    """Compile the same book with a pronounce() request attached."""
+    return compile_for(
+        kk.epub("book.epub").pronounce().assign_voice("eponine").tts(),
+        language,
+    )
+
+
+def test_spoken_form_changes_segment_text_but_not_the_bill() -> None:
+    """The engine hears words; the meter still counts the source characters."""
+    plan = spoken_plan()
+    spoken_text = "".join(segment.text for segment in plan.segments)
+    assert "one hundred thousand" in spoken_text
+    assert "chello" in spoken_text
+    assert "100,000" not in spoken_text
+    assert plan.total_speech_characters == len(TEXT)
+
+
+def test_spoken_form_changes_segment_identity() -> None:
+    """Different spoken output must never reuse a plain pipeline's cache entry."""
+    plain = {segment.id for segment in plain_plan().segments}
+    spoken = {segment.id for segment in spoken_plan().segments}
+    assert plain.isdisjoint(spoken)
+
+
+def test_non_english_narrator_disables_the_stage() -> None:
+    """A voice that cannot speak English number-words leaves text alone."""
+    plan = spoken_plan("fr-FR")
+    assert "100,000" in "".join(segment.text for segment in plan.segments)
+    assert plan.schema_versions.spoken_form is None
+
+
+def test_synthesized_characters_exceed_the_billable_total() -> None:
+    """Spoken form is exactly what makes the two statistics diverge."""
+    plan = spoken_plan()
+    synthesized = sum(segment.character_count for segment in plan.segments)
+    assert plan.total_speech_characters == len(TEXT)
+    assert synthesized > plan.total_speech_characters
+
+
+def test_spoken_form_absent_from_fingerprint_payload_when_off() -> None:
+    """An explicit null would change the fingerprint of every plain pipeline.
+
+    Regression guard: the schema_versions block must omit the key entirely
+    when the stage is off, not emit it as null.
+    """
+    assert plain_plan().schema_versions.spoken_form is None
+    assert spoken_plan().schema_versions.spoken_form is not None
+    assert plain_plan().semantic_fingerprint != spoken_plan().semantic_fingerprint
