@@ -156,3 +156,46 @@ the chunker saw before attribution existed. Speaker and voice enter a segment's
 identity only for attributed speech, so single-voice segment identities and
 plan fingerprints are unchanged and no previously cached segment is
 invalidated.
+
+## Canonical text and the spoken form
+
+Normalized chapter text stays the single authority for billing, inspection,
+chapter identity, and attribution offsets. When a caller asks for it, a
+separate versioned `spoken-form-v1` stage derives the string the engine
+actually speaks, and nothing else consumes that string. This is what lets
+`normalized_speech_characters` keep describing the book the caller supplied
+while `synthesized_characters` follows the expansion.
+
+Segment compilation runs split, then speak, then chunk. Splitting first, in
+canonical coordinates, means the spoken stage cannot move a boundary that has
+already been decided, which removes the need to map offsets through a
+length-changing transformation. Exactness therefore holds at three levels:
+chunks join to the spoken form of their piece, pieces join to their span, and
+spans join to the canonical chapter text.
+
+`tts-chunks-v3` is `tts-chunks-v2` restricted rather than replaced: the
+structural split feeds the unmodified v2 chunker one piece at a time, so
+concatenation-exactness is inherited and the tuned break constants are not
+forked. Every field the new stages contribute — the spoken-form schema, the
+number tier, the lexicon identity, the structure schema, the break tiers —
+enters a segment's identity only when that feature is active, so a pipeline
+requesting neither pronunciation nor pauses produces byte-identical identities
+and invalidates no cached segment. The same discipline governs the plan
+fingerprint: a key is absent, never null, when its feature is not in play.
+
+## Silence as a gap between segments
+
+Pauses are generated silence, not prosody hints. Between any two adjacent
+segments there is exactly one gap, and a gap may have several reasons; its
+duration is the maximum of them, never the sum, so a chapter boundary meeting a
+chapter title's leading pause cannot compound. Modelling gaps rather than
+per-segment durations makes that impossible by construction.
+
+Each gap folds into the preceding segment's trailing pad, so the inter-chapter
+gap is counted in the earlier chapter and skipping forward lands on speech. The
+coordinator pads `SegmentAudio` only after the raw worker output has been
+validated; because `byte_count` is derived from `frame_count`, that single
+adjustment keeps the assembler's part-size check, the chapter markers, and the
+reported duration in agreement without changing the FFmpeg shell at all.
+Silence never reaches a worker or the cache, so pause durations stay out of
+segment identity and retuning them costs no re-synthesis.

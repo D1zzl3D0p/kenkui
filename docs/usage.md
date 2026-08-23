@@ -299,3 +299,71 @@ or `${XDG_CACHE_HOME:-~/.cache}/kenkui/v1/manifest.json` (Linux).
 `KENKUI_POCKET_MANIFEST` overrides that path for operator-controlled
 deployments, with unchanged strict-validation semantics. With neither present,
 `write()` fails closed with `renderer_unavailable`.
+
+## Shaping speech
+
+Nothing below is applied unless you ask for it. A pipeline that calls neither
+`pronounce()` nor `pauses()` renders exactly as it did before these existed,
+down to the segment identities, so no cached audio is invalidated by upgrading.
+
+```python
+from pathlib import Path
+
+import kenkui as kk
+
+pipeline = (
+    kk.epub("book.epub")
+    .pronounce({"Cthulhu": "kuh-THOO-loo"}, numbers="standard")
+    .pauses(chapter_ms=1500, heading_after_ms=600, paragraph_ms=250)
+    .assign_voice("alba")
+    .tts()
+    .metadata(cover=Path("cover.jpg"))
+)
+```
+
+### Pronunciation and numbers
+
+`pronounce()` changes what the engine says, never what you are billed for.
+`ExecutionStats.normalized_speech_characters` keeps counting the source text
+while `synthesized_characters` follows the expansion.
+
+A small built-in lexicon applies by default once you call `pronounce()`; pass
+`builtin=False` to disable it. Your own entries always win over it, match whole
+words case-insensitively, and take the source's capitalization shape, so one
+entry covers `cello`, `Cello`, and `CELLO`.
+
+`numbers` selects how much guessing you accept. Anything a tier declines is
+left verbatim for your own entries to handle.
+
+| tier | adds |
+|---|---|
+| `off` | nothing |
+| `conservative` (default) | grouped integers, decimals, negatives, ordinals, percent, currency, units after a number |
+| `standard` | years as pairs, clock times, numeric ranges, Roman numerals after Chapter/Part/Act or a regnal name |
+| `aggressive` | bare Roman numerals, `No. 5`, fractions |
+
+`St.`, `Dr.`, and `Mrs.` are never expanded at any tier. English only: a
+non-English narrator voice disables the stage rather than mangling the text.
+
+### Pauses
+
+Each boundary carries its own duration in milliseconds, and zero disables that
+tier completely — including the extra segmenting it would otherwise cause, so
+leaving `line_ms` at zero costs nothing.
+
+Durations are free to retune: changing 250 ms to 600 ms reuses every cached
+segment, because only turning a tier on or off changes where a segment ends.
+`chapter_ms` never re-segments at all.
+
+The gap between two chapters belongs to the chapter that precedes it, so
+skipping forward lands on speech rather than silence, and a book never ends on
+dead air. Where several reasons meet — a chapter ending immediately before a
+chapter title — the longest one wins rather than all of them adding up.
+
+### Cover art
+
+`metadata(cover=...)` accepts `"source"` (the default), `None`, or a path to a
+JPEG or PNG. A supplied image that cannot be read or is not one of those two
+formats fails the render rather than quietly falling back to the book's own
+art. The plan records the image's content, not its location, so moving the file
+does not change the output.
