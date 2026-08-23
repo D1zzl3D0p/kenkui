@@ -178,8 +178,6 @@ class _Emitter:
             raise RenderError(ErrorCode.CALLBACK_FAILED) from None
 
 
-
-
 def _stage_boundary(stage: str) -> str:
     """Map internal execution stages to their public logging boundaries."""
     return {
@@ -403,6 +401,7 @@ def _render(  # noqa: PLR0913
     cached, miss_indices, cache_keys = _cache_lookup(
         plan, tasks, engine_specification, cancel, cache_store
     )
+    silence = plan.trailing_silence_ms or (0,) * len(plan.segments)
     rendered: list[SegmentAudio] = []
     parts: list[Path] = []
     pending: list[bytes] = []
@@ -435,19 +434,24 @@ def _render(  # noqa: PLR0913
         if item is None:
             item = next(records).audio
         item_bytes = _validate_audio(task, item)
+        # Padding is applied only after the raw worker output has been
+        # validated, so every existing audio invariant still governs what the
+        # worker actually sent.
+        entry, padding = _padded(segment_audio(item), silence[index])
+        item_bytes += len(padding)
         chapter_bytes += item_bytes
         total_bytes += item_bytes
         if chapter_bytes > MAX_CHAPTER_PCM_BYTES or total_bytes > MAX_TOTAL_PCM_BYTES:
             raise RenderError(ErrorCode.INVALID_AUDIO)
-        rendered.append(segment_audio(item))
+        rendered.append(entry)
         pending.append(item.pcm_s16le)
+        if padding:
+            pending.append(padding)
         if cache_store is not None and index in cache_keys and index not in cached:
             cache_store.store(cache_keys[index], segment, task, item, cache_context)
         if last_segment[segment.chapter_id] == index:
             # The chapter is complete, so its samples leave memory for good.
-            parts.append(
-                _spill_chapter(spill_directory, len(parts), tuple(pending))
-            )
+            parts.append(_spill_chapter(spill_directory, len(parts), tuple(pending)))
             pending.clear()
             chapter_bytes = 0
             completed_chapters += 1
@@ -470,6 +474,27 @@ def _fresh_spill_directory(workspace: Path) -> Path:
     except OSError:
         raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
     return directory
+
+
+def _padded(item: SegmentAudio, silence_ms: int) -> tuple[SegmentAudio, bytes]:
+    """Extend one segment's metadata and produce its trailing silence bytes.
+
+    SegmentAudio.byte_count is derived from frame_count, so this single
+    adjustment keeps the assembler's part-size check, the chapter markers, and
+    the reported duration in agreement without touching either.
+    """
+    if silence_ms <= 0:
+        return item, b""
+    frames = silence_ms * item.sample_rate_hz // 1000
+    if frames <= 0:
+        return item, b""
+    total = item.frame_count + frames
+    extended = replace(
+        item,
+        frame_count=total,
+        duration_ms=total * 1000 // item.sample_rate_hz,
+    )
+    return extended, bytes(frames * item.channels * 2)
 
 
 def _spill_chapter(directory: Path, index: int, payloads: tuple[bytes, ...]) -> Path:

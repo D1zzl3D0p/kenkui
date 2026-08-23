@@ -373,3 +373,41 @@ def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
     )
     _decode_with_host_ffmpeg(cold_output)
     _decode_with_host_ffmpeg(warm_output)
+
+
+@pytest.mark.native
+def test_native_write_with_pauses_is_longer_and_still_decodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Generated silence must survive real FFmpeg encoding and decoding.
+
+    The other native cases render without pauses, so padding is zero and
+    FFmpeg never sees a padded chapter part. This is the only case that proves
+    the part-size check, the chapter markers and the encoder all agree once
+    silence is actually present.
+    """
+    chapters = {
+        "one": xhtml(f"<h1>{escape(_CHAPTER_TITLES[0])}</h1><p>Exact first.</p>"),
+        "two": xhtml(f"<h1>{escape(_CHAPTER_TITLES[1])}</h1><p>Exact second.</p>"),
+    }
+    source = make_epub(
+        tmp_path / "paused.epub", chapters=chapters, spine=("one", "two")
+    )
+    _bind(monkeypatch, EngineSpecification.fake(), FFmpegM4BAssembler())
+
+    plain = (
+        kk.epub(source).assign_voice("narrator").tts().write_m4b(tmp_path / "plain.m4b")
+    )
+    paused = (
+        kk.epub(source)
+        .pauses(chapter_ms=2000)
+        .assign_voice("narrator")
+        .tts()
+        .write_m4b(tmp_path / "paused.m4b")
+    )
+
+    assert paused.stats.duration_ms > plain.stats.duration_ms
+    assert paused.stats.rendered_chapters == _EXPECTED_CHAPTERS
+    _decode_with_host_ffmpeg(tmp_path / "paused.m4b")
+    probed = _probe_with_host_ffprobe(tmp_path / "paused.m4b")
+    assert _probe_chapter_titles(probed) == _CHAPTER_TITLES

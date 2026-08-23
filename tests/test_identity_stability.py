@@ -212,3 +212,51 @@ def test_pieces_join_to_the_canonical_chapter_text() -> None:
     """Exactness survives the split: chunks still reconstruct the source."""
     plan = paused_plan(paragraph_ms=250, line_ms=100)
     assert "".join(segment.text for segment in plan.segments) == TEXT
+
+
+def _cache_key_inputs(plan: ExecutionPlan) -> list[tuple[object, ...]]:
+    """Project the plan onto exactly what CacheStore.key_for consumes.
+
+    key_for reads the segment's id, chapter, ordinal, character count and
+    content hash, plus the model revision and the normalization and render
+    schemas. It never reads trailing_silence_ms or the structure schema, so
+    this projection is what determines whether a render re-uses cached PCM.
+    """
+    return [
+        (
+            segment.id,
+            segment.chapter_id,
+            segment.ordinal,
+            segment.character_count,
+            segment.content_hash,
+            plan.model_revision,
+            plan.schema_versions.normalization,
+            plan.schema_versions.render,
+        )
+        for segment in plan.segments
+    ]
+
+
+def test_retuning_a_duration_leaves_every_cache_key_input_identical() -> None:
+    """Retuning pause length must reuse cached PCM, not re-synthesize it."""
+    first = paused_plan(paragraph_ms=250)
+    second = paused_plan(paragraph_ms=600)
+    assert _cache_key_inputs(first) == _cache_key_inputs(second)
+    assert first.trailing_silence_ms != second.trailing_silence_ms
+
+
+def test_changing_the_number_tier_invalidates_every_cache_key_input() -> None:
+    """Different spoken output must never reuse another tier's cached PCM."""
+    conservative = compile_for(
+        kk.epub("book.epub")
+        .pronounce(numbers="conservative")
+        .assign_voice("eponine")
+        .tts()
+    )
+    standard = compile_for(
+        kk.epub("book.epub").pronounce(numbers="standard").assign_voice("eponine").tts()
+    )
+    shared = {segment.id for segment in conservative.segments} & {
+        segment.id for segment in standard.segments
+    }
+    assert not shared
