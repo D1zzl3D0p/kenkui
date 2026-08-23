@@ -9,6 +9,7 @@ from kenkui._domain.spoken.numbers import (
     cardinal_words,
     conservative_rules,
     decimal_words,
+    number_rules,
     ordinal_words,
     roman_value,
     year_words,
@@ -168,3 +169,69 @@ def test_conservative_tier_converts(source: str, expected: str) -> None:
 def test_conservative_tier_declines(source: str) -> None:
     """Ambiguous or out-of-range forms are left exactly as written."""
     assert apply_rules(conservative_rules(), source) == source
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("In 1984 he left.", "In nineteen eighty-four he left."),
+        ("1914-1918", "nineteen fourteen to nineteen eighteen"),
+        ("1914\u20131918", "nineteen fourteen to nineteen eighteen"),
+        ("1914\u20141918", "nineteen fourteen to nineteen eighteen"),
+        ("at 3:45", "at three forty-five"),
+        ("at 3:00", "at three o'clock"),
+        ("at 3:05", "at three oh five"),
+        ("Chapter IV", "Chapter Four"),
+        ("Part VIII", "Part Eight"),
+        ("Henry VIII", "Henry the Eighth"),
+    ],
+)
+def test_standard_tier_converts(source: str, expected: str) -> None:
+    """Heuristic-but-usually-right forms convert under the standard tier."""
+    assert apply_rules(number_rules("standard"), source) == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '"I know," said I.',
+        "Elizabeth I",
+    ],
+)
+def test_standard_tier_leaves_single_i(source: str) -> None:
+    """A one-character numeral is left alone: "I" is far more often a pronoun."""
+    assert apply_rules(number_rules("standard"), source) == source
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("Elizabeth I", "Elizabeth the First"),
+        ("No. 5", "Number five"),
+        ("1/2", "one half"),
+        ("3/4", "three quarters"),
+        ("1/7", "one seventh"),
+        ("XIV", "Fourteen"),
+    ],
+)
+def test_aggressive_tier_converts(source: str, expected: str) -> None:
+    """The aggressive tier accepts forms that require guessing."""
+    assert apply_rules(number_rules("aggressive"), source) == expected
+
+
+@pytest.mark.parametrize("source", ["MIX", "CIVIC", "DID"])
+def test_aggressive_tier_respects_roman_stoplist(source: str) -> None:
+    """Words that are also valid numerals stay words."""
+    assert apply_rules(number_rules("aggressive"), source) == source
+
+
+def test_off_tier_has_no_rules() -> None:
+    """The off tier converts nothing at all."""
+    assert number_rules("off") == ()
+    assert apply_rules(number_rules("off"), "100,000") == "100,000"
+
+
+def test_tiers_are_cumulative() -> None:
+    """Every tier still converts everything the conservative tier does."""
+    for tier in ("conservative", "standard", "aggressive"):
+        assert apply_rules(number_rules(tier), "100,000") == "one hundred thousand"

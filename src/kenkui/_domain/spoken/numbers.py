@@ -296,3 +296,147 @@ def conservative_rules() -> tuple[Rule, ...]:
         (re.compile(rf"{_LB}(-)?({_INT})\.(\d+){_RB}"), _decimal),
         (re.compile(rf"{_LB}(-)?({_INT}){_RB}"), _integer),
     )
+
+
+_YEAR = r"(?:1[0-9]{3}|20[0-9]{2})"
+_TITLE_WORDS = "Chapter|Part|Book|Act|Scene|Volume|Section|Appendix"
+# The dash family, escaped: en and em dashes are visually
+# indistinguishable from a hyphen in source.
+_DASHES = r"[-\u2013\u2014]"
+# Valid canonical numerals that are also ordinary English words or common
+# abbreviations. Without this, "MIX" and "CIVIC" read as numbers.
+_ROMAN_STOPLIST = frozenset(
+    {
+        "MIX",
+        "DID",
+        "CIVIC",
+        "MILD",
+        "DIM",
+        "LID",
+        "MI",
+        "DI",
+        "CD",
+        "MM",
+        "LI",
+        "MC",
+        "ID",
+        "MD",
+        "CI",
+    }
+)
+_DENOMINATORS = {
+    2: ("half", "halves"),
+    3: ("third", "thirds"),
+    4: ("quarter", "quarters"),
+}
+# conservative_rules() ends with the decimal and integer catch-alls. Higher
+# tiers splice their more specific forms in front of those two so a bare year
+# is not swallowed as a plain integer.
+_GENERIC_RULE_COUNT = 2
+
+
+def _year_range(match: re.Match[str]) -> str | None:
+    """Read a hyphenated or dashed span of two years."""
+    return f"{year_words(int(match.group(1)))} to {year_words(int(match.group(2)))}"
+
+
+def _clock(match: re.Match[str]) -> str | None:
+    """Read a clock time the way it is spoken."""
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if minute == 0:
+        return f"{cardinal_words(hour)} o'clock"
+    if minute < _TEN:
+        return f"{cardinal_words(hour)} oh {_ONES[minute]}"
+    return f"{cardinal_words(hour)} {cardinal_words(minute)}"
+
+
+def _year(match: re.Match[str]) -> str | None:
+    """Read a bare four-digit year as a century pair."""
+    return year_words(int(match.group(1)))
+
+
+def _title_roman(match: re.Match[str]) -> str | None:
+    """Read a Roman numeral that follows a structural title word."""
+    value = roman_value(match.group(3))
+    if value is None:
+        return None
+    return f"{match.group(1)}{match.group(2)}{cardinal_words(value).capitalize()}"
+
+
+def _regnal(match: re.Match[str]) -> str | None:
+    """Read a Roman numeral that follows a capitalized personal name."""
+    value = roman_value(match.group(3))
+    if value is None:
+        return None
+    return f"{match.group(1)}{match.group(2)}the {ordinal_words(value).capitalize()}"
+
+
+def _bare_roman(match: re.Match[str]) -> str | None:
+    """Read a standalone Roman numeral that is not also an English word."""
+    token = match.group(1)
+    if token in _ROMAN_STOPLIST:
+        return None
+    value = roman_value(token)
+    if value is None:
+        return None
+    return cardinal_words(value).capitalize()
+
+
+def _numbered(match: re.Match[str]) -> str | None:
+    """Read the "No." abbreviation as the word Number."""
+    value = _plain(match.group(2))
+    if value is None:
+        return None
+    return f"Number {cardinal_words(value)}"
+
+
+def _fraction(match: re.Match[str]) -> str | None:
+    """Read a slash fraction, using the ordinary names for small denominators."""
+    numerator = _plain(match.group(1))
+    denominator = _plain(match.group(2))
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    if denominator in _DENOMINATORS:
+        singular, plural = _DENOMINATORS[denominator]
+        return f"{cardinal_words(numerator)} {singular if numerator == 1 else plural}"
+    tail = ordinal_words(denominator)
+    return f"{cardinal_words(numerator)} {tail}{'' if numerator == 1 else 's'}"
+
+
+def _standard_rules() -> tuple[Rule, ...]:
+    """Return forms that are usually right but require context."""
+    return (
+        (re.compile(rf"{_LB}({_YEAR})\s*{_DASHES}\s*({_YEAR}){_RB}"), _year_range),
+        (re.compile(rf"{_LB}([01]?[0-9]|2[0-3]):([0-5][0-9]){_RB}"), _clock),
+        (re.compile(rf"{_LB}({_YEAR}){_RB}"), _year),
+        (re.compile(rf"{_LB}({_TITLE_WORDS})(\s+)([IVXLCDM]+){_RB}"), _title_roman),
+        # Two or more numeral characters: a lone "I" is far more often the
+        # pronoun, and "said I" must never become "said the First".
+        (re.compile(rf"{_LB}([A-Z][a-z]+)(\s+)([IVXLCDM]{{2,}}){_RB}"), _regnal),
+    )
+
+
+def _aggressive_rules() -> tuple[Rule, ...]:
+    """Return forms that require guessing and must be opted into explicitly."""
+    return (
+        (re.compile(rf"{_LB}([A-Z][a-z]+)(\s+)([IVXLCDM]+){_RB}"), _regnal),
+        (re.compile(rf"No\.(\s*)({_INT}){_RB}"), _numbered),
+        (re.compile(rf"{_LB}({_INT})/({_INT}){_RB}"), _fraction),
+        (re.compile(rf"{_LB}([IVXLCDM]{{2,}}){_RB}"), _bare_roman),
+    )
+
+
+def number_rules(tier: NumberTier) -> tuple[Rule, ...]:
+    """Return the ordered rules for one tier, most specific form first."""
+    if tier == "off":
+        return ()
+    base = conservative_rules()
+    if tier == "conservative":
+        return base
+    extra = _standard_rules()
+    if tier == "aggressive":
+        extra = (*extra, *_aggressive_rules())
+    head = base[:-_GENERIC_RULE_COUNT]
+    generic = base[-_GENERIC_RULE_COUNT:]
+    return (*head, *extra, *generic)
