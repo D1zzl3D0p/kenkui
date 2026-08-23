@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
+from kenkui._tts import production
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -112,12 +113,14 @@ class CastRecord:
 
 
 def default_store_path() -> Path:
-    """Return the managed store location, beside the voice manifest."""
-    from kenkui._tts.production import (  # noqa: PLC0415 - avoids an import cycle
-        default_cache_root,
-    )
+    """Return the managed store location, beside the voice manifest.
 
-    return default_cache_root() / STORE_NAME
+    Resolved through the module rather than a bound name, so the attribute
+    lookup happens per call. Tests redirect the cache root that way, and
+    binding the function at import time would send every test's writes to the
+    developer's real cache.
+    """
+    return production.default_cache_root() / STORE_NAME
 
 
 def _canonical(value: object) -> str:

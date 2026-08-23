@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING
 from kenkui._characters.infer import PRONOUNS, UNKNOWN
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import ATTRIBUTION_PROMPT, CONTINUITY_SPEAKERS
-from kenkui._characters.quotes import extract_spans
+from kenkui._characters.quotes import TextSpan, extract_spans
 from kenkui._domain.planning import SpeakerSpan
+from kenkui.errors import ModelError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -73,7 +74,7 @@ def attribute_chapter(
     dialogue = [span for span in spans if span.is_dialogue]
     if not dialogue or not characters:
         # Nothing to attribute, so nothing is worth a model call.
-        return tuple(_narrated(span) for span in spans), tuple(recent)
+        return _all_narrated(spans), tuple(recent)
 
     quotes = [
         {"quote_id": index, "text": chapter.text[span.start : span.end]}
@@ -88,24 +89,33 @@ def attribute_chapter(
     known = frozenset(character.id for character in characters)
     answers = _answers(model_id, prompt, client, known)
 
-    assigned: list[str | None] = [answers.get(index) for index in range(len(dialogue))]
-    ordered = {span.start: span for span in dialogue}
-    resolved: list[SpeakerSpan] = []
-    for span in spans:
-        if not span.is_dialogue:
-            resolved.append(_narrated(span))
-            continue
-        speaker = assigned[list(ordered).index(span.start)]
-        resolved.append(
-            SpeakerSpan(span.chapter_id, span.start, span.end, speaker)
+    # A quote's id is its position among the dialogue spans, so pairing them
+    # back up is a zip. A model that skipped an id leaves None, which is
+    # unknown: gaps need no special case.
+    speakers = [answers.get(index) for index in range(len(dialogue))]
+    by_start = dict(zip((span.start for span in dialogue), speakers, strict=True))
+
+    resolved = tuple(
+        SpeakerSpan(
+            span.chapter_id,
+            span.start,
+            span.end,
+            by_start.get(span.start) if span.is_dialogue else None,
         )
-    trailing = [speaker for speaker in assigned if speaker is not None]
-    return tuple(resolved), tuple(trailing[-CONTINUITY_SPEAKERS:]) or tuple(recent)
+        for span in spans
+    )
+    named = [speaker for speaker in speakers if speaker is not None]
+    # A chapter where nobody could be placed carries the previous chapter's
+    # speakers forward rather than resetting continuity to nothing.
+    trailing = tuple(named[-CONTINUITY_SPEAKERS:]) if named else tuple(recent)
+    return resolved, trailing
 
 
-def _narrated(span: object) -> SpeakerSpan:
-    """Convert an extraction span to a narration span."""
-    return SpeakerSpan(span.chapter_id, span.start, span.end, None)  # type: ignore[attr-defined]
+def _all_narrated(spans: Sequence[TextSpan]) -> tuple[SpeakerSpan, ...]:
+    """Carry every span through as narration, speaker unassigned."""
+    return tuple(
+        SpeakerSpan(span.chapter_id, span.start, span.end, None) for span in spans
+    )
 
 
 def _answers(
@@ -117,8 +127,6 @@ def _answers(
     than stopping the render: the book still reads, in one voice for the lines
     it could not place.
     """
-    from kenkui.errors import ModelError  # noqa: PLC0415 - avoids an import cycle
-
     try:
         payload = complete_json(model_id, prompt, _SCHEMA, client=client)
     except ModelError:

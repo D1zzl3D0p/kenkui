@@ -20,6 +20,7 @@ from kenkui._characters.infer import merge_rosters, normalise_roster
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import PROMPT_VERSION, ROSTER_PROMPT
 from kenkui._characters.store import AttributionRecord
+from kenkui.errors import ModelError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -43,8 +44,6 @@ def _roster_for(
     chapter_text: str, model_id: str, client: Client | None
 ) -> tuple[CharacterProfile, ...]:
     """Infer one chapter's characters, or none if the model cannot help."""
-    from kenkui.errors import ModelError  # noqa: PLC0415 - avoids an import cycle
-
     escaped = chapter_text.replace("{", "{{").replace("}", "}}")
     try:
         payload = complete_json(

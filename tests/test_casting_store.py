@@ -14,6 +14,7 @@ import pytest
 from kenkui._characters import store
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
+from kenkui._tts import production
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -183,3 +184,16 @@ def test_writing_twice_replaces_rather_than_duplicates(
     store.write_attribution(attribution)
     store.write_attribution(attribution)
     assert store.read_attribution(attribution.attribution_id) == attribution
+
+
+def test_the_store_path_follows_a_redirected_cache_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Resolution must happen per call, not once at import.
+
+    The whole suite's isolation rests on this. Binding default_cache_root at
+    import time silently sends every test's writes to the developer's real
+    cache, which is a leak nothing else here would notice.
+    """
+    monkeypatch.setattr(production, "default_cache_root", lambda: tmp_path)
+    assert store.default_store_path() == tmp_path / store.STORE_NAME
