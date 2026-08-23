@@ -19,6 +19,7 @@ from kenkui._characters.attribution import attribute_chapter
 from kenkui._characters.infer import merge_rosters, normalise_roster
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import PROMPT_VERSION, ROSTER_PROMPT
+from kenkui._characters.quotes import extract_spans
 from kenkui._characters.store import AttributionRecord
 from kenkui.errors import ModelError
 
@@ -117,6 +118,12 @@ def resolve_attribution(
     for chapter in inspection.chapters:
         if cancel is not None:
             cancel.raise_if_cancelled()
+        # A chapter with no quoted speech has no speaker to attribute, so its
+        # roster is never consulted. Front matter and purely descriptive
+        # chapters are common enough that asking about them is real spend.
+        spans = extract_spans(chapter.id, chapter.text)
+        if not any(span.is_dialogue for span in spans):
+            continue
         rosters.append(_roster_for(chapter.text, model_id, client))
     characters = merge_rosters(tuple(rosters))
 

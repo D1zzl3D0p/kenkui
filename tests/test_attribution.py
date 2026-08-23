@@ -190,3 +190,19 @@ def test_book_text_with_braces_does_not_break_the_prompt() -> None:
         _inspection(text), BOOK, "fake/model", client=ScriptedClient()
     )
     assert "".join(text[s.start : s.end] for s in record.spans) == text
+
+
+def test_no_roster_call_for_a_chapter_without_speech() -> None:
+    """Front matter and description are common; asking about them is spend."""
+    quiet = kk.ChapterInspection("ch0", 0, "Front", 24, "No speech whatsoever here.")
+    speaking = kk.ChapterInspection("ch1", 1, "One", len(TEXT), TEXT)
+    metadata = kk.BookMetadata("T", "A", cover_available=False)
+    client = ScriptedClient()
+    resolve_attribution(
+        kk.BookInspection(metadata, (quiet, speaking)),
+        BOOK,
+        "fake/model",
+        client=client,
+    )
+    rosters = [p for p in client.calls if "List the speaking characters" in p]
+    assert len(rosters) == 1
