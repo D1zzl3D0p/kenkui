@@ -23,6 +23,7 @@ from ._domain.operations import (
     Operation,
     SelectChapterRange,
     SelectChapters,
+    SpokenForm,
     SynthesizeSpeech,
     append_unique,
     has_operation,
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger(__name__)
 _HASH_CHUNK_BYTES = 1024 * 1024
+_NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +122,31 @@ class Pipeline:
     def normalize_text(self) -> Pipeline:
         """Return a branch requesting default deterministic normalization."""
         return self._append(NormalizeText(), before_tts=True)
+
+    def pronounce(
+        self,
+        lexicon: Mapping[str, str] | None = None,
+        *,
+        numbers: str = "conservative",
+        builtin: bool = True,
+    ) -> Pipeline:
+        """Return a branch controlling how text is spoken rather than counted.
+
+        Off unless called. Canonical text, and therefore the billable
+        character count, is unaffected either way.
+        """
+        from ._domain.spoken.lexicon import validate_entries  # noqa: PLC0415
+
+        if numbers not in _NUMBER_TIERS:
+            raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+        return self._append(
+            SpokenForm(
+                numbers=numbers,
+                builtin_lexicon=builtin,
+                lexicon=validate_entries(lexicon or {}),
+            ),
+            before_tts=True,
+        )
 
     def infer_characters(self, model: str) -> Pipeline:
         """Return a branch that will derive a character roster."""
@@ -322,9 +349,7 @@ class Pipeline:
         )
 
     def _casting(self) -> AssignVoices:
-        return next(
-            item for item in self.operations if isinstance(item, AssignVoices)
-        )
+        return next(item for item in self.operations if isinstance(item, AssignVoices))
 
     def _assigned_voice_id(self) -> str:
         return self._casting().narrator_voice_id

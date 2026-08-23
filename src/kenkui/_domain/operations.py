@@ -29,6 +29,21 @@ class NormalizeText:
 
 
 @dataclass(frozen=True, slots=True)
+class SpokenForm:
+    """How canonical text becomes the string the engine actually speaks.
+
+    Never affects the canonical text, and therefore never affects billing,
+    inspection, chapter identity, or attribution offsets.
+    """
+
+    numbers: str = "conservative"
+    builtin_lexicon: bool = True
+    # Sorted pairs rather than a mapping: an operation record must be hashable
+    # and compare equal regardless of how the caller ordered it.
+    lexicon: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class InferCharacters:
     """Derive a character roster with the named model."""
 
@@ -77,6 +92,7 @@ Operation: TypeAlias = (
     SelectChapters
     | SelectChapterRange
     | NormalizeText
+    | SpokenForm
     | InferCharacters
     | AttributeQuotes
     | AssignVoices

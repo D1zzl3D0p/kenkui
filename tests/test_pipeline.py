@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, cast, get_args
 import pytest
 
 import kenkui as kk
+from kenkui._domain.operations import SpokenForm
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -304,3 +305,41 @@ def test_public_exports_are_intentional() -> None:
     }
     assert set(kk.__all__) == expected
 
+
+def test_pronounce_records_intent_without_effects() -> None:
+    """The operation captures configuration as an immutable value."""
+    pipeline = kk.epub("book.epub").pronounce({"Cthulhu": "kuh-THOO-loo"})
+    recorded = pipeline.operations[0]
+    assert isinstance(recorded, SpokenForm)
+    assert recorded.numbers == "conservative"
+    assert recorded.builtin_lexicon is True
+    assert recorded.lexicon == (("Cthulhu", "kuh-THOO-loo"),)
+
+
+def test_pronounce_is_branchable_and_absent_by_default() -> None:
+    """A pipeline that never calls pronounce records no spoken-form intent."""
+    root = kk.epub("book.epub")
+    branch = root.pronounce()
+    assert root.operations == ()
+    assert any(isinstance(item, SpokenForm) for item in branch.operations)
+
+
+def test_pronounce_rejects_an_unknown_tier() -> None:
+    """Only the four defined tiers are accepted."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pronounce(numbers="wild")
+    assert error.value.code is kk.ErrorCode.INVALID_PRONUNCIATION
+
+
+def test_pronounce_rejects_a_malformed_entry() -> None:
+    """Caller entries are validated at the Pipeline boundary, not at render."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pronounce({"": "x"})
+    assert error.value.code is kk.ErrorCode.INVALID_PRONUNCIATION
+
+
+def test_pronounce_cannot_be_requested_twice() -> None:
+    """Duplicate operations are refused by the existing append rule."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pronounce().pronounce()
+    assert error.value.code is kk.ErrorCode.DUPLICATE_OPERATION
