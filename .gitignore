@@ -30,3 +30,6 @@ site/
 .idea/
 .vscode/
 *.swp
+
+# Agent tooling state
+.serena/
