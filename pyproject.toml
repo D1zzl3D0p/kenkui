@@ -28,6 +28,9 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml==0.7.1",
+    # Called directly with a model identifier from pipeline intent. No proxy
+    # and no provider framework: see the character-casting design.
+    "litellm>=1.0",
     # The pack declares a pocket-tts range and registry.py resolves against it.
     # packaging arrives transitively via huggingface-hub; Kenkui imports it
     # directly.

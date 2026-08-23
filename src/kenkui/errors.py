@@ -29,6 +29,9 @@ class ErrorCode(StrEnum):
     CASTING_METHOD_UNKNOWN = "casting_method_unknown"
     CAST_POOL_EMPTY = "cast_pool_empty"
     CHARACTER_UNKNOWN = "character_unknown"
+    MODEL_CALL_FAILED = "model_call_failed"
+    MODEL_RESPONSE_INVALID = "model_response_invalid"
+    ATTRIBUTION_UNAVAILABLE = "attribution_unavailable"
     TTS_REQUIRED = "tts_required"
     EMPTY_SPEECH = "empty_speech"
     INVALID_SOURCE_HASH = "invalid_source_hash"
@@ -96,6 +99,13 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.CASTING_METHOD_UNKNOWN: "The casting method is not recognized.",
     ErrorCode.CAST_POOL_EMPTY: "No loaded voice is available to cast characters.",
     ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
+    ErrorCode.MODEL_CALL_FAILED: "The language model could not be reached.",
+    ErrorCode.MODEL_RESPONSE_INVALID: (
+        "The language model returned an unusable response."
+    ),
+    ErrorCode.ATTRIBUTION_UNAVAILABLE: (
+        "Character casting requires inferred characters."
+    ),
     ErrorCode.TTS_REQUIRED: "Explicit TTS intent is required.",
     ErrorCode.EMPTY_SPEECH: "Selected speech must be non-empty and exactly counted.",
     ErrorCode.INVALID_SOURCE_HASH: "The source-bytes hash is invalid.",
