@@ -7,7 +7,7 @@ import os
 import stat
 import sys
 from pathlib import Path, PurePath
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from kenkui._audio.production import FFmpegM4BAssembler
 from kenkui._execution.cache import CacheStore
@@ -22,6 +22,9 @@ from kenkui._tts.pocket import (
 )
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
 from kenkui.voices.types import Voice, VoiceVariety
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _MANIFEST_ENV: Final = "KENKUI_POCKET_MANIFEST"
 MANIFEST_SCHEMA_VERSION: Final = "kenkui-pocket-production-v2"
@@ -84,8 +87,16 @@ def resolve_manifest_path() -> Path | None:
     return managed if managed.exists() else None
 
 
-def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
-    """Resolve one explicitly assigned voice from a strict local manifest."""
+def production_bindings_from_environment(
+    voice_id: str, *, also: Sequence[str] = ()
+) -> ExecutionBindings:
+    """Resolve the assigned voices from a strict local manifest.
+
+    ``voice_id`` is the narrator, whose engine and revision govern the run.
+    ``also`` names the rest of a cast: each is validated the same way and its
+    asset joins the engine config, so one worker holds one model and a
+    conditioning state per voice.
+    """
     path = resolve_manifest_path()
     if path is None:
         raise RenderError(ErrorCode.RENDERER_UNAVAILABLE)
@@ -131,23 +142,92 @@ def production_bindings_from_environment(voice_id: str) -> ExecutionBindings:
         model_revision=revision,
         package_version=_string(engine["package_version"]),
         files=files,
-        voices=(
-            VoiceAsset(
-                path=_absolute_path(voice_data["asset_path"], voice=True),
-                sha256=digest,
-                variety=variety,
-                provenance=cast("str", voice.provenance),
-                license_id=cast("str", voice.license_id),
-                rights=_string(voice_data["voice_rights"], voice=True),
-                commercial_use_allowed=cast("bool", voice.commercial_use_allowed),
-            ),
-        ),
+        voices=_cast_assets(root, voice_id, also, revision),
         cloning_capable=cloning_capable,
         sample_rate_hz=_integer(engine["sample_rate_hz"]),
         device=_string(engine["device"]),
         timeout_seconds=_floating(engine["timeout_seconds"]),
     )
-    return pocket_production_bindings(config, voice)
+    return pocket_production_bindings(config, voice, _cast_voices(root, also, revision))
+
+
+def _voice_asset(voice_data: dict[str, object]) -> VoiceAsset:
+    """Build one renderable asset from a validated manifest voice entry."""
+    return VoiceAsset(
+        path=_absolute_path(voice_data["asset_path"], voice=True),
+        sha256=_digest(voice_data["asset_sha256"], voice=True),
+        variety=_string(voice_data["variety"], voice=True),
+        provenance=_string(voice_data["provenance"], voice=True),
+        license_id=_string(voice_data["license_id"], voice=True),
+        rights=_string(voice_data["voice_rights"], voice=True),
+        commercial_use_allowed=_boolean(
+            voice_data["commercial_use_allowed"], voice=True
+        ),
+    )
+
+
+def _cast_assets(
+    root: dict[str, object],
+    narrator_id: str,
+    also: Sequence[str],
+    revision: str,
+) -> tuple[VoiceAsset, ...]:
+    """Return one asset per distinct cast voice, narrator first."""
+    assets = [_voice_asset(_select_voice(root, narrator_id))]
+    seen = {narrator_id}
+    for other in also:
+        if other in seen:
+            continue
+        seen.add(other)
+        assets.append(_voice_asset(_validated_cast_voice(root, other, revision)))
+    return tuple(assets)
+
+
+def _validated_cast_voice(
+    root: dict[str, object], voice_id: str, revision: str
+) -> dict[str, object]:
+    """Validate one cast voice against the narrator's engine and revision."""
+    voice_data, engine = _select(root, voice_id)
+    if not _boolean(voice_data["enabled"], voice=True):
+        raise VoiceError(ErrorCode.VOICE_DISABLED)
+    # A cast spanning languages would need a second 225 MB engine resident per
+    # worker. v1 rejects it; the plural structure is already in place for later.
+    if _string(engine["model_revision"]) != revision:
+        raise VoiceError(ErrorCode.CAST_LANGUAGE_MIXED)
+    if revision not in _string_tuple(voice_data["compatible_model_revisions"]):
+        raise VoiceError(ErrorCode.VOICE_INCOMPATIBLE)
+    return voice_data
+
+
+def _cast_voices(
+    root: dict[str, object], also: Sequence[str], revision: str
+) -> tuple[Voice, ...]:
+    """Return resolved public metadata for each cast voice."""
+    resolved: list[Voice] = []
+    for voice_id in dict.fromkeys(also):
+        voice_data = _validated_cast_voice(root, voice_id, revision)
+        resolved.append(
+            Voice(
+                id=voice_id,
+                name=_string(voice_data["name"], voice=True),
+                enabled=True,
+                provenance=_string(voice_data["provenance"], voice=True),
+                license_id=_string(voice_data["license_id"], voice=True),
+                commercial_use_allowed=_boolean(
+                    voice_data["commercial_use_allowed"], voice=True
+                ),
+                language=_string(voice_data["language"], voice=True),
+                content_fingerprint=_digest(voice_data["asset_sha256"], voice=True),
+                compatible_model_revisions=_string_tuple(
+                    voice_data["compatible_model_revisions"]
+                ),
+                variety=cast(
+                    "VoiceVariety", _string(voice_data["variety"], voice=True)
+                ),
+                state="loaded",
+            )
+        )
+    return tuple(resolved)
 
 
 def _select(
@@ -202,6 +282,7 @@ def _select_engine(root: dict[str, object], engine_id: object) -> dict[str, obje
 def pocket_production_bindings(
     config: PocketEngineConfig,
     voice: Voice,
+    cast_voices: tuple[Voice, ...] = (),
 ) -> ExecutionBindings:
     """Bind Pocket, FFmpeg, resolved voice metadata, and the private OS cache."""
     from kenkui._domain.planning import VoicePlan  # noqa: PLC0415
@@ -229,6 +310,7 @@ def pocket_production_bindings(
         voice,
         config.model_revision,
         CacheStore(default_cache_root()),
+        cast_voices,
     )
 
 

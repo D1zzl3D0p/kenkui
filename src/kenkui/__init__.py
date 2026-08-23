@@ -1,5 +1,10 @@
 """Intentional public package interface for Kenkui."""
 
+from ._characters.store import (
+    list_castings,
+    remove_attribution,
+    remove_casting,
+)
 from ._domain.operations import MetadataIntent
 from .api import (
     ExecutionStats,
@@ -22,6 +27,7 @@ from .errors import (
     VoiceError,
 )
 from .events import (
+    CastResolved,
     Completed,
     ExecutionEvent,
     StageCompleted,
@@ -48,6 +54,7 @@ __all__ = [
     "BookMetadata",
     "CancellationToken",
     "CancelledError",
+    "CastResolved",
     "ChapterInspection",
     "Completed",
     "EncodingError",
@@ -77,8 +84,11 @@ __all__ = [
     "add_voice",
     "book",
     "epub",
+    "list_castings",
     "list_voices",
     "load_voice",
+    "remove_attribution",
+    "remove_casting",
     "remove_voice",
     "unload_voice",
 ]

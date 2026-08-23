@@ -43,6 +43,7 @@ from kenkui.errors import (
     SourceError,
 )
 from kenkui.events import (
+    CastResolved,
     Completed,
     ExecutionEvent,
     StageCompleted,
@@ -53,8 +54,9 @@ from kenkui.events import (
 from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping
 
+    from kenkui._domain.planning import SpeakerSpan
     from kenkui._execution.cache import CacheStore, _RunContext
     from kenkui._execution.process_pool import WorkerRecord
     from kenkui.cancellation import CancellationToken
@@ -86,6 +88,9 @@ class ExecutionBindings:
     voice: Voice
     model_revision: str
     cache_store: CacheStore | None = None
+    # The rest of the cast, if any. The narrator stays in `voice` because its
+    # engine and revision govern the run.
+    cast_voices: tuple[Voice, ...] = ()
 
 
 class _Emitter:
@@ -97,6 +102,18 @@ class _Emitter:
 
     def emit_started(self) -> None:
         self._emit(Started(self._next()))
+
+    def emit_cast_resolved(self, plan: ExecutionPlan) -> None:
+        """Publish the resolved cast before any worker exists."""
+        self._emit(
+            CastResolved(
+                self._next(),
+                "planning",
+                plan.cast.narrator.id,
+                plan.cast.unknown.id,
+                tuple(sorted(plan.cast.assignments.items())),
+            )
+        )
 
     def emit_stage_started(self, stage: str) -> None:
         log_event(
@@ -182,6 +199,9 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
     cancel: CancellationToken | None,
     workers: int | Literal["auto"],
     overwrite: bool,
+    assignments: Mapping[str, str] | None = None,
+    unknown_voice_id: str | None = None,
+    spans: tuple[SpeakerSpan, ...] = (),
 ) -> Result:
     """Execute one immutable plan in order and transactionally publish its artifact."""
     metadata_intent = pipeline.metadata_intent
@@ -212,7 +232,15 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
             source_bytes_hash=source_hash,
             resolved_voice=bindings.voice,
             model_revision=bindings.model_revision,
+            cast_voices=bindings.cast_voices,
+            assignments=assignments,
+            unknown_voice_id=unknown_voice_id,
+            spans=spans,
         )
+        emitter.emit_cast_resolved(plan)
+        # Emitted before the worker pool exists, so cancelling from the
+        # callback costs the attribution already paid for and no rendering.
+        _check_cancel(cancel)
         if bindings.engine_specification.kind == "pocket":
             config = bindings.engine_specification.pocket_config
             if config is None:

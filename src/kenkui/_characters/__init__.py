@@ -121,8 +121,9 @@ def resolve_attribution(
         # A chapter with no quoted speech has no speaker to attribute, so its
         # roster is never consulted. Front matter and purely descriptive
         # chapters are common enough that asking about them is real spend.
-        spans = extract_spans(chapter.id, chapter.text)
-        if not any(span.is_dialogue for span in spans):
+        if not any(
+            span.is_dialogue for span in extract_spans(chapter.id, chapter.text)
+        ):
             continue
         rosters.append(_roster_for(chapter.text, model_id, client))
     characters = merge_rosters(tuple(rosters))

@@ -67,7 +67,7 @@ def test_pipeline_is_frozen_branchable_and_operations_are_values() -> None:
     with pytest.raises(FrozenInstanceError):
         first.source = root.source  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
-        first.operations[-1].voice_id = "changed"  # type: ignore[misc,union-attr]
+        first.operations[-1].narrator_voice_id = "x"  # type: ignore[misc,union-attr]
 
 
 def test_duplicate_and_contradictory_operations_have_stable_codes() -> None:
@@ -224,6 +224,7 @@ def test_public_values_events_errors_and_results_are_frozen() -> None:
             setattr(value, attribute, None)
 
     assert set(get_args(kk.ExecutionEvent)) == {
+        kk.CastResolved,
         kk.Started,
         kk.StageStarted,
         kk.StageProgress,
@@ -266,6 +267,10 @@ def test_public_exports_are_intentional() -> None:
         "load_voice",
         "remove_voice",
         "unload_voice",
+        "list_castings",
+        "remove_casting",
+        "remove_attribution",
+        "CastResolved",
         "book",
         "epub",
         "Pipeline",

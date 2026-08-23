@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from kenkui._domain.operations import (
-    AssignVoice,
+    AssignVoices,
     MetadataIntent,
     Operation,
     SynthesizeSpeech,
@@ -236,7 +236,9 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     source_bytes_hash: str,
     resolved_voice: Voice | None,
     model_revision: str,
-    cast: CastPlan | None = None,
+    cast_voices: tuple[Voice, ...] = (),
+    assignments: Mapping[str, str] | None = None,
+    unknown_voice_id: str | None = None,
     spans: tuple[SpeakerSpan, ...] = (),
 ) -> ExecutionPlan:
     """Compile supplied material without filesystem, provider, or process effects."""
@@ -245,18 +247,23 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     if not revision:
         raise ModelError(ErrorCode.INVALID_MODEL_REVISION)
 
-    assigned = _one_operation(pipeline.operations, AssignVoice)
+    assigned = _one_operation(pipeline.operations, AssignVoices)
     if assigned is None:
         raise VoiceError(ErrorCode.VOICE_UNRESOLVED)
     if _one_operation(pipeline.operations, SynthesizeSpeech) is None:
         raise ValidationError(ErrorCode.TTS_REQUIRED)
-    if cast is None:
-        voice = _resolve_voice(assigned.voice_id, resolved_voice, revision)
-        # Single voice is the degenerate cast, not a separate path: one
-        # VoicePlan, one renderer, one set of segment identities.
-        cast = CastPlan.single(voice)
-    else:
-        voice = cast.narrator
+    narrator = _resolve_voice(assigned.narrator_voice_id, resolved_voice, revision)
+    # Single voice is the degenerate cast, not a separate path: one renderer
+    # and one set of segment identities serve both.
+    others = tuple(_resolve_voice(item.id, item, revision) for item in cast_voices)
+    by_id = {plan.id: plan for plan in (narrator, *others)}
+    cast = CastPlan(
+        narrator=narrator,
+        unknown=by_id.get(unknown_voice_id or narrator.id, narrator),
+        voices=(narrator, *others),
+        assignments=dict(assignments or {}),
+    )
+    voice = narrator
 
     segments = _compile_segments(inspection.chapters, spans, cast)
     if not segments:

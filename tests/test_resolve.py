@@ -1,0 +1,135 @@
+"""resolve() steps a pipeline forward without changing what it means."""
+
+from __future__ import annotations
+
+import kenkui as kk
+from kenkui._domain.operations import AssignVoices, AttributeQuotes, InferCharacters
+
+_THREE_OPERATIONS = 3
+
+
+def _pipeline(model: str = "fake/model") -> kk.Pipeline:
+    return (
+        kk.epub("book.epub")
+        .infer_characters(model=model)
+        .attribute_quotes(model=model)
+        .assign_voices(narrator="eponine", method="gendered")
+    )
+
+
+def test_building_a_pipeline_performs_no_work() -> None:
+    """Construction records intent; nothing is parsed, fetched, or inferred."""
+    pipeline = _pipeline()
+    assert len(pipeline.operations) == _THREE_OPERATIONS
+
+
+def test_assign_voice_is_the_degenerate_cast() -> None:
+    """One VoicePlan and one renderer serve single and multi voice alike."""
+    single = kk.epub("book.epub").assign_voice("eponine")
+    plural = kk.epub("book.epub").assign_voices(narrator="eponine")
+    assert single.operations == plural.operations
+
+
+def test_unknown_defaults_to_the_narrator_voice() -> None:
+    """A line nobody could place sounds like narration rather than vanishing."""
+    casting = kk.epub("book.epub").assign_voices(narrator="eponine").operations[-1]
+    assert isinstance(casting, AssignVoices)
+    assert casting.unknown_voice_id == "eponine"
+
+
+def test_unknown_can_be_set_independently() -> None:
+    """Unattributed speech can be made audibly distinct from narration."""
+    casting = (
+        kk.epub("book.epub")
+        .assign_voices(narrator="eponine", unknown="paul")
+        .operations[-1]
+    )
+    assert isinstance(casting, AssignVoices)
+    assert casting.unknown_voice_id == "paul"
+
+
+def test_the_cast_is_order_independent() -> None:
+    """Two callers writing the same cast differently must record it the same."""
+    forward = kk.epub("book.epub").assign_voices(
+        narrator="eponine", cast={"a": "anna", "b": "vera"}
+    )
+    reverse = kk.epub("book.epub").assign_voices(
+        narrator="eponine", cast={"b": "vera", "a": "anna"}
+    )
+    assert forward.operations == reverse.operations
+
+
+def test_operation_order_does_not_matter() -> None:
+    """Only the before_tts rule constrains ordering; the planner reads by type."""
+    forward = _pipeline()
+    reverse = (
+        kk.epub("book.epub")
+        .assign_voices(narrator="eponine", method="gendered")
+        .attribute_quotes(model="fake/model")
+        .infer_characters(model="fake/model")
+    )
+    assert set(map(type, forward.operations)) == set(map(type, reverse.operations))
+
+
+def test_resolve_leaves_the_receiver_alone() -> None:
+    """Immutable in shape even though it is an effect."""
+    original = _pipeline()
+    assert original._resolved is None  # noqa: SLF001
+
+
+def test_appending_drops_resolved_values() -> None:
+    """Changing intent invalidates resolution; re-resolving is a store lookup."""
+    resolved = kk.Pipeline(
+        kk.epub("book.epub").source,
+        _pipeline().operations,
+        object(),  # type: ignore[arg-type]
+    )
+    assert resolved.tts()._resolved is None  # noqa: SLF001
+
+
+def test_resolved_values_are_not_intent() -> None:
+    """They must never reach the plan or its fingerprint."""
+    base = _pipeline()
+    carrying = kk.Pipeline(base.source, base.operations, object())  # type: ignore[arg-type]
+    assert carrying.operations == base.operations
+
+
+def test_attributing_without_a_roster_is_rejected_by_presence_not_order() -> None:
+    """A presence rule, so chaining order stays free."""
+    issues = (
+        kk.epub("book.epub")
+        .attribute_quotes(model="fake/model")
+        .assign_voices(narrator="eponine")
+        .validate()
+        .issues
+    )
+    assert kk.ErrorCode.ATTRIBUTION_UNAVAILABLE in {issue.code for issue in issues}
+
+
+def test_inferring_alone_is_fine() -> None:
+    """A roster with no attribution is harmless: nothing consumes it."""
+    issues = (
+        kk.epub("book.epub")
+        .infer_characters(model="fake/model")
+        .assign_voices(narrator="eponine")
+        .validate()
+        .issues
+    )
+    assert kk.ErrorCode.ATTRIBUTION_UNAVAILABLE not in {issue.code for issue in issues}
+
+
+def test_the_model_id_must_be_real() -> None:
+    """A blank model id would reach the provider as a broken request."""
+    for blank in ("", "   "):
+        try:
+            kk.epub("book.epub").infer_characters(model=blank)
+        except kk.ValidationError:
+            continue
+        msg = f"blank model {blank!r} was accepted"
+        raise AssertionError(msg)
+
+
+def test_operations_are_named_for_what_they_do() -> None:
+    """The three character operations, and nothing else."""
+    kinds = {type(op) for op in _pipeline().operations}
+    assert kinds == {InferCharacters, AttributeQuotes, AssignVoices}

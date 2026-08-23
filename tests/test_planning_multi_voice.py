@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import kenkui as kk
 from kenkui._domain.planning import (
-    CastPlan,
     ExecutionPlan,
     SpeakerSpan,
-    VoicePlan,
     compile_execution_plan,
 )
 from kenkui._execution.cache import CacheStore
@@ -28,21 +26,24 @@ NARRATION_B = " Nobody answered him."
 TEXT = NARRATION_A + DIALOGUE + NARRATION_B
 
 
-def _voice_plan(voice_id: str, fingerprint: str) -> VoicePlan:
-    return VoicePlan(
+def _voice(voice_id: str, fingerprint: str) -> kk.Voice:
+    """Build a resolved public Voice, which is what the planner converts."""
+    return kk.Voice(
         id=voice_id,
         name=voice_id.title(),
-        content_fingerprint=fingerprint,
-        language="en-US",
+        enabled=True,
         provenance="Project-owned recording by Test Speaker",
         license_id="CC0-1.0",
         commercial_use_allowed=True,
+        language="en-US",
+        content_fingerprint=fingerprint,
         compatible_model_revisions=(MODEL_REVISION,),
+        state="loaded",
     )
 
 
-NARRATOR = _voice_plan("eponine", "2" * 64)
-JAVERT = _voice_plan("charles", "3" * 64)
+NARRATOR = _voice("eponine", "2" * 64)
+JAVERT = _voice("charles", "3" * 64)
 
 
 def _inspection(text: str = TEXT) -> kk.BookInspection:
@@ -50,15 +51,6 @@ def _inspection(text: str = TEXT) -> kk.BookInspection:
     return kk.BookInspection(
         kk.BookMetadata("Source Title", "Source Author", cover_available=True),
         (chapter,),
-    )
-
-
-def _cast() -> CastPlan:
-    return CastPlan(
-        narrator=NARRATOR,
-        unknown=NARRATOR,
-        voices=(NARRATOR, JAVERT),
-        assignments={"javert": "charles"},
     )
 
 
@@ -75,16 +67,16 @@ def _spans() -> tuple[SpeakerSpan, ...]:
 def _compile(
     *,
     spans: tuple[SpeakerSpan, ...] = (),
-    cast: CastPlan | None = None,
     text: str = TEXT,
 ) -> ExecutionPlan:
     return compile_execution_plan(
         kk.epub("ignored-location.epub").assign_voice("eponine").tts(),
         _inspection(text),
         source_bytes_hash=SOURCE_HASH,
-        resolved_voice=None,
+        resolved_voice=NARRATOR,
         model_revision=MODEL_REVISION,
-        cast=cast or _cast(),
+        cast_voices=(JAVERT,),
+        assignments={"javert": "charles"},
         spans=spans,
     )
 

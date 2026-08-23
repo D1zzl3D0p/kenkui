@@ -29,10 +29,34 @@ class NormalizeText:
 
 
 @dataclass(frozen=True, slots=True)
-class AssignVoice:
-    """Assign one voice to all selected speech."""
+class InferCharacters:
+    """Derive a character roster with the named model."""
 
-    voice_id: str
+    model_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttributeQuotes:
+    """Assign a speaker to each quoted run with the named model."""
+
+    model_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AssignVoices:
+    """Cast narrator, unknown, and characters to voices.
+
+    Single voice is the degenerate case, not a separate operation: one
+    VoicePlan and one renderer serve both, which is what keeps multi-voice a
+    composition rather than a second architecture.
+    """
+
+    narrator_voice_id: str
+    unknown_voice_id: str
+    # Sorted pairs rather than a mapping: an operation record has to be
+    # hashable and compare equal regardless of how the caller ordered it.
+    cast: tuple[tuple[str, str], ...] = ()
+    method: str = "gendered"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +77,9 @@ Operation: TypeAlias = (
     SelectChapters
     | SelectChapterRange
     | NormalizeText
-    | AssignVoice
+    | InferCharacters
+    | AttributeQuotes
+    | AssignVoices
     | SynthesizeSpeech
     | MetadataIntent
 )

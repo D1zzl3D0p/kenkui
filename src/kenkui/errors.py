@@ -28,6 +28,7 @@ class ErrorCode(StrEnum):
     VOICE_VARIETY_INVALID = "voice_variety_invalid"
     CASTING_METHOD_UNKNOWN = "casting_method_unknown"
     CAST_POOL_EMPTY = "cast_pool_empty"
+    CAST_LANGUAGE_MIXED = "cast_language_mixed"
     CHARACTER_UNKNOWN = "character_unknown"
     MODEL_CALL_FAILED = "model_call_failed"
     MODEL_RESPONSE_INVALID = "model_response_invalid"
@@ -98,6 +99,9 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.VOICE_VARIETY_INVALID: "The voice variety or state is not recognized.",
     ErrorCode.CASTING_METHOD_UNKNOWN: "The casting method is not recognized.",
     ErrorCode.CAST_POOL_EMPTY: "No loaded voice is available to cast characters.",
+    ErrorCode.CAST_LANGUAGE_MIXED: (
+        "Every voice in one cast must share a language."
+    ),
     ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
     ErrorCode.MODEL_CALL_FAILED: "The language model could not be reached.",
     ErrorCode.MODEL_RESPONSE_INVALID: (
