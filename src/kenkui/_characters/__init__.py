@@ -23,7 +23,12 @@ from kenkui._characters.narration import is_first_person
 from kenkui._characters.prompts import PROMPT_VERSION, ROSTER_PROMPT
 from kenkui._characters.quotes import extract_spans
 from kenkui._characters.store import AttributionRecord
-from kenkui._domain.casting import CastingOutcome, CastingRequest, solve
+from kenkui._domain.casting import (
+    CastingOutcome,
+    CastingRequest,
+    CharacterProfile,
+    solve,
+)
 from kenkui._domain.planning import (
     NORMALIZATION_SCHEMA_VERSION,
     PARSER_SCHEMA_VERSION,
@@ -34,7 +39,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from kenkui._characters.llm import Client
-    from kenkui._domain.casting import CharacterProfile
     from kenkui._domain.planning import SpeakerSpan
     from kenkui.cancellation import CancellationToken
     from kenkui.inspection import BookInspection
@@ -101,7 +105,7 @@ def _measured(
         seen = chapters.setdefault(span.character_id, [])
         if span.chapter_id not in seen:
             seen.append(span.chapter_id)
-    return tuple(
+    named = tuple(
         type(character)(
             id=character.id,
             display_name=character.display_name,
@@ -115,6 +119,25 @@ def _measured(
         # waste one.
         if character.id in volume
     )
+    # Roles are minted during attribution, never listed on any chapter's
+    # roster, so they need synthesising here or the invariant that every
+    # span.character_id is either None or present in characters would break.
+    roles = {
+        span.character_id
+        for span in spans
+        if span.character_id is not None and span.character_id.startswith("role:")
+    }
+    synthesised = tuple(
+        CharacterProfile(
+            id=role,
+            display_name=role.removeprefix("role:").split("@")[0].replace("-", " "),
+            gender=None,
+            spoken_characters=volume.get(role, 0),
+            chapter_ids=tuple(chapters.get(role, ())),
+        )
+        for role in sorted(roles)
+    )
+    return (*named, *synthesised)
 
 
 def resolve_cast(record: AttributionRecord, request: CastingRequest) -> CastingOutcome:

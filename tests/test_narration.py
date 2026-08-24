@@ -272,3 +272,67 @@ def test_narrator_orphaned_by_roster_merge_is_never_attributed() -> None:
     assert all(
         span.character_id is None or span.character_id in known for span in record.spans
     )
+
+
+def test_a_role_answer_is_scoped_to_its_chapter() -> None:
+    """A role the text identifies but never names is scoped to its chapter."""
+    resolved = _resolve("guard", frozenset({"rand"}), None, chapter_id="ch-1")
+    assert resolved == "role:guard@ch-1"
+
+
+def test_the_same_role_in_two_chapters_is_two_characters() -> None:
+    """The same role word in different chapters mints two distinct ids."""
+    first = _resolve("guard", frozenset(), None, chapter_id="ch-1")
+    second = _resolve("guard", frozenset(), None, chapter_id="ch-2")
+    assert first != second
+
+
+def test_a_roster_character_still_wins_over_a_role() -> None:
+    """A roster id shaped like a role resolves to the character, not a role."""
+    assert _resolve("rand", frozenset({"rand"}), None, chapter_id="ch-1") == "rand"
+
+
+def test_a_word_outside_the_role_vocabulary_is_refused() -> None:
+    """A hallucinated name is not a role just because it is short and lowercase.
+
+    The vocabulary is closed on purpose: a pattern that accepted any short
+    lowercase word could not tell a role from an invented name, and would
+    turn every model hallucination into a cast voice.
+    """
+    assert _resolve("someone-else", frozenset(), None, chapter_id="ch-1") is None
+
+
+def test_a_role_id_synthesised_by_measured_satisfies_the_invariant() -> None:
+    """A role id minted during attribution appears in record.characters too.
+
+    Every span.character_id is either None or present in record.characters --
+    the invariant tasks 4 and 5 established. Role ids are minted during
+    attribution and are never listed on any chapter's roster, so _measured
+    must synthesise a CharacterProfile for each one it finds in the spans, or
+    an orphaned role id would reach a span with nothing behind it.
+    """
+    text = '"Halt!" the guard said.'
+
+    class RoleClient:
+        """Rosters one unrelated character; attributes the quote to a role."""
+
+        def complete(self, model: str, prompt: str) -> str:
+            """Route by prompt kind: roster names "rand", attribution "guard"."""
+            assert model
+            if "List the speaking characters" in prompt:
+                return json.dumps({"characters": [{"id": "rand", "name": "Rand"}]})
+            return json.dumps({"attributions": [{"quote_id": 0, "speaker": "guard"}]})
+
+    chapter = kk.ChapterInspection("ch1", 0, "One", len(text), text)
+    metadata = kk.BookMetadata("T", "A", cover_available=False)
+    book = kk.BookInspection(metadata, (chapter,))
+
+    record = resolve_attribution(
+        book, "e" * 64, "m/x", client=RoleClient(), roster_model_id="m/x"
+    )
+    known = {character.id for character in record.characters}
+    assert "role:guard@ch1" in known
+    assert any(span.character_id == "role:guard@ch1" for span in record.spans)
+    assert all(
+        span.character_id is None or span.character_id in known for span in record.spans
+    )

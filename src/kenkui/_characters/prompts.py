@@ -7,11 +7,56 @@ reused silently under the new one.
 
 from __future__ import annotations
 
-PROMPT_VERSION = "characters-v2"
+PROMPT_VERSION = "characters-v3"
 
 # Speakers carried into the next window so the model can hold A-B-A-B
 # conversational momentum across a boundary it cannot see past.
 CONTINUITY_SPEAKERS = 4
+
+# The roles a speaker may be identified by when the text names no one. Closed
+# on purpose: a pattern that accepts any short lowercase word cannot tell a
+# role from a hallucinated name, and would turn every invented speaker into a
+# cast voice. A word outside this list resolves to unknown, exactly as before
+# roles existed.
+ROLE_WORDS: frozenset[str] = frozenset(
+    {
+        "man",
+        "woman",
+        "boy",
+        "girl",
+        "child",
+        "stranger",
+        "voice",
+        "first-man",
+        "second-man",
+        "third-man",
+        "first-woman",
+        "second-woman",
+        "third-woman",
+        "old-man",
+        "old-woman",
+        "young-man",
+        "young-woman",
+        "guard",
+        "soldier",
+        "servant",
+        "innkeeper",
+        "cook",
+        "farmer",
+        "merchant",
+        "sailor",
+        "lookout",
+        "watchman",
+        "driver",
+        "porter",
+        "messenger",
+        "priest",
+        "doctor",
+        "nurse",
+        "clerk",
+        "captain",
+    }
+)
 
 ROSTER_PROMPT = """\
 List the speaking characters in this passage from a novel.
@@ -70,4 +115,13 @@ RULES
 - A character marked "narrates this book" tells it in the first person. A quote
   tagged "I said", "I asked" or "said I" is spoken by them: answer with their
   id. Do not answer "unknown" for those, and never answer with the pronoun.
+- When the text identifies a speaker without naming them -- "the lookout in the
+  bow", "the first man", "the innkeeper" -- answer with the matching word from
+  this list, if one fits: man, woman, boy, girl, child, stranger, voice,
+  first-man, second-man, third-man, first-woman, second-woman, third-woman,
+  old-man, old-woman, young-man, young-woman, guard, soldier, servant,
+  innkeeper, cook, farmer, merchant, sailor, lookout, watchman, driver,
+  porter, messenger, priest, doctor, nurse, clerk, captain. Prefer this over
+  "unknown" whenever the text says who is speaking at all and one of these
+  words fits.
 """

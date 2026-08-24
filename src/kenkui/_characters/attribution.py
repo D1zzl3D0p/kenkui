@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING
 
 from kenkui._characters.infer import PRONOUNS, UNKNOWN
 from kenkui._characters.llm import complete_json
-from kenkui._characters.prompts import ATTRIBUTION_PROMPT, CONTINUITY_SPEAKERS
+from kenkui._characters.prompts import (
+    ATTRIBUTION_PROMPT,
+    CONTINUITY_SPEAKERS,
+    ROLE_WORDS,
+)
 from kenkui._characters.quotes import TextSpan, extract_spans
 from kenkui._domain.planning import SpeakerSpan
 from kenkui.errors import ModelError
@@ -48,10 +52,14 @@ def _roster_block(
     )
 
 
-def _resolve(
-    speaker: object, known: frozenset[str], narrator_id: str | None = None
+def _resolve(  # noqa: PLR0911 - one branch per resolution rule, kept flat.
+    speaker: object,
+    known: frozenset[str],
+    narrator_id: str | None = None,
+    *,
+    chapter_id: str | None = None,
 ) -> str | None:
-    """Return a known character id, or None meaning unknown.
+    """Return a known character id, a scoped role id, or None meaning unknown.
 
     A returned pronoun is rejected outright: the prompt forbids it, and a
     pronoun that slipped through would merge unrelated speakers into one voice.
@@ -74,7 +82,17 @@ def _resolve(
         return narrator_id if narrator_id in known else None
     if candidate in PRONOUNS:
         return None
-    return candidate if candidate in known else None
+    if candidate in known:
+        return candidate
+    if chapter_id is not None and candidate in ROLE_WORDS:
+        # A role names a speaker the text identifies without naming: "the
+        # lookout", "the first man". It is scoped to the chapter because
+        # chapter 40's guard is not chapter 12's, and the model answers the
+        # bare word because an id it must reproduce gets shortened and lost.
+        # The vocabulary is closed: a pattern that accepted any short
+        # lowercase word could not tell a role from a hallucinated name.
+        return f"role:{candidate}@{chapter_id}"
+    return None
 
 
 def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
@@ -114,7 +132,9 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         quotes=_escaped(json.dumps(quotes, ensure_ascii=False, indent=2)),
     )
     known = frozenset(character.id for character in characters)
-    answers = _answers(model_id, prompt, client, known, narrator_id)
+    answers = _answers(
+        model_id, prompt, client, known, narrator_id, chapter_id=chapter.id
+    )
 
     # A quote's id is its position among the dialogue spans, so pairing them
     # back up is a zip. A model that skipped an id leaves None, which is
@@ -145,12 +165,14 @@ def _all_narrated(spans: Sequence[TextSpan]) -> tuple[SpeakerSpan, ...]:
     )
 
 
-def _answers(
+def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     model_id: str,
     prompt: str,
     client: Client | None,
     known: frozenset[str],
     narrator_id: str | None = None,
+    *,
+    chapter_id: str | None = None,
 ) -> dict[int, str | None]:
     """Return quote index to resolved speaker, tolerating a bad response.
 
@@ -168,5 +190,7 @@ def _answers(
             continue
         quote_id = item.get("quote_id")
         if isinstance(quote_id, int) and not isinstance(quote_id, bool):
-            answers[quote_id] = _resolve(item.get("speaker"), known, narrator_id)
+            answers[quote_id] = _resolve(
+                item.get("speaker"), known, narrator_id, chapter_id=chapter_id
+            )
     return answers
