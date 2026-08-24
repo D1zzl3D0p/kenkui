@@ -59,3 +59,21 @@ def test_curly_single_first_person_tag_is_still_counted() -> None:
     """The fix for the bridging bug must not over-correct into a miss."""
     text = "‘I will not,’ I said."
     assert first_person_tags(text, _ends(text)) == 1
+
+
+def test_curly_apostrophe_contraction_before_the_verb_is_counted() -> None:
+    """A professionally typeset contraction must not read as a closing quote.
+
+    EPUBs typeset every apostrophe as U+2019, the same glyph that closes
+    British dialogue. `I'd` here is a contraction, not a second quote, and
+    excluding U+2019 outright -- the fix for the bridging bug -- must not
+    cost this tag.
+    """
+    text = '"Stop it," I’d said.'
+    assert first_person_tags(text, _ends(text)) == 1
+
+
+def test_curly_apostrophe_contraction_after_the_verb_is_counted() -> None:
+    """A contraction elsewhere in the window must not block the real tag."""
+    text = '"Stop it," I said, though I’d rather not.'
+    assert first_person_tags(text, _ends(text)) == 1
