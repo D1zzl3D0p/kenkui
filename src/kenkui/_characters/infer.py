@@ -120,20 +120,33 @@ def merge_rosters(
     asked about one chapter answers "Tam" and about another "Tam al'Thor", and
     the two are one man. `identity` decides which pairs fold, and refuses the
     short forms that two people could claim.
+
+    Folding is layered on top of id matching, never instead of it. `id` is
+    the model's stable book-wide identifier; `name` is only how the text
+    names someone in one chapter, per `ROSTER_PROMPT`. So two distinct ids
+    are grouped by id first, exactly as before identity-aware folding
+    existed. Only then are the *distinct* ids folded into each other, by
+    comparing their display names through `identity`. And two distinct ids
+    that happen to display the exact same bare name are never folded into
+    each other on that evidence alone: the model already told us, by giving
+    them different ids, that they are not the same person, and a name
+    collision is not grounds to override that.
     """
-    from kenkui._characters.identity import (  # noqa: PLC0415 - avoids a cycle
+    from kenkui._characters.identity import (  # noqa: PLC0415 - identity is
+        # only needed once a book has more than one roster to fold, so the
+        # import is kept off the path of callers that never merge rosters.
         group_full_names,
         resolve_short_forms,
     )
 
-    by_display: dict[str, CharacterProfile] = {}
+    by_id: dict[str, CharacterProfile] = {}
     for roster in rosters:
         for character in roster:
-            existing = by_display.get(character.display_name)
+            existing = by_id.get(character.id)
             if existing is None:
-                by_display[character.display_name] = character
+                by_id[character.id] = character
             elif existing.gender is None and character.gender is not None:
-                by_display[character.display_name] = existing.__class__(
+                by_id[character.id] = existing.__class__(
                     id=existing.id,
                     display_name=existing.display_name,
                     gender=character.gender,
@@ -141,21 +154,45 @@ def merge_rosters(
                     chapter_ids=existing.chapter_ids,
                 )
 
-    names = sorted(by_display)
-    entity = group_full_names([n for n in names if len(n.split()) > 1])
-    resolved = resolve_short_forms([n for n in names if len(n.split()) == 1], entity)
-    canonical = {**entity, **resolved.assigned}
+    ids_by_name: dict[str, list[str]] = {}
+    for character_id, character in by_id.items():
+        ids_by_name.setdefault(character.display_name, []).append(character_id)
+    # Two distinct ids sharing one display name is the model's own signal
+    # that they are two people wearing the same surface name in different
+    # chapters (e.g. two characters each only ever called "Charles"). That
+    # name is therefore excluded from identity resolution entirely: it must
+    # neither fold those ids into each other nor act as a host that some
+    # other name resolves to.
+    contested = {name for name, ids in ids_by_name.items() if len(ids) > 1}
+
+    usable_names = sorted(name for name in ids_by_name if name not in contested)
+    entity = group_full_names([n for n in usable_names if len(n.split()) > 1])
+    resolved = resolve_short_forms(
+        [n for n in usable_names if len(n.split()) == 1], entity
+    )
+    canonical: dict[str, str] = {
+        **entity,
+        **resolved.assigned,
+        # No identity signal either way: each contested id stands alone.
+        **{name: name for name in contested},
+    }
+
+    name_to_id = {
+        name: ids[0] for name, ids in ids_by_name.items() if name not in contested
+    }
 
     merged: dict[str, CharacterProfile] = {}
-    for name, character in by_display.items():
-        target = canonical.get(name)
-        if target is None:
+    for character_id, character in by_id.items():
+        target_name = canonical.get(character.display_name)
+        if target_name is None:
             # Ambiguous short form: two people could claim it, so it names
             # neither. See identity.resolve_short_forms.
             continue
-        head = by_display[target]
-        gender = head.gender or character.gender
-        merged[head.id] = head.__class__(
+        head_id = name_to_id.get(target_name, character_id)
+        head = by_id[head_id]
+        existing = merged.get(head_id, head)
+        gender = existing.gender if existing.gender is not None else character.gender
+        merged[head_id] = head.__class__(
             id=head.id,
             display_name=head.display_name,
             gender=gender,

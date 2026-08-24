@@ -137,3 +137,22 @@ def test_merge_rosters_attaches_an_unambiguous_short_form() -> None:
     )
     assert len(merged) == 1
     assert merged[0].id == "tam-althor"
+
+
+def test_merge_rosters_keeps_two_ids_with_an_identical_display_name_apart() -> None:
+    """Two distinct ids sharing one bare name are not folded into each other.
+
+    `id` is the model's stable identifier; a shared surface name across two
+    distinct ids is not evidence they are one person - it is the model
+    telling us, via the ids, that they are not.
+    """
+    merged = merge_rosters(
+        (
+            (_profile("charles-hayter", "Charles"),),
+            (_profile("charles-musgrove", "Charles"),),
+        )
+    )
+    assert sorted(character.id for character in merged) == [
+        "charles-hayter",
+        "charles-musgrove",
+    ]
