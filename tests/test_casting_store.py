@@ -201,7 +201,7 @@ def test_the_store_path_follows_a_redirected_cache_root(
 
 
 def _voice(voice_id: str, traits: str) -> kk.Voice:
-    """A loaded voice the solver can draw from."""
+    """Return a loaded voice the solver can draw from."""
     return kk.Voice(
         id=voice_id,
         name=voice_id.title(),

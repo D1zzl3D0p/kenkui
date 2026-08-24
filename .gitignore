@@ -33,3 +33,6 @@ site/
 
 # Agent tooling state
 .serena/
+
+# Local evaluation harness: scratch, not shipped.
+evals/
