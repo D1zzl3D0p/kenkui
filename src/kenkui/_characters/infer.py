@@ -15,15 +15,47 @@ from kenkui._domain.casting import CharacterProfile
 # pronoun as a character id would collapse every male speaker into one voice.
 PRONOUNS = frozenset(
     {
-        "i", "me", "my", "mine", "myself",
-        "you", "your", "yours", "yourself",
-        "he", "him", "his", "himself",
-        "she", "her", "hers", "herself",
-        "it", "its", "itself",
-        "we", "us", "our", "ours", "ourselves",
-        "they", "them", "their", "theirs", "themselves",
-        "who", "whom", "whose", "someone", "somebody",
-        "everyone", "everybody", "no-one", "nobody", "anyone", "anybody",
+        "i",
+        "me",
+        "my",
+        "mine",
+        "myself",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "he",
+        "him",
+        "his",
+        "himself",
+        "she",
+        "her",
+        "hers",
+        "herself",
+        "it",
+        "its",
+        "itself",
+        "we",
+        "us",
+        "our",
+        "ours",
+        "ourselves",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "themselves",
+        "who",
+        "whom",
+        "whose",
+        "someone",
+        "somebody",
+        "everyone",
+        "everybody",
+        "no-one",
+        "nobody",
+        "anyone",
+        "anybody",
     }
 )
 
@@ -81,23 +113,53 @@ def normalise_roster(payload: object) -> tuple[CharacterProfile, ...]:
 def merge_rosters(
     rosters: tuple[tuple[CharacterProfile, ...], ...],
 ) -> tuple[CharacterProfile, ...]:
-    """Combine per-chapter rosters, keeping the first gender actually stated.
+    """Combine per-chapter rosters, folding the names that are one person.
 
     A character named in ten chapters must be one entry, or casting would
-    assign them ten voices.
+    assign them ten voices. Exact-id matching is not enough for that: a model
+    asked about one chapter answers "Tam" and about another "Tam al'Thor", and
+    the two are one man. `identity` decides which pairs fold, and refuses the
+    short forms that two people could claim.
     """
-    merged: dict[str, CharacterProfile] = {}
+    from kenkui._characters.identity import (  # noqa: PLC0415 - avoids a cycle
+        group_full_names,
+        resolve_short_forms,
+    )
+
+    by_display: dict[str, CharacterProfile] = {}
     for roster in rosters:
         for character in roster:
-            existing = merged.get(character.id)
+            existing = by_display.get(character.display_name)
             if existing is None:
-                merged[character.id] = character
+                by_display[character.display_name] = character
             elif existing.gender is None and character.gender is not None:
-                merged[character.id] = existing.__class__(
+                by_display[character.display_name] = existing.__class__(
                     id=existing.id,
                     display_name=existing.display_name,
                     gender=character.gender,
                     spoken_characters=existing.spoken_characters,
                     chapter_ids=existing.chapter_ids,
                 )
+
+    names = sorted(by_display)
+    entity = group_full_names([n for n in names if len(n.split()) > 1])
+    resolved = resolve_short_forms([n for n in names if len(n.split()) == 1], entity)
+    canonical = {**entity, **resolved.assigned}
+
+    merged: dict[str, CharacterProfile] = {}
+    for name, character in by_display.items():
+        target = canonical.get(name)
+        if target is None:
+            # Ambiguous short form: two people could claim it, so it names
+            # neither. See identity.resolve_short_forms.
+            continue
+        head = by_display[target]
+        gender = head.gender or character.gender
+        merged[head.id] = head.__class__(
+            id=head.id,
+            display_name=head.display_name,
+            gender=gender,
+            spoken_characters=head.spoken_characters,
+            chapter_ids=head.chapter_ids,
+        )
     return tuple(sorted(merged.values(), key=lambda character: character.id))

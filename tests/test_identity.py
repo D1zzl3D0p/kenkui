@@ -1,5 +1,5 @@
 """One person or two, decided from the names alone."""
-# ruff: noqa: D103, FBT001
+# ruff: noqa: D103, FBT001, PLR2004
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from kenkui._characters.identity import (
     resolve_short_forms,
     same_person,
 )
+from kenkui._characters.infer import merge_rosters
+from kenkui._domain.casting import CharacterProfile
 
 
 @pytest.mark.parametrize(
@@ -80,3 +82,58 @@ def test_short_form_with_two_hosts_is_dropped() -> None:
 def test_short_form_with_no_host_stands_alone() -> None:
     resolved = resolve_short_forms(["Egwene"], {})
     assert resolved.assigned["Egwene"] == "Egwene"
+
+
+def _profile(character_id: str, display: str) -> CharacterProfile:
+    return CharacterProfile(
+        id=character_id,
+        display_name=display,
+        gender=None,
+        spoken_characters=0,
+        chapter_ids=(),
+    )
+
+
+def test_merge_rosters_folds_one_person_under_two_names() -> None:
+    merged = merge_rosters(
+        (
+            (_profile("moiraine-sedai", "Moiraine Sedai"),),
+            (_profile("moiraine-aes-sedai", "Moiraine Aes Sedai"),),
+        )
+    )
+    assert len(merged) == 1
+
+
+def test_merge_rosters_keeps_two_people_apart() -> None:
+    merged = merge_rosters(
+        (
+            (_profile("mr-elliot", "Mr Elliot"),),
+            (_profile("miss-elliot", "Miss Elliot"),),
+        )
+    )
+    assert len(merged) == 2
+
+
+def test_merge_rosters_drops_an_ambiguous_short_form() -> None:
+    merged = merge_rosters(
+        (
+            (_profile("charles-hayter", "Charles Hayter"),),
+            (_profile("charles-musgrove", "Charles Musgrove"),),
+            (_profile("charles", "Charles"),),
+        )
+    )
+    assert sorted(character.id for character in merged) == [
+        "charles-hayter",
+        "charles-musgrove",
+    ]
+
+
+def test_merge_rosters_attaches_an_unambiguous_short_form() -> None:
+    merged = merge_rosters(
+        (
+            (_profile("tam-althor", "Tam al'Thor"),),
+            (_profile("tam", "Tam"),),
+        )
+    )
+    assert len(merged) == 1
+    assert merged[0].id == "tam-althor"
