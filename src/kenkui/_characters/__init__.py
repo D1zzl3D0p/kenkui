@@ -217,6 +217,14 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     # One narrator per book: chapters that disagree are outvoted rather than
     # producing a second narrating character.
     narrator_id = narrators.most_common(1)[0][0] if narrators else None
+    # Vouched against the chapter roster that named them, not the merged
+    # one: alias folding can rename or drop that exact id. A narrator who
+    # did not survive the fold cannot be marked in the prompt, or the id
+    # would reach a span with no character behind it.
+    if narrator_id is not None and not any(
+        character.id == narrator_id for character in characters
+    ):
+        narrator_id = None
 
     spans: list[SpeakerSpan] = []
     recent: tuple[str, ...] = ()

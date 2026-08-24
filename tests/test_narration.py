@@ -9,12 +9,13 @@ import zipfile
 from typing import TYPE_CHECKING
 
 import kenkui as kk
-from kenkui._characters import resolve_attribution
+from kenkui._characters import _roster_for, resolve_attribution
 from kenkui._characters.attribution import _resolve
 from kenkui._characters.narration import first_person_tags, is_first_person
 from kenkui._characters.quotes import extract_spans
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
 FIRST = '"I will not," I said. "You know that." She turned away.'
@@ -168,3 +169,106 @@ def test_bare_narrator_is_unknown_without_a_narrator() -> None:
 def test_a_pronoun_is_still_refused() -> None:
     """A narrator on the book does not open the door to pronoun answers."""
     assert _resolve("she", frozenset({"nieshka"}), "nieshka") is None
+
+
+class _RosterClient:
+    """Answers every roster prompt with a fixed payload."""
+
+    def __init__(self, payload: Mapping[str, object]) -> None:
+        """Store the payload to hand back regardless of prompt content."""
+        self.payload = payload
+
+    def complete(self, model: str, prompt: str) -> str:
+        """Return the fixed payload, ignoring the prompt entirely."""
+        assert model
+        assert prompt
+        return json.dumps(self.payload)
+
+
+def test_roster_for_rejects_a_narrator_not_on_its_own_roster() -> None:
+    """A narrator id the model did not also list cannot be vouched for."""
+    payload = {
+        "characters": [{"id": "nieshka", "name": "Nieshka"}],
+        "narrator": "someone-else",
+    }
+    _roster, narrator = _roster_for(
+        "text", "m/x", _RosterClient(payload), first_person=True
+    )
+    assert narrator is None
+
+
+def test_roster_for_narrator_absent_or_null() -> None:
+    """A model that omits or nulls the narrator key names nobody."""
+    absent = {"characters": [{"id": "nieshka", "name": "Nieshka"}]}
+    null = {"characters": [{"id": "nieshka", "name": "Nieshka"}], "narrator": None}
+    for payload in (absent, null):
+        _roster, narrator = _roster_for(
+            "text", "m/x", _RosterClient(payload), first_person=True
+        )
+        assert narrator is None
+
+
+def test_roster_for_ignores_a_claimed_narrator_outside_first_person() -> None:
+    """A narrator is only ever asked for, and only ever accepted, in first person."""
+    payload = {
+        "characters": [{"id": "nieshka", "name": "Nieshka"}],
+        "narrator": "nieshka",
+    }
+    _roster, narrator = _roster_for(
+        "text", "m/x", _RosterClient(payload), first_person=False
+    )
+    assert narrator is None
+
+
+def test_narrator_orphaned_by_roster_merge_is_never_attributed() -> None:
+    """A narrator vouched by one chapter's roster can be folded by identity.
+
+    Chapter one vouches "nieshka" against its own roster and votes them
+    narrator. Chapter two names the same person by their full name under a
+    different id, and merge_rosters folds the bare form into it -- exactly
+    the short-form folding merge_rosters exists to do -- leaving "nieshka"
+    absent from the merged roster. The orphaned id must never reach a span:
+    every span.character_id is either None or present in record.characters.
+    """
+    ch1 = '"I will not," I said. "You know that." ' * 3
+    ch2 = 'Nieshka Fullname entered the room. "Hello," she said.'
+
+    class FoldingClient:
+        """Names a narrator in chapter one that chapter two's roster folds away."""
+
+        def complete(self, model: str, prompt: str) -> str:
+            """Route by prompt kind and, for rosters, by which chapter it is."""
+            assert model
+            if "List the speaking characters" in prompt:
+                if "I will not" in prompt:
+                    return json.dumps(
+                        {
+                            "characters": [{"id": "nieshka", "name": "Nieshka"}],
+                            "narrator": "nieshka",
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "characters": [
+                            {"id": "nieshka-fullname", "name": "Nieshka Fullname"}
+                        ]
+                    }
+                )
+            return json.dumps(
+                {"attributions": [{"quote_id": 0, "speaker": "narrator"}]}
+            )
+
+    chapter1 = kk.ChapterInspection("ch1", 0, "One", len(ch1), ch1)
+    chapter2 = kk.ChapterInspection("ch2", 1, "Two", len(ch2), ch2)
+    metadata = kk.BookMetadata("T", "A", cover_available=False)
+    book = kk.BookInspection(metadata, (chapter1, chapter2))
+
+    record = resolve_attribution(
+        book, "c" * 64, "m/x", client=FoldingClient(), roster_model_id="m/x"
+    )
+    known = {character.id for character in record.characters}
+    # The fold really happened, or the invariant below would pass vacuously.
+    assert "nieshka" not in known
+    assert all(
+        span.character_id is None or span.character_id in known for span in record.spans
+    )

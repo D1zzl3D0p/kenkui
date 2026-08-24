@@ -68,7 +68,10 @@ def _resolve(
     if not candidate or candidate == UNKNOWN:
         return None
     if candidate == NARRATOR:
-        return narrator_id
+        # Gated on membership too: a narrator vouched against one chapter's
+        # roster can be folded away by merge_rosters, and an orphaned id
+        # must never reach a span whatever the caller passed.
+        return narrator_id if narrator_id in known else None
     if candidate in PRONOUNS:
         return None
     return candidate if candidate in known else None
