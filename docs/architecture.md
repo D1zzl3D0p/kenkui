@@ -145,6 +145,13 @@ provisioning already performs. The render path is unchanged: spawned workers
 install a socket-denying audit hook and set the offline environment variables,
 so no credential and no request can reach them.
 
+A book narrated in the first person names its narrator during roster
+inference, and attribution marks them in the roster it sends. Their id is an
+ordinary character id, so their spoken lines and their narration differ only in
+which voice casting gives them: `_castable` withholds the narrator voice from
+every character, so a narrating character cannot be given the voice their own
+narration uses.
+
 ## Span-then-chunk segmentation
 
 Attribution produces speaker spans that partition a chapter. The frozen

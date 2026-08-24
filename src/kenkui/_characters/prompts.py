@@ -7,7 +7,7 @@ reused silently under the new one.
 
 from __future__ import annotations
 
-PROMPT_VERSION = "characters-v1"
+PROMPT_VERSION = "characters-v2"
 
 # Speakers carried into the next window so the model can hold A-B-A-B
 # conversational momentum across a boundary it cannot see past.
@@ -17,7 +17,7 @@ ROSTER_PROMPT = """\
 List the speaking characters in this passage from a novel.
 
 Return ONLY JSON:
-{{"characters": [{{"id": "...", "name": "...", "gender": "..."}}]}}
+{{"characters": [{{"id": "...", "name": "...", "gender": "..."}}], "narrator": "..."}}
 
 - "id": lowercase, words joined by hyphens, derived from the name. Stable
   across the whole book, so use the fullest form you see: "elizabeth-bennet",
@@ -28,6 +28,10 @@ Return ONLY JSON:
 - Include only characters who speak or are addressed. Omit places, objects,
   and groups.
 - Never return a pronoun as a name.
+- "narrator": when the passage is written in the first person, the "id" of the
+  character narrating it, taken from the list you are returning. Omit this key
+  or return null when the passage is written in the third person, or when the
+  narrator is never named.
 
 Passage:
 ---
@@ -63,4 +67,7 @@ RULES
   speech. Answer "unknown" for it.
 - Prefer "unknown" over a guess. An unattributed line is narrated, which is
   correct-sounding; a wrongly attributed line is audibly wrong.
+- A character marked "narrates this book" tells it in the first person. A quote
+  tagged "I said", "I asked" or "said I" is spoken by them: answer with their
+  id. Do not answer "unknown" for those, and never answer with the pronoun.
 """

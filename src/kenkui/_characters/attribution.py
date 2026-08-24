@@ -30,29 +30,46 @@ if TYPE_CHECKING:
 
 _SCHEMA: Mapping[str, type] = {"attributions": list}
 
+NARRATOR = "narrator"
+
 
 def _escaped(text: str) -> str:
     """Neutralise braces so book text survives str.format unchanged."""
     return text.replace("{", "{{").replace("}", "}}")
 
 
-def _roster_block(characters: Sequence[CharacterProfile]) -> str:
+def _roster_block(
+    characters: Sequence[CharacterProfile], narrator_id: str | None = None
+) -> str:
     return "\n".join(
         f'- {character.id}  (appears as "{character.display_name}")'
+        + ("  [narrates this book]" if character.id == narrator_id else "")
         for character in characters
     )
 
 
-def _resolve(speaker: object, known: frozenset[str]) -> str | None:
+def _resolve(
+    speaker: object, known: frozenset[str], narrator_id: str | None = None
+) -> str | None:
     """Return a known character id, or None meaning unknown.
 
     A returned pronoun is rejected outright: the prompt forbids it, and a
     pronoun that slipped through would merge unrelated speakers into one voice.
+
+    The bare word "narrator" is the one exception, and only when the book has
+    one. Models shorten an id they are asked to reproduce, and a namespaced
+    narrator id loses the answers it shortens; accepting the short word keeps
+    them while leaving one id per person, so a narrating character's dialogue
+    and their narration stay one voice.
     """
     if not isinstance(speaker, str):
         return None
     candidate = speaker.strip().lower()
-    if not candidate or candidate == UNKNOWN or candidate in PRONOUNS:
+    if not candidate or candidate == UNKNOWN:
+        return None
+    if candidate == NARRATOR:
+        return narrator_id
+    if candidate in PRONOUNS:
         return None
     return candidate if candidate in known else None
 
@@ -65,6 +82,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     client: Client | None = None,
     recent: Sequence[str] = (),
     spans: tuple[TextSpan, ...] | None = None,
+    narrator_id: str | None = None,
 ) -> tuple[tuple[SpeakerSpan, ...], tuple[str, ...]]:
     """Return one chapter's speaker spans and the speakers that ended it.
 
@@ -87,13 +105,13 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         for index, span in enumerate(dialogue)
     ]
     prompt = ATTRIBUTION_PROMPT.format(
-        roster=_escaped(_roster_block(characters)),
+        roster=_escaped(_roster_block(characters, narrator_id)),
         recent=_escaped(", ".join(recent) or "(start of book)"),
         passage=_escaped(chapter.text),
         quotes=_escaped(json.dumps(quotes, ensure_ascii=False, indent=2)),
     )
     known = frozenset(character.id for character in characters)
-    answers = _answers(model_id, prompt, client, known)
+    answers = _answers(model_id, prompt, client, known, narrator_id)
 
     # A quote's id is its position among the dialogue spans, so pairing them
     # back up is a zip. A model that skipped an id leaves None, which is
@@ -125,7 +143,11 @@ def _all_narrated(spans: Sequence[TextSpan]) -> tuple[SpeakerSpan, ...]:
 
 
 def _answers(
-    model_id: str, prompt: str, client: Client | None, known: frozenset[str]
+    model_id: str,
+    prompt: str,
+    client: Client | None,
+    known: frozenset[str],
+    narrator_id: str | None = None,
 ) -> dict[int, str | None]:
     """Return quote index to resolved speaker, tolerating a bad response.
 
@@ -143,5 +165,5 @@ def _answers(
             continue
         quote_id = item.get("quote_id")
         if isinstance(quote_id, int) and not isinstance(quote_id, bool):
-            answers[quote_id] = _resolve(item.get("speaker"), known)
+            answers[quote_id] = _resolve(item.get("speaker"), known, narrator_id)
     return answers

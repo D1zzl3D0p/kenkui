@@ -4,11 +4,52 @@
 
 from __future__ import annotations
 
+import json
+import zipfile
+from typing import TYPE_CHECKING
+
+import kenkui as kk
+from kenkui._characters import resolve_attribution
+from kenkui._characters.attribution import _resolve
 from kenkui._characters.narration import first_person_tags, is_first_person
 from kenkui._characters.quotes import extract_spans
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 FIRST = '"I will not," I said. "You know that." She turned away.'
 THIRD = '"I will not," Anne said. "You know that." She turned away.'
+
+
+def _epub_with(tmp_path: Path, body: str) -> Path:
+    """Write a one-chapter EPUB containing *body*."""
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip")
+        archive.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" '
+            'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="c.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        archive.writestr(
+            "c.opf",
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '
+            'version="3.0" unique-identifier="i"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier '
+            'id="i">x</dc:identifier><dc:title>T</dc:title>'
+            "<dc:language>en</dc:language></metadata><manifest>"
+            '<item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>'
+            '</manifest><spine><itemref idref="a"/></spine></package>',
+        )
+        archive.writestr(
+            "a.xhtml",
+            '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>'
+            + body
+            + "</p></body></html>",
+        )
+    return path
 
 
 def _ends(text: str) -> list[int]:
@@ -77,3 +118,53 @@ def test_curly_apostrophe_contraction_after_the_verb_is_counted() -> None:
     """A contraction elsewhere in the window must not block the real tag."""
     text = '"Stop it," I said, though I’d rather not.'
     assert first_person_tags(text, _ends(text)) == 1
+
+
+class NarratedClient:
+    """A model that names a narrator when asked, and attributes to them."""
+
+    def __init__(self) -> None:
+        """Track roster prompts so the test can inspect what was asked."""
+        self.roster_prompts: list[str] = []
+
+    def complete(self, model: str, prompt: str) -> str:
+        """Answer a roster prompt with a named narrator, else attribute to them."""
+        assert model
+        if "List the speaking characters" in prompt:
+            self.roster_prompts.append(prompt)
+            return json.dumps(
+                {
+                    "characters": [
+                        {"id": "nieshka", "name": "Nieshka", "gender": "feminine"}
+                    ],
+                    "narrator": "nieshka",
+                }
+            )
+        return json.dumps({"attributions": [{"quote_id": 0, "speaker": "narrator"}]})
+
+
+def test_roster_prompt_asks_for_a_narrator_when_first_person(tmp_path: Path) -> None:
+    """A first-person chapter's roster prompt asks who narrates it."""
+    text = '"I will not," I said. "You know that." ' * 3
+    book = kk.epub(_epub_with(tmp_path, text))
+    client = NarratedClient()
+    record = resolve_attribution(
+        book.inspect(), "b" * 64, "m/x", client=client, roster_model_id="m/x"
+    )
+    assert any("narrator" in prompt for prompt in client.roster_prompts)
+    assert any(span.character_id == "nieshka" for span in record.spans)
+
+
+def test_bare_narrator_resolves_to_the_narrating_character() -> None:
+    """The bare word "narrator" maps to the book's narrating character."""
+    assert _resolve("narrator", frozenset({"nieshka"}), "nieshka") == "nieshka"
+
+
+def test_bare_narrator_is_unknown_without_a_narrator() -> None:
+    """Without a narrator, the bare word "narrator" resolves to nobody."""
+    assert _resolve("narrator", frozenset({"nieshka"}), None) is None
+
+
+def test_a_pronoun_is_still_refused() -> None:
+    """A narrator on the book does not open the door to pronoun answers."""
+    assert _resolve("she", frozenset({"nieshka"}), "nieshka") is None

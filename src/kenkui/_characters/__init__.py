@@ -12,12 +12,14 @@ value and never reaches a model or the store itself.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from kenkui._characters import store
 from kenkui._characters.attribution import attribute_chapter
-from kenkui._characters.infer import merge_rosters, normalise_roster
+from kenkui._characters.infer import merge_rosters, normalise_roster, slugify
 from kenkui._characters.llm import complete_json
+from kenkui._characters.narration import is_first_person
 from kenkui._characters.prompts import PROMPT_VERSION, ROSTER_PROMPT
 from kenkui._characters.quotes import extract_spans
 from kenkui._characters.store import AttributionRecord
@@ -47,9 +49,13 @@ _ROSTER_SCHEMA: Mapping[str, type] = {"characters": list}
 
 
 def _roster_for(
-    chapter_text: str, model_id: str, client: Client | None
-) -> tuple[CharacterProfile, ...]:
-    """Infer one chapter's characters, or none if the model cannot help."""
+    chapter_text: str,
+    model_id: str,
+    client: Client | None,
+    *,
+    first_person: bool,
+) -> tuple[tuple[CharacterProfile, ...], str | None]:
+    """Infer one chapter's characters, and who narrates it when asked."""
     escaped = chapter_text.replace("{", "{{").replace("}", "}}")
     try:
         payload = complete_json(
@@ -59,8 +65,19 @@ def _roster_for(
             client=client,
         )
     except ModelError:
-        return ()
-    return normalise_roster(payload["characters"])
+        return (), None
+    roster = normalise_roster(payload["characters"])
+    narrator = None
+    if first_person:
+        claimed = payload.get("narrator")
+        if isinstance(claimed, str) and claimed.strip():
+            candidate = slugify(claimed)
+            # Only a character the model also listed. A narrator who is not
+            # on the roster cannot be cast, and inventing an entry here would
+            # put an unvouched id into the plan fingerprint.
+            if any(character.id == candidate for character in roster):
+                narrator = candidate
+    return roster, narrator
 
 
 def _measured(
@@ -176,16 +193,30 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     }
 
     rosters: list[tuple[CharacterProfile, ...]] = []
+    narrators: Counter[str] = Counter()
     for chapter in inspection.chapters:
         if cancel is not None:
             cancel.raise_if_cancelled()
         # A chapter with no quoted speech has no speaker to attribute, so its
         # roster is never consulted. Front matter and purely descriptive
         # chapters are common enough that asking about them is real spend.
-        if not any(span.is_dialogue for span in extracted[chapter.id]):
+        spans_here = extracted[chapter.id]
+        if not any(span.is_dialogue for span in spans_here):
             continue
-        rosters.append(_roster_for(chapter.text, roster_model, client))
+        ends = [span.end for span in spans_here if span.is_dialogue]
+        roster, narrator = _roster_for(
+            chapter.text,
+            roster_model,
+            client,
+            first_person=is_first_person(chapter.text, ends),
+        )
+        rosters.append(roster)
+        if narrator is not None:
+            narrators[narrator] += 1
     characters = merge_rosters(tuple(rosters))
+    # One narrator per book: chapters that disagree are outvoted rather than
+    # producing a second narrating character.
+    narrator_id = narrators.most_common(1)[0][0] if narrators else None
 
     spans: list[SpeakerSpan] = []
     recent: tuple[str, ...] = ()
@@ -199,6 +230,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
             client=client,
             recent=recent,
             spans=extracted[chapter.id],
+            narrator_id=narrator_id,
         )
         spans.extend(chapter_spans)
 
