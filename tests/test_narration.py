@@ -1,4 +1,6 @@
 """First-person narration is found by its dialogue tags, or not at all."""
+# ruff: noqa: RUF001 - the typographic quotes are the data under test;
+# writing them as escapes would make every case unreadable.
 
 from __future__ import annotations
 
@@ -34,3 +36,26 @@ def test_a_book_needs_several_tags_to_qualify() -> None:
     assert is_first_person(FIRST, _ends(FIRST)) is False
     doubled = FIRST * 3
     assert is_first_person(doubled, _ends(doubled)) is True
+
+
+def test_curly_single_interrupted_tag_is_not_counted() -> None:
+    """The scan must not run through a closing curly single quote.
+
+    quotes.py treats the curly single pair as a dialogue delimiter for
+    British prose, so the tag here is "she said" -- the "I said" that
+    follows belongs to the next, separate quote.
+    """
+    text = "‘Well,’ she said, ‘I said nothing.’"
+    assert first_person_tags(text, _ends(text)) == 0
+
+
+def test_curly_single_back_to_back_quotes_are_not_counted() -> None:
+    """A closing quote immediately followed by another must not be bridged."""
+    text = "‘Stop it.’ ‘I told you already,’ he shouted at her sister."
+    assert first_person_tags(text, _ends(text)) == 0
+
+
+def test_curly_single_first_person_tag_is_still_counted() -> None:
+    """The fix for the bridging bug must not over-correct into a miss."""
+    text = "‘I will not,’ I said."
+    assert first_person_tags(text, _ends(text)) == 1
