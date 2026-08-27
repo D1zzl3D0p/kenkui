@@ -29,6 +29,27 @@ def book(path: str | os.PathLike[str]) -> Pipeline:
     return epub(source_path)
 
 
+def magic_run(
+    book_path: str | os.PathLike[str],
+    *,
+    narrator: str,
+    multi: bool = False,
+    model: str = "deepseek/deepseek-v4-flash",
+) -> Result:
+    """Render an EPUB with one narrator or an automatically assigned cast."""
+    output = Path(book_path).with_suffix(".m4b")
+    pipeline = book(book_path)
+    if multi:
+        pipeline = (
+            pipeline.infer_characters(model)
+            .attribute_quotes(model)
+            .assign_voices(narrator=narrator)
+        )
+    else:
+        pipeline = pipeline.assign_voice(narrator)
+    return pipeline.tts().write(output)
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
     """One inexpensive pipeline validation finding."""

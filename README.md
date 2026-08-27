@@ -69,7 +69,6 @@ load_voice("eponine")  # one-time: downloads and hashes the voice
 base = epub("book.epub")
 job = (
     base.select_chapter_range("chapter-start", "chapter-end")
-    .normalize_text()
     .assign_voice("eponine")
     .tts()
     .metadata(title="Example", author="Author", cover="source")
@@ -101,6 +100,24 @@ except KenkuiError as error:
         raise
 ```
 
+### One-call rendering
+
+`magic_run()` is the concise path when the default output, casting method, and
+execution settings fit. It writes `book.m4b` beside `book.epub`; an existing
+output remains protected by the normal atomic publication checks.
+
+```python
+from kenkui import magic_run
+
+result = magic_run("book.epub", narrator="eponine")
+cast_result = magic_run("book.epub", narrator="eponine", multi=True)
+```
+
+Single-voice is the default. Multi-voice runs use
+`deepseek/deepseek-v4-flash` unless `model=` supplies a different LiteLLM
+provider/model identifier. Multi-voice runs perform character inference and
+quote attribution, which can make provider requests.
+
 ### Casting characters
 
 One voice is the degenerate cast. For a full one, add inference and
@@ -123,9 +140,11 @@ result = (
 )
 ```
 
-Characters speaking in the same chapter never share a voice, and dialogue that
-could not be placed is narrated rather than guessed at. Attribution is stored,
-so re-rendering the same book costs no further model calls.
+Characters speaking in the same chapter never share a voice. Attribution also
+casts text-identified unnamed speakers, such as a guard or innkeeper,
+automatically; each is scoped to its chapter. Dialogue that cannot be placed is
+narrated rather than guessed at. Attribution is stored, so re-rendering the
+same book costs no further model calls.
 
 
 `write()` is an alias for `write_m4b()`. Output must end in `.m4b` and its parent

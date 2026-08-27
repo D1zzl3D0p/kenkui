@@ -21,7 +21,6 @@ from ._domain.operations import (
     AttributeQuotes,
     InferCharacters,
     MetadataIntent,
-    NormalizeText,
     Operation,
     Pauses,
     SelectChapterRange,
@@ -122,10 +121,6 @@ class Pipeline:
         if has_operation(self.operations, SelectChapters):
             raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
         return self._append(SelectChapterRange(start, end), before_tts=True)
-
-    def normalize_text(self) -> Pipeline:
-        """Return a branch requesting default deterministic normalization."""
-        return self._append(NormalizeText(), before_tts=True)
 
     def pronounce(
         self,

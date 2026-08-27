@@ -20,6 +20,8 @@ from kenkui._tts import production
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from kenkui.voices.types import PerceivedGender
+
 BOOK = "a" * 64
 MODEL = "fake/model"
 PROMPT_VERSION = "characters-v1"
@@ -200,7 +202,7 @@ def test_the_store_path_follows_a_redirected_cache_root(
     assert store.default_store_path() == tmp_path / store.STORE_NAME
 
 
-def _voice(voice_id: str, traits: str) -> kk.Voice:
+def _voice(voice_id: str, traits: PerceivedGender) -> kk.Voice:
     """Return a loaded voice the solver can draw from."""
     return kk.Voice(
         id=voice_id,

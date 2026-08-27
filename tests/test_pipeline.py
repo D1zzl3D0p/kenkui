@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from typing import Any
 
-EXPECTED_OPERATION_COUNT = 5
+EXPECTED_OPERATION_COUNT = 4
 IO_ERROR_MESSAGE = "pipeline construction performed I/O"
 PAUSE_CHAPTER_MS = 1500
 PAUSE_HEADING_MS = 600
@@ -57,7 +57,6 @@ def test_construction_is_lazy_and_book_dispatches_without_reading(
     source = kk.book("unread.epub")
     pipeline = (
         source.select_chapters("chapter-1", "chapter-2")
-        .normalize_text()
         .assign_voice("narrator")
         .tts()
         .metadata(title=None, author="Writer", cover=None)
@@ -155,7 +154,7 @@ def test_pipeline_is_frozen_branchable_and_operations_are_values() -> None:
 def test_duplicate_and_contradictory_operations_have_stable_codes() -> None:
     """Invalid semantic chains fail deterministically at their cheapest boundary."""
     with pytest.raises(kk.ValidationError) as duplicate:
-        kk.epub("book.epub").normalize_text().normalize_text()
+        kk.epub("book.epub").pronounce().pronounce()
     assert duplicate.value.code == kk.ErrorCode.DUPLICATE_OPERATION
 
     with pytest.raises(kk.ValidationError) as missing_voice:

@@ -233,6 +233,8 @@ def test_adding_a_cast_voice_does_not_rekey_narration(tmp_path: Path) -> None:
     plan = _compile(spans=_spans())
     store = CacheStore.__new__(CacheStore)
     narration = plan.segments[0]
+    assert NARRATOR.content_fingerprint is not None
+    assert JAVERT.content_fingerprint is not None
     task = SynthesisTask(
         narration.id,
         narration.chapter_id,
@@ -257,6 +259,8 @@ def test_the_rendering_voice_still_enters_the_key(tmp_path: Path) -> None:
     """Narrowing the engine material must not drop voice identity entirely."""
     plan = _compile(spans=_spans())
     store = CacheStore.__new__(CacheStore)
+    assert NARRATOR.content_fingerprint is not None
+    assert JAVERT.content_fingerprint is not None
     spec = _pocket_spec(
         (tmp_path / "cast").resolve(),
         NARRATOR.content_fingerprint,

@@ -27,11 +27,6 @@ class SelectChapterRange:
 
 
 @dataclass(frozen=True, slots=True)
-class NormalizeText:
-    """Request the default versioned text normalization."""
-
-
-@dataclass(frozen=True, slots=True)
 class SpokenForm:
     """How canonical text becomes the string the engine actually speaks.
 
@@ -109,7 +104,6 @@ class MetadataIntent:
 Operation: TypeAlias = (
     SelectChapters
     | SelectChapterRange
-    | NormalizeText
     | SpokenForm
     | Pauses
     | InferCharacters

@@ -62,7 +62,6 @@ def test_render_a_real_m4b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     output = tmp_path / "out.m4b"
     result = (
         kk.book(_book(tmp_path))
-        .normalize_text()
         .assign_voice("eponine")
         .tts()
         .write(output)

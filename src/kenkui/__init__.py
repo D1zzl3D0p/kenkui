@@ -13,6 +13,7 @@ from .api import (
     ValidationResult,
     book,
     epub,
+    magic_run,
 )
 from .cancellation import CancellationToken
 from .errors import (
@@ -87,6 +88,7 @@ __all__ = [
     "list_castings",
     "list_voices",
     "load_voice",
+    "magic_run",
     "remove_attribution",
     "remove_casting",
     "remove_voice",

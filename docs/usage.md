@@ -16,7 +16,6 @@ source = kk.book("novel.epub")
 all_chapters = source.assign_voice("narrator").tts()
 selection = (
     source.select_chapters("chapter-a", "chapter-c")
-    .normalize_text()
     .assign_voice("narrator")
     .tts()
     .metadata(title="Novel", author="Writer", cover="source")
@@ -28,6 +27,25 @@ Use either `select_chapters(*ids)` or the inclusive
 `select_chapter_range(start_id, end_id)`, before `tts()`. Chapter IDs come from
 `inspect()` and are stable functions of canonical EPUB member/fragment identity
 and occurrence. Duplicate operations and invalid ordering fail immediately.
+
+## One-call rendering
+
+`magic_run(book_path, *, narrator, multi=False, model="deepseek/deepseek-v4-flash")`
+provides the small, defaulted rendering surface. It derives an `.m4b` output
+beside the EPUB and returns the normal `Result`.
+
+```python
+import kenkui as kk
+
+single = kk.magic_run("novel.epub", narrator="eponine")
+multi = kk.magic_run("novel.epub", narrator="eponine", multi=True)
+```
+
+`multi=True` adds character inference, quote attribution, and automatic casting.
+The default model is the LiteLLM identifier `deepseek/deepseek-v4-flash`; pass
+`model=` to select another configured provider/model. The helper exposes no
+selection, output, overwrite, callback, worker, or cast controls; use the
+fluent API for those cases.
 
 ## Validate and inspect
 
@@ -62,13 +80,15 @@ validation, rendering, callback, cancellation, or encoding failure cannot publis
 the work-in-progress candidate.
 
 ```python
-from kenkui import CancellationToken, StageProgress
+from kenkui import CancellationToken, CastResolved, StageProgress
 
 token = CancellationToken()
 
 
 def progress(event: object) -> None:
-    if isinstance(event, StageProgress):
+    if isinstance(event, CastResolved):
+        print(dict(event.assignments))
+    elif isinstance(event, StageProgress):
         print(event.stage, event.completed, event.total, event.chapter_id)
 
 
@@ -101,6 +121,12 @@ atomic commit. Only after a successful commit are publication `StageCompleted`
 and terminal `Completed` emitted. Both are best-effort; either callback may fail
 without revoking the published output. A publish failure emits neither.
 
+For a multi-voice pipeline, `CastResolved` arrives after attribution and casting
+but before any renderer worker starts. Its `assignments` contain
+`(character_id, voice_id)` pairs, so a callback can log or inspect the cast and
+cancel before synthesis begins. Single-voice runs emit the same event with no
+assignments.
+
 ## Cancellation and workers
 
 `CancellationToken.cancel()` is thread-safe and idempotent. Pass the token to a
@@ -129,7 +155,6 @@ kk.load_voice("eponine")
 
 result = (
     kk.book("book.epub")
-    .normalize_text()
     .assign_voice("eponine")
     .tts()
     .write("book.m4b")
@@ -199,9 +224,25 @@ result = (
 )
 ```
 
+### Resolve before write
+
+`write()` resolves voices, model attribution, and casting when it needs to.
+Call `resolve()` first only when you want to pay for that work early and inspect
+the completed cast before rendering:
+
+```python
+resolved = pipeline.resolve()
+assert resolved.inspect().casting is not None
+result = resolved.write("book.m4b")
+```
+
+`resolve()` returns an immutable pipeline with the same intent. It is
+idempotent: a second call reuses the resolved values, and `write()` reuses them
+too.
+
 Order does not matter. Only `tts()` must come last.
 
-### Roles
+### Narrator and unknown voices
 
 `narrator` speaks everything that is not attributed dialogue. `unknown` speaks
 dialogue nobody could be placed for, and defaults to the narrator's voice, so
@@ -212,9 +253,20 @@ it separately to make the distinction audible:
 .assign_voices(narrator="eponine", unknown="paul")
 ```
 
-Both roles are excluded from the pool characters are cast from. The narrator
-speaks in every chapter, so sharing its voice with a character would collide
-everywhere.
+Both configured voices are excluded from the pool characters are cast from.
+The narrator speaks in every chapter, so sharing its voice with a character
+would collide everywhere.
+
+### Unnamed speakers
+
+`attribute_quotes()` can also place a speaker the text identifies without
+naming, such as a guard, innkeeper, or first man. This happens automatically:
+use the normal inference, attribution, and casting pipeline above; do not add
+or pin a role identifier yourself. Each identified role is scoped to its
+chapter, so two such speakers in one scene receive different voices, while the
+same role word in another chapter is treated as another speaker. When the text
+does not identify the speaker, the dialogue remains `unknown` and uses the
+fallback described above.
 
 ### Methods
 

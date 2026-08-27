@@ -70,7 +70,7 @@ def test_registered_voice_fails_before_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_manifest(tmp_path, "registered")))
-    pipeline = kk.book(_book(tmp_path)).normalize_text().assign_voice("mine").tts()
+    pipeline = kk.book(_book(tmp_path)).assign_voice("mine").tts()
     with pytest.raises(VoiceError) as excinfo:
         pipeline.write(tmp_path / "out.m4b")
     assert excinfo.value.code is ErrorCode.VOICE_NOT_PROVISIONED
@@ -80,7 +80,7 @@ def test_unknown_voice_fails_before_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_manifest(tmp_path, "registered")))
-    pipeline = kk.book(_book(tmp_path)).normalize_text().assign_voice("nobody").tts()
+    pipeline = kk.book(_book(tmp_path)).assign_voice("nobody").tts()
     with pytest.raises(VoiceError) as excinfo:
         pipeline.write(tmp_path / "out.m4b")
     assert excinfo.value.code is ErrorCode.VOICE_UNRESOLVED
