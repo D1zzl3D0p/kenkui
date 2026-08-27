@@ -50,6 +50,29 @@ def magic_run(
     return pipeline.tts().write(output)
 
 
+def read_lexicon(path: str | os.PathLike[str]) -> dict[str, str]:
+    """Read a pronunciation table from a JSON file, validated as a literal is.
+
+    Accepts a plain object of word to replacement, or the shape the shipped
+    table uses. The result is an ordinary dict: merge it, edit it, or pass it
+    straight to ``Pipeline.pronounce``.
+    """
+    from ._domain.spoken.lexicon import read_entries
+
+    return read_entries(Path(path))
+
+
+def builtin_lexicon() -> dict[str, str]:
+    """Return a copy of the pronunciation table Kenkui ships.
+
+    A copy rather than the cached table itself, so a caller extending it
+    cannot corrupt what every later pipeline in the process reads.
+    """
+    from ._domain.spoken.lexicon import builtin_entries
+
+    return dict(builtin_entries())
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
     """One inexpensive pipeline validation finding."""

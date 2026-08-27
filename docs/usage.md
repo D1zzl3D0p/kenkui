@@ -379,10 +379,26 @@ pipeline = (
 `ExecutionStats.normalized_speech_characters` keeps counting the source text
 while `synthesized_characters` follows the expansion.
 
+Normalization is not part of this and is not optional. NFC, line endings,
+Unicode spaces, and whitespace runs are settled when the source is parsed, and
+character counts refer to that normalized string. `pronounce()` is the only
+stage that rewrites text for speech, and it runs last, per segment.
+
 A small built-in lexicon applies by default once you call `pronounce()`; pass
 `builtin=False` to disable it. Your own entries always win over it, match whole
 words case-insensitively, and take the source's capitalization shape, so one
 entry covers `cello`, `Cello`, and `CELLO`.
+
+Keep a larger table in a file rather than a literal, and read it with
+`read_lexicon()`. It accepts a plain object of word to replacement, or the
+shape the shipped table uses, and validates exactly as an inline dict does.
+`builtin_lexicon()` returns a copy of what Kenkui ships, so you can extend it
+rather than replace it.
+
+```python
+mine = kk.builtin_lexicon() | kk.read_lexicon("pronunciations.json")
+pipeline = kk.epub("book.epub").pronounce(mine, builtin=False)
+```
 
 `numbers` selects how much guessing you accept. Anything a tier declines is
 left verbatim for your own entries to handle.
@@ -393,6 +409,24 @@ left verbatim for your own entries to handle.
 | `conservative` (default) | grouped integers, decimals, negatives, ordinals, percent, currency, units after a number |
 | `standard` | years as pairs, clock times, numeric ranges, Roman numerals after Chapter/Part/Act or a regnal name |
 | `aggressive` | bare Roman numerals, `No. 5`, fractions |
+
+A tier is a preset over individually switchable features, not a package. Pass
+any of `currency`, `percent`, `ordinals`, `units`, `decimals`, `integers`,
+`years`, `clock`, `roman`, `fractions`, `numbered` as a keyword to override
+it: `False` declines a form the tier supplies, `True` asks for one it does
+not, without accepting the rest of the tier that carries it.
+
+```python
+pipeline.pronounce(numbers="standard", roman=False)
+```
+
+Features compose rather than nest, so declining a specific form leaves a
+general one free to match inside it: `currency=False` alone reads `£5` as
+`£five`, because the integer rule still applies. Decline `integers` too to
+leave the digits alone.
+
+An override changes segment identity, so a book already rendered without one
+re-synthesizes. Passing none leaves identities byte-identical.
 
 `St.`, `Dr.`, and `Mrs.` are never expanded at any tier. English only: a
 non-English narrator voice disables the stage rather than mangling the text.

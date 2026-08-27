@@ -152,6 +152,19 @@ which voice casting gives them: `_castable` withholds the narrator voice from
 every character, so a narrating character cannot be given the voice their own
 narration uses.
 
+Attribution also handles a speaker the text identifies by role but never names,
+such as a guard, innkeeper, or first man. The model returns a short role word;
+resolution scopes that identity to the chapter and turns it into an ordinary
+character profile for casting. Two role speakers in one scene therefore receive
+different voices, while a guard in a later chapter may reuse one. A role that
+cannot be identified remains unattributed rather than becoming a guessed
+character.
+
+Roster identity is deliberately conservative. Clear aliases fold into one
+character, but ambiguous short names and conflicting honorifics do not. A
+duplicate voice is locally audible; assigning two distinct people one voice is
+a more damaging error.
+
 ## Span-then-chunk segmentation
 
 Attribution produces speaker spans that partition a chapter. The frozen

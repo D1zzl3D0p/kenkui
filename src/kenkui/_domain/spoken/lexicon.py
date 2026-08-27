@@ -15,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from kenkui.errors import ErrorCode, ValidationError
+from kenkui.errors import ErrorCode, SourceError, ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -53,6 +53,32 @@ def builtin_entries() -> tuple[tuple[str, str], ...]:
     payload = cast("dict[str, object]", json.loads(_DATA.read_text("utf-8")))
     entries = cast("dict[str, str]", payload["entries"])
     return tuple(sorted(entries.items()))
+
+
+def read_entries(path: Path) -> dict[str, str]:
+    """Read a caller's pronunciation table from a JSON file.
+
+    Two shapes are accepted: a plain object of word to replacement, and the
+    shape the shipped table uses, so copying `lexicon-v1.json` and editing it
+    works without rewriting the wrapper away. Entries are validated exactly
+    as a literal would be -- a file must not be able to smuggle in input a
+    caller could not have written inline.
+    """
+    if not path.exists():
+        raise SourceError(ErrorCode.SOURCE_NOT_FOUND)
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValidationError(ErrorCode.INVALID_PRONUNCIATION) from error
+    if not isinstance(payload, dict):
+        raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+    entries = payload.get("entries", payload)
+    if not isinstance(entries, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in entries.items()
+    ):
+        raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+    return dict(validate_entries(entries))
 
 
 def validate_entries(mapping: Mapping[str, str]) -> tuple[tuple[str, str], ...]:

@@ -12,8 +12,10 @@ from .api import (
     ValidationIssue,
     ValidationResult,
     book,
+    builtin_lexicon,
     epub,
     magic_run,
+    read_lexicon,
 )
 from .cancellation import CancellationToken
 from .errors import (
@@ -84,11 +86,13 @@ __all__ = [
     "__version__",
     "add_voice",
     "book",
+    "builtin_lexicon",
     "epub",
     "list_castings",
     "list_voices",
     "load_voice",
     "magic_run",
+    "read_lexicon",
     "remove_attribution",
     "remove_casting",
     "remove_voice",
