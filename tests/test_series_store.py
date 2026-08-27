@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
+
+import pytest
 
 from kenkui._characters import store
 
@@ -89,3 +92,85 @@ def test_listing_and_removal(tmp_path: Path) -> None:
 def test_an_unusable_store_lists_empty(tmp_path: Path) -> None:
     """Reads degrade rather than raise, matching read_attribution."""
     assert store.list_series(tmp_path / "never-created.sqlite3") == ()
+
+
+def test_corrupt_database_reads_as_a_miss(tmp_path: Path) -> None:
+    """Everything here is recoverable by recomputing, so a read fails soft."""
+    path = tmp_path / "s.sqlite3"
+    path.write_bytes(b"not a database")
+    assert store.read_series("stormlight", path) is None
+    assert store.list_series(path) == ()
+
+
+def test_corrupt_database_fails_loud_on_write(tmp_path: Path) -> None:
+    """Silently losing a series would silently re-cast it on the next volume."""
+    path = tmp_path / "s.sqlite3"
+    path.write_bytes(b"not a database")
+    record = store.SeriesRecord(
+        "stormlight", "eponine", (_character("kaladin", "alf"),)
+    )
+    with pytest.raises(OSError, match="could not write series"):
+        store.write_series(record, path)
+
+
+def test_corrupt_database_fails_loud_on_remove(tmp_path: Path) -> None:
+    """The remove path added to match its siblings must fail loud too."""
+    path = tmp_path / "s.sqlite3"
+    path.write_bytes(b"not a database")
+    with pytest.raises(OSError, match="could not remove series"):
+        store.remove_series("stormlight", path)
+
+
+def test_remove_series_cascades_to_its_characters_and_aliases(
+    tmp_path: Path,
+) -> None:
+    """Dropping a series must not strand the rows that reference it.
+
+    Only the parent row is visible through the store's own reads once it is
+    gone, so this reaches past the module and queries the child tables
+    directly - the one way to show ON DELETE CASCADE, and the foreign_keys
+    pragma that arms it, actually fired.
+    """
+    path = tmp_path / "s.sqlite3"
+    store.write_series(
+        store.SeriesRecord("a", "eponine", (_character("x", "alf"),)), path
+    )
+    store.remove_series("a", path)
+    with sqlite3.connect(path) as connection:
+        characters = connection.execute(
+            "SELECT * FROM series_characters WHERE series_id=?", ("a",)
+        ).fetchall()
+        aliases = connection.execute(
+            "SELECT * FROM series_aliases WHERE series_id=?", ("a",)
+        ).fetchall()
+    assert characters == []
+    assert aliases == []
+
+
+def test_a_character_with_several_aliases_round_trips(tmp_path: Path) -> None:
+    """Aliases group by canonical_id, not by insertion order, and read back sorted."""
+    path = tmp_path / "s.sqlite3"
+    kaladin = store.SeriesCharacter(
+        canonical_id="kaladin",
+        display_name="Kaladin",
+        gender="masculine",
+        voice_id="alf",
+        spoken_characters=900,
+        aliases=("Stormblessed", "Kal", "Radiant"),
+    )
+    shallan = store.SeriesCharacter(
+        canonical_id="shallan",
+        display_name="Shallan",
+        gender="feminine",
+        voice_id="aoife",
+        spoken_characters=400,
+        aliases=("Veil",),
+    )
+    store.write_series(
+        store.SeriesRecord("stormlight", "eponine", (kaladin, shallan)), path
+    )
+    read = store.read_series("stormlight", path)
+    assert read is not None
+    by_id = {c.canonical_id: c for c in read.characters}
+    assert by_id["kaladin"].aliases == ("Kal", "Radiant", "Stormblessed")
+    assert by_id["shallan"].aliases == ("Veil",)
