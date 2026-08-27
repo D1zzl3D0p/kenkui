@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -10,7 +11,17 @@ from typing import TYPE_CHECKING, cast, get_args
 import pytest
 
 import kenkui as kk
-from kenkui._domain.operations import Pauses, SpokenForm
+from kenkui._domain.casting import CharacterProfile
+from kenkui._domain.operations import (
+    AssignVoices,
+    AttributeQuotes,
+    InferCharacters,
+    Pauses,
+    SpokenForm,
+    SynthesizeSpeech,
+)
+from kenkui.pipeline import _log_ungendered_cast
+from kenkui.voices.types import PerceivedGender, Voice
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -56,6 +67,73 @@ def test_construction_is_lazy_and_book_dispatches_without_reading(
     assert source.source.format == "epub"
     assert source.operations == ()
     assert len(pipeline.operations) == EXPECTED_OPERATION_COUNT
+
+
+def test_magic_run_writes_a_single_voice_book_beside_the_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing single-voice intent or a wrong default destination loses the render."""
+    captured: list[tuple[Path, tuple[object, ...]]] = []
+    expected = object()
+
+    def capture_write(self: kk.Pipeline, output: str | Path) -> object:
+        captured.append((Path(output), self.operations))
+        return expected
+
+    monkeypatch.setattr(kk.Pipeline, "write", capture_write)
+
+    magic_run = getattr(kk, "magic_run", None)
+    assert magic_run is not None
+    assert magic_run("novel.epub", narrator="eponine") is expected
+
+    assert captured == [
+        (
+            Path("novel.m4b"),
+            (
+                AssignVoices(
+                    narrator_voice_id="eponine",
+                    unknown_voice_id="eponine",
+                    cast=(),
+                    method="gendered",
+                ),
+                SynthesizeSpeech(),
+            ),
+        )
+    ]
+
+
+def test_magic_run_uses_the_default_deepseek_model_for_multi_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting multi-voice analysis would silently collapse character dialogue."""
+    captured: list[tuple[Path, tuple[object, ...]]] = []
+
+    def capture_write(self: kk.Pipeline, output: str | Path) -> object:
+        captured.append((Path(output), self.operations))
+        return object()
+
+    monkeypatch.setattr(kk.Pipeline, "write", capture_write)
+
+    magic_run = getattr(kk, "magic_run", None)
+    assert magic_run is not None
+    magic_run("novel.epub", narrator="eponine", multi=True)
+
+    assert captured == [
+        (
+            Path("novel.m4b"),
+            (
+                InferCharacters("deepseek/deepseek-v4-flash"),
+                AttributeQuotes("deepseek/deepseek-v4-flash"),
+                AssignVoices(
+                    narrator_voice_id="eponine",
+                    unknown_voice_id="eponine",
+                    cast=(),
+                    method="gendered",
+                ),
+                SynthesizeSpeech(),
+            ),
+        )
+    ]
 
 
 def test_pipeline_is_frozen_branchable_and_operations_are_values() -> None:
@@ -272,6 +350,7 @@ def test_public_exports_are_intentional() -> None:
         "remove_voice",
         "unload_voice",
         "list_castings",
+        "magic_run",
         "remove_casting",
         "remove_attribution",
         "CastResolved",
@@ -382,3 +461,59 @@ def test_pauses_defaults_to_silence_free() -> None:
     recorded = kk.epub("book.epub").pauses().operations[0]
     assert isinstance(recorded, Pauses)
     assert recorded == Pauses()
+
+
+def _traited_voice(voice_id: str, gender: PerceivedGender) -> Voice:
+    return Voice(
+        id=voice_id,
+        name=voice_id.title(),
+        enabled=True,
+        provenance="test",
+        license_id="CC-BY-4.0",
+        commercial_use_allowed=False,
+        language="english",
+        state="loaded",
+        perceived_gender=gender,
+    )
+
+
+def _speaker(character_id: str, gender: str | None) -> CharacterProfile:
+    return CharacterProfile(character_id, character_id.title(), gender, 100, ("ch1",))
+
+
+def test_an_ungendered_cast_is_logged_for_the_operator(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The silence that let a pool carrying no gender traits go unnoticed.
+
+    `candidates` falls back to the whole pool, so a gendered cast that
+    cannot be honoured renders happily in arbitrary voices. Nothing else in
+    the suite can observe that, because the fallback is the designed
+    behaviour; only the log distinguishes it from a cast that worked.
+    """
+    with caplog.at_level(logging.WARNING):
+        _log_ungendered_cast(
+            "gendered",
+            (_speaker("her", "feminine"),),
+            (_traited_voice("c", "masculine"),),
+        )
+    assert "ungendered_cast" in caplog.text
+
+
+def test_a_served_cast_logs_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    """No noise when the pool can honour the method."""
+    pool = (_traited_voice("c", "masculine"), _traited_voice("a", "feminine"))
+    with caplog.at_level(logging.WARNING):
+        _log_ungendered_cast("gendered", (_speaker("her", "feminine"),), pool)
+    assert "ungendered_cast" not in caplog.text
+
+
+def test_the_random_method_is_never_reported(caplog: pytest.LogCaptureFixture) -> None:
+    """The random method never promised a gendered pool."""
+    with caplog.at_level(logging.WARNING):
+        _log_ungendered_cast(
+            "random",
+            (_speaker("her", "feminine"),),
+            (_traited_voice("c", "masculine"),),
+        )
+    assert "ungendered_cast" not in caplog.text

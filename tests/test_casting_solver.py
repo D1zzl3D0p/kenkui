@@ -14,6 +14,7 @@ from kenkui._domain.casting import (
     CharacterProfile,
     candidates,
     solve,
+    ungendered_pool_characters,
 )
 from kenkui.errors import ErrorCode, ValidationError
 from kenkui.voices.types import PerceivedGender, Voice
@@ -249,3 +250,35 @@ def test_every_character_is_assigned() -> None:
     )
     outcome = solve(_request(characters))
     assert set(outcome.assignments) == {c.id for c in characters}
+
+
+def test_ungendered_pool_names_the_characters_it_cannot_serve() -> None:
+    """A gendered cast with no matching voice must say so, not degrade quietly."""
+    pool = (_voice("charles", "masculine"),)
+    characters = (
+        _character("her", "feminine", 100, ("ch1",)),
+        _character("him", "masculine", 100, ("ch1",)),
+    )
+    assert ungendered_pool_characters("gendered", characters, pool) == ("her",)
+
+
+def test_a_character_with_no_gender_is_not_reported() -> None:
+    """Falling back to the whole pool is the designed behaviour for these."""
+    pool = (_voice("charles", "masculine"),)
+    characters = (_character("who", None, 100, ("ch1",)),)
+    assert ungendered_pool_characters("gendered", characters, pool) == ()
+
+
+def test_random_method_reports_nothing() -> None:
+    """The random method never promised a gendered pool."""
+    pool = (_voice("charles", "masculine"),)
+    characters = (_character("her", "feminine", 100, ("ch1",)),)
+    assert ungendered_pool_characters("random", characters, pool) == ()
+
+
+def test_a_served_pool_reports_nothing() -> None:
+    """A pool with a matching voice for every gender reports nothing."""
+    pool = (_voice("charles", "masculine"), _voice("anna", "feminine"))
+    characters = (_character("her", "feminine", 100, ("ch1",)),)
+    assert ungendered_pool_characters("gendered", characters, pool) == ()
+

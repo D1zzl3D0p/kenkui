@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from kenkui.errors import ErrorCode, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from kenkui.voices.types import Voice
 
@@ -100,6 +100,32 @@ def candidates(
         voice for voice in pool if voice.perceived_gender == character.gender
     )
     return matched or pool
+
+
+def ungendered_pool_characters(
+    method: str,
+    characters: Sequence[CharacterProfile],
+    pool: Sequence[Voice],
+) -> tuple[str, ...]:
+    """Return the ids a gendered cast cannot honour, in the order given.
+
+    `candidates` falls back to the whole pool rather than dropping the
+    speech, which is the right thing to do at render time and the wrong
+    thing to do quietly: it turns a gendered cast into a random one with no
+    signal at all. Reporting is kept separate from casting so the caller can
+    warn without changing what gets rendered.
+
+    A character whose gender was never inferred is not reported. The whole
+    pool is the designed answer for those, not a degradation.
+    """
+    if method != "gendered":
+        return ()
+    return tuple(
+        character.id
+        for character in characters
+        if character.gender is not None
+        and not any(voice.perceived_gender == character.gender for voice in pool)
+    )
 
 
 def solve(request: CastingRequest) -> CastingOutcome:

@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Literal, cast
 from ._domain.casting import (
     CastingMethod,
     CastingRequest,
+    CharacterProfile,
     Collision,
+    ungendered_pool_characters,
     validate_method,
 )
 from ._domain.operations import (
@@ -473,6 +475,7 @@ def _resolve_all(
         for voice in list_voices()
         if voice.state == "loaded" and voice.language == bindings.voice.language
     )
+    _log_ungendered_cast(casting.method, record.characters, pool)
     # Stored, not just solved: the cast is what list_castings names and what
     # remove_casting discards, and neither can see a cast that only ever
     # existed for the duration of one render.
@@ -512,6 +515,41 @@ def _source_digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _log_ungendered_cast(
+    method: str,
+    characters: tuple[CharacterProfile, ...],
+    pool: tuple[Voice, ...],
+) -> None:
+    """Record a gendered cast the pool could not honour, for an operator.
+
+    `candidates` falls back to the whole pool rather than dropping the
+    speech, which is right at render time and silent by nature: a gendered
+    cast becomes a random one with nothing to show for it. That silence is
+    how a voice pool carrying no gender traits at all rendered whole books
+    in arbitrary voices without a single failing check.
+
+    Logged rather than raised as a Warning event, for the same reason as
+    `_log_collisions`: the fix is to the operator's voice pool, not to
+    anything the caller passed.
+    """
+    affected = ungendered_pool_characters(method, characters, pool)
+    if not affected:
+        return
+    log_event(
+        _LOGGER,
+        "ungendered_cast",
+        level=logging.WARNING,
+        context={
+            "boundary": "casting",
+            "method": method,
+            "characters": len(affected),
+            "sample": ", ".join(affected[:5]),
+            "traited_voices": sum(v.perceived_gender is not None for v in pool),
+            "pool": len(pool),
+        },
+    )
 
 
 def _log_collisions(collisions: tuple[Collision, ...]) -> None:
