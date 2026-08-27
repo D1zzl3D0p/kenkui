@@ -137,7 +137,23 @@ def merge_rosters(
         # import is kept off the path of callers that never merge rosters.
         group_full_names,
         resolve_short_forms,
+        same_person,
     )
+
+    def _one_person(ids: list[str]) -> bool:
+        """Whether every id sharing a display name denotes one person.
+
+        Ids are the model's own answer to "who is this", so they carry the
+        evidence the display name lacks. Read as names, `corwi` nests inside
+        `lizbyet-corwi` and the two are one woman; `charles-hayter` and
+        `charles-musgrove` share only a forename and stay two men.
+        """
+        names = [character_id.replace("-", " ") for character_id in ids]
+        return all(same_person(names[0], other) for other in names[1:])
+
+    def _fullest(ids: list[str]) -> str:
+        """Pick the id carrying the most name, deterministically."""
+        return max(sorted(ids), key=lambda value: len(value.split("-")))
 
     by_id: dict[str, CharacterProfile] = {}
     for roster in rosters:
@@ -157,13 +173,23 @@ def merge_rosters(
     ids_by_name: dict[str, list[str]] = {}
     for character_id, character in by_id.items():
         ids_by_name.setdefault(character.display_name, []).append(character_id)
-    # Two distinct ids sharing one display name is the model's own signal
-    # that they are two people wearing the same surface name in different
-    # chapters (e.g. two characters each only ever called "Charles"). That
-    # name is therefore excluded from identity resolution entirely: it must
-    # neither fold those ids into each other nor act as a host that some
-    # other name resolves to.
-    contested = {name for name, ids in ids_by_name.items() if len(ids) > 1}
+    # Two distinct ids sharing one display name is usually the model's own
+    # signal that they are two people wearing the same surface name in
+    # different chapters (e.g. two characters each only ever called
+    # "Charles"). Such a name is excluded from identity resolution entirely:
+    # it must neither fold those ids into each other nor act as a host that
+    # some other name resolves to.
+    #
+    # But the ids themselves can say otherwise. A model asked for an id
+    # "stable across the whole book" does not reliably give one, so one
+    # person arrives under two ids that happen to share a surface name.
+    # When those ids nest, they are that person twice, not two people, and
+    # treating them as contested gives her two voices.
+    contested = {
+        name
+        for name, ids in ids_by_name.items()
+        if len(ids) > 1 and not _one_person(ids)
+    }
 
     usable_names = sorted(name for name in ids_by_name if name not in contested)
     entity = group_full_names([n for n in usable_names if len(n.split()) > 1])
@@ -177,8 +203,12 @@ def merge_rosters(
         **{name: name for name in contested},
     }
 
+    # The fullest id wins the name: "lizbyet-corwi" carries more of who she
+    # is than "corwi", and the head's id is what the cast is keyed on.
     name_to_id = {
-        name: ids[0] for name, ids in ids_by_name.items() if name not in contested
+        name: _fullest(ids)
+        for name, ids in ids_by_name.items()
+        if name not in contested
     }
 
     merged: dict[str, CharacterProfile] = {}

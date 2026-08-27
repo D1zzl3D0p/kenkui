@@ -156,3 +156,46 @@ def test_merge_rosters_keeps_two_ids_with_an_identical_display_name_apart() -> N
         "charles-hayter",
         "charles-musgrove",
     ]
+
+
+def test_one_person_under_two_ids_folds_despite_a_shared_display_name() -> None:
+    """The production split: Corwi and Lizbyet Corwi cast as two women.
+
+    A model asked for an id "stable across the whole book" does not reliably
+    give one, so the same person arrives under two ids that happen to share a
+    surface name. Treating that as two people gave her two voices.
+    """
+    merged = merge_rosters(
+        (
+            (_profile("corwi", "Corwi"),),
+            (_profile("lizbyet-corwi", "Corwi"),),
+            (_profile("lizbyet-corwi", "Lizbyet Corwi"),),
+        )
+    )
+    assert len(merged) == 1
+    assert merged[0].id == "lizbyet-corwi"
+
+
+def test_two_people_sharing_a_bare_name_still_stand_apart() -> None:
+    """The guard this rule exists for: ids that do not nest are two people."""
+    merged = merge_rosters(
+        (
+            (_profile("charles-hayter", "Charles"),),
+            (_profile("charles-musgrove", "Charles"),),
+        )
+    )
+    assert {character.id for character in merged} == {
+        "charles-hayter",
+        "charles-musgrove",
+    }
+
+
+def test_a_rank_prefixed_id_folds_into_the_bare_one() -> None:
+    """Dhatt and Senior Detective Dhatt are one man with one voice."""
+    merged = merge_rosters(
+        (
+            (_profile("dhatt", "Dhatt"),),
+            (_profile("senior-detective-dhatt", "Dhatt"),),
+        )
+    )
+    assert len(merged) == 1
