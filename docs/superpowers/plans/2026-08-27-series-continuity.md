@@ -111,15 +111,73 @@ Expected: PASS
 
 - [ ] **Step 6: Persist the field**
 
-In `src/kenkui/_characters/store.py`, add the column to the `characters` table in `_SCHEMA`:
+Add the column to the `characters` table in `_SCHEMA`, for databases created
+from now on:
 
 ```sql
     aliases_json TEXT NOT NULL DEFAULT '[]',
 ```
 
-Write it in `write_attribution` alongside the other character columns, as
-`json.dumps(list(character.aliases))`, and read it back where characters are
-loaded, as `tuple(json.loads(row["aliases_json"]))`.
+**That alone is not enough.** `_SCHEMA` runs under `CREATE TABLE IF NOT
+EXISTS`, which silently does nothing to a table that already exists, so an
+operator's live store keeps a `characters` table without the column and the
+next write fails with `table characters has no column named aliases_json`.
+Add a guarded migration that runs after the schema, wherever `_SCHEMA` is
+executed:
+
+```python
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Add columns that post-date a store an operator already has.
+
+    CREATE TABLE IF NOT EXISTS does nothing to an existing table, so a new
+    column reaches a fresh database and no other. Adding it here keeps a
+    store written by an earlier version readable and writable rather than
+    making the operator discard their attributions.
+    """
+    existing = {
+        row["name"] for row in connection.execute("PRAGMA table_info(characters)")
+    }
+    if "aliases_json" not in existing:
+        connection.execute(
+            "ALTER TABLE characters "
+            "ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
+        )
+```
+
+Write the field in `write_attribution` alongside the other character columns,
+as `json.dumps(list(character.aliases))`, and read it back where characters
+are loaded, as `tuple(json.loads(row["aliases_json"]))`.
+
+- [ ] **Step 6b: Test the migration against a pre-existing store**
+
+```python
+def test_a_store_without_the_column_is_migrated(tmp_path: Path) -> None:
+    """An operator's existing attributions survive the upgrade."""
+    path = tmp_path / "old.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE books(book_id TEXT PRIMARY KEY);
+        CREATE TABLE characters(
+            attribution_id TEXT NOT NULL,
+            character_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            gender TEXT,
+            spoken_characters INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            PRIMARY KEY (attribution_id, character_id));
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store.write_attribution(_record(), path)
+    assert store.read_attribution(_record().attribution_id, path) is not None
+```
+
+Build `_record()` the way the surrounding tests in
+`tests/test_casting_store.py` build an `AttributionRecord`. The point of the
+test is that writing to a store created before the column existed succeeds.
 
 - [ ] **Step 7: Test the round trip**
 
@@ -530,12 +588,16 @@ def test_an_exact_alias_matches() -> None:
 
 
 def test_a_nested_name_matches_without_an_exact_alias() -> None:
-    """Identity resolution, not just string equality."""
+    """Identity resolution, not just string equality.
+
+    The series recorded only the full name; this volume uses the short one
+    and it was never stored as an alias, so an exact hit cannot find it.
+    """
     record = store.SeriesRecord(
         "stormlight", "eponine",
         (_known("dalinar-kholin", "Dalinar Kholin", ("Dalinar Kholin",)),),
     )
-    matched = match_roster(record, (_profile("dalinar", "Brightlord Dalinar"),))
+    matched = match_roster(record, (_profile("dalinar", "Dalinar"),))
     assert matched == {"dalinar": "dalinar-kholin"}
 
 
