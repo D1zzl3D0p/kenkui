@@ -459,6 +459,8 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
                 return _loaded_view(record, engines[record.engine_id])
         if record is None:
             record = _registered_from_catalog(voice_id)
+        else:
+            record = _with_catalog_gender(record)
         cloning = record.variety == "wav"
         wanted = engine_id_for(record.language, cloning=cloning)
         engine = engines.get(wanted)
@@ -469,6 +471,23 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
         voices[voice_id] = loaded
         store.write(engines, voices)
         return _loaded_view(loaded, engine)
+
+
+def _with_catalog_gender(record: VoiceRecord) -> VoiceRecord:
+    """Adopt the catalog's trait for a record that predates the field.
+
+    `_registered_from_catalog` stamps the trait on a first registration, so
+    a fresh install never lacked it. An operator whose manifest was written
+    before the field existed takes the `voices.get` path instead, and would
+    otherwise keep writing the record back ungendered on every load. The
+    manifest stays the authority wherever it has an answer of its own.
+    """
+    if record.perceived_gender is not None:
+        return record
+    entry = CATALOG.get(record.id)
+    if entry is None or entry.perceived_gender is None:
+        return record
+    return dataclasses.replace(record, perceived_gender=entry.perceived_gender)
 
 
 def _gender_for(record: VoiceRecord) -> PerceivedGender:

@@ -20,6 +20,7 @@ from kenkui._tts.production import default_cache_root as _cache_root
 if TYPE_CHECKING:
     from pathlib import Path
 from kenkui.voices.manifest import ManifestStore, VoiceRecord
+from kenkui.voices.provision import _with_catalog_gender
 from kenkui.voices.registry import BUILT_IN_CATALOG, CATALOG
 from kenkui.voices.types import Voice
 
@@ -180,3 +181,75 @@ def test_gendered_cast_admits_no_opposite_gender_voice() -> None:
     assert admitted, "the enumerated pool must contain at least one feminine voice"
     assert admitted != pool, "a pool equal to the whole pool is not gendered"
     assert not [v for v in admitted if v.perceived_gender == "masculine"]
+
+
+def test_an_existing_ungendered_record_adopts_the_catalog_trait() -> None:
+    """A record written before the field existed gains it on the next write.
+
+    `_registered_from_catalog` already stamps the trait on a first
+    registration, so a fresh install was never the gap. An operator whose
+    manifest predates the field has a record, takes the `voices.get` path,
+    and would otherwise keep writing it back ungendered forever.
+    """
+    voice_id = next(
+        key
+        for key, entry in sorted(CATALOG.items())
+        if entry.perceived_gender == "masculine"
+    )
+    stale = VoiceRecord(
+        id=voice_id,
+        variety="built-in",
+        state="registered",
+        name="Stale",
+        enabled=True,
+        language="english",
+        engine_id="english",
+        provenance="test",
+        license_id="CC-BY-4.0",
+        commercial_use_allowed=False,
+        voice_rights="test",
+    )
+    assert stale.perceived_gender is None
+    assert _with_catalog_gender(stale).perceived_gender == "masculine"
+
+
+def test_an_explicit_trait_is_never_overwritten() -> None:
+    """The manifest is the authority when it has an answer."""
+    voice_id = next(
+        key
+        for key, entry in sorted(CATALOG.items())
+        if entry.perceived_gender == "masculine"
+    )
+    record = VoiceRecord(
+        id=voice_id,
+        variety="built-in",
+        state="registered",
+        name="Owned",
+        enabled=True,
+        language="english",
+        engine_id="english",
+        provenance="test",
+        license_id="CC-BY-4.0",
+        commercial_use_allowed=False,
+        voice_rights="test",
+        perceived_gender="feminine",
+    )
+    assert _with_catalog_gender(record).perceived_gender == "feminine"
+
+
+def test_a_voice_the_catalog_does_not_know_is_left_alone() -> None:
+    """An operator's own voice has no catalog answer to adopt."""
+    record = VoiceRecord(
+        id="house_voice",
+        variety="safetensors",
+        state="registered",
+        name="House",
+        enabled=True,
+        language="english",
+        engine_id="english",
+        provenance="test",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        voice_rights="test",
+    )
+    assert _with_catalog_gender(record).perceived_gender is None
