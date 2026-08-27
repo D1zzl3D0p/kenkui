@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS characters(
     gender TEXT,
     spoken_characters INTEGER NOT NULL,
     ordinal INTEGER NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (attribution_id, character_id));
 
 CREATE TABLE IF NOT EXISTS character_chapters(
@@ -188,6 +189,24 @@ def cast_key(
     ).hexdigest()
 
 
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Add columns that post-date a store an operator already has.
+
+    CREATE TABLE IF NOT EXISTS does nothing to an existing table, so a new
+    column reaches a fresh database and no other. Adding it here keeps a
+    store written by an earlier version readable and writable rather than
+    making the operator discard their attributions.
+    """
+    existing = {
+        row["name"] for row in connection.execute("PRAGMA table_info(characters)")
+    }
+    if "aliases_json" not in existing:
+        connection.execute(
+            "ALTER TABLE characters "
+            "ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
+        )
+
+
 @contextmanager
 def _connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open the store, creating it and its private directory if absent."""
@@ -198,6 +217,7 @@ def _connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
         # Required for the delete cascades below; SQLite leaves it off.
         connection.execute("PRAGMA foreign_keys = ON")
         connection.executescript(_SCHEMA)
+        _migrate(connection)
         # Private like the voice manifest; a filesystem without chmod is not
         # a reason to refuse the store.
         with suppress(OSError):
@@ -243,8 +263,8 @@ def write_attribution(record: AttributionRecord, path: Path | None = None) -> No
             for ordinal, character in enumerate(record.characters):
                 connection.execute(
                     "INSERT INTO characters(attribution_id,character_id,"
-                    "display_name,gender,spoken_characters,ordinal) "
-                    "VALUES(?,?,?,?,?,?)",
+                    "display_name,gender,spoken_characters,ordinal,aliases_json) "
+                    "VALUES(?,?,?,?,?,?,?)",
                     (
                         record.attribution_id,
                         character.id,
@@ -252,6 +272,7 @@ def write_attribution(record: AttributionRecord, path: Path | None = None) -> No
                         character.gender,
                         character.spoken_characters,
                         ordinal,
+                        json.dumps(list(character.aliases)),
                     ),
                 )
                 for index, chapter_id in enumerate(character.chapter_ids):
@@ -307,6 +328,7 @@ def read_attribution(
                     item["gender"],
                     item["spoken_characters"],
                     tuple(chapters.get(item["character_id"], ())),
+                    tuple(json.loads(item["aliases_json"])),
                 )
                 for item in connection.execute(
                     "SELECT * FROM characters WHERE attribution_id=? ORDER BY ordinal",

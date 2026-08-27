@@ -199,3 +199,27 @@ def test_a_rank_prefixed_id_folds_into_the_bare_one() -> None:
         )
     )
     assert len(merged) == 1
+
+
+def test_merged_names_are_kept_as_aliases() -> None:
+    """Folding Lizbyet Corwi into Corwi must not lose the other surface form.
+
+    Volume 1 records the fullest name it saw and volume 3 uses a shorter one.
+    Keeping only the head's display name throws away the string that would
+    have matched them.
+    """
+    merged = merge_rosters(
+        (
+            (_profile("corwi", "Corwi"),),
+            (_profile("lizbyet-corwi", "Corwi"),),
+            (_profile("lizbyet-corwi", "Lizbyet Corwi"),),
+        )
+    )
+    assert len(merged) == 1
+    assert set(merged[0].aliases) == {"Corwi", "Lizbyet Corwi"}
+
+
+def test_a_lone_character_aliases_to_its_own_name() -> None:
+    """Every character has at least one surface form: the one it was given."""
+    merged = merge_rosters(((_profile("dhatt", "Dhatt"),),))
+    assert merged[0].aliases == ("Dhatt",)

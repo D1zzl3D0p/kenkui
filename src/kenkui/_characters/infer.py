@@ -156,8 +156,15 @@ def merge_rosters(
         return max(sorted(ids), key=lambda value: len(value.split("-")))
 
     by_id: dict[str, CharacterProfile] = {}
+    # by_id keeps one display name per id -- the first seen, gender aside --
+    # but the same id can surface under different names in different
+    # chapters ("Corwi" in one, "Lizbyet Corwi" in another). Every name is
+    # worth keeping, so it is tracked here rather than left to fall out of
+    # the dedup above.
+    id_names: dict[str, set[str]] = {}
     for roster in rosters:
         for character in roster:
+            id_names.setdefault(character.id, set()).add(character.display_name)
             existing = by_id.get(character.id)
             if existing is None:
                 by_id[character.id] = character
@@ -212,6 +219,7 @@ def merge_rosters(
     }
 
     merged: dict[str, CharacterProfile] = {}
+    aliases: dict[str, set[str]] = {}
     for character_id, character in by_id.items():
         target_name = canonical.get(character.display_name)
         if target_name is None:
@@ -220,6 +228,11 @@ def merge_rosters(
             continue
         head_id = name_to_id.get(target_name, character_id)
         head = by_id[head_id]
+        # Every display name folded under this head is a surface form series
+        # matching will later need, not just the one the head kept.
+        seen_names = aliases.setdefault(head_id, set())
+        seen_names.update(id_names[character_id])
+        seen_names.update(id_names[head_id])
         existing = merged.get(head_id, head)
         gender = existing.gender if existing.gender is not None else character.gender
         merged[head_id] = head.__class__(
@@ -228,5 +241,6 @@ def merge_rosters(
             gender=gender,
             spoken_characters=head.spoken_characters,
             chapter_ids=head.chapter_ids,
+            aliases=tuple(sorted(aliases[head_id])),
         )
     return tuple(sorted(merged.values(), key=lambda character: character.id))

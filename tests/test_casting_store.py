@@ -7,6 +7,7 @@ means a re-render silently re-casts the book.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -265,3 +266,55 @@ def test_a_stored_cast_records_which_choices_the_caller_pinned(
     pinned = {c: p for c, _, p in store.list_castings()[0].assignments}
     assert pinned["elizabeth"] is True
     assert pinned["darcy"] is False
+
+
+def test_a_store_without_the_column_is_migrated(
+    tmp_path: Path, attribution: store.AttributionRecord
+) -> None:
+    """An operator's existing attributions survive the upgrade."""
+    path = tmp_path / "old.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE books(book_id TEXT PRIMARY KEY);
+        CREATE TABLE characters(
+            attribution_id TEXT NOT NULL,
+            character_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            gender TEXT,
+            spoken_characters INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            PRIMARY KEY (attribution_id, character_id));
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store.write_attribution(attribution, path)
+    assert store.read_attribution(attribution.attribution_id, path) is not None
+
+
+def test_character_aliases_round_trip(tmp_path: Path) -> None:
+    """A stored character keeps every name it was known by."""
+    record = store.AttributionRecord(
+        attribution_id=store.attribution_key(BOOK, MODEL, PROMPT_VERSION, PARAMS),
+        book_id=BOOK,
+        model_id=MODEL,
+        prompt_version=PROMPT_VERSION,
+        params=PARAMS,
+        characters=(
+            CharacterProfile(
+                id="corwi",
+                display_name="Lizbyet Corwi",
+                gender="feminine",
+                spoken_characters=10,
+                chapter_ids=("ch1",),
+                aliases=("Corwi", "Lizbyet Corwi"),
+            ),
+        ),
+        spans=(),
+    )
+    store.write_attribution(record, tmp_path / "s.sqlite3")
+    read = store.read_attribution(record.attribution_id, tmp_path / "s.sqlite3")
+    assert read is not None
+    assert read.characters[0].aliases == ("Corwi", "Lizbyet Corwi")

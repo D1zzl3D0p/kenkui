@@ -38,6 +38,11 @@ class CharacterProfile:
     gender: str | None
     spoken_characters: int
     chapter_ids: tuple[str, ...]
+    # Every surface form this character was seen under, sorted. The display
+    # name alone cannot find them again: a later volume says "Kaladin" where
+    # this one recorded "Kaladin Stormblessed", and merge_rosters keeps only
+    # the head's name. Defaulted so every existing construction still works.
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
