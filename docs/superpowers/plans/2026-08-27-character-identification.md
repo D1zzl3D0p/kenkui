@@ -18,6 +18,55 @@
 - `identity.py` keeps its stated bias: under-merge (one person, two voices) is preferred to over-merge (two people, one voice). No change may invert this.
 - Run `.venv/bin/pytest` from the repo root. Lint with `.venv/bin/ruff check src tests` and `.venv/bin/mypy src`.
 
+## Status (2026-08-27, complete)
+
+| Task | Outcome |
+| --- | --- |
+| 1 Restore catalog gender | done, `bccc634` |
+| 2 Persist catalog gender | done, `7c07477` — premise refined, see below |
+| 3 Report an unhonourable cast | done, `bb0dcf8` — logged, not validated, see below |
+| 4-5 Coreference merging | **replaced**, `f95ac14` — see below |
+| 6 Role-word gender | done, `87a2863` |
+| 7 Mint roles | done, `5eb1a0a` |
+| 8 Dropped vs unknown | done, `d080486` |
+| 9 Verify | done — result below |
+| 10-12 Aliases, honorific, tag vote | **closed unimplemented** by Task 9's gate |
+
+**Result, re-solving the stored production cast against the fixed pool
+(pure, no model spend):**
+
+```
+before : matched 29   opposite 27   ungendered 16
+after  : matched 56   opposite  0   ungendered 16
+```
+
+**Deviations.** Task 2's premise was wrong: `_registered_from_catalog`
+already stamps the trait on a first registration and `add_voice` rejects
+catalog ids, so the real gap was re-loading an existing ungendered record.
+Task 3 dropped `ErrorCode.GENDERED_POOL_EMPTY` and the `validate()` issue,
+because `validate()` runs before any model call and has no character list;
+it follows `_log_collisions` instead. Tasks 4 and 5 were built on a false
+premise — `Tye` is not a prefix of `Tyador`, and `merge_rosters` already
+handled the rank-word case — so both were replaced by one task fixing the
+actual cause, the `contested` rule in `merge_rosters`.
+
+**Why 10-12 are closed.** Task 9 Step 5 measured the residual after the
+committed fixes: 7 characters, 7,426 spoken characters, 3.34% of all cast
+speech. `tye` alone is 6,703 of that — 90% — and it is Borlú under a second
+id, a coreference failure that neither an honorific nor a dialogue-tag vote
+repairs. Excluding it the residual is 0.33%. Implementing two speculative
+signals for that is not worth the surface area.
+
+**Known and unfixed.** `tye` still splits the narrator into two voices. No
+deterministic name rule reaches it: `Tyador` and `Tye` share only `Ty`, and
+a rule loose enough to merge them would merge genuinely different names. It
+needs the roster prompt to return aliases, or an explicit merge pass, and
+is a separate decision.
+
+**Note.** `evals/` is gitignored, so `evals/attribution/score_gender.py`
+and the `attribute_chapter` arity fix in `evals/attribution/run.py` exist
+locally but are not committed.
+
 ---
 
 ### Task 1: Restore catalog gender to enumerated voices
