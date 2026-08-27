@@ -9,11 +9,14 @@ import pytest
 import kenkui as kk
 from kenkui._characters import resolve_attribution, store
 from kenkui._characters.attribution import attribute_chapter
+from kenkui._characters.infer import normalise_roster, slugify
 from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
-from kenkui._characters.infer import normalise_roster, slugify
 from kenkui.cancellation import CancellationToken
 from kenkui.errors import CancelledError
+
+# The coverage fixture below carries exactly this many quoted runs.
+_FIXTURE_QUOTES = 3
 
 NARRATION_A = "The inspector waited by the door. "
 QUOTED = '"You are late again,"'
@@ -234,7 +237,7 @@ def test_coverage_separates_unknown_from_dropped() -> None:
     chapter = inspection.chapters[0]
     spans = extract_spans(chapter.id, chapter.text)
     dialogue = [span for span in spans if span.is_dialogue]
-    assert len(dialogue) >= 2, "fixture must carry at least two quotes"
+    assert len(dialogue) == _FIXTURE_QUOTES
 
     # ScriptedClient answers quote_id 0 only, so every later quote is dropped.
     _, _, coverage = attribute_chapter(
