@@ -37,18 +37,30 @@ return matched or pool
 `matched` is always empty and every character falls back to the entire pool.
 `method="gendered"` has been behaving exactly as `method="random"`.
 
-The cause is an **id-space mismatch**, not missing data:
+The cause is that **`list_voices` discards the gender the catalog already
+holds**. `registry.CATALOG` contains 121 entries — 50 masculine, 45 feminine,
+26 unsourced — keyed by the same short ids the manifest uses. It already knows
+the gender of **95 of the 98 installed voices**:
 
-| Source | Count | Id form | Gender |
-| --- | --- | --- | --- |
-| `kenkui-voices/voices.json` | 95 | `alasdair-m-vctk-p246-scottish` | 50 Male / 45 Female |
-| bundled `src/kenkui/voices/pack.json` | 95 | identical ids, identical set | 50 Male / 45 Female |
-| installed manifest | 98 | `alasdair`, `variety: "built-in"` | absent on 96 |
+```
+alasdair -> masculine   declan -> masculine
+aoife    -> feminine    amara  -> feminine
+```
 
-`registry.py:149` maps `_GENDERS.get(voice["gender"])` correctly, but it never
-runs against these entries because the manifest's short ids never join the
-catalog's long ids. The assets are the same files: **95 of 98 manifest entries
-join `kenkui-voices` on `asset_sha256`**, recovering the full 50/45 split.
+`provision.py:575-588` seeds `known` from `CATALOG`, then unconditionally
+overwrites every manifest entry with `_registered_view(record)` or
+`_loaded_view(record, engine)`. Both build `perceived_gender=record.
+perceived_gender` (`provision.py:485`) from the manifest record alone, which
+has no such field. The catalog value is read, then thrown away.
+
+Verified end to end against a copy of the production manifest:
+
+```
+perceived_gender populated      : 1/123  ->  96/123
+candidates for feminine Corwi   : 123 (whole pool)  ->  45 (gendered)
+masculine voices admitted       : 1  ->  0
+declan admitted for Corwi       : True  ->  False
+```
 
 The user-visible result, from the real cast:
 
@@ -57,8 +69,8 @@ corwi          (feminine) -> aoife    = Female  ok
 lizbyet-corwi  (feminine) -> declan   = Male    wrong
 ```
 
-No improvement to gender *inference* can affect this. The voice side has no
-gender to match against.
+No improvement to gender *inference* can affect this. The voice side has
+gender; the enumeration primitive drops it before casting ever sees it.
 
 ### Defect 2: the fallback is silent
 
@@ -151,20 +163,23 @@ conversation.
 
 ### A. Recover voice gender, and stop degrading silently
 
-1. **Backfill by content hash.** A migration joins existing manifest entries to
-   the bundled catalog on `asset_sha256` and writes `perceived_gender` where it
-   resolves. 95 of 98 entries recover; the remainder stay `None`.
-2. **Fix provisioning.** Voices loaded from `kenkui-voices` through
-   `load_voice` must retain the catalog id, or carry the catalog's rights and
-   `perceived_gender` when registered under a short alias. A voice that is
-   byte-identical to a catalog asset must never land in the manifest without
-   its catalog metadata.
+1. **Stop discarding the catalog value.** `_registered_view` and
+   `_loaded_view` fall back to `CATALOG[voice_id].perceived_gender` when the
+   manifest record carries none. This is the entire repair for 95 of 98
+   installed voices, it needs no migration, and it self-heals every existing
+   manifest on the next call.
+2. **Persist on write, not as a migration.** `load_voice` and `add_voice`
+   record the catalog's `perceived_gender` when registering a voice whose id
+   the catalog knows, so newly written entries are correct at rest. Short ids
+   are kept; the catalog already resolves `voices.json`'s long ids
+   (`alasdair-m-vctk-p246-scottish`) to the short form. No id renaming, so
+   stored casts and `cast_assignments` rows stay valid.
 3. **Refuse to degrade quietly.** When `method="gendered"` and a character with
    a known gender has no gender-matching voice in the pool, emit a `Warning`
    event naming the character and the empty pool. `validate()` reports it as a
-   `ValidationIssue` before any model call is made or any audio is rendered.
-   `matched or pool` stays as the runtime behaviour — dropping the speech
-   would be worse — but it stops being invisible.
+   `ValidationIssue` before any model call or render. `matched or pool` stays
+   as the runtime behaviour — dropping the speech would be worse — but it stops
+   being invisible.
 
 This is the whole of complaint 1. Items B-F are independently real and worth
 fixing, but none of them changes a voice assignment until A lands.
