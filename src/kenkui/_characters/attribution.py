@@ -14,12 +14,11 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from kenkui._characters.infer import PRONOUNS, UNKNOWN
+from kenkui._characters.infer import PRONOUNS, UNKNOWN, slugify
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import (
     ATTRIBUTION_PROMPT,
     CONTINUITY_SPEAKERS,
-    ROLE_WORDS,
 )
 from kenkui._characters.quotes import TextSpan, extract_spans
 from kenkui._domain.planning import SpeakerSpan
@@ -84,14 +83,24 @@ def _resolve(  # noqa: PLR0911 - one branch per resolution rule, kept flat.
         return None
     if candidate in known:
         return candidate
-    if chapter_id is not None and candidate in ROLE_WORDS:
-        # A role names a speaker the text identifies without naming: "the
-        # lookout", "the first man". It is scoped to the chapter because
-        # chapter 40's guard is not chapter 12's, and the model answers the
-        # bare word because an id it must reproduce gets shortened and lost.
-        # The vocabulary is closed: a pattern that accepted any short
-        # lowercase word could not tell a role from a hallucinated name.
-        return f"role:{candidate}@{chapter_id}"
+    if chapter_id is not None:
+        # Any answer that is not on the roster is a speaker the roster
+        # missed, not a non-answer. A closed vocabulary could not anticipate
+        # "officer" or "Professor Rochambeaux", and every speaker it failed
+        # to name resolved to unknown -- which is read in the narrator's
+        # voice, so a first-person book renders both halves of a
+        # conversation as one person.
+        #
+        # Scoped to the chapter because chapter 40's officer is not chapter
+        # 12's. A speaker recurring across chapters therefore gets a voice
+        # per chapter; these are overwhelmingly one-scene parts, and a
+        # wrong-but-distinct voice beats collapsing into the narrator.
+        #
+        # Pronouns are refused above, so no minted role can merge unrelated
+        # speakers. A hallucinated name does become a voice, which is the
+        # accepted cost of the open vocabulary.
+        slug = slugify(candidate)
+        return f"role:{slug}@{chapter_id}" if slug else None
     return None
 
 

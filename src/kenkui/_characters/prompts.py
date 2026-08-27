@@ -12,56 +12,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-PROMPT_VERSION = "characters-v3"
+PROMPT_VERSION = "characters-v4"
 
 # Speakers carried into the next window so the model can hold A-B-A-B
 # conversational momentum across a boundary it cannot see past.
 CONTINUITY_SPEAKERS = 4
-
-# The roles a speaker may be identified by when the text names no one. Closed
-# on purpose: a pattern that accepts any short lowercase word cannot tell a
-# role from a hallucinated name, and would turn every invented speaker into a
-# cast voice. A word outside this list resolves to unknown, exactly as before
-# roles existed.
-ROLE_WORDS: frozenset[str] = frozenset(
-    {
-        "man",
-        "woman",
-        "boy",
-        "girl",
-        "child",
-        "stranger",
-        "voice",
-        "first-man",
-        "second-man",
-        "third-man",
-        "first-woman",
-        "second-woman",
-        "third-woman",
-        "old-man",
-        "old-woman",
-        "young-man",
-        "young-woman",
-        "guard",
-        "soldier",
-        "servant",
-        "innkeeper",
-        "cook",
-        "farmer",
-        "merchant",
-        "sailor",
-        "lookout",
-        "watchman",
-        "driver",
-        "porter",
-        "messenger",
-        "priest",
-        "doctor",
-        "nurse",
-        "clerk",
-        "captain",
-    }
-)
 
 # The role words that state a gender outright. An innkeeper or a guard may be
 # anyone, and casting them from a gendered pool would be a guess; a woman is a
@@ -131,7 +86,8 @@ Quotes, in order. Attribute every one; do not add, skip, or reorder:
 {quotes}
 
 RULES
-- "speaker": an id from the list above, or "unknown".
+- "speaker": an id from the list above when one fits, otherwise the name or
+  role of whoever speaks, or "unknown" when the passage does not say.
 - Never answer with a pronoun. If the speaker is identifiable only by pronoun
   and the passage does not disambiguate, answer "unknown".
 - A quoted run that is a title, label, acronym, or a word used as a term is not
@@ -142,12 +98,10 @@ RULES
   tagged "I said", "I asked" or "said I" is spoken by them: answer with their
   id. Do not answer "unknown" for those, and never answer with the pronoun.
 - When the text identifies a speaker without naming them -- "the lookout in the
-  bow", "the first man", "the innkeeper" -- answer with the matching word from
-  this list, if one fits: man, woman, boy, girl, child, stranger, voice,
-  first-man, second-man, third-man, first-woman, second-woman, third-woman,
-  old-man, old-woman, young-man, young-woman, guard, soldier, servant,
-  innkeeper, cook, farmer, merchant, sailor, lookout, watchman, driver,
-  porter, messenger, priest, doctor, nurse, clerk, captain. Prefer this over
-  "unknown" whenever the text says who is speaking at all and one of these
-  words fits.
+  bow", "the first man", "the innkeeper" -- answer with a short lowercase noun
+  phrase for them, words joined by hyphens: "lookout", "first-man",
+  "innkeeper", "old-woman". Prefer this over "unknown" whenever the text says
+  who is speaking at all.
+- When the text names a speaker who is not in the list above, answer with their
+  name. A speaker the list missed is still a speaker.
 """

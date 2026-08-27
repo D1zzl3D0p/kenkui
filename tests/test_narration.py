@@ -293,14 +293,40 @@ def test_a_roster_character_still_wins_over_a_role() -> None:
     assert _resolve("rand", frozenset({"rand"}), None, chapter_id="ch-1") == "rand"
 
 
-def test_a_word_outside_the_role_vocabulary_is_refused() -> None:
-    """A hallucinated name is not a role just because it is short and lowercase.
+def test_a_name_outside_the_roster_becomes_a_role() -> None:
+    """A speaker the roster missed still gets a voice of their own.
 
-    The vocabulary is closed on purpose: a pattern that accepted any short
-    lowercase word could not tell a role from an invented name, and would
-    turn every model hallucination into a cast voice.
+    Previously the vocabulary was a closed 34-word list, so a speaker the
+    text names plainly -- "a militsya officer", "Professor Rochambeaux" --
+    had no legal token and resolved to unknown, which is read in the
+    narrator's voice. An open vocabulary casts a hallucinated name too; a
+    wrong-but-distinct voice is the better failure.
     """
-    assert _resolve("someone-else", frozenset(), None, chapter_id="ch-1") is None
+    assert (
+        _resolve("Rochambeaux", frozenset({"dhatt"}), None, chapter_id="ch13")
+        == "role:rochambeaux@ch13"
+    )
+    assert (
+        _resolve("officer", frozenset(), None, chapter_id="ch13")
+        == "role:officer@ch13"
+    )
+
+
+def test_a_pronoun_is_never_minted_as_a_role() -> None:
+    """role:he@ch13 would collapse every male speaker into one voice."""
+    assert _resolve("he", frozenset(), None, chapter_id="ch13") is None
+    assert _resolve("She", frozenset(), None, chapter_id="ch13") is None
+    assert _resolve("they", frozenset(), None, chapter_id="ch13") is None
+
+
+def test_unknown_is_still_unknown() -> None:
+    """The reserved word means the model declined, not that it named someone."""
+    assert _resolve("unknown", frozenset(), None, chapter_id="ch13") is None
+
+
+def test_no_chapter_to_scope_to_means_no_role() -> None:
+    """A role is only meaningful scoped to the chapter that minted it."""
+    assert _resolve("Rochambeaux", frozenset(), None, chapter_id=None) is None
 
 
 def test_a_role_id_synthesised_by_measured_satisfies_the_invariant() -> None:

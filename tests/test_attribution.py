@@ -109,12 +109,21 @@ def test_an_unknown_speaker_stays_unattributed() -> None:
     assert all(s.character_id is None for s in record.spans)
 
 
-def test_a_speaker_outside_the_roster_is_rejected() -> None:
-    """An invented name has no voice to map to."""
+def test_a_speaker_outside_the_roster_becomes_a_role() -> None:
+    """A name the roster missed is a speaker, not a non-answer.
+
+    Rejecting it made the roster a hard ceiling on attribution: a character
+    the model named correctly but the roster never listed could not be
+    placed at any price, and unknown is read in the narrator's voice. The
+    cost of the open vocabulary is that a hallucinated name also becomes a
+    voice, which is the better failure of the two.
+    """
     record = resolve_attribution(
         _inspection(), BOOK, "fake/model", client=ScriptedClient("someone-else")
     )
-    assert all(s.character_id is None for s in record.spans)
+    placed = [s.character_id for s in record.spans if s.character_id is not None]
+    assert placed
+    assert all(cid.startswith("role:someone-else@") for cid in placed)
 
 
 def test_a_pronoun_answer_is_rejected() -> None:
