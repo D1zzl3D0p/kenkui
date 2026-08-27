@@ -7,6 +7,11 @@ reused silently under the new one.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 PROMPT_VERSION = "characters-v3"
 
 # Speakers carried into the next window so the model can hold A-B-A-B
@@ -57,6 +62,27 @@ ROLE_WORDS: frozenset[str] = frozenset(
         "captain",
     }
 )
+
+# The role words that state a gender outright. An innkeeper or a guard may be
+# anyone, and casting them from a gendered pool would be a guess; a woman is a
+# woman, and sending her to the whole pool is a coin flip on a speaker the text
+# has already identified.
+ROLE_GENDERS: Mapping[str, str] = {
+    "woman": "feminine",
+    "girl": "feminine",
+    "old-woman": "feminine",
+    "young-woman": "feminine",
+    "first-woman": "feminine",
+    "second-woman": "feminine",
+    "third-woman": "feminine",
+    "man": "masculine",
+    "boy": "masculine",
+    "old-man": "masculine",
+    "young-man": "masculine",
+    "first-man": "masculine",
+    "second-man": "masculine",
+    "third-man": "masculine",
+}
 
 ROSTER_PROMPT = """\
 List the speaking characters in this passage from a novel.

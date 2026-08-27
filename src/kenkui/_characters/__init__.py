@@ -20,7 +20,11 @@ from kenkui._characters.attribution import attribute_chapter
 from kenkui._characters.infer import merge_rosters, normalise_roster, slugify
 from kenkui._characters.llm import complete_json
 from kenkui._characters.narration import is_first_person
-from kenkui._characters.prompts import PROMPT_VERSION, ROSTER_PROMPT
+from kenkui._characters.prompts import (
+    PROMPT_VERSION,
+    ROLE_GENDERS,
+    ROSTER_PROMPT,
+)
 from kenkui._characters.quotes import extract_spans
 from kenkui._characters.store import AttributionRecord
 from kenkui._domain.casting import (
@@ -131,7 +135,7 @@ def _measured(
         CharacterProfile(
             id=role,
             display_name=role.removeprefix("role:").split("@")[0].replace("-", " "),
-            gender=None,
+            gender=ROLE_GENDERS.get(role.removeprefix("role:").split("@")[0]),
             spoken_characters=volume.get(role, 0),
             chapter_ids=tuple(chapters.get(role, ())),
         )

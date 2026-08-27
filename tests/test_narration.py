@@ -9,10 +9,11 @@ import zipfile
 from typing import TYPE_CHECKING
 
 import kenkui as kk
-from kenkui._characters import _roster_for, resolve_attribution
+from kenkui._characters import _measured, _roster_for, resolve_attribution
 from kenkui._characters.attribution import _resolve
 from kenkui._characters.narration import first_person_tags, is_first_person
 from kenkui._characters.quotes import extract_spans
+from kenkui._domain.planning import SpeakerSpan
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -336,3 +337,30 @@ def test_a_role_id_synthesised_by_measured_satisfies_the_invariant() -> None:
     assert all(
         span.character_id is None or span.character_id in known for span in record.spans
     )
+
+
+def test_gendered_role_words_carry_their_own_gender() -> None:
+    """"role:woman@ch3" is feminine because the text said so.
+
+    Seven of the fifteen largest ungendered entries in a real run were role
+    words that state a gender outright. Synthesising them as unknown sent
+    each one to the whole voice pool, which is a coin flip on a speaker the
+    text had already identified.
+    """
+    spans = (
+        SpeakerSpan("ch3", 0, 10, "role:woman@ch3"),
+        SpeakerSpan("ch3", 10, 20, "role:old-man@ch3"),
+        SpeakerSpan("ch3", 20, 30, "role:young-woman@ch3"),
+        SpeakerSpan("ch3", 30, 40, "role:innkeeper@ch3"),
+    )
+    profiles = {character.id: character for character in _measured((), spans)}
+    assert profiles["role:woman@ch3"].gender == "feminine"
+    assert profiles["role:old-man@ch3"].gender == "masculine"
+    assert profiles["role:young-woman@ch3"].gender == "feminine"
+
+
+def test_an_ungendered_role_word_stays_unknown() -> None:
+    """An innkeeper may be anyone; casting them from a pool would be a guess."""
+    spans = (SpeakerSpan("ch3", 0, 10, "role:innkeeper@ch3"),)
+    profiles = {character.id: character for character in _measured((), spans)}
+    assert profiles["role:innkeeper@ch3"].gender is None
