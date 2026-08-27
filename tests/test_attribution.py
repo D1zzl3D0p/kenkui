@@ -61,6 +61,41 @@ def _inspection(text: str = TEXT) -> kk.BookInspection:
     return kk.BookInspection(metadata, (chapter,))
 
 
+class _AliasFoldClient:
+    """Names one woman "Corwi" in chapter one and "Lizbyet Corwi" in chapter two.
+
+    merge_rosters folds these into a single character keyed on
+    "lizbyet-corwi" before any attribution call happens, so both chapters'
+    attribution answers name the folded id -- exactly what a real model
+    would do, since that is the only id the roster block hands it by then.
+    """
+
+    def __init__(self) -> None:
+        """Track calls so the fixture reads like the ones above it."""
+        self.calls: list[str] = []
+        self._rosters_seen = 0
+
+    def complete(self, model: str, prompt: str) -> str:
+        """Return the next scripted roster or attribution answer."""
+        assert model
+        self.calls.append(prompt)
+        if "List the speaking characters" in prompt:
+            self._rosters_seen += 1
+            character = (
+                {"id": "corwi", "name": "Corwi", "gender": "feminine"}
+                if self._rosters_seen == 1
+                else {
+                    "id": "lizbyet-corwi",
+                    "name": "Lizbyet Corwi",
+                    "gender": "feminine",
+                }
+            )
+            return json.dumps({"characters": [character]})
+        return json.dumps(
+            {"attributions": [{"quote_id": 0, "speaker": "lizbyet-corwi"}]}
+        )
+
+
 def test_slugify_produces_stable_ids() -> None:
     """Ids key everything downstream, so they must not drift."""
     assert slugify("Elizabeth Bennet") == "elizabeth-bennet"
@@ -251,3 +286,29 @@ def test_coverage_separates_unknown_from_dropped() -> None:
     assert coverage.unknown == 1
     assert coverage.dropped == len(dialogue) - 1
     assert coverage.answered == 0
+
+
+def test_folded_aliases_survive_measurement_and_the_store() -> None:
+    """The gap this closes: aliases dying between merge_rosters and the store.
+
+    merge_rosters computes aliases correctly on its own, but resolve_attribution
+    rebuilds every profile through _measured on the way to storage. A test
+    that only calls merge_rosters cannot see _measured silently dropping the
+    field back to its default -- this one exercises the whole path a book
+    actually takes, roster inference through the stored record.
+    """
+    chapter_one = kk.ChapterInspection("ch1", 0, "One", len(TEXT), TEXT)
+    chapter_two = kk.ChapterInspection("ch2", 1, "Two", len(TEXT), TEXT)
+    metadata = kk.BookMetadata("T", "A", cover_available=False)
+    inspection = kk.BookInspection(metadata, (chapter_one, chapter_two))
+
+    record = resolve_attribution(
+        inspection, BOOK, "fake/model", client=_AliasFoldClient()
+    )
+    corwi = next(c for c in record.characters if c.id == "lizbyet-corwi")
+    assert set(corwi.aliases) == {"Corwi", "Lizbyet Corwi"}
+
+    stored = store.read_attribution(record.attribution_id)
+    assert stored is not None
+    restored = next(c for c in stored.characters if c.id == "lizbyet-corwi")
+    assert set(restored.aliases) == {"Corwi", "Lizbyet Corwi"}

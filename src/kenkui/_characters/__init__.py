@@ -156,6 +156,7 @@ def _measured(
             gender=character.gender,
             spoken_characters=volume.get(character.id, 0),
             chapter_ids=tuple(chapters.get(character.id, ())),
+            aliases=character.aliases,
         )
         for character in characters
         # A character nobody attributed anything to cannot be cast, and would
@@ -178,6 +179,9 @@ def _measured(
             gender=ROLE_GENDERS.get(role.removeprefix("role:").split("@")[0]),
             spoken_characters=volume.get(role, 0),
             chapter_ids=tuple(chapters.get(role, ())),
+            # A role is minted with one surface form -- its display name --
+            # never a roster entry with variant names to fold together.
+            aliases=(role.removeprefix("role:").split("@")[0].replace("-", " "),),
         )
         for role in sorted(roles)
     )
