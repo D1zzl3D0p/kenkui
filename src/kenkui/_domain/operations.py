@@ -39,6 +39,9 @@ class SpokenForm:
     # Sorted pairs rather than a mapping: an operation record must be hashable
     # and compare equal regardless of how the caller ordered it.
     lexicon: tuple[tuple[str, str], ...] = ()
+    # Per-feature overrides on the tier, same reasoning. Empty means the tier
+    # decides everything, which is what every caller before these existed did.
+    features: tuple[tuple[str, bool], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

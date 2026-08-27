@@ -7,7 +7,6 @@ import pytest
 from kenkui._domain.spoken.numbers import (
     Rule,
     cardinal_words,
-    conservative_rules,
     decimal_words,
     number_rules,
     ordinal_words,
@@ -152,7 +151,7 @@ def apply_rules(rules: tuple[Rule, ...], text: str) -> str:
 )
 def test_conservative_tier_converts(source: str, expected: str) -> None:
     """Unambiguous numeric forms convert under the conservative tier."""
-    assert apply_rules(conservative_rules(), source) == expected
+    assert apply_rules(number_rules("conservative"), source) == expected
 
 
 @pytest.mark.parametrize(
@@ -168,7 +167,7 @@ def test_conservative_tier_converts(source: str, expected: str) -> None:
 )
 def test_conservative_tier_declines(source: str) -> None:
     """Ambiguous or out-of-range forms are left exactly as written."""
-    assert apply_rules(conservative_rules(), source) == source
+    assert apply_rules(number_rules("conservative"), source) == source
 
 
 @pytest.mark.parametrize(
@@ -246,7 +245,7 @@ def test_tiers_are_cumulative() -> None:
 )
 def test_foot_has_a_singular_form(source: str, expected: str) -> None:
     """A single foot is a foot, not a feet."""
-    assert apply_rules(conservative_rules(), source) == expected
+    assert apply_rules(number_rules("conservative"), source) == expected
 
 
 @pytest.mark.parametrize(
@@ -267,4 +266,4 @@ def test_currency_reads_scale_words_and_short_decimals(
     strands after the currency ("three dollars million") and a one-digit
     decimal falls out of the match entirely ("one dollar.five billion").
     """
-    assert apply_rules(conservative_rules(), source) == expected
+    assert apply_rules(number_rules("conservative"), source) == expected

@@ -8,8 +8,10 @@ segment identity without making a cache entry machine-specific.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from typing import Literal
+from collections.abc import Callable, Mapping
+from typing import Final, Literal
+
+from kenkui.errors import ErrorCode, ValidationError
 
 _ONES = (
     "zero",
@@ -161,6 +163,34 @@ def roman_value(token: str) -> int | None:
 
 Handler = Callable[[re.Match[str]], str | None]
 Rule = tuple[re.Pattern[str], Handler]
+# The same rule, tagged with the feature a caller can switch on or off. Only
+# the tier assembly below sees these; `number_rules` strips the tag.
+NamedRule = tuple[str, re.Pattern[str], Handler]
+
+# Every switchable feature, and the tier that first turns it on. A caller may
+# decline any of them, or ask for one the tier would not have supplied.
+FEATURES: Final[dict[str, str]] = {
+    "currency": "conservative",
+    "percent": "conservative",
+    "ordinals": "conservative",
+    "units": "conservative",
+    "decimals": "conservative",
+    "integers": "conservative",
+    "years": "standard",
+    "clock": "standard",
+    "roman": "standard",
+    "fractions": "aggressive",
+    "numbered": "aggressive",
+}
+_TIER_RANK: Final[dict[str, int]] = {
+    "off": 0,
+    "conservative": 1,
+    "standard": 2,
+    "aggressive": 3,
+}
+# Rules general enough to swallow the leading digits of a more specific form,
+# so they run last whatever else is enabled.
+_GENERIC: Final[frozenset[str]] = frozenset({"decimals", "integers"})
 NumberTier = Literal["off", "conservative", "standard", "aggressive"]
 
 # A number may neither begin nor end inside a word: "COVID19" and "3D" are
@@ -298,7 +328,7 @@ def _integer(match: re.Match[str]) -> str | None:
     return f"{sign}{cardinal_words(value)}"
 
 
-def conservative_rules() -> tuple[Rule, ...]:
+def conservative_rules() -> tuple[NamedRule, ...]:
     """Return forms that are unambiguous under any reading.
 
     Order is significant: the first rule whose handler accepts wins, so more
@@ -309,14 +339,19 @@ def conservative_rules() -> tuple[Rule, ...]:
     scales = "|".join(name for _, name in _SCALES)
     return (
         (
+            "currency",
             re.compile(rf"{_LB}([$£€])({_INT})(?:\.(\d+))?(?:[ ]({scales}))?{_RB}"),
             _currency,
         ),
-        (re.compile(rf"{_LB}({_INT})(?:\.(\d+))?%"), _percent),
-        (re.compile(rf"{_LB}({_INT})(st|nd|rd|th){_RB}"), _ordinal),
-        (re.compile(rf"{_LB}(-)?({_INT})(?:\.(\d+))?[  ]?({units}){_RB}"), _unit),
-        (re.compile(rf"{_LB}(-)?({_INT})\.(\d+){_RB}"), _decimal),
-        (re.compile(rf"{_LB}(-)?({_INT}){_RB}"), _integer),
+        ("percent", re.compile(rf"{_LB}({_INT})(?:\.(\d+))?%"), _percent),
+        ("ordinals", re.compile(rf"{_LB}({_INT})(st|nd|rd|th){_RB}"), _ordinal),
+        (
+            "units",
+            re.compile(rf"{_LB}(-)?({_INT})(?:\.(\d+))?[  ]?({units}){_RB}"),
+            _unit,
+        ),
+        ("decimals", re.compile(rf"{_LB}(-)?({_INT})\.(\d+){_RB}"), _decimal),
+        ("integers", re.compile(rf"{_LB}(-)?({_INT}){_RB}"), _integer),
     )
 
 
@@ -426,39 +461,81 @@ def _fraction(match: re.Match[str]) -> str | None:
     return f"{cardinal_words(numerator)} {tail}{'' if numerator == 1 else 's'}"
 
 
-def _standard_rules() -> tuple[Rule, ...]:
+def _standard_rules() -> tuple[NamedRule, ...]:
     """Return forms that are usually right but require context."""
     return (
-        (re.compile(rf"{_LB}({_YEAR})\s*{_DASHES}\s*({_YEAR}){_RB}"), _year_range),
-        (re.compile(rf"{_LB}([01]?[0-9]|2[0-3]):([0-5][0-9]){_RB}"), _clock),
-        (re.compile(rf"{_LB}({_YEAR}){_RB}"), _year),
-        (re.compile(rf"{_LB}({_TITLE_WORDS})(\s+)([IVXLCDM]+){_RB}"), _title_roman),
+        (
+            "years",
+            re.compile(rf"{_LB}({_YEAR})\s*{_DASHES}\s*({_YEAR}){_RB}"),
+            _year_range,
+        ),
+        ("clock", re.compile(rf"{_LB}([01]?[0-9]|2[0-3]):([0-5][0-9]){_RB}"), _clock),
+        ("years", re.compile(rf"{_LB}({_YEAR}){_RB}"), _year),
+        (
+            "roman",
+            re.compile(rf"{_LB}({_TITLE_WORDS})(\s+)([IVXLCDM]+){_RB}"),
+            _title_roman,
+        ),
         # Two or more numeral characters: a lone "I" is far more often the
         # pronoun, and "said I" must never become "said the First".
-        (re.compile(rf"{_LB}([A-Z][a-z]+)(\s+)([IVXLCDM]{{2,}}){_RB}"), _regnal),
+        (
+            "roman",
+            re.compile(rf"{_LB}([A-Z][a-z]+)(\s+)([IVXLCDM]{{2,}}){_RB}"),
+            _regnal,
+        ),
     )
 
 
-def _aggressive_rules() -> tuple[Rule, ...]:
+def _aggressive_rules() -> tuple[NamedRule, ...]:
     """Return forms that require guessing and must be opted into explicitly."""
     return (
-        (re.compile(rf"{_LB}([A-Z][a-z]+)(\s+)([IVXLCDM]+){_RB}"), _regnal),
-        (re.compile(rf"No\.(\s*)({_INT}){_RB}"), _numbered),
-        (re.compile(rf"{_LB}({_INT})/({_INT}){_RB}"), _fraction),
-        (re.compile(rf"{_LB}([IVXLCDM]{{2,}}){_RB}"), _bare_roman),
+        ("roman", re.compile(rf"{_LB}([A-Z][a-z]+)(\s+)([IVXLCDM]+){_RB}"), _regnal),
+        ("numbered", re.compile(rf"No\.(\s*)({_INT}){_RB}"), _numbered),
+        ("fractions", re.compile(rf"{_LB}({_INT})/({_INT}){_RB}"), _fraction),
+        ("roman", re.compile(rf"{_LB}([IVXLCDM]{{2,}}){_RB}"), _bare_roman),
     )
 
 
-def number_rules(tier: NumberTier) -> tuple[Rule, ...]:
-    """Return the ordered rules for one tier, most specific form first."""
-    if tier == "off":
-        return ()
-    base = conservative_rules()
-    if tier == "conservative":
-        return base
-    extra = _standard_rules()
-    if tier == "aggressive":
-        extra = (*extra, *_aggressive_rules())
-    head = base[:-_GENERIC_RULE_COUNT]
-    generic = base[-_GENERIC_RULE_COUNT:]
-    return (*head, *extra, *generic)
+def _validated(overrides: Mapping[str, bool] | None) -> Mapping[str, bool]:
+    """Reject a feature name no rule answers to, rather than ignoring it."""
+    for feature in overrides or {}:
+        if feature not in FEATURES:
+            raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+    return overrides or {}
+
+
+def number_rules(
+    tier: NumberTier, overrides: Mapping[str, bool] | None = None
+) -> tuple[Rule, ...]:
+    """Return the ordered rules for one configuration, most specific first.
+
+    A tier is a preset over features, not a package. An override may decline
+    a feature the tier supplies, or ask for one it does not, so wanting a
+    single aggressive form never means accepting every other one.
+
+    Each rule keeps the tier that introduced it, so asking for `roman` does
+    not smuggle the aggressive readings of it into a standard render: only
+    the rules that tier already carried apply unless the feature was named
+    explicitly.
+
+    Generic rules run last however the set was chosen, since a bare integer
+    would otherwise swallow the leading digits of a currency amount or year.
+    """
+    wanted = _validated(overrides)
+    rank = _TIER_RANK[tier]
+    chosen: list[NamedRule] = []
+    for group, rules in (
+        ("conservative", conservative_rules()),
+        ("standard", _standard_rules()),
+        ("aggressive", _aggressive_rules()),
+    ):
+        within = rank >= _TIER_RANK[group]
+        for rule in rules:
+            asked = wanted.get(rule[0])
+            if asked is False:
+                continue
+            if within or asked is True:
+                chosen.append(rule)
+    head = [rule for rule in chosen if rule[0] not in _GENERIC]
+    generic = [rule for rule in chosen if rule[0] in _GENERIC]
+    return tuple((pattern, handler) for _, pattern, handler in (*head, *generic))

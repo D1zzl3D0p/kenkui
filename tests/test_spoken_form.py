@@ -52,3 +52,71 @@ def test_identity_is_stable_across_calls() -> None:
     first = spoken_identity(numbers="standard", lexicon=(("a", "b"),), builtin=True)
     second = spoken_identity(numbers="standard", lexicon=(("a", "b"),), builtin=True)
     assert first == second
+
+
+def test_a_feature_can_be_turned_off_below_its_tier() -> None:
+    """A tier is a preset, not a package: any rule in it can be declined."""
+    source = "It cost £5 that year."
+    assert "five pounds" in to_spoken(
+        source, numbers="conservative", lexicon=(), builtin=False
+    )
+    assert "five pounds" not in to_spoken(
+        source, numbers="conservative", lexicon=(), builtin=False,
+        features={"currency": False},
+    )
+
+
+def test_a_feature_can_be_turned_on_above_its_tier() -> None:
+    """Wanting one aggressive rule must not mean accepting all of them."""
+    source = "Chapter IV begins."
+    assert "IV" in to_spoken(source, numbers="off", lexicon=(), builtin=False)
+    assert "IV" not in to_spoken(
+        source, numbers="off", lexicon=(), builtin=False, features={"roman": True}
+    )
+
+
+def test_an_unset_feature_follows_the_tier() -> None:
+    """None is not False: it means whatever the tier already decided."""
+    source = "Chapter IV begins."
+    assert to_spoken(
+        source, numbers="standard", lexicon=(), builtin=False, features={}
+    ) == to_spoken(source, numbers="standard", lexicon=(), builtin=False)
+
+
+def test_features_reach_the_segment_identity() -> None:
+    """Two configurations that speak differently must never share a cache row."""
+    base = spoken_identity(numbers="standard", lexicon=(), builtin=False)
+    without = spoken_identity(
+        numbers="standard", lexicon=(), builtin=False, features={"roman": False}
+    )
+    assert base != without
+
+
+def test_an_empty_feature_map_is_the_bare_tier_identity() -> None:
+    """Passing no overrides must not invalidate anybody's cached audio."""
+    assert spoken_identity(
+        numbers="standard", lexicon=(), builtin=False, features={}
+    ) == spoken_identity(numbers="standard", lexicon=(), builtin=False)
+
+
+def test_features_compose_rather_than_nest() -> None:
+    """Declining a specific form leaves a general one free to match inside it.
+
+    Documented because it surprises: turning off currency does not turn off
+    integers, so the amount is still read even though the symbol is not.
+    """
+    source = "It cost £5."
+    assert (
+        to_spoken(
+            source, numbers="conservative", lexicon=(), builtin=False,
+            features={"currency": False},
+        )
+        == "It cost £five."
+    )
+    assert (
+        to_spoken(
+            source, numbers="conservative", lexicon=(), builtin=False,
+            features={"currency": False, "integers": False},
+        )
+        == source
+    )

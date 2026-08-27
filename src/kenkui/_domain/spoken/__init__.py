@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 from kenkui._domain.spoken.lexicon import LEXICON_VERSION, lexicon_rules
 from kenkui._domain.spoken.numbers import NumberTier, Rule, number_rules
@@ -17,10 +21,17 @@ SPOKEN_FORM_VERSION = "spoken-form-v1"
 
 
 def _rules(
-    numbers: NumberTier, lexicon: tuple[tuple[str, str], ...], *, builtin: bool
+    numbers: NumberTier,
+    lexicon: tuple[tuple[str, str], ...],
+    *,
+    builtin: bool,
+    features: Mapping[str, bool] | None = None,
 ) -> tuple[Rule, ...]:
     """Rank caller entries, then built-in entries, then number rules."""
-    return (*lexicon_rules(lexicon, builtin=builtin), *number_rules(numbers))
+    return (
+        *lexicon_rules(lexicon, builtin=builtin),
+        *number_rules(numbers, features),
+    )
 
 
 def to_spoken(
@@ -29,6 +40,7 @@ def to_spoken(
     numbers: NumberTier,
     lexicon: tuple[tuple[str, str], ...],
     builtin: bool,
+    features: Mapping[str, bool] | None = None,
 ) -> str:
     """Return the string the engine should speak for this canonical text.
 
@@ -36,7 +48,7 @@ def to_spoken(
     its output is emitted verbatim; emitted output is never re-examined, so
     rules can neither cascade nor loop.
     """
-    rules = _rules(numbers, lexicon, builtin=builtin)
+    rules = _rules(numbers, lexicon, builtin=builtin, features=features)
     if not rules:
         return text
     out: list[str] = []
@@ -63,6 +75,7 @@ def spoken_identity(
     numbers: NumberTier,
     lexicon: tuple[tuple[str, str], ...],
     builtin: bool,
+    features: Mapping[str, bool] | None = None,
 ) -> dict[str, object]:
     """Return the identity fields this configuration contributes to a segment.
 
@@ -77,8 +90,16 @@ def spoken_identity(
         separators=(",", ":"),
     )
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
-    return {
+    identity: dict[str, object] = {
         "spoken_form_schema": SPOKEN_FORM_VERSION,
         "numbers_tier": numbers,
         "lexicon_identity": f"{LEXICON_VERSION if builtin else 'none'}:{digest}",
     }
+    # Absent when nothing was overridden, so a caller who never touched a
+    # feature keeps the identity -- and therefore the cached audio -- they
+    # had before features existed.
+    if features:
+        identity["number_features"] = ",".join(
+            f"{name}={int(value)}" for name, value in sorted(features.items())
+        )
+    return identity

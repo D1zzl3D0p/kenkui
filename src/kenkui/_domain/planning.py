@@ -511,6 +511,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                     numbers=cast("NumberTier", spoken.numbers),
                     lexicon=spoken.lexicon,
                     builtin=spoken.builtin_lexicon,
+                    features=dict(spoken.features),
                 )
             text = f"{carried}{text}"
             carried = ""
@@ -670,6 +671,7 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
                 numbers=cast("NumberTier", spoken.numbers),
                 lexicon=spoken.lexicon,
                 builtin=spoken.builtin_lexicon,
+                features=dict(spoken.features),
             )
         )
     identity = json.dumps(fields, sort_keys=True, separators=(",", ":"))

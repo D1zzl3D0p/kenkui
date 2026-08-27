@@ -128,21 +128,55 @@ class Pipeline:
         *,
         numbers: str = "conservative",
         builtin: bool = True,
+        **features: bool,
     ) -> Pipeline:
-        """Return a branch controlling how text is spoken rather than counted.
+        """Return a branch shaping what the engine says, not what it counts.
 
-        Off unless called. Canonical text, and therefore the billable
-        character count, is unaffected either way.
+        This is the only stage that rewrites text for speech. It runs last,
+        per segment, and its output is thrown away after synthesis: canonical
+        text, the billable character count, attribution offsets, and chapter
+        identity are all unaffected. Normalization -- NFC, line endings,
+        Unicode spaces, whitespace runs -- is not part of this and is not
+        optional; it happens when the source is parsed.
+
+        Off unless called. What it does when called:
+
+        * replaces entries from ``lexicon``, then a small built-in
+          pronunciation table unless ``builtin=False``;
+        * reads numbers aloud, at the depth ``numbers`` selects --
+          ``"off"``, ``"conservative"``, ``"standard"`` or ``"aggressive"``.
+
+        ``numbers`` is a preset over individually switchable features, each
+        of which may be overridden by keyword: ``currency``, ``percent``,
+        ``ordinals``, ``units``, ``decimals``, ``integers``, ``years``,
+        ``clock``, ``roman``, ``fractions``, ``numbered``. Passing ``False``
+        declines a feature the tier supplies; passing ``True`` asks for one
+        it does not, without accepting the rest of the tier that carries it.
+
+            pipeline.pronounce(numbers="standard", roman=False)
+
+        Features compose rather than nest, so declining a specific form
+        leaves a general one free to match inside it: ``currency=False``
+        alone reads "£5" as "£five", because the integer rule still applies.
+        Decline ``integers`` too to leave the digits alone.
         """
         from ._domain.spoken.lexicon import validate_entries  # noqa: PLC0415
+        from ._domain.spoken.numbers import FEATURES  # noqa: PLC0415
 
         if numbers not in _NUMBER_TIERS:
             raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+        # Rejected here rather than at render time: a misspelled feature is a
+        # caller's typo, and silently ignoring it renders a book that does
+        # not sound like what was asked for.
+        for name, value in features.items():
+            if name not in FEATURES or not isinstance(value, bool):
+                raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
         return self._append(
             SpokenForm(
                 numbers=numbers,
                 builtin_lexicon=builtin,
                 lexicon=validate_entries(lexicon or {}),
+                features=tuple(sorted(features.items())),
             ),
             before_tts=True,
         )
