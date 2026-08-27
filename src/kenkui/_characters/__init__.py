@@ -12,11 +12,15 @@ value and never reaches a model or the store itself.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import TYPE_CHECKING
 
 from kenkui._characters import store
-from kenkui._characters.attribution import attribute_chapter
+from kenkui._characters.attribution import (
+    AttributionCoverage,
+    attribute_chapter,
+)
 from kenkui._characters.infer import merge_rosters, normalise_roster, slugify
 from kenkui._characters.llm import complete_json
 from kenkui._characters.narration import is_first_person
@@ -38,6 +42,7 @@ from kenkui._domain.planning import (
     PARSER_SCHEMA_VERSION,
 )
 from kenkui.errors import ModelError
+from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -53,7 +58,13 @@ __all__ = ["AttributionRecord", "resolve_attribution", "store"]
 # derivation, not a cache hit.
 PARAMS: Mapping[str, object] = {"temperature": 0.0}
 
+_LOGGER = get_logger(__name__)
+
 _ROSTER_SCHEMA: Mapping[str, type] = {"characters": list}
+
+# Above this share of a chapter dropped, the response is the problem
+# rather than the passage.
+_DROPPED_WARN_RATIO = 0.05
 
 
 def _roster_for(
@@ -86,6 +97,35 @@ def _roster_for(
             if any(character.id == candidate for character in roster):
                 narrator = candidate
     return roster, narrator
+
+
+def _log_coverage(chapter_id: str, coverage: AttributionCoverage) -> None:
+    """Record how one chapter's quotes were accounted for.
+
+    A dropped quote is a defect in the response, not caution: it means the
+    model never mentioned that id at all. Kept separate from "unknown" so a
+    chapter answering badly is visible without reading the book, and logged
+    for an operator rather than raised, since the caller cannot act on it.
+    """
+    if not coverage.quotes:
+        return
+    log_event(
+        _LOGGER,
+        "attribution_coverage",
+        level=(
+            logging.WARNING
+            if coverage.dropped > coverage.quotes * _DROPPED_WARN_RATIO
+            else logging.INFO
+        ),
+        context={
+            "boundary": "attribution",
+            "chapter_id": chapter_id,
+            "quotes": coverage.quotes,
+            "answered": coverage.answered,
+            "unknown": coverage.unknown,
+            "dropped": coverage.dropped,
+        },
+    )
 
 
 def _measured(
@@ -258,7 +298,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     for chapter in inspection.chapters:
         if cancel is not None:
             cancel.raise_if_cancelled()
-        chapter_spans, recent = attribute_chapter(
+        chapter_spans, recent, coverage = attribute_chapter(
             chapter,
             characters,
             model_id,
@@ -267,6 +307,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
             spans=extracted[chapter.id],
             narrator_id=narrator_id,
         )
+        _log_coverage(chapter.id, coverage)
         spans.extend(chapter_spans)
 
     record = AttributionRecord(

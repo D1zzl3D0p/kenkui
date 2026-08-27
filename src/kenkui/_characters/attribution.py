@@ -12,6 +12,7 @@ attributed line is audibly wrong. The asymmetry is deliberate throughout.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from kenkui._characters.infer import PRONOUNS, UNKNOWN, slugify
@@ -34,6 +35,22 @@ if TYPE_CHECKING:
 _SCHEMA: Mapping[str, type] = {"attributions": list}
 
 NARRATOR = "narrator"
+
+
+@dataclass(frozen=True, slots=True)
+class AttributionCoverage:
+    """How one chapter's quotes were accounted for.
+
+    "The model said unknown" and "the model never mentioned this quote id"
+    are different failures with different fixes. Both resolved to None, so a
+    truncated or malformed response was indistinguishable from ordinary
+    model caution and could only be found by reading the book.
+    """
+
+    quotes: int
+    answered: int
+    unknown: int
+    dropped: int
 
 
 def _escaped(text: str) -> str:
@@ -113,7 +130,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     recent: Sequence[str] = (),
     spans: tuple[TextSpan, ...] | None = None,
     narrator_id: str | None = None,
-) -> tuple[tuple[SpeakerSpan, ...], tuple[str, ...]]:
+) -> tuple[tuple[SpeakerSpan, ...], tuple[str, ...], AttributionCoverage]:
     """Return one chapter's speaker spans and the speakers that ended it.
 
     The trailing speakers feed the next chapter's prompt, so a conversation
@@ -128,7 +145,11 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     dialogue = [span for span in spans if span.is_dialogue]
     if not dialogue or not characters:
         # Nothing to attribute, so nothing is worth a model call.
-        return _all_narrated(spans), tuple(recent)
+        return (
+            _all_narrated(spans),
+            tuple(recent),
+            AttributionCoverage(len(dialogue), 0, 0, 0),
+        )
 
     quotes = [
         {"quote_id": index, "text": chapter.text[span.start : span.end]}
@@ -149,6 +170,15 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     # back up is a zip. A model that skipped an id leaves None, which is
     # unknown: gaps need no special case.
     speakers = [answers.get(index) for index in range(len(dialogue))]
+    # A key the model never returned is a dropped quote; a key present with
+    # no resolution is one it declined. Only the first is a defect.
+    returned = set(answers)
+    coverage = AttributionCoverage(
+        quotes=len(dialogue),
+        answered=sum(1 for value in answers.values() if value is not None),
+        unknown=sum(1 for value in answers.values() if value is None),
+        dropped=sum(1 for index in range(len(dialogue)) if index not in returned),
+    )
     by_start = dict(zip((span.start for span in dialogue), speakers, strict=True))
 
     resolved = tuple(
@@ -164,7 +194,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     # A chapter where nobody could be placed carries the previous chapter's
     # speakers forward rather than resetting continuity to nothing.
     trailing = tuple(named[-CONTINUITY_SPEAKERS:]) if named else tuple(recent)
-    return resolved, trailing
+    return resolved, trailing, coverage
 
 
 def _all_narrated(spans: Sequence[TextSpan]) -> tuple[SpeakerSpan, ...]:

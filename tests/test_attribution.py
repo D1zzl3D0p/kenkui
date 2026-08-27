@@ -8,6 +8,9 @@ import pytest
 
 import kenkui as kk
 from kenkui._characters import resolve_attribution, store
+from kenkui._characters.attribution import attribute_chapter
+from kenkui._characters.quotes import extract_spans
+from kenkui._domain.casting import CharacterProfile
 from kenkui._characters.infer import normalise_roster, slugify
 from kenkui.cancellation import CancellationToken
 from kenkui.errors import CancelledError
@@ -215,3 +218,33 @@ def test_no_roster_call_for_a_chapter_without_speech() -> None:
     )
     rosters = [p for p in client.calls if "List the speaking characters" in p]
     assert len(rosters) == 1
+
+
+def test_coverage_separates_unknown_from_dropped() -> None:
+    """Two different failures that produced one indistinguishable value.
+
+    A model that answers "unknown" has considered the quote and declined; a
+    model that never returns the id has dropped it, which is a defect. Both
+    became None, so a truncated or malformed response was indistinguishable
+    from ordinary model caution and could only be found by reading the text.
+    """
+    inspection = _inspection(
+        'Chapter One\n\n"One," he said. "Two," she said. "Three," they said.'
+    )
+    chapter = inspection.chapters[0]
+    spans = extract_spans(chapter.id, chapter.text)
+    dialogue = [span for span in spans if span.is_dialogue]
+    assert len(dialogue) >= 2, "fixture must carry at least two quotes"
+
+    # ScriptedClient answers quote_id 0 only, so every later quote is dropped.
+    _, _, coverage = attribute_chapter(
+        chapter,
+        (CharacterProfile("dhatt", "Dhatt", None, 0, ()),),
+        "fake/model",
+        client=ScriptedClient("unknown"),
+        spans=spans,
+    )
+    assert coverage.quotes == len(dialogue)
+    assert coverage.unknown == 1
+    assert coverage.dropped == len(dialogue) - 1
+    assert coverage.answered == 0
