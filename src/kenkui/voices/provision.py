@@ -323,7 +323,7 @@ def _loaded_view(record: VoiceRecord, engine: EngineRecord) -> Voice:
         state="loaded",
         asset_bytes=asset.stat().st_size if asset.is_file() else None,
         engine=_engine_view(engine),
-        perceived_gender=record.perceived_gender,
+        perceived_gender=_gender_for(record),
     )
 
 
@@ -471,6 +471,22 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
         return _loaded_view(loaded, engine)
 
 
+def _gender_for(record: VoiceRecord) -> PerceivedGender:
+    """Prefer the manifest's own trait, else the catalog's for this id.
+
+    A manifest written before the field existed carries no trait, but the
+    catalog has always known it for the voices it ships. Reading the record
+    alone discards that, which silently degrades every gendered cast to a
+    random one: `candidates` finds no matching voice and falls back to the
+    whole pool. The catalog is consulted as a fallback rather than ignored,
+    so an old manifest heals on the next call instead of needing a migration.
+    """
+    if record.perceived_gender is not None:
+        return record.perceived_gender
+    entry = CATALOG.get(record.id)
+    return entry.perceived_gender if entry is not None else None
+
+
 def _registered_view(record: VoiceRecord) -> Voice:
     return Voice(
         id=record.id,
@@ -482,7 +498,7 @@ def _registered_view(record: VoiceRecord) -> Voice:
         language=record.language,
         variety=record.variety,
         state="registered",
-        perceived_gender=record.perceived_gender,
+        perceived_gender=_gender_for(record),
     )
 
 
