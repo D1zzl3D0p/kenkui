@@ -85,6 +85,25 @@ CREATE TABLE IF NOT EXISTS cast_assignments(
     voice_id TEXT NOT NULL,
     pinned INTEGER NOT NULL,
     PRIMARY KEY (cast_id, character_id));
+
+CREATE TABLE IF NOT EXISTS series(
+    series_id TEXT PRIMARY KEY,
+    narrator_voice_id TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS series_characters(
+    series_id TEXT NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
+    canonical_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    gender TEXT,
+    voice_id TEXT NOT NULL,
+    spoken_characters INTEGER NOT NULL,
+    PRIMARY KEY (series_id, canonical_id));
+
+CREATE TABLE IF NOT EXISTS series_aliases(
+    series_id TEXT NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
+    alias TEXT NOT NULL,
+    canonical_id TEXT NOT NULL,
+    PRIMARY KEY (series_id, alias));
 """
 
 
@@ -111,6 +130,31 @@ class CastRecord:
     narrator_voice_id: str
     unknown_voice_id: str
     assignments: tuple[tuple[str, str, bool], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesCharacter:
+    """One person across a series, and the voice they keep."""
+
+    canonical_id: str
+    display_name: str
+    gender: str | None
+    voice_id: str
+    spoken_characters: int
+    aliases: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesRecord:
+    """A series' cast, ordered by accumulated speech.
+
+    Keyed on the series and the character, never on an attribution: a volume
+    re-read by a different model must not re-cast the series.
+    """
+
+    series_id: str
+    narrator_voice_id: str
+    characters: tuple[SeriesCharacter, ...]
 
 
 def default_store_path() -> Path:
@@ -458,4 +502,121 @@ def remove_attribution(attribution_id: str, path: Path | None = None) -> None:
             )
     except sqlite3.Error as error:
         message = f"could not remove attribution from {path or default_store_path()}"
+        raise OSError(message) from error
+
+
+def write_series(record: SeriesRecord, path: Path | None = None) -> None:
+    """Persist one series, replacing whatever it held before.
+
+    A volume updates the series wholesale rather than appending, so a
+    re-render cannot leave a character behind under a stale voice.
+    """
+    try:
+        with _connect(path) as connection, connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO series(series_id,narrator_voice_id) "
+                "VALUES(?,?)",
+                (record.series_id, record.narrator_voice_id),
+            )
+            connection.execute(
+                "DELETE FROM series_characters WHERE series_id=?",
+                (record.series_id,),
+            )
+            connection.execute(
+                "DELETE FROM series_aliases WHERE series_id=?", (record.series_id,)
+            )
+            for character in record.characters:
+                connection.execute(
+                    "INSERT INTO series_characters(series_id,canonical_id,"
+                    "display_name,gender,voice_id,spoken_characters) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        record.series_id,
+                        character.canonical_id,
+                        character.display_name,
+                        character.gender,
+                        character.voice_id,
+                        character.spoken_characters,
+                    ),
+                )
+                for alias in character.aliases:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO series_aliases(series_id,alias,"
+                        "canonical_id) VALUES(?,?,?)",
+                        (record.series_id, alias, character.canonical_id),
+                    )
+    except sqlite3.Error as error:
+        message = f"could not write series to {path or default_store_path()}"
+        raise OSError(message) from error
+
+
+def _series_from_row(
+    connection: sqlite3.Connection, row: sqlite3.Row
+) -> SeriesRecord:
+    aliases: dict[str, list[str]] = {}
+    for item in connection.execute(
+        "SELECT alias,canonical_id FROM series_aliases WHERE series_id=? "
+        "ORDER BY alias",
+        (row["series_id"],),
+    ):
+        aliases.setdefault(item["canonical_id"], []).append(item["alias"])
+    characters = tuple(
+        SeriesCharacter(
+            canonical_id=item["canonical_id"],
+            display_name=item["display_name"],
+            gender=item["gender"],
+            voice_id=item["voice_id"],
+            spoken_characters=item["spoken_characters"],
+            aliases=tuple(aliases.get(item["canonical_id"], ())),
+        )
+        for item in connection.execute(
+            "SELECT * FROM series_characters WHERE series_id=? "
+            "ORDER BY spoken_characters DESC, canonical_id",
+            (row["series_id"],),
+        )
+    )
+    return SeriesRecord(
+        series_id=row["series_id"],
+        narrator_voice_id=row["narrator_voice_id"],
+        characters=characters,
+    )
+
+
+def read_series(series_id: str, path: Path | None = None) -> SeriesRecord | None:
+    """Return one stored series, or None on a miss or unusable store."""
+    with _reading(path) as connection:
+        if connection is None:
+            return None
+        try:
+            row = connection.execute(
+                "SELECT * FROM series WHERE series_id=?", (series_id,)
+            ).fetchone()
+            return None if row is None else _series_from_row(connection, row)
+        except sqlite3.Error:
+            return None
+
+
+def list_series(path: Path | None = None) -> tuple[SeriesRecord, ...]:
+    """Return every stored series. Filtering composes over this."""
+    with _reading(path) as connection:
+        if connection is None:
+            return ()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM series ORDER BY series_id"
+            ).fetchall()
+            return tuple(_series_from_row(connection, row) for row in rows)
+        except sqlite3.Error:
+            return ()
+
+
+def remove_series(series_id: str, path: Path | None = None) -> None:
+    """Drop a series and its pins. The next volume is cast fresh."""
+    try:
+        with _connect(path) as connection, connection:
+            connection.execute(
+                "DELETE FROM series WHERE series_id=?", (series_id,)
+            )
+    except sqlite3.Error as error:
+        message = f"could not remove series from {path or default_store_path()}"
         raise OSError(message) from error
