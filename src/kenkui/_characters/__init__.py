@@ -21,7 +21,12 @@ from kenkui._characters.attribution import (
     AttributionCoverage,
     attribute_chapter,
 )
-from kenkui._characters.infer import merge_rosters, normalise_roster, slugify
+from kenkui._characters.infer import (
+    ROLE_PREFIX,
+    merge_rosters,
+    normalise_roster,
+    slugify,
+)
 from kenkui._characters.llm import complete_json
 from kenkui._characters.narration import is_first_person
 from kenkui._characters.prompts import (
@@ -170,18 +175,23 @@ def _measured(
     roles = {
         span.character_id
         for span in spans
-        if span.character_id is not None and span.character_id.startswith("role:")
+        if span.character_id is not None
+        and span.character_id.startswith(ROLE_PREFIX)
     }
     synthesised = tuple(
         CharacterProfile(
             id=role,
-            display_name=role.removeprefix("role:").split("@")[0].replace("-", " "),
-            gender=ROLE_GENDERS.get(role.removeprefix("role:").split("@")[0]),
+            display_name=role.removeprefix(ROLE_PREFIX).split("@")[0].replace(
+                "-", " "
+            ),
+            gender=ROLE_GENDERS.get(role.removeprefix(ROLE_PREFIX).split("@")[0]),
             spoken_characters=volume.get(role, 0),
             chapter_ids=tuple(chapters.get(role, ())),
             # A role is minted with one surface form -- its display name --
             # never a roster entry with variant names to fold together.
-            aliases=(role.removeprefix("role:").split("@")[0].replace("-", " "),),
+            aliases=(
+                role.removeprefix(ROLE_PREFIX).split("@")[0].replace("-", " "),
+            ),
         )
         for role in sorted(roles)
     )

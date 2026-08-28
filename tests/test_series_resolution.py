@@ -686,3 +686,296 @@ def test_an_unauthorised_drop_renders_but_leaves_the_series_unchanged(
 
     issues = {issue.code for issue in pipeline.validate().issues}
     assert kk.ErrorCode.SERIES_VOICE_MISSING in issues
+
+
+class _OffRoster:
+    """Names one character, then answers every quote with someone else.
+
+    Exactly what `attribution.py` mints a ``role:<slug>@<chapter_id>`` for:
+    a speaker the roster never listed, kept distinct per chapter because
+    chapter 40's officer is not chapter 12's.
+    """
+
+    def complete(self, model: str, prompt: str) -> str:
+        assert model
+        if "List the speaking characters" in prompt:
+            return json.dumps(
+                {
+                    "characters": [
+                        {"id": "javert", "name": "Javert", "gender": "feminine"}
+                    ]
+                }
+            )
+        return json.dumps(
+            {"attributions": [{"quote_id": 0, "speaker": "officer"}]}
+        )
+
+
+def test_a_minted_role_never_becomes_a_series_character(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A one-scene part is not a person the series should remember.
+
+    Minted roles are deliberately distinct per chapter, so persisting them
+    inverts that decision across volumes -- volume one's officer would be
+    merged with volume four's -- and, because every volume mints the same
+    slugs, it was also what made an ordinary first volume grow a new
+    canonical on every re-render.
+    """
+    monkeypatch.setattr("kenkui.pipeline._attribution_client", _OffRoster)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings",
+        lambda: ExecutionBindings(
+            EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
+        ),
+    )
+    monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE))
+    path = make_epub(
+        tmp_path / "volume-1.epub",
+        chapters={
+            "one": xhtml('<h1>One</h1><p>"Hello," said the officer.</p>'),
+            "two": xhtml('<h1>Two</h1><p>"Again," said the officer.</p>'),
+        },
+        spine=("one", "two"),
+    )
+
+    def _render() -> dict[str, str]:
+        resolved = (
+            kk.epub(path)
+            .series("s", book=1)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+        return dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+
+    first = _render()
+    # Still cast normally inside their own book: excluding them from the
+    # series must not drop their speech.
+    minted = sorted(key for key in first if key.startswith("role:officer@"))
+    assert len(minted) == 2  # noqa: PLR2004 - one officer per chapter, by design
+    for _ in range(2):
+        assert _render() == first
+        record = store.read_series("s")
+        assert record is not None
+        assert record.characters == ()
+
+
+class _TwoSpeakers:
+    """Two women whose surface forms both reach one person the series knows."""
+
+    def complete(self, model: str, prompt: str) -> str:
+        assert model
+        if "List the speaking characters" in prompt:
+            return json.dumps(
+                {
+                    "characters": [
+                        {"id": "elizabeth", "name": "Elizabeth", "gender": "feminine"},
+                        {"id": "lizzy", "name": "Lizzy", "gender": "feminine"},
+                    ]
+                }
+            )
+        return json.dumps(
+            {
+                "attributions": [
+                    {"quote_id": 0, "speaker": "elizabeth"},
+                    {"quote_id": 1, "speaker": "lizzy"},
+                ]
+            }
+        )
+
+
+def test_re_rendering_a_volume_neither_mints_nor_recasts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rendering one volume twice is one volume, not two.
+
+    Both of this book's characters reach the series' one Elizabeth Bennet,
+    so `match_roster` withholds her from both -- correctly. Each then
+    joined the series under a minted canonical, and the next render, finding
+    its own slug taken, minted another; the series grew by two people per
+    render. Their own accumulated speech also fed back into `prior_load`,
+    so the solver re-cast them against an inflated count and the voices
+    swapped between renders -- which changes the segment identity and
+    re-synthesizes the whole book.
+    """
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="elizabeth-bennet",
+                    display_name="Elizabeth Bennet",
+                    gender="feminine",
+                    voice_id="alf",
+                    spoken_characters=100,
+                    aliases=("Elizabeth", "Lizzy"),
+                ),
+            ),
+        )
+    )
+    monkeypatch.setattr("kenkui.pipeline._attribution_client", _TwoSpeakers)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings",
+        lambda: ExecutionBindings(
+            EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
+        ),
+    )
+    monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE))
+    path = make_epub(
+        tmp_path / "volume-1.epub",
+        chapters={
+            # Deliberately lopsided: Elizabeth's own accumulated speech is
+            # what tips `prior_load` far enough to move her off the voice
+            # she was given last render.
+            "one": xhtml(
+                "<h1>One</h1><p>"
+                '"Hello, and a great deal more besides, for I have been '
+                "talking at some length about the weather and the roads and "
+                'everything else that comes to mind," said Elizabeth.</p>'
+                '<p>"Indeed," said Lizzy.</p>'
+            )
+        },
+        spine=("one",),
+    )
+
+    def _render() -> dict[str, str]:
+        resolved = (
+            kk.epub(path)
+            .series("s", book=1)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+        return dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+
+    first = _render()
+    for _ in range(3):
+        assert _render() == first
+        record = store.read_series("s")
+        assert record is not None
+        assert {c.canonical_id for c in record.characters} == {
+            "elizabeth-bennet",
+            "elizabeth",
+            "lizzy",
+        }
+
+
+_FOREIGN = kk.Voice(
+    id="foreign",
+    name="Foreign",
+    enabled=True,
+    provenance="fixture",
+    license_id="CC0-1.0",
+    commercial_use_allowed=True,
+    language="fr",
+    state="loaded",
+)
+
+
+def _series_pipeline(tmp_path: Path, name: str = "volume-2.epub") -> kk.Pipeline:
+    """Build a second volume of series "s", ready to validate."""
+    path = make_epub(
+        tmp_path / name,
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    return (
+        kk.epub(path)
+        .series("s", book=2)
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+    )
+
+
+def _seed(voice_id: str) -> None:
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="javert",
+                    display_name="Javert",
+                    gender="feminine",
+                    voice_id=voice_id,
+                    spoken_characters=100,
+                    aliases=("Javert",),
+                ),
+            ),
+        )
+    )
+
+
+def test_validate_refuses_a_pin_of_the_wrong_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """validate() has to judge the pool the render will actually cast from.
+
+    `_resolve_all` keeps only voices matching the narrator's language, so a
+    pin naming a loaded French voice passes a language-blind validate(), is
+    dropped at render time, and -- correctly, without allow_recast -- is not
+    persisted. The character then sounds different in this volume and every
+    later one, with only a log line to say so.
+    """
+    _seed("foreign")
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices",
+        lambda: (_ALF, _AOIFE, _NARRATOR, _FOREIGN),
+    )
+    issues = {issue.code for issue in _series_pipeline(tmp_path).validate().issues}
+    assert kk.ErrorCode.SERIES_VOICE_MISSING in issues
+
+
+def test_validate_refuses_a_pin_equal_to_this_renders_narrator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narrator's voice is reserved, so a pin on it is no pin at all."""
+    _seed("eponine")
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE, _NARRATOR)
+    )
+    issues = {issue.code for issue in _series_pipeline(tmp_path).validate().issues}
+    assert kk.ErrorCode.SERIES_VOICE_MISSING in issues
+
+
+def test_validate_still_accepts_a_pin_the_render_can_honour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tightening the pool must not start refusing ordinary series renders."""
+    _seed("alf")
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices",
+        lambda: (_ALF, _AOIFE, _NARRATOR, _FOREIGN),
+    )
+    issues = {issue.code for issue in _series_pipeline(tmp_path).validate().issues}
+    assert kk.ErrorCode.SERIES_VOICE_MISSING not in issues
+
+
+def test_a_missing_series_voice_names_its_characters_for_the_operator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The refusal stands; the sanitized issue cannot say who it is about.
+
+    `ValidationIssue` carries a stable code and public text and nothing
+    else, so an operator told only "series_voice_missing" has fifty
+    characters to search by hand. Spec D asks for the characters and the
+    lost voice by name, which is an operator's log line, the same way a
+    collision is.
+    """
+    _seed("ghost")
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE, _NARRATOR)
+    )
+    with caplog.at_level(logging.WARNING):
+        _series_pipeline(tmp_path).validate()
+    named = [r for r in caplog.records if r.getMessage() == "series_voice_missing"]
+    assert len(named) == 1
+    assert log_field(named[0], "boundary") == "series"
+    assert log_field(named[0], "series_id") == "s"
+    assert log_field(named[0], "characters") == "Javert"
+    assert log_field(named[0], "voice_ids") == "ghost"

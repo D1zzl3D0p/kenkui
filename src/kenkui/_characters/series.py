@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from kenkui._characters.identity import detect_titles, same_person
+from kenkui._characters.identity import (
+    SUFFIX_TITLES,
+    detect_titles,
+    same_person,
+)
+from kenkui._characters.infer import ROLE_PREFIX
 from kenkui._characters.store import SeriesCharacter, SeriesRecord
 
 if TYPE_CHECKING:
@@ -24,12 +29,16 @@ def match_roster(
 ) -> dict[str, str]:
     """Map this volume's character ids onto the series' canonical ids.
 
-    An exact alias decides on its own: the series recorded that surface form
-    against exactly one person. Otherwise every name this character is known
-    by is compared to every name the series knows, and a match counts only
-    when it lands on exactly one series character -- two candidates means the
-    name belongs to neither, which is `resolve_short_forms`' rule and the
-    reason a series does not quietly merge its two Charleses.
+    Every name this character is known by is compared to every name the
+    series knows, and a match counts only when it lands on exactly one
+    series character -- two candidates means the name belongs to neither,
+    which is `resolve_short_forms`' rule and the reason a series does not
+    quietly merge its two Charleses. An exact surface form is no exception:
+    two series characters can legitimately share one, and a shared alias is
+    exactly the ambiguity that refuses.
+
+    `_may_host` decides each individual comparison, and is directional --
+    see there for why a symmetric one hands a son his father's voice.
     """
     if record is None:
         return {}
@@ -46,8 +55,8 @@ def match_roster(
             canonical
             for name in names
             for alias, owners in by_alias.items()
+            if _may_host(alias, name, titles)
             for canonical in owners
-            if alias == name or same_person(alias, name, titles)
         }
         if len(hosts) == 1:
             matched[character.id] = next(iter(hosts))
@@ -69,8 +78,85 @@ def match_roster(
     }
 
 
-def _mint_canonical(base: str, known: Mapping[str, SeriesCharacter]) -> str:
-    """Return an id the series has not already claimed for someone else.
+def _residue(name: str, titles: frozenset[str]) -> frozenset[str]:
+    """Return the tokens that identify a person, titles set aside.
+
+    The same reduction ``same_person`` compares by, exposed so the *shape*
+    of a name can be judged as well as its content: "Kholin" carries one
+    identifying token, "Adolin Kholin" two.
+    """
+    tokens = {token.lower().strip(".") for token in name.split()}
+    return frozenset(tokens - titles - SUFFIX_TITLES)
+
+
+def _may_host(alias: str, name: str, titles: frozenset[str]) -> bool:
+    """Whether one name the series knows may stand for one name in this volume.
+
+    ``same_person`` is symmetric and reads nesting as identity, which is
+    right when both sides are full names and wrong when the series' side is
+    bare. ``merge_rosters`` records bare surnames as a matter of course --
+    volume one's Dalinar contributes "Kholin" alongside "Dalinar Kholin" --
+    so a symmetric rule lets that lone token host volume three's "Adolin
+    Kholin" and pins a son to his father's voice, permanently.
+
+    Inside one book that direction cannot happen: ``resolve_short_forms``
+    attaches a short form TO a full name and never the reverse. This
+    mirrors it. A bare series name hosts only a bare incoming one; an
+    incoming name carrying more than one identifying token must find a
+    series name that carries more than one too, where the surnames
+    discriminate -- ``same_person("Dalinar Kholin", "Adolin Kholin")`` is
+    already False.
+
+    The cost is a series that only ever saw a bare name failing to claim a
+    later full one. That is an under-merge -- one person, two voices -- and
+    it is the failure ``identity`` is built to prefer.
+    """
+    if alias == name:
+        return True
+    if not same_person(alias, name, titles):
+        return False
+    return len(_residue(alias, titles)) > 1 or len(_residue(name, titles)) <= 1
+
+
+def series_members(
+    characters: Sequence[CharacterProfile],
+) -> tuple[CharacterProfile, ...]:
+    """Return the characters a series should remember, dropping minted roles.
+
+    A ``role:<slug>@<chapter_id>`` id is minted for a speaker no roster
+    listed, and is scoped to its chapter on purpose: chapter 40's officer is
+    not chapter 12's. Carrying one into the series inverts that decision
+    across volumes -- volume one's officer would be merged with volume
+    four's -- for parts that are one scene long by construction.
+
+    It is also why an ordinary first volume grew on every re-render: every
+    volume mints the same slugs, so the roles collided with themselves and
+    minted a fresh canonical each time. They are cast normally inside their
+    own book; they are simply not people a series knows.
+    """
+    return tuple(
+        character
+        for character in characters
+        if not character.id.startswith(ROLE_PREFIX)
+    )
+
+
+def _claimed_slots(base: str, known: Mapping[str, SeriesCharacter]) -> list[str]:
+    """Return the ids the series already holds under ``base``, in mint order."""
+    if base not in known:
+        return []
+    slots = [base]
+    suffix = 2
+    while f"{base}-{suffix}" in known:
+        slots.append(f"{base}-{suffix}")
+        suffix += 1
+    return slots
+
+
+def _mint_canonical(
+    base: str, known: Mapping[str, SeriesCharacter], book_digest: str | None = None
+) -> str:
+    """Return the id this series holds for a character no name matched.
 
     Character ids are slugged from display names alone (see ``infer.py``),
     so two unrelated people in different volumes can land on the same raw
@@ -78,13 +164,23 @@ def _mint_canonical(base: str, known: Mapping[str, SeriesCharacter]) -> str:
     two "Guard"s, say. Handing the newcomer the raw id anyway would fold
     them into whoever already holds it with no name comparison involved;
     minting a fresh, deterministic id keeps them the two people they are.
+
+    A re-render is not a newcomer, and must not be mistaken for one.
+    ``match_roster`` withholds a canonical that two of this volume's
+    characters both reach, so the same character can be unmatched on every
+    render of the same volume; minting each time gave ``guard``, then
+    ``guard-2``, then ``guard-3``, without bound -- and each fresh mint
+    carried an empty ledger, so ``_accumulate`` never got the chance to
+    replace anything and the ``book_digest`` idempotency was defeated by
+    the very path meant to be safe. An id already carrying a contribution
+    from THIS volume is that same character seen again, so it is reused.
     """
-    if base not in known:
-        return base
-    suffix = 2
-    while f"{base}-{suffix}" in known:
-        suffix += 1
-    return f"{base}-{suffix}"
+    slots = _claimed_slots(base, known)
+    if book_digest is not None:
+        for canonical in slots:
+            if book_digest in dict(known[canonical].contributions):
+                return canonical
+    return base if not slots else f"{base}-{len(slots) + 1}"
 
 
 def _accumulate(
@@ -156,11 +252,12 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
         if voice_id is None:
             continue
         # A canonical from match_roster is a name-checked return; falling
-        # back to the raw id is only safe once it is confirmed free, since
-        # an unmatched character's id can coincide with someone else's.
+        # back to the raw id is only safe once it is confirmed free, or
+        # confirmed to be this same volume's own earlier mint, since an
+        # unmatched character's id can coincide with someone else's.
         canonical = matched.get(character.id)
         if canonical is None:
-            canonical = _mint_canonical(character.id, known)
+            canonical = _mint_canonical(character.id, known, book_digest)
         existing = known.get(canonical)
         aliases = {*character.aliases, character.display_name}
         if existing is None:

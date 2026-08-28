@@ -211,3 +211,82 @@ def test_an_unnamed_volume_still_accumulates_as_before() -> None:
     )
     kaladin = next(c for c in second.characters if c.canonical_id == "kaladin")
     assert kaladin.spoken_characters == 200  # noqa: PLR2004 - additive, as always
+
+
+def test_re_merging_an_unchanged_volume_does_not_mint_a_new_canonical() -> None:
+    """A withheld character must not become a new person on every render.
+
+    ``match_roster`` withholds a canonical two local characters both reach,
+    which is correct. What follows must not be: an unmatched character fell
+    through to a fresh mint, found its own slug taken by the mint the
+    previous render made, and took ``elizabeth-2``, then ``elizabeth-3``.
+    Each mint carried an empty ledger, so the ``book_digest`` idempotency
+    never got the chance to replace anything, and the series grew without
+    bound while re-casting the volume every time.
+    """
+    record = store.SeriesRecord(
+        "s", "eponine",
+        (_known("elizabeth-bennet", "Elizabeth Bennet", ("Elizabeth", "Lizzy")),),
+    )
+    characters = (_profile("elizabeth", "Elizabeth"), _profile("lizzy", "Lizzy"))
+    for _ in range(4):
+        record = merged_series(
+            record, characters, {"elizabeth": "v1", "lizzy": "v2"}, "eponine", "s",
+            book_digest="volume-1",
+        )
+        assert {c.canonical_id for c in record.characters} == {
+            "elizabeth-bennet",
+            "elizabeth",
+            "lizzy",
+        }
+    elizabeth = next(c for c in record.characters if c.canonical_id == "elizabeth")
+    assert elizabeth.spoken_characters == 100  # noqa: PLR2004 - replaced, never piled up
+
+
+def test_a_bare_series_alias_does_not_capture_a_longer_new_name() -> None:
+    """Volume 3 introduces Dalinar's son while Dalinar himself is absent.
+
+    ``merge_rosters`` routinely records bare surnames as aliases, and
+    ``same_person`` treats nesting as identity in both directions, so the
+    series' bare "Kholin" hosted the newcomer "Adolin Kholin" -- pinning the
+    son to his father's voice and folding him into that record for good.
+    Inside one book this direction is impossible: ``resolve_short_forms``
+    attaches shorts to fulls and never the reverse. The series must match
+    the same way round.
+    """
+    record = store.SeriesRecord(
+        "s", "eponine",
+        (
+            _known(
+                "dalinar-kholin",
+                "Dalinar Kholin",
+                ("Dalinar", "Dalinar Kholin", "Kholin"),
+            ),
+        ),
+    )
+    assert match_roster(record, (_profile("adolin-kholin", "Adolin Kholin"),)) == {}
+
+
+def test_a_bare_series_forename_does_not_capture_a_longer_new_name() -> None:
+    """The forename variant of the same defect: "John" hosting "John Watson"."""
+    record = store.SeriesRecord(
+        "s", "eponine", (_known("john", "John", ("John",)),)
+    )
+    assert match_roster(record, (_profile("john-watson", "John Watson"),)) == {}
+
+
+def test_an_alias_two_series_characters_share_matches_nobody() -> None:
+    """One surface form on two canonicals is ambiguity, which refuses.
+
+    The store can now record that, so ``match_roster`` has to mean it: an
+    alias reaching two people names neither, exactly as two full names
+    sharing a short form do.
+    """
+    record = store.SeriesRecord(
+        "s", "eponine",
+        (
+            _known("elizabeth-bennet", "Elizabeth Bennet", ("Elizabeth",)),
+            _known("elizabeth-gardiner", "Elizabeth Gardiner", ("Elizabeth",)),
+        ),
+    )
+    assert match_roster(record, (_profile("elizabeth", "Elizabeth"),)) == {}

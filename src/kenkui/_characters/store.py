@@ -32,7 +32,22 @@ if TYPE_CHECKING:
 
 STORE_NAME = "casting.sqlite3"
 
-_SCHEMA = """
+# Named rather than inlined because `_migrate` has to be able to rebuild this
+# one table against a store an earlier version created with a narrower key.
+# `canonical_id` is part of that key: a surface form can belong to more than
+# one person in a series -- two Elizabeths -- and keying it out silently gave
+# the alias to whichever character was written last, which both loses what
+# was written and, worse, loses the ambiguity `match_roster` refuses on.
+_SERIES_ALIASES_DDL = """
+CREATE TABLE IF NOT EXISTS series_aliases(
+    series_id TEXT NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
+    alias TEXT NOT NULL,
+    canonical_id TEXT NOT NULL,
+    PRIMARY KEY (series_id, alias, canonical_id));
+"""
+
+_SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS books(
     book_id TEXT PRIMARY KEY);
 
@@ -99,12 +114,6 @@ CREATE TABLE IF NOT EXISTS series_characters(
     spoken_characters INTEGER NOT NULL,
     PRIMARY KEY (series_id, canonical_id));
 
-CREATE TABLE IF NOT EXISTS series_aliases(
-    series_id TEXT NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
-    alias TEXT NOT NULL,
-    canonical_id TEXT NOT NULL,
-    PRIMARY KEY (series_id, alias));
-
 CREATE TABLE IF NOT EXISTS series_contributions(
     series_id TEXT NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
     canonical_id TEXT NOT NULL,
@@ -112,6 +121,8 @@ CREATE TABLE IF NOT EXISTS series_contributions(
     spoken_characters INTEGER NOT NULL,
     PRIMARY KEY (series_id, canonical_id, book_digest));
 """
+    + _SERIES_ALIASES_DDL
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +272,35 @@ def _migrate(connection: sqlite3.Connection) -> None:
             "ALTER TABLE characters "
             "ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
         )
+    _widen_series_alias_key(connection)
+
+
+def _widen_series_alias_key(connection: sqlite3.Connection) -> None:
+    """Re-key an existing series_aliases from (series, alias) to include the owner.
+
+    A primary key cannot be altered in place, and CREATE TABLE IF NOT EXISTS
+    leaves an existing table exactly as it was, so a store written before the
+    key widened would keep silently replacing one character's alias with
+    another's. The rows themselves are unchanged, so they are carried across
+    rather than discarded: they are a series' only route back from volume
+    three's "Kaladin" to volume one's "Kaladin Stormblessed".
+    """
+    key = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(series_aliases)")
+        if row["pk"]
+    }
+    if "canonical_id" in key:
+        return
+    # The only interpolation is _SERIES_ALIASES_DDL, a module constant; no
+    # value in this script comes from a caller.
+    connection.executescript(
+        "ALTER TABLE series_aliases RENAME TO series_aliases_legacy;"  # noqa: S608
+        + _SERIES_ALIASES_DDL
+        + "INSERT OR IGNORE INTO series_aliases(series_id,alias,canonical_id) "
+        "SELECT series_id,alias,canonical_id FROM series_aliases_legacy;"
+        "DROP TABLE series_aliases_legacy;"
+    )
 
 
 @contextmanager
@@ -557,7 +597,7 @@ def write_series(record: SeriesRecord, path: Path | None = None) -> None:
                 )
                 for alias in character.aliases:
                     connection.execute(
-                        "INSERT OR REPLACE INTO series_aliases(series_id,alias,"
+                        "INSERT INTO series_aliases(series_id,alias,"
                         "canonical_id) VALUES(?,?,?)",
                         (record.series_id, alias, character.canonical_id),
                     )

@@ -201,3 +201,35 @@ def test_the_public_pair_is_exported() -> None:
     assert callable(kk.remove_series)
     assert kk.SeriesRecord is store.SeriesRecord
     assert kk.SeriesCharacter is store.SeriesCharacter
+
+
+def test_two_characters_sharing_an_alias_round_trip(tmp_path: Path) -> None:
+    """An alias belongs to a surface form, not to one canonical id.
+
+    Two people in a series can be known by the same bare name; the alias key
+    made that impossible, so the later row silently stole "Elizabeth" from
+    the earlier one and what came back was not what went in. Losing the
+    alias also loses the ambiguity, which is the signal `match_roster`
+    refuses on -- the surviving owner would then quietly host every later
+    "Elizabeth" alone.
+    """
+    path = tmp_path / "s.sqlite3"
+    bennet = store.SeriesCharacter(
+        canonical_id="elizabeth-bennet",
+        display_name="Elizabeth Bennet",
+        gender="feminine",
+        voice_id="alf",
+        spoken_characters=900,
+        aliases=("Elizabeth", "Elizabeth Bennet"),
+    )
+    gardiner = store.SeriesCharacter(
+        canonical_id="elizabeth-gardiner",
+        display_name="Elizabeth Gardiner",
+        gender="feminine",
+        voice_id="aoife",
+        spoken_characters=100,
+        aliases=("Elizabeth", "Elizabeth Gardiner"),
+    )
+    record = store.SeriesRecord("s", "eponine", (bennet, gardiner))
+    store.write_series(record, path)
+    assert store.read_series("s", path) == record

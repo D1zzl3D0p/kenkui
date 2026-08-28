@@ -161,7 +161,9 @@ def solve(request: CastingRequest) -> CastingOutcome:
             load.get(voice_id, 0) + by_id[character_id].spoken_characters
         )
 
-    collisions: list[Collision] = []
+    collisions: list[Collision] = _pinned_collisions(
+        request.explicit, request.characters, neighbours
+    )
     remaining = [c for c in request.characters if c.id not in assignments]
     while remaining:
         character = _most_constrained(remaining, neighbours, assignments)
@@ -234,6 +236,46 @@ def _most_constrained(
             character.id,
         ),
     )
+
+
+def _pinned_collisions(
+    explicit: Mapping[str, str],
+    characters: Sequence[CharacterProfile],
+    neighbours: Mapping[str, frozenset[str]],
+) -> list[Collision]:
+    """Record same-chapter clashes between two characters that were pinned.
+
+    The greedy loop only ever inspects the character it is about to assign,
+    and every ``explicit`` entry is already in ``assignments`` before that
+    loop starts -- so a clash between two pins was invisible, while the same
+    clash between two solved characters was reported. A series manufactures
+    exactly this without any caller ``cast=``: volume one pins A to a voice,
+    volume two pins B to it while A is absent, and volume three has both in
+    one chapter.
+
+    Reported against whichever character the roster lists first, since
+    neither pin is the "newly assigned" one the greedy loop's ordering
+    assumes. One clash therefore yields one Collision rather than a mirrored
+    pair.
+    """
+    found: list[Collision] = []
+    for index, character in enumerate(characters):
+        voice_id = explicit.get(character.id)
+        if voice_id is None:
+            continue
+        for other in characters[index + 1 :]:
+            if (
+                explicit.get(other.id) != voice_id
+                or other.id not in neighbours[character.id]
+            ):
+                continue
+            found.extend(
+                Collision(chapter_id, character.id, other.id, voice_id)
+                for chapter_id in sorted(
+                    set(character.chapter_ids) & set(other.chapter_ids)
+                )
+            )
+    return found
 
 
 def _collisions(

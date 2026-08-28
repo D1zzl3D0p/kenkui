@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from kenkui._characters.infer import PRONOUNS, UNKNOWN, slugify
+from kenkui._characters.infer import PRONOUNS, ROLE_PREFIX, UNKNOWN, slugify
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import (
     ATTRIBUTION_PROMPT,
@@ -117,7 +117,7 @@ def _resolve(  # noqa: PLR0911 - one branch per resolution rule, kept flat.
         # speakers. A hallucinated name does become a voice, which is the
         # accepted cost of the open vocabulary.
         slug = slugify(candidate)
-        return f"role:{slug}@{chapter_id}" if slug else None
+        return f"{ROLE_PREFIX}{slug}@{chapter_id}" if slug else None
     return None
 
 

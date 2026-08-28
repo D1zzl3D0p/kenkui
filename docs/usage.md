@@ -363,8 +363,10 @@ kk.epub("oathbringer.epub").series("stormlight", book=3)
 ```
 
 Membership is declared, never derived. EPUBs do not carry series metadata in
-practice, so the name is yours to choose, and `book` is recorded for ordering
-only. Continuity is decided by who the characters are, not by volume number:
+practice, so the name is yours to choose. `book` is recorded with the render's
+intent and nothing reads it: `list_series()` orders by series name, and
+continuity never consults it. Pass it if it documents your own call sites;
+it changes nothing. Continuity is decided by who the characters are:
 identity resolution matches this volume's roster against every name the
 series has seen, the same way it matches names within one book.
 

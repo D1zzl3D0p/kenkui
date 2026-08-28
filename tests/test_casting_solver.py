@@ -12,6 +12,7 @@ import pytest
 from kenkui._domain.casting import (
     CastingRequest,
     CharacterProfile,
+    Collision,
     candidates,
     solve,
     ungendered_pool_characters,
@@ -304,3 +305,41 @@ def test_no_prior_load_is_todays_behaviour() -> None:
         _request(characters, prior_load={})
     ).assignments
 
+
+
+def test_two_pinned_characters_sharing_a_chapter_collide() -> None:
+    """A clash between two pins is the same clash the solver reports itself.
+
+    `explicit` entries were seeded straight into `assignments` and only the
+    greedy loop ever looked for collisions, so two pins landing on one voice
+    in one chapter reported nothing at all. A series manufactures exactly
+    that without any caller `cast=`: volume one pins A to a voice, volume
+    two pins B to the same voice while A is absent, and volume three has
+    both of them in one chapter.
+    """
+    outcome = solve(
+        _request(
+            (
+                _character("darcy", "masculine", 400, ("ch1",)),
+                _character("bingley", "masculine", 300, ("ch1",)),
+            ),
+            explicit={"darcy": "charles", "bingley": "charles"},
+        )
+    )
+    assert outcome.collisions == (
+        Collision("ch1", "darcy", "bingley", "charles"),
+    )
+
+
+def test_pins_on_distinct_voices_report_no_collision() -> None:
+    """The ordinary pinned cast must stay silent."""
+    outcome = solve(
+        _request(
+            (
+                _character("darcy", "masculine", 400, ("ch1",)),
+                _character("bingley", "masculine", 300, ("ch1",)),
+            ),
+            explicit={"darcy": "charles", "bingley": "paul"},
+        )
+    )
+    assert outcome.collisions == ()

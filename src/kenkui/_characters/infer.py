@@ -61,6 +61,11 @@ PRONOUNS = frozenset(
 
 # The value the prompt reserves for "could not tell".
 UNKNOWN = "unknown"
+# Prefix of the ids `attribution` mints for a speaker no roster listed. The
+# chapter id is part of the id on purpose -- chapter 40's officer is not
+# chapter 12's -- so anything reasoning about who a character *is* has to be
+# able to recognise one.
+ROLE_PREFIX = "role:"
 
 _GENDERS = frozenset({"feminine", "masculine"})
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")

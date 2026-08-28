@@ -360,16 +360,28 @@ class Pipeline:
             # should not pay: the store and the voice manifest are only
             # touched once a pipeline actually names one.
 
-            issues.extend(
-                _issue(code)
-                for code in series_intent_errors(
-                    self.operations,
-                    store.read_series(series.series_id),
-                    frozenset(
-                        voice.id for voice in list_voices() if voice.state == "loaded"
+            casting = self._casting()
+            stored = store.read_series(series.series_id)
+            codes = series_intent_errors(
+                self.operations,
+                stored,
+                _series_pool_ids(
+                    tuple(list_voices()),
+                    casting.narrator_voice_id,
+                    casting.unknown_voice_id,
+                ),
+            )
+            if ErrorCode.SERIES_VOICE_MISSING in codes and stored is not None:
+                _log_missing_series_voices(
+                    series.series_id,
+                    stored,
+                    _series_pool_ids(
+                        tuple(list_voices()),
+                        casting.narrator_voice_id,
+                        casting.unknown_voice_id,
                     ),
                 )
-            )
+            issues.extend(_issue(code) for code in codes)
         return ValidationResult(tuple(issues))
 
     def inspect(self) -> BookInspection:
@@ -525,11 +537,80 @@ class _SeriesPins:
     overridden_pins: tuple[str, ...]
 
 
+def _log_missing_series_voices(
+    series_id: str, stored: SeriesRecord, pool_ids: frozenset[str]
+) -> None:
+    """Name the characters a series can no longer honour, for an operator.
+
+    The refusal itself is right and stays: a voice this series already cast
+    has gone, and that is the operator's to fix. But `ValidationIssue`
+    carries a stable code and sanitized public text and nothing else, so an
+    operator told only `series_voice_missing` has the whole cast to search
+    by hand. The spec asks for the characters and the lost voice by name,
+    which is an operator's log line -- the same channel, and for the same
+    reason, as a cast collision.
+    """
+    affected = [
+        character
+        for character in stored.characters
+        if character.voice_id not in pool_ids
+    ]
+    if not affected:
+        return
+    log_event(
+        _LOGGER,
+        "series_voice_missing",
+        level=logging.WARNING,
+        context={
+            "boundary": "series",
+            "series_id": series_id,
+            "characters": ", ".join(c.display_name for c in affected),
+            "voice_ids": ", ".join(sorted({c.voice_id for c in affected})),
+        },
+    )
+
+
+def _series_pool_ids(
+    voices: Sequence[Voice], narrator_voice_id: str, unknown_voice_id: str
+) -> frozenset[str]:
+    """Return the voice ids a series pin can actually be honoured by.
+
+    `validate()` and `_resolve_all` have to agree about this exactly. They
+    did not: `validate()` judged every loaded voice while the render casts
+    only from voices matching the narrator's language, minus the reserved
+    ids `_castable` strips. A pin naming a loaded voice of another language,
+    or naming this render's narrator, therefore passed the check, was
+    dropped at render time, and -- correctly, without `allow_recast` -- was
+    not persisted. The character then sounded different in this volume and
+    every later one, with a log line as the only signal.
+
+    Used by `validate()`, which starts from every known voice and has to
+    reproduce what `_resolve_all` gets handed already filtered. The language
+    comes from the narrator because that is what the renderer binds against.
+    A narrator absent from `voices` cannot supply one, and that is a
+    different failure the render reports for itself -- so the language
+    filter is skipped rather than matching nothing and reporting every pin
+    in the series as missing.
+    """
+    reserved = {narrator_voice_id, unknown_voice_id}
+    narrator = next(
+        (voice for voice in voices if voice.id == narrator_voice_id), None
+    )
+    return frozenset(
+        voice.id
+        for voice in voices
+        if voice.state == "loaded"
+        and (narrator is None or voice.language == narrator.language)
+        and voice.id not in reserved
+    )
+
+
 def _series_pins(
     stored: SeriesRecord | None,
     characters: tuple[CharacterProfile, ...],
     casting: AssignVoices,
     pool: tuple[Voice, ...],
+    book_digest: str,
 ) -> _SeriesPins:
     """Fold a series' stored cast into pins, prior load, and what gave way.
 
@@ -548,11 +629,11 @@ def _series_pins(
     dropped_pins: list[str] = []
     dropped_voice_ids: dict[str, str] = {}
     overridden_pins: list[str] = []
-    # Reserved ids are excluded the same way `_castable` excludes them from
-    # the solver's own pool: the narrator speaks in every chapter, so a pin
-    # equal to it (or to `unknown`) is never an honourable pin, it is a
-    # character quietly wearing the narrator's voice.
-    pool_ids = {voice.id for voice in pool} - {
+    # `pool` is already the loaded, language-matched set this render casts
+    # from, so only the reserved ids remain to drop -- the same ones
+    # `_castable` strips, because a pin equal to the narrator is not a pin,
+    # it is a character quietly wearing the narrator's voice.
+    pool_ids = frozenset(voice.id for voice in pool) - {
         casting.narrator_voice_id,
         casting.unknown_voice_id,
     }
@@ -583,8 +664,13 @@ def _series_pins(
             dropped_pins.append(book_id)
             dropped_voice_ids[book_id] = known.voice_id
     for known in stored.characters:
+        # This volume's own contribution is not "prior". Counting it made a
+        # re-render solve against an inflated load, so unpinned characters
+        # could land on a different voice -- which changes the segment
+        # identity and re-synthesizes a book that had not changed.
+        already = dict(known.contributions).get(book_digest, 0)
         prior_load[known.voice_id] = (
-            prior_load.get(known.voice_id, 0) + known.spoken_characters
+            prior_load.get(known.voice_id, 0) + known.spoken_characters - already
         )
     return _SeriesPins(
         explicit,
@@ -611,7 +697,10 @@ def _resolve_all(
         resolve_cast,
         store,
     )
-    from ._characters.series import merged_series  # noqa: PLC0415
+    from ._characters.series import (  # noqa: PLC0415
+        merged_series,
+        series_members,
+    )
     from .voices.provision import list_voices  # noqa: PLC0415 - resolved per
     # call so the managed cache root can be redirected, as the store is.
 
@@ -661,7 +750,10 @@ def _resolve_all(
         (item for item in pipeline.operations if isinstance(item, Series)), None
     )
     stored = store.read_series(series.series_id) if series is not None else None
-    pins = _series_pins(stored, record.characters, casting, pool)
+    # Minted roles are chapter-scoped by construction and are not people a
+    # series remembers; see `series_members`.
+    members = series_members(record.characters)
+    pins = _series_pins(stored, members, casting, pool, digest)
     if series is not None:
         _log_series_overrides(
             series,
@@ -711,7 +803,7 @@ def _resolve_all(
         store.write_series(
             merged_series(
                 stored,
-                record.characters,
+                members,
                 persisted_assignments,
                 (
                     casting.narrator_voice_id
