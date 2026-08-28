@@ -266,10 +266,17 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
     """
     matched = match_roster(record, characters)
     known = {c.canonical_id: c for c in (record.characters if record else ())}
-    # Every canonical this call has handed out. Two characters of one volume
-    # are two people, so a slot already spoken for here is closed to the
-    # rest of them -- see `_mint_canonical`.
-    claimed: set[str] = set()
+    # Every canonical this call has spoken for. Two characters of one volume
+    # are two people, so a slot claimed here is closed to the rest of them --
+    # see `_mint_canonical`.
+    #
+    # Seeded with every matched canonical rather than filled as the loop
+    # goes, because `matched` is already fully known and the loop is not.
+    # A character that mints early would otherwise be free to take a slot a
+    # later-iterated character matches to by name, which is the same
+    # over-merge one step over: ids sort before names, so the minting
+    # character genuinely can run first.
+    claimed: set[str] = set(matched.values())
     for character in characters:
         voice_id = assignments.get(character.id)
         if voice_id is None:

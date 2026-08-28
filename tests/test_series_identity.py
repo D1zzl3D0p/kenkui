@@ -364,3 +364,64 @@ def test_two_of_one_volumes_people_do_not_collapse_onto_one_canonical() -> None:
     assert again["Guard"].spoken_characters == 200  # noqa: PLR2004 - replaced, not piled
     assert again["Warden"].spoken_characters == 300  # noqa: PLR2004
     assert again["Warden"].voice_id == "aaron"
+
+
+def test_a_mint_cannot_take_a_slot_a_later_character_matches_to() -> None:
+    """The same over-merge one step over: minting before a name-match runs.
+
+    `claimed` is filled as the loop goes, but `matched` is known in full
+    before it starts. A character whose id sorts early enough to mint first
+    could therefore take the very canonical a later-iterated character
+    matches to by name -- ids sort before names decide, so the minting one
+    genuinely runs first. Seeding `claimed` from `matched` closes it.
+
+    Two renders of one volume with different rosters is ordinary, not an
+    abuse: `SeriesRecord` exists so that a volume re-read by a different
+    model does not re-cast the series.
+    """
+    volume_one = _roster(
+        [
+            {"id": "guard", "name": "Warden"},
+            {"id": "sentinel", "name": "Sentry"},
+            {"id": "picket", "name": "Sentry"},
+        ],
+        {"guard": 100, "sentinel": 100, "picket": 100},
+    )
+    record = merged_series(
+        None,
+        volume_one,
+        {"guard": "alf", "sentinel": "aoife", "picket": "aaron"},
+        "eponine",
+        "s",
+        book_digest="volume-1",
+    )
+    # The first read of volume two sees only Warden, so `guard` takes on
+    # volume two's digest.
+    record = merged_series(
+        record,
+        _roster([{"id": "warden", "name": "Warden"}], {"warden": 100}),
+        {"warden": "alf"},
+        "eponine",
+        "s",
+        book_digest="volume-2",
+    )
+    # The second read also finds a new Sentry. "Sentry" now has three
+    # possible hosts, so it is withheld and must mint -- and "guard" sorts
+    # before "warden", so it mints before Warden's match is applied.
+    updated = merged_series(
+        record,
+        _roster(
+            [{"id": "guard", "name": "Sentry"}, {"id": "warden", "name": "Warden"}],
+            {"guard": 300, "warden": 100},
+        ),
+        {"guard": "aoife", "warden": "alf"},
+        "eponine",
+        "s",
+        book_digest="volume-2",
+    )
+
+    by_display = {c.display_name: c for c in updated.characters}
+    assert len(updated.characters) == 4  # noqa: PLR2004 - Warden, two Sentrys, the new one
+    # The new Sentry kept its own voice rather than being absorbed.
+    assert by_display["Warden"].voice_id == "alf"
+    assert by_display["Warden"].aliases == ("Warden",)
