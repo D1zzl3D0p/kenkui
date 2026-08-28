@@ -10,13 +10,17 @@ from ._domain.operations import (
     AttributeQuotes,
     InferCharacters,
     Operation,
+    Series,
     SynthesizeSpeech,
     has_operation,
 )
 from .errors import ErrorCode
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
+
+    from ._characters.store import SeriesRecord
 
 
 def source_validation_error(path: Path) -> ErrorCode | None:
@@ -63,4 +67,40 @@ def render_intent_errors(operations: tuple[Operation, ...]) -> tuple[ErrorCode, 
         errors.append(ErrorCode.CAST_UNATTRIBUTED)
     if not has_operation(operations, SynthesizeSpeech):
         errors.append(ErrorCode.TTS_REQUIRED)
+    return tuple(errors)
+
+
+def series_intent_errors(
+    operations: Sequence[Operation],
+    record: SeriesRecord | None,
+    pool_ids: frozenset[str],
+) -> tuple[ErrorCode, ...]:
+    """Return the ways this render would contradict its series.
+
+    Checked here rather than at render time because both are knowable from
+    the store and the operations alone: failing after a book has been
+    attributed spends a model pass to learn something free.
+    """
+    series = next((item for item in operations if isinstance(item, Series)), None)
+    if series is None or record is None:
+        return ()
+    errors: list[ErrorCode] = []
+    if not series.allow_recast and any(
+        character.voice_id not in pool_ids for character in record.characters
+    ):
+        errors.append(ErrorCode.SERIES_VOICE_MISSING)
+    narrator = next(
+        (
+            item.narrator_voice_id
+            for item in operations
+            if isinstance(item, AssignVoices)
+        ),
+        None,
+    )
+    if (
+        not series.allow_narrator_change
+        and narrator is not None
+        and narrator != record.narrator_voice_id
+    ):
+        errors.append(ErrorCode.SERIES_NARRATOR_CHANGED)
     return tuple(errors)

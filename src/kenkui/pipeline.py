@@ -43,7 +43,11 @@ from .errors import (
     ValidationError,
 )
 from .observability import get_logger, log_event
-from .validation import render_intent_errors, source_validation_error
+from .validation import (
+    render_intent_errors,
+    series_intent_errors,
+    source_validation_error,
+)
 from .voices import Voice
 
 if TYPE_CHECKING:
@@ -306,11 +310,11 @@ class Pipeline:
         recorded for ordering only: continuity is decided by identity, not by
         volume number.
 
-        Two ways a series can be contradicted fail before any model call:
-        a pinned voice missing from the pool, and a narrator differing from
-        the one the series recorded. ``allow_recast`` re-solves the affected
-        characters and updates their pins; ``allow_narrator_change`` adopts
-        the new narrator from this volume on. Both log when they take effect.
+        Two ways a series can be contradicted fail validation before any
+        model call: a pinned voice missing from the pool, and a narrator
+        differing from the one the series recorded. ``allow_recast`` and
+        ``allow_narrator_change`` each waive their matching failure so the
+        render proceeds instead of refusing.
         """
         name = series_id.strip()
         if not name or (book is not None and book < 1):
@@ -344,6 +348,26 @@ class Pipeline:
         if source_error is not None:
             issues.append(_issue(source_error))
         issues.extend(_issue(code) for code in render_intent_errors(self.operations))
+        series = next(
+            (item for item in self.operations if isinstance(item, Series)), None
+        )
+        if series is not None:
+            from ._characters import store  # noqa: PLC0415 - see below
+            from .voices.provision import list_voices  # noqa: PLC0415
+            # Both are import-time cost callers who never declare a series
+            # should not pay: the store and the voice manifest are only
+            # touched once a pipeline actually names one.
+
+            issues.extend(
+                _issue(code)
+                for code in series_intent_errors(
+                    self.operations,
+                    store.read_series(series.series_id),
+                    frozenset(
+                        voice.id for voice in list_voices() if voice.state == "loaded"
+                    ),
+                )
+            )
         return ValidationResult(tuple(issues))
 
     def inspect(self) -> BookInspection:

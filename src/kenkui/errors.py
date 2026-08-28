@@ -76,6 +76,8 @@ class ErrorCode(StrEnum):
     PUBLICATION_FAILED = "publication_failed"
     CALLBACK_FAILED = "callback_failed"
     CANCELLED = "cancelled"
+    SERIES_VOICE_MISSING = "series_voice_missing"
+    SERIES_NARRATOR_CHANGED = "series_narrator_changed"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -162,6 +164,12 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.PUBLICATION_FAILED: "The audiobook artifact could not be published.",
     ErrorCode.CALLBACK_FAILED: "The execution event callback failed.",
     ErrorCode.CANCELLED: "Execution was cancelled.",
+    ErrorCode.SERIES_VOICE_MISSING: (
+        "A voice this series already cast is not in the pool."
+    ),
+    ErrorCode.SERIES_NARRATOR_CHANGED: (
+        "This series was recorded with a different narrator voice."
+    ),
 }
 
 
