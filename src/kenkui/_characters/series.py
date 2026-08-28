@@ -118,9 +118,26 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
 ) -> SeriesRecord:
     """Return the series as it stands after this volume.
 
-    A returning character keeps the voice the series gave them and gains this
-    volume's speech and surface forms. A newcomer joins with whatever voice
-    the solver just chose.
+    A returning character keeps the voice ``assignments`` actually gave them
+    this render and gains this volume's speech and surface forms. A newcomer
+    joins with whatever voice the solver just chose.
+
+    Recording ``assignments`` rather than re-asserting the series' own prior
+    voice_id is deliberate, not redundant: ordinarily they agree, because the
+    caller pins a returning character to the series' voice before solving.
+    They can legitimately disagree two ways -- a dropped pin the solver had
+    to recast because the pool could no longer honour it, or this render's
+    caller overriding the series pin with an explicit ``cast=`` -- and both
+    are cases where what was actually spoken must become the series' new
+    voice for that person. Keeping the stale value instead would mean the
+    series never converges: the next render pins the same unavailable voice,
+    drops it again, and may recast to something else again.
+
+    The narrator is adopted from ``narrator_voice_id`` the same way, on every
+    call, not only the first: a caller who rendered under
+    ``allow_narrator_change`` used a different narrator for this volume, and
+    the series must record what was actually narrated, not what an earlier
+    volume happened to use.
 
     ``book_digest`` identifies the volume whose speech is being folded in --
     the same content hash attribution is keyed by, so an edited copy of a
@@ -170,16 +187,15 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
             # The series keeps the first gender it was sure of: a later
             # volume answering None must not un-gender a cast character.
             gender=existing.gender if existing.gender is not None else character.gender,
-            voice_id=existing.voice_id,
+            # `voice_id`, not `existing.voice_id`: see the docstring above.
+            voice_id=voice_id,
             spoken_characters=total,
             aliases=tuple(sorted({*existing.aliases, *aliases})),
             contributions=contributions,
         )
     return SeriesRecord(
         series_id=series_id,
-        narrator_voice_id=(
-            record.narrator_voice_id if record is not None else narrator_voice_id
-        ),
+        narrator_voice_id=narrator_voice_id,
         characters=tuple(
             sorted(known.values(), key=lambda c: (-c.spoken_characters, c.canonical_id))
         ),

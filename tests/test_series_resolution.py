@@ -53,6 +53,18 @@ _NARRATOR = kk.Voice(
     language="en",
     state="loaded",
 )
+# Sorts before "alf" -- used to prove a re-solve (rather than a persisted
+# pin) actually ran, since the greedy solver's tie-break is alphabetical.
+_AARON = kk.Voice(
+    id="aaron",
+    name="Aaron",
+    enabled=True,
+    provenance="fixture",
+    license_id="CC0-1.0",
+    commercial_use_allowed=True,
+    language="en",
+    state="loaded",
+)
 
 
 class _Roster:
@@ -211,11 +223,24 @@ def test_a_dropped_pin_is_logged_for_the_operator(
     series = Series(series_id="s", allow_recast=True)
     stored = store.SeriesRecord("s", "eponine", (_known(),))
     with caplog.at_level(logging.WARNING):
-        _log_series_overrides(series, stored, ["javert"], "eponine")
+        _log_series_overrides(series, stored, ["javert"], [], "eponine")
     assert "series_override" in caplog.text
     record = caplog.records[0]
     assert log_field(record, "boundary") == "series"
     assert log_field(record, "dropped_pins") == "javert"
+
+
+def test_an_overridden_pin_is_logged_for_the_operator(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A caller's explicit cast= beating a series pin is still worth saying."""
+    series = Series(series_id="s")
+    stored = store.SeriesRecord("s", "eponine", (_known(),))
+    with caplog.at_level(logging.WARNING):
+        _log_series_overrides(series, stored, [], ["javert"], "eponine")
+    assert "series_override" in caplog.text
+    record = caplog.records[0]
+    assert log_field(record, "overridden_pins") == "javert"
 
 
 def test_an_adopted_narrator_is_logged_for_the_operator(
@@ -225,7 +250,7 @@ def test_an_adopted_narrator_is_logged_for_the_operator(
     series = Series(series_id="s", allow_narrator_change=True)
     stored = store.SeriesRecord("s", "eponine", (_known(),))
     with caplog.at_level(logging.WARNING):
-        _log_series_overrides(series, stored, [], "cosette")
+        _log_series_overrides(series, stored, [], [], "cosette")
     assert "series_override" in caplog.text
 
 
@@ -236,7 +261,276 @@ def test_an_honoured_series_logs_nothing(
     series = Series(series_id="s")
     stored = store.SeriesRecord("s", "eponine", (_known(),))
     with caplog.at_level(logging.WARNING):
-        _log_series_overrides(series, stored, [], "eponine")
+        _log_series_overrides(series, stored, [], [], "eponine")
     assert "series_override" not in caplog.text
 
 
+
+
+def test_a_pin_cannot_land_a_character_on_the_narrators_voice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The narrator's voice is reserved.
+
+    ``resolve_cast`` never reports a collision for an explicit pin -- that
+    check only runs for characters the solver placed itself -- so a pin
+    equal to the narrator's voice would otherwise land a character on it
+    with nothing to show for it.
+    """
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="javert",
+                    display_name="Javert",
+                    gender="feminine",
+                    voice_id="eponine",
+                    spoken_characters=100,
+                    aliases=("Javert",),
+                ),
+            ),
+        )
+    )
+    _stub_resolution(monkeypatch, "javert")
+    # The narrator's own voice is also enumerated by list_voices(), which is
+    # exactly what makes it reachable as a pin: nothing here treats it as
+    # special until the reserved-id exclusion does.
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE, _NARRATOR)
+    )
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    with caplog.at_level(logging.WARNING):
+        resolved = (
+            kk.epub(path)
+            .series("s", book=2, allow_recast=True)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+    assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+    assert assignments["javert"] != "eponine"
+    assert "series_override" in caplog.text
+
+
+def test_a_pin_for_a_different_language_voice_is_dropped_and_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """validate()'s pool and _resolve_all's pool differ by language filtering.
+
+    A pin naming a voice that is loaded but of another language passes
+    validate(), which never filters by language, and reaches here with no
+    allow_recast involved at all. It must still be dropped, and reported.
+    """
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="javert",
+                    display_name="Javert",
+                    gender="feminine",
+                    voice_id="foreign",
+                    spoken_characters=100,
+                    aliases=("Javert",),
+                ),
+            ),
+        )
+    )
+    _stub_resolution(monkeypatch, "javert")
+    foreign = kk.Voice(
+        id="foreign",
+        name="Foreign",
+        enabled=True,
+        provenance="fixture",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="fr",
+        state="loaded",
+    )
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE, foreign)
+    )
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    with caplog.at_level(logging.WARNING):
+        resolved = (
+            kk.epub(path)
+            .series("s", book=2)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+    assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+    assert assignments["javert"] != "foreign"
+    assert "series_override" in caplog.text
+
+
+def test_allow_recast_converges_once_the_dropped_pin_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dropped pin must persist what the solver actually chose.
+
+    Otherwise every render re-pins the dead voice, drops it again, and
+    re-solves from scratch -- which a *widening* pool can answer
+    differently each time, since the greedy solver's tie-break is
+    alphabetical over whatever pool it is handed. Persisting the
+    replacement is what lets allow_recast settle on one voice, which is the
+    property that matters -- not any single render's answer.
+    """
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="javert",
+                    display_name="Javert",
+                    gender="feminine",
+                    voice_id="ghost",
+                    spoken_characters=100,
+                    aliases=("Javert",),
+                ),
+            ),
+        )
+    )
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+
+    # The client and engine bindings are stubbed once, directly -- not via
+    # `_stub_resolution`, which would also reset the voice pool back to its
+    # default on every call and mask the pool actually being widened below.
+    monkeypatch.setattr(
+        "kenkui.pipeline._attribution_client", lambda: _Roster("javert")
+    )
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings",
+        lambda: ExecutionBindings(
+            EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
+        ),
+    )
+
+    def _render() -> str:
+        resolved = (
+            kk.epub(path)
+            .series("s", book=2, allow_recast=True)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+        return dict(resolved._resolved.cast_assignments)["javert"]  # noqa: SLF001
+
+    monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE))
+    first = _render()
+    assert first == "alf"
+
+    # The pool widens with a voice that sorts before "alf". If this render
+    # still had to re-solve from scratch -- because the first render's
+    # replacement was never persisted -- it would pick "aaron" instead.
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (_AARON, _ALF, _AOIFE)
+    )
+    second = _render()
+    assert second == first
+
+
+def test_an_explicit_cast_overrides_a_series_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The caller's render-time cast is more specific than a stored series default.
+
+    It is also the only way to correct a series pin without discarding the
+    whole series, so the series then adopts what the caller chose.
+    """
+    first = _render_volume(tmp_path, monkeypatch, "javert", book=1)
+    assert first["javert"] == "alf"  # deterministic: alf sorts before aoife
+
+    _stub_resolution(monkeypatch, "javert")
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    with caplog.at_level(logging.WARNING):
+        resolved = (
+            kk.epub(path)
+            .series("s", book=2)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine", cast={"javert": "aoife"})
+            .resolve()
+        )
+    assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+    assert assignments["javert"] == "aoife"
+    assert "series_override" in caplog.text
+
+    record = store.read_series("s")
+    assert record is not None
+    javert = next(c for c in record.characters if c.canonical_id == "javert")
+    assert javert.voice_id == "aoife"
+
+
+def test_allow_narrator_change_adopts_the_new_narrator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The spec: allow_narrator_change records the new narrator from here on."""
+    _render_volume(tmp_path, monkeypatch, "javert", book=1)
+    record = store.read_series("s")
+    assert record is not None
+    assert record.narrator_voice_id == "eponine"
+
+    _stub_resolution(monkeypatch, "javert")
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    with caplog.at_level(logging.WARNING):
+        (
+            kk.epub(path)
+            .series("s", book=2, allow_narrator_change=True)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="cosette")
+            .resolve()
+        )
+    assert "series_override" in caplog.text
+    adopted = store.read_series("s")
+    assert adopted is not None
+    assert adopted.narrator_voice_id == "cosette"
+
+    # Having settled, the same narrator on the next render is no longer a
+    # change worth reporting -- the state converged instead of nagging
+    # forever about a switch that already happened.
+    caplog.clear()
+    _stub_resolution(monkeypatch, "javert")
+    path3 = make_epub(
+        tmp_path / "volume-3.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    with caplog.at_level(logging.WARNING):
+        (
+            kk.epub(path3)
+            .series("s", book=3, allow_narrator_change=True)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="cosette")
+            .resolve()
+        )
+    assert "series_override" not in caplog.text

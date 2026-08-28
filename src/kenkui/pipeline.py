@@ -583,14 +583,36 @@ def _resolve_all(
     explicit = dict(casting.cast)
     prior_load: dict[str, int] = {}
     dropped_pins: list[str] = []
+    overridden_pins: list[str] = []
     if stored is not None:
-        pool_ids = {voice.id for voice in pool}
+        # Reserved ids are excluded the same way `_castable` excludes them
+        # from the solver's own pool: the narrator speaks in every chapter,
+        # so a pin equal to it (or to `unknown`) is never an honourable
+        # pin, it is a character quietly wearing the narrator's voice.
+        pool_ids = {voice.id for voice in pool} - {
+            casting.narrator_voice_id,
+            casting.unknown_voice_id,
+        }
         by_canonical = {c.canonical_id: c for c in stored.characters}
         for book_id, canonical in match_roster(stored, record.characters).items():
             known = by_canonical[canonical]
-            # A pin the pool cannot honour only reaches here under
-            # allow_recast; validate() refuses it otherwise. Dropping it
-            # lets the solver choose afresh, which is what was asked for.
+            if book_id in explicit:
+                # This render's caller named a voice for this character
+                # directly (``explicit`` starts as exactly that mapping),
+                # which is more specific than a series default and the only
+                # way to correct a series pin without discarding the whole
+                # series. Left as the caller set it; the series adopts it
+                # below, in `merged_series`.
+                if explicit[book_id] != known.voice_id:
+                    overridden_pins.append(book_id)
+                continue
+            # A pin the pool cannot honour reaches here under allow_recast
+            # through write() (validate() refuses it otherwise), but also
+            # through resolve(), which never validates at all, and through
+            # a mismatch validate()'s own pool cannot see -- a voice loaded
+            # but of a different language than this render's narrator,
+            # which `pool` excludes and validate()'s check does not.
+            # Dropping it lets the solver choose afresh either way.
             if known.voice_id in pool_ids:
                 explicit[book_id] = known.voice_id
             else:
@@ -600,7 +622,9 @@ def _resolve_all(
                 prior_load.get(known.voice_id, 0) + known.spoken_characters
             )
     if series is not None:
-        _log_series_overrides(series, stored, dropped_pins, casting.narrator_voice_id)
+        _log_series_overrides(
+            series, stored, dropped_pins, overridden_pins, casting.narrator_voice_id
+        )
 
     # Stored, not just solved: the cast is what list_castings names and what
     # remove_casting discards, and neither can see a cast that only ever
@@ -709,19 +733,24 @@ def _log_series_overrides(
     series: Series,
     stored: SeriesRecord | None,
     dropped_pins: Sequence[str],
+    overridden_pins: Sequence[str],
     narrator_voice_id: str,
 ) -> None:
     """Record a forced series override for an operator, not for the caller.
 
-    `allow_recast` and `allow_narrator_change` exist to let a render proceed
-    over a contradiction `validate()` would otherwise refuse. Proceeding
-    silently would leave nobody able to tell that it happened -- a forced
-    render must still say what it did.
+    Three things can make this volume's cast disagree with what the series
+    remembers: a pin the pool can no longer honour, a pin this render's
+    caller chose to override with an explicit `cast=`, and a narrator this
+    render used that differs from the one the series recorded. Each is a
+    legitimate outcome -- `allow_recast`, an explicit override, and
+    `allow_narrator_change` all exist to let exactly this happen -- but
+    proceeding silently would leave nobody able to tell that it did. A
+    forced render must still say what it did.
     """
     narrator_changed = (
         stored is not None and stored.narrator_voice_id != narrator_voice_id
     )
-    if not dropped_pins and not narrator_changed:
+    if not dropped_pins and not overridden_pins and not narrator_changed:
         return
     log_event(
         _LOGGER,
@@ -731,6 +760,7 @@ def _log_series_overrides(
             "boundary": "series",
             "series_id": series.series_id,
             "dropped_pins": ", ".join(dropped_pins),
+            "overridden_pins": ", ".join(overridden_pins),
             "narrator_changed": narrator_changed,
         },
     )
