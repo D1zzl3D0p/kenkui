@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11–3.13, dataclasses, pytest, Ruff, mypy, Pocket-TTS, FFmpeg/ffprobe; FastAPI, Pydantic, SQLite/PostgreSQL, SSE; TypeScript, React, Vite, generated OpenAPI types, Vitest, React Testing Library, Playwright; Cloudflare static hosting/R2, Railway/PostgreSQL, Modal, WorkOS/AuthKit, Stripe.
 
-**Spec:** `../kenkui-suite-v2/specs/00 Kenkui System Specification - Final.md`, `../kenkui-suite-v2/specs/01 Kenkui Core Specification - Final.md`, `../kenkui-suite-v2/specs/02 Kenkui Server Specification - Final.md`, `../kenkui-suite-v2/specs/03 Kenkui Web and Client Specification - Final.md`, `../kenkui-suite-v2/specs/04 Kenkui Cloud and Deployment Specification - Final.md`, and `../kenkui-suite-v2/specs/05 Kenkui Implementation Plan - Final.md`.
+**Spec:** `../specs/00 Kenkui System Specification - Final.md`, `../specs/01 Kenkui Core Specification - Final.md`, `../specs/02 Kenkui Server Specification - Final.md`, `../specs/03 Kenkui Web and Client Specification - Final.md`, `../specs/04 Kenkui Cloud and Deployment Specification - Final.md`, and `../specs/05 Kenkui Implementation Plan - Final.md`.
 
 ## Global Constraints
 

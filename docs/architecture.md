@@ -18,9 +18,13 @@ to this exact normalized string.
 
 The pure planner consumes an immutable inspection, exact source-bytes SHA-256,
 resolved voice metadata, model revision, and ordered intent. Under frozen
-`tts-chunks-v1`, it splits every selected chapter into non-empty segments of at
-most 1000 characters, preferring whitespace/sentence opportunities and using a
-hard boundary for long tokens. Concatenating a chapter's segments exactly
+`tts-chunks-v2`, it splits every selected chapter into non-empty segments of at
+most 1000 characters, ranking break points by how natural the resulting pause
+sounds -- line break, then whitespace beside punctuation, then any whitespace,
+then the dash family -- and taking the best one that still fills most of the
+window, with a hard boundary for long tokens. It additionally caps runs holding
+none of `.!?,;:`, which the engine cannot subdivide, so no run reaches synthesis
+far enough over the engine's own chunk budget to generate past its limit. Concatenating a chapter's segments exactly
 reconstructs its normalized text. It emits schema versions, content hashes, stable segment
 identities, resolved metadata, and a canonical semantic fingerprint. Canonical
 JSON key ordering and bounded UTF-8 hashing make equivalent semantic inputs
@@ -39,13 +43,20 @@ constructs one engine, and reuses it serially for that batch. The parent never
 constructs an engine.
 
 Segments are worker/cache units, but public progress and output metadata remain
-semantic chapter units. Assembly concatenates plan-ordered segment PCM and
-aggregates exact frames into one M4B marker per selected chapter.
+semantic chapter units. As each chapter completes, its ordered segment PCM is
+spilled to a private part file in the run workspace and leaves memory, so a run
+holds at most one chapter of samples rather than a whole book. Only metadata --
+identities, frame counts, durations -- travels on to assembly, which concatenates
+the parts in one linear pass and aggregates exact frames into one M4B marker per
+selected chapter. Parts are untrusted like any other worker output: each must be
+a regular file whose size matches its chapter's metadata exactly.
 
-`workers="auto"` considers CPUs and chapter count; all requests are bounded by
-chapter count and a hard cap of two. The scheduler bounds combined live and
-completed-but-not-emitted work, validates per-segment and cumulative PCM budgets,
-accepts completion out of order, and emits results/events strictly in plan order.
+`workers="auto"` reserves two CPUs for the rest of the system and is bounded by
+chapter count and a hard cap of sixteen; the ceiling is memory, because each
+worker copies a private model snapshot and holds its own model instance. The
+scheduler bounds combined live and completed-but-not-emitted work, validates
+per-segment, per-chapter, and whole-run PCM budgets, accepts completion out of
+order, and emits results/events strictly in plan order.
 
 Worker audio never crosses a multiprocessing pipe. A worker writes one
 versioned, bounded header and raw PCM to a private result path using sibling-temp
@@ -114,3 +125,97 @@ generic-log records and cannot revoke durable success. Publish failure emits no
 publication completion. Logs contain only generic stage/cache categories and
 terminal stable codes: cache keys/ordinals, source/output paths, text,
 voice/model paths, and provider diagnostics are excluded.
+
+## Attribution as a resolved input
+
+Character inference and dialogue attribution call a language model, which the
+pure planner must not do. They are resolved in the shell and handed to the
+planner as finished values, exactly as voice metadata already is: the planner
+receives a roster, speaker spans, and a cast, and reaches neither a model nor
+a store.
+
+`resolve()` and `write()` are two entry points into one resolution
+implementation, not two paths. A pipeline carrying resolved values renders
+identically to one that resolves during `write()`; appending any operation
+discards them, because changing intent invalidates them and re-resolving
+against a populated store is a lookup.
+
+All model traffic happens in the parent process, beside the network voice
+provisioning already performs. The render path is unchanged: spawned workers
+install a socket-denying audit hook and set the offline environment variables,
+so no credential and no request can reach them.
+
+A book narrated in the first person names its narrator during roster
+inference, and attribution marks them in the roster it sends. Their id is an
+ordinary character id, so their spoken lines and their narration differ only in
+which voice casting gives them: `_castable` withholds the narrator voice from
+every character, so a narrating character cannot be given the voice their own
+narration uses.
+
+Attribution also handles a speaker the text identifies by role but never names,
+such as a guard, innkeeper, or first man. The model returns a short role word;
+resolution scopes that identity to the chapter and turns it into an ordinary
+character profile for casting. Two role speakers in one scene therefore receive
+different voices, while a guard in a later chapter may reuse one. A role that
+cannot be identified remains unattributed rather than becoming a guessed
+character.
+
+Roster identity is deliberately conservative. Clear aliases fold into one
+character, but ambiguous short names and conflicting honorifics do not. A
+duplicate voice is locally audible; assigning two distinct people one voice is
+a more damaging error.
+
+## Span-then-chunk segmentation
+
+Attribution produces speaker spans that partition a chapter. The frozen
+`tts-chunks-v2` chunker then runs inside each span, so concatenating every
+chunk still reproduces the chapter exactly.
+
+A chapter with no attributed dialogue is one span, which is byte-for-byte what
+the chunker saw before attribution existed. Speaker and voice enter a segment's
+identity only for attributed speech, so single-voice segment identities and
+plan fingerprints are unchanged and no previously cached segment is
+invalidated.
+
+## Canonical text and the spoken form
+
+Normalized chapter text stays the single authority for billing, inspection,
+chapter identity, and attribution offsets. When a caller asks for it, a
+separate versioned `spoken-form-v1` stage derives the string the engine
+actually speaks, and nothing else consumes that string. This is what lets
+`normalized_speech_characters` keep describing the book the caller supplied
+while `synthesized_characters` follows the expansion.
+
+Segment compilation runs split, then speak, then chunk. Splitting first, in
+canonical coordinates, means the spoken stage cannot move a boundary that has
+already been decided, which removes the need to map offsets through a
+length-changing transformation. Exactness therefore holds at three levels:
+chunks join to the spoken form of their piece, pieces join to their span, and
+spans join to the canonical chapter text.
+
+`tts-chunks-v3` is `tts-chunks-v2` restricted rather than replaced: the
+structural split feeds the unmodified v2 chunker one piece at a time, so
+concatenation-exactness is inherited and the tuned break constants are not
+forked. Every field the new stages contribute — the spoken-form schema, the
+number tier, the lexicon identity, the structure schema, the break tiers —
+enters a segment's identity only when that feature is active, so a pipeline
+requesting neither pronunciation nor pauses produces byte-identical identities
+and invalidates no cached segment. The same discipline governs the plan
+fingerprint: a key is absent, never null, when its feature is not in play.
+
+## Silence as a gap between segments
+
+Pauses are generated silence, not prosody hints. Between any two adjacent
+segments there is exactly one gap, and a gap may have several reasons; its
+duration is the maximum of them, never the sum, so a chapter boundary meeting a
+chapter title's leading pause cannot compound. Modelling gaps rather than
+per-segment durations makes that impossible by construction.
+
+Each gap folds into the preceding segment's trailing pad, so the inter-chapter
+gap is counted in the earlier chapter and skipping forward lands on speech. The
+coordinator pads `SegmentAudio` only after the raw worker output has been
+validated; because `byte_count` is derived from `frame_count`, that single
+adjustment keeps the assembler's part-size check, the chapter markers, and the
+reported duration in agreement without changing the FFmpeg shell at all.
+Silence never reaches a worker or the cache, so pause durations stay out of
+segment identity and retuning them costs no re-synthesis.

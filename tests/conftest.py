@@ -8,6 +8,7 @@ read — or worse, mutate — real assets. Every test gets its own cache root.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -34,3 +35,11 @@ def isolated_cache_root(
 def _real_cache_root(monkeypatch: pytest.MonkeyPatch) -> None:
     """Undo the autouse redirect for tests of default_cache_root itself."""
     monkeypatch.undo()
+
+def log_field(record: logging.LogRecord, name: str) -> object:
+    """Read one structured field that log_event attached through ``extra``.
+
+    LogRecord declares no such attributes, so reading them directly is
+    invisible to the type checker even though they exist at runtime.
+    """
+    return getattr(record, name)

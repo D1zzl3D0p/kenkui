@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import stat
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from kenkui._audio.cover import materialize_source_cover
+from kenkui._audio.cover import (
+    materialize_file_cover,
+    materialize_source_cover,
+    read_cover,
+)
 from kenkui._audio.ffmpeg import FFmpegTools
 from kenkui._audio.m4b import (
     AssemblyResult,
@@ -19,6 +24,8 @@ from kenkui._audio.native import run_checked
 from kenkui._audio.probe import validate_artifact
 from kenkui._domain.planning import CoverIntent
 from kenkui.errors import EncodingError, ErrorCode
+
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,15 +57,27 @@ class FFmpegM4BAssembler:
             expect_cover = (
                 request.plan.output.cover is CoverIntent.SOURCE
                 and request.plan.output.source_cover_available
-            )
+            ) or request.plan.output.cover is CoverIntent.FILE
             tools = self._tools.preflight(expect_cover=expect_cover)
             _require_absent_candidate(candidate)
             _write_pcm(pcm, request)
             _write_metadata(metadata, request)
             if expect_cover:
-                if request.source_epub is None:
+                if request.plan.output.cover is CoverIntent.FILE:
+                    if request.cover_file is None:
+                        raise EncodingError(ErrorCode.COVER_INVALID)  # noqa: TRY301
+                    payload, digest = read_cover(request.cover_file)
+                    # The plan named a digest, not a path. A file swapped
+                    # between planning and here would otherwise be embedded
+                    # while the fingerprint still claims the original.
+                    expected = request.plan.output.cover_content_hash
+                    if expected is not None and digest != expected:
+                        raise EncodingError(ErrorCode.COVER_INVALID)  # noqa: TRY301
+                    materialize_file_cover(payload, cover)
+                elif request.source_epub is None:
                     raise EncodingError(ErrorCode.COVER_FAILED)  # noqa: TRY301
-                materialize_source_cover(request.source_epub, cover)
+                else:
+                    materialize_source_cover(request.source_epub, cover)
             argv = _encode_argv(
                 tools.ffmpeg,
                 pcm,
@@ -126,13 +145,33 @@ def _validate_request(request: AssemblyRequest) -> None:
             or item.channels != audio[0].channels
             or item.segment_id != segment.id
             or item.chapter_id != segment.chapter_id
-            or len(item.pcm_s16le) != item.frame_count * item.channels * 2
             or item.frame_count <= 0
             or item.duration_ms <= 0
             for item, segment in zip(audio, request.plan.segments, strict=True)
         )
     ):
         raise EncodingError(ErrorCode.ASSEMBLY_FAILED)
+    _validate_pcm_parts(request)
+
+
+def _validate_pcm_parts(request: AssemblyRequest) -> None:
+    """Require one readable part per chapter, sized exactly as its metadata claims."""
+    expected: dict[str, int] = {}
+    order: list[str] = []
+    for item in request.audio:
+        if item.chapter_id not in expected:
+            expected[item.chapter_id] = 0
+            order.append(item.chapter_id)
+        expected[item.chapter_id] += item.byte_count
+    if len(request.pcm_parts) != len(order):
+        raise EncodingError(ErrorCode.ASSEMBLY_FAILED)
+    for chapter_id, part in zip(order, request.pcm_parts, strict=True):
+        try:
+            info = part.lstat()
+        except OSError:
+            raise EncodingError(ErrorCode.ASSEMBLY_FAILED) from None
+        if not stat.S_ISREG(info.st_mode) or info.st_size != expected[chapter_id]:
+            raise EncodingError(ErrorCode.ASSEMBLY_FAILED)
 
 
 def _require_absent_candidate(candidate: Path) -> None:
@@ -141,9 +180,11 @@ def _require_absent_candidate(candidate: Path) -> None:
 
 
 def _write_pcm(path: Path, request: AssemblyRequest) -> None:
+    """Concatenate spilled chapter parts in one linear pass, never buffering all."""
     with path.open("xb") as stream:
-        for item in request.audio:
-            stream.write(item.pcm_s16le)
+        for part in request.pcm_parts:
+            with part.open("rb") as source:
+                shutil.copyfileobj(source, stream, _COPY_CHUNK_BYTES)
         stream.flush()
         os.fsync(stream.fileno())
 

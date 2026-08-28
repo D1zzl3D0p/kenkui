@@ -20,6 +20,7 @@ from kenkui._audio.m4b import AssemblyRequest, cumulative_frame_boundaries_ms
 from kenkui._audio.native import NativeCommandRunner, SubprocessRunner, run_checked
 from kenkui._audio.production import FFmpegM4BAssembler
 from kenkui._domain.planning import (
+    CastPlan,
     CoverIntent,
     ExecutionPlan,
     OutputChapter,
@@ -29,7 +30,7 @@ from kenkui._domain.planning import (
     VoicePlan,
 )
 from kenkui._execution.process_pool import EngineSpecification
-from kenkui._tts.protocols import SynthesizedAudio
+from kenkui._tts.protocols import SynthesizedAudio, segment_audio
 from test_epub import make_epub, xhtml
 from test_execution import _bind, _pipeline
 
@@ -110,13 +111,14 @@ def _plan(*, cover: CoverIntent = CoverIntent.NONE) -> ExecutionPlan:
         OutputChapter("chapter-1", 0, "One = #; \\ title", 3),
         OutputChapter("chapter-2", 1, "Two\ncontinued", 3),
     )
+    voice = VoicePlan(
+        "voice", "Voice", "b" * 64, "en", "fixture", "CC0", True, ("fake-v1",)
+    )
     return ExecutionPlan(
         SchemaVersions("parser", "normalization", "planning", "render"),
         "a" * 64,
         "fake-v1",
-        VoicePlan(
-            "voice", "Voice", "b" * 64, "en", "fixture", "CC0", True, ("fake-v1",)
-        ),
+        CastPlan.single(voice),
         (
             SpeechSegment("segment-1", "chapter-1", 0, "one", 3, "c" * 64),
             SpeechSegment("segment-2", "chapter-2", 1, "two", 3, "d" * 64),
@@ -145,6 +147,30 @@ def _audio() -> tuple[SynthesizedAudio, ...]:
             1_000,
         )
         for number in (1, 2)
+    )
+
+
+def _request(
+    plan: ExecutionPlan,
+    audio: tuple[SynthesizedAudio, ...],
+    output: Path,
+    source: Path | None = None,
+) -> AssemblyRequest:
+    """Spill in-memory audio to per-chapter parts the way rendering now does."""
+    directory = output.parent / f"parts-{output.stem}"
+    directory.mkdir(exist_ok=True)
+    parts: list[Path] = []
+    payloads: list[bytes] = []
+    for index, item in enumerate(audio):
+        payloads.append(item.pcm_s16le)
+        last = index + 1 == len(audio) or audio[index + 1].chapter_id != item.chapter_id
+        if last:
+            part = directory / f"chapter-{len(parts):05d}.pcm"
+            part.write_bytes(b"".join(payloads))
+            parts.append(part)
+            payloads.clear()
+    return AssemblyRequest(
+        plan, tuple(segment_audio(item) for item in audio), tuple(parts), output, source
     )
 
 
@@ -300,7 +326,7 @@ def test_assembly_builds_exact_safe_argv_metadata_chapters_and_no_cover(
     assembler = _assembler(runner)
     output = tmp_path / "output with ünicode.m4b"
 
-    result = assembler.assemble(AssemblyRequest(_plan(), _audio(), output))
+    result = assembler.assemble(_request(_plan(), _audio(), output))
 
     encode = next(call for call, _ in runner.calls if call[-1] == str(output))
     assert encode[:8] == (
@@ -350,7 +376,7 @@ def test_requested_cover_is_materialized_from_epub_to_fixed_private_file(
     output = tmp_path / "covered.m4b"
 
     _assembler(runner).assemble(
-        AssemblyRequest(_plan(cover=CoverIntent.SOURCE), _audio(), output, source)
+        _request(_plan(cover=CoverIntent.SOURCE), _audio(), output, source)
     )
 
     encode = next(call for call, _ in runner.calls if call[-1] == str(output))
@@ -383,7 +409,7 @@ def test_nonzero_and_timeout_failures_never_leave_candidate(
             else MockRunner(probe_payload=_probe(), timeout_on=failure)
         )
         with pytest.raises(kk.EncodingError) as caught:
-            _assembler(runner).assemble(AssemblyRequest(_plan(), _audio(), output))
+            _assembler(runner).assemble(_request(_plan(), _audio(), output))
         assert caught.value.code == code
         assert "secret" not in str(caught.value)
         assert caught.value.__cause__ is None
@@ -416,7 +442,7 @@ def test_corrupt_probe_payload_is_rejected_and_not_published(
     output = tmp_path / "corrupt.m4b"
     with pytest.raises(kk.EncodingError) as caught:
         _assembler(MockRunner(probe_payload=payload)).assemble(
-            AssemblyRequest(_plan(), _audio(), output)
+            _request(_plan(), _audio(), output)
         )
     assert caught.value.code == kk.ErrorCode.INVALID_ARTIFACT
     assert not output.exists()
@@ -432,7 +458,7 @@ def test_cover_probe_semantics_are_authoritative(tmp_path: Path) -> None:
     output = tmp_path / "missing-cover.m4b"
     with pytest.raises(kk.EncodingError) as caught:
         _assembler(MockRunner(probe_payload=_probe(cover=False))).assemble(
-            AssemblyRequest(_plan(cover=CoverIntent.SOURCE), _audio(), output, source)
+            _request(_plan(cover=CoverIntent.SOURCE), _audio(), output, source)
         )
     assert caught.value.code == kk.ErrorCode.INVALID_ARTIFACT
     assert not output.exists()
@@ -452,7 +478,7 @@ def test_corrupt_attached_cover_fails_full_decode_of_every_mapped_stream(
 
     with pytest.raises(kk.EncodingError) as caught:
         _assembler(runner).assemble(
-            AssemblyRequest(_plan(cover=CoverIntent.SOURCE), _audio(), output, source)
+            _request(_plan(cover=CoverIntent.SOURCE), _audio(), output, source)
         )
 
     assert caught.value.code == kk.ErrorCode.DECODE_FAILED
@@ -495,7 +521,7 @@ def test_hundred_fractional_frame_chapters_telescope_and_probe_within_tolerance(
         )
         for i in range(count)
     )
-    boundaries = cumulative_frame_boundaries_ms(audio)
+    boundaries = cumulative_frame_boundaries_ms(tuple(map(segment_audio, audio)))
     assert boundaries[-1] == count * frames * 1_000 // rate
     assert (
         sum(
@@ -531,7 +557,7 @@ def test_hundred_fractional_frame_chapters_telescope_and_probe_within_tolerance(
     }
     runner = MockRunner(probe_payload=payload)
     output = tmp_path / "fractional.m4b"
-    result = _assembler(runner).assemble(AssemblyRequest(plan, audio, output))
+    result = _assembler(runner).assemble(_request(plan, audio, output))
     assert result.duration_ms == boundaries[-1]
     metadata_bounds = [
         int(line.split("=", maxsplit=1)[1])
@@ -547,7 +573,7 @@ def test_mixed_sample_rates_are_rejected_before_any_subprocess(tmp_path: Path) -
     mixed = (_audio()[0], replace(_audio()[1], sample_rate_hz=22_050))
     with pytest.raises(kk.EncodingError) as caught:
         _assembler(runner).assemble(
-            AssemblyRequest(_plan(), mixed, tmp_path / "mixed.m4b")
+            _request(_plan(), mixed, tmp_path / "mixed.m4b")
         )
     assert caught.value.code == kk.ErrorCode.ASSEMBLY_FAILED
     assert not runner.calls
@@ -683,3 +709,33 @@ def test_subprocess_timeout_kills_and_uses_bounded_reap(
     assert all(wait > 0 for wait in process.waits)
     assert caught.value.code == kk.ErrorCode.ENCODING_FAILED
     assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize("delta", [-2, 2])
+def test_pcm_part_disagreeing_with_metadata_is_rejected_before_any_subprocess(
+    tmp_path: Path, delta: int
+) -> None:
+    """A spilled part is untrusted: its size must match the metadata exactly."""
+    runner = MockRunner(probe_payload=_probe())
+    output = tmp_path / "tampered.m4b"
+    request = _request(_plan(), _audio(), output)
+    part = request.pcm_parts[0]
+    payload = part.read_bytes()
+    part.write_bytes(payload[:delta] if delta < 0 else payload + b"\0" * delta)
+
+    with pytest.raises(kk.EncodingError) as caught:
+        _assembler(runner).assemble(request)
+    assert caught.value.code == kk.ErrorCode.ASSEMBLY_FAILED
+    assert not runner.calls
+
+
+def test_missing_pcm_part_is_rejected_before_any_subprocess(tmp_path: Path) -> None:
+    """A part that vanished between render and assembly fails closed."""
+    runner = MockRunner(probe_payload=_probe())
+    request = _request(_plan(), _audio(), tmp_path / "missing.m4b")
+    request.pcm_parts[0].unlink()
+
+    with pytest.raises(kk.EncodingError) as caught:
+        _assembler(runner).assemble(request)
+    assert caught.value.code == kk.ErrorCode.ASSEMBLY_FAILED
+    assert not runner.calls

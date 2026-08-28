@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from kenkui._domain.planning import ExecutionPlan
-    from kenkui._tts.protocols import SynthesizedAudio
+    from kenkui._tts.protocols import SegmentAudio
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,9 +27,11 @@ class AssemblyRequest:
     """Complete ordered input to a private assembler/publisher boundary."""
 
     plan: ExecutionPlan
-    audio: tuple[SynthesizedAudio, ...]
+    audio: tuple[SegmentAudio, ...]
+    pcm_parts: tuple[Path, ...]
     workspace_output: Path
     source_epub: Path | None = None
+    cover_file: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,16 +83,17 @@ class FakeArtifactAssembler:
             request.plan.semantic_fingerprint.encode("ascii"),
             f"{sample_rate}:{channels}".encode(),
         ]
+        digests = _segment_digests(audio, request.pcm_parts)
         lines.extend(
             b":".join(
                 (
                     item.segment_id.encode("utf-8"),
                     item.chapter_id.encode("utf-8"),
                     str(item.duration_ms).encode(),
-                    hashlib.sha256(item.pcm_s16le).hexdigest().encode("ascii"),
+                    digest.encode("ascii"),
                 )
             )
-            for item in audio
+            for item, digest in zip(audio, digests, strict=True)
         )
         artifact_bytes = b"\n".join(lines) + b"\n"
         with request.workspace_output.open("xb") as stream:
@@ -106,8 +109,36 @@ class FakeArtifactAssembler:
         )
 
 
+def _segment_digests(
+    audio: tuple[SegmentAudio, ...], pcm_parts: tuple[Path, ...]
+) -> tuple[str, ...]:
+    """Hash each segment by reading its exact span from its chapter's part."""
+    order: list[str] = []
+    for item in audio:
+        if item.chapter_id not in order:
+            order.append(item.chapter_id)
+    parts = dict(zip(order, pcm_parts, strict=True))
+    digests: list[str] = []
+    handles: dict[str, object] = {}
+    try:
+        for item in audio:
+            stream = handles.get(item.chapter_id)
+            if stream is None:
+                stream = parts[item.chapter_id].open("rb")
+                handles[item.chapter_id] = stream
+            payload = stream.read(item.byte_count)  # type: ignore[attr-defined]
+            if len(payload) != item.byte_count:
+                message = "chapter part is shorter than its segment metadata"
+                raise ValueError(message)
+            digests.append(hashlib.sha256(payload).hexdigest())
+    finally:
+        for stream in handles.values():
+            stream.close()  # type: ignore[attr-defined]
+    return tuple(digests)
+
+
 def cumulative_frame_boundaries_ms(
-    audio: tuple[SynthesizedAudio, ...],
+    audio: tuple[SegmentAudio, ...],
 ) -> tuple[int, ...]:
     """Convert cumulative exact frames to integral milliseconds without drift."""
     if not audio or any(
@@ -125,7 +156,7 @@ def cumulative_frame_boundaries_ms(
 
 
 def chapter_frame_boundaries_ms(
-    plan: ExecutionPlan, audio: tuple[SynthesizedAudio, ...]
+    plan: ExecutionPlan, audio: tuple[SegmentAudio, ...]
 ) -> tuple[int, ...]:
     """Aggregate contiguous segment frames into exact semantic chapter boundaries."""
     if len(audio) != len(plan.segments) or not audio:

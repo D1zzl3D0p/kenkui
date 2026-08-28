@@ -28,6 +28,13 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml==0.7.1",
+    # Called directly with a model identifier from pipeline intent. No proxy
+    # and no provider framework: see the character-casting design.
+    "litellm>=1.0",
+    # The pack declares a pocket-tts range and registry.py resolves against it.
+    # packaging arrives transitively via huggingface-hub; Kenkui imports it
+    # directly.
+    "packaging>=24.0",
     "pocket-tts==2.1.0",
     # Provisioning rewrites pocket-tts config YAML to local paths. yaml arrives
     # transitively via pocket-tts, but Kenkui imports it directly.
@@ -63,6 +70,7 @@ docs = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kenkui"]
+artifacts = ["src/kenkui/_domain/spoken/data/*.json"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -81,6 +89,8 @@ include = [
 target-version = "py311"
 line-length = 88
 src = ["src", "tests"]
+# Local evaluation scratch, git-ignored and not part of the package.
+extend-exclude = ["evals"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -93,6 +103,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
+# Build scripts, not library code: heavy imports stay lazy so --help is
+# instant, and pocket-tts ships no types to annotate its model against.
+"tools/**/*.py" = ["ANN401", "BLE001", "PLC0415", "T201"]
 "tests/test_pocket_tts*.py" = [
   "ANN401", "D107", "E501", "FBT003", "PT012", "PT018", "RUF005",
   "RUF100", "S301", "TRY003",

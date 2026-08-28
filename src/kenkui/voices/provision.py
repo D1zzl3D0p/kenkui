@@ -26,8 +26,13 @@ from kenkui.voices.manifest import (
     VoiceRecord,
     default_manifest_path,
 )
-from kenkui.voices.registry import CATALOG, catalog_voice, embedding_url
-from kenkui.voices.types import Engine, Voice, VoiceVariety
+from kenkui.voices.registry import CATALOG, asset_url, catalog_voice
+from kenkui.voices.types import (
+    Engine,
+    PerceivedGender,
+    Voice,
+    VoiceVariety,
+)
 
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _IDENTIFIER = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
@@ -92,6 +97,7 @@ def add_voice(  # noqa: PLR0913
     license_id: str,
     commercial_use_allowed: bool,
     voice_rights: str,
+    perceived_gender: PerceivedGender = None,
     manifest: Path | None = None,
 ) -> Voice:
     """Register a local WAV or safetensors voice with explicit rights metadata.
@@ -121,6 +127,7 @@ def add_voice(  # noqa: PLR0913
         license_id=license_id,
         commercial_use_allowed=commercial_use_allowed,
         voice_rights=voice_rights,
+        perceived_gender=perceived_gender,
         source_path=str(source),
         source_sha256=_sha256(source),
     )
@@ -144,6 +151,7 @@ def add_voice(  # noqa: PLR0913
         language=language,
         variety=variety,
         state="registered",
+        perceived_gender=perceived_gender,
     )
 
 
@@ -315,6 +323,7 @@ def _loaded_view(record: VoiceRecord, engine: EngineRecord) -> Voice:
         state="loaded",
         asset_bytes=asset.stat().st_size if asset.is_file() else None,
         engine=_engine_view(engine),
+        perceived_gender=_gender_for(record),
     )
 
 
@@ -332,6 +341,7 @@ def _registered_from_catalog(voice_id: str) -> VoiceRecord:
         license_id=entry.license_id,
         commercial_use_allowed=entry.commercial_use_allowed,
         voice_rights=entry.voice_rights,
+        perceived_gender=entry.perceived_gender,
     )
 
 
@@ -397,7 +407,9 @@ def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> Voice
     destination = root / "voices" / record.language / f"{record.id}.safetensors"
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if record.variety == "built-in":
-        fetched = _fetch(embedding_url(record.language, record.id))
+        # Pack voices carry their own pinned URL; kyutai catalog names derive
+        # theirs. Both are catalog voices fetched by URL, so one branch serves.
+        fetched = _fetch(asset_url(record.id, record.language))
         shutil.copyfile(fetched, destination)
     else:
         source = Path(record.source_path or "")
@@ -447,6 +459,8 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
                 return _loaded_view(record, engines[record.engine_id])
         if record is None:
             record = _registered_from_catalog(voice_id)
+        else:
+            record = _with_catalog_gender(record)
         cloning = record.variety == "wav"
         wanted = engine_id_for(record.language, cloning=cloning)
         engine = engines.get(wanted)
@@ -457,6 +471,39 @@ def load_voice(voice_id: str, *, manifest: Path | None = None) -> Voice:
         voices[voice_id] = loaded
         store.write(engines, voices)
         return _loaded_view(loaded, engine)
+
+
+def _with_catalog_gender(record: VoiceRecord) -> VoiceRecord:
+    """Adopt the catalog's trait for a record that predates the field.
+
+    `_registered_from_catalog` stamps the trait on a first registration, so
+    a fresh install never lacked it. An operator whose manifest was written
+    before the field existed takes the `voices.get` path instead, and would
+    otherwise keep writing the record back ungendered on every load. The
+    manifest stays the authority wherever it has an answer of its own.
+    """
+    if record.perceived_gender is not None:
+        return record
+    entry = CATALOG.get(record.id)
+    if entry is None or entry.perceived_gender is None:
+        return record
+    return dataclasses.replace(record, perceived_gender=entry.perceived_gender)
+
+
+def _gender_for(record: VoiceRecord) -> PerceivedGender:
+    """Prefer the manifest's own trait, else the catalog's for this id.
+
+    A manifest written before the field existed carries no trait, but the
+    catalog has always known it for the voices it ships. Reading the record
+    alone discards that, which silently degrades every gendered cast to a
+    random one: `candidates` finds no matching voice and falls back to the
+    whole pool. The catalog is consulted as a fallback rather than ignored,
+    so an old manifest heals on the next call instead of needing a migration.
+    """
+    if record.perceived_gender is not None:
+        return record.perceived_gender
+    entry = CATALOG.get(record.id)
+    return entry.perceived_gender if entry is not None else None
 
 
 def _registered_view(record: VoiceRecord) -> Voice:
@@ -470,6 +517,7 @@ def _registered_view(record: VoiceRecord) -> Voice:
         language=record.language,
         variety=record.variety,
         state="registered",
+        perceived_gender=_gender_for(record),
     )
 
 
@@ -486,6 +534,7 @@ def _unloaded(record: VoiceRecord) -> VoiceRecord:
         license_id=record.license_id,
         commercial_use_allowed=record.commercial_use_allowed,
         voice_rights=record.voice_rights,
+        perceived_gender=record.perceived_gender,
         source_path=record.source_path,
         source_sha256=record.source_sha256,
     )

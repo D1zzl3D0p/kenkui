@@ -22,9 +22,11 @@ from kenkui._execution.process_pool import (
 )
 from kenkui._tts.pocket import (
     MAX_OUTPUT_SAMPLES,
+    SAMPLE_TOLERANCE,
     PocketEngineConfig,
     PocketManifestFile,
     PocketTTSEngine,
+    VoiceAsset,
     preflight_pocket,
     tensor_to_pcm,
 )
@@ -62,33 +64,46 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
         PocketManifestFile("model.safetensors", len(weights), _digest(weights)),
         PocketManifestFile("model.yaml", len(config_bytes), _digest(config_bytes)),
     )
+    asset = VoiceAsset(
+        path=str(voice_path.resolve()),
+        sha256=_digest(voice_bytes),
+        variety="wav",
+        provenance="locally recorded with documented consent",
+        license_id="research-only",
+        rights="authorized for this local use",
+        commercial_use_allowed=False,
+    )
     config = PocketEngineConfig(
         str(root.resolve()),
         str(config_path.resolve()),
         "approved-revision",
         "2.1.0",
         files,
-        str(voice_path.resolve()),
-        _digest(voice_bytes),
-        "wav",
+        (asset,),
         True,
-        "locally recorded with documented consent",
-        "research-only",
-        "authorized for this local use",
-        False,
         24_000,
     )
     voice = VoicePlan(
         "voice",
         "Voice",
-        config.voice_asset_sha256,
+        asset.sha256,
         "en",
-        config.voice_provenance,
-        config.voice_license_id,
+        asset.provenance,
+        asset.license_id,
         False,
         (config.model_revision,),
     )
     return config, voice
+
+
+def _asset_path(config: PocketEngineConfig) -> Path:
+    """Return the single voice asset path, for tests that mutate it on disk."""
+    return Path(config.voices[0].path)
+
+
+def _with_asset(config: PocketEngineConfig, **fields: object) -> PocketEngineConfig:
+    """Return the config with one voice-asset field replaced."""
+    return replace(config, voices=(replace(config.voices[0], **fields),))  # type: ignore[arg-type]
 
 
 def _installed(monkeypatch: pytest.MonkeyPatch, version: str = "2.1.0") -> None:
@@ -130,7 +145,7 @@ def test_manifest_failures_are_stable(
     elif failure == "symlink":
         target = root / "model.safetensors"
         target.unlink()
-        target.symlink_to(Path(config.voice_asset_path))
+        target.symlink_to(_asset_path(config))
     elif failure == "hardlink":
         os.link(root / "model.safetensors", root / "second-link")
         config = replace(
@@ -289,8 +304,8 @@ def test_voice_hash_wav_and_plan_identity_are_verified(
 ) -> None:
     config, voice = _fixture(tmp_path)
     _installed(monkeypatch)
-    Path(config.voice_asset_path).write_bytes(b"not a wav!!")
-    bad = replace(config, voice_asset_sha256=_digest(b"not a wav!!"))
+    _asset_path(config).write_bytes(b"not a wav!!")
+    bad = _with_asset(config, sha256=_digest(b"not a wav!!"))
     with pytest.raises(VoiceError) as caught:
         preflight_pocket(bad)
     assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
@@ -350,7 +365,8 @@ def test_pcm_conversion_golden_is_deterministic() -> None:
     [
         FakeTensor([float("nan")] * 24),
         FakeTensor([float("inf")] * 24),
-        FakeTensor([1.01] * 24),
+        FakeTensor([2.5] * 24),
+        FakeTensor([-2.5] * 24),
         FakeTensor([0.0] * 24, dtype="torch.float64"),
         FakeTensor([0.0] * 24, ndim=2, shape=(1, 24)),
         object(),
@@ -361,6 +377,29 @@ def test_invalid_output_is_sanitized(output: object) -> None:
         tensor_to_pcm(output, FakeTensor, _task(), 24_000)
     assert caught.value.code == ErrorCode.INVALID_AUDIO
     assert caught.value.__cause__ is None
+
+
+def test_marginal_overshoot_clamps_instead_of_failing() -> None:
+    """Vocoder overshoot just past full scale hard-limits rather than failing."""
+    audio = tensor_to_pcm(
+        FakeTensor([1.0168930292129517, -1.0168930292129517] * 12),
+        FakeTensor,
+        _task(),
+        24_000,
+    )
+    assert audio.pcm_s16le == struct.pack("<hh", 32767, -32767) * 12
+
+
+def test_overshoot_at_tolerance_edge_clamps_but_beyond_it_fails() -> None:
+    """The tolerance band is the boundary between overshoot and corruption."""
+    audio = tensor_to_pcm(
+        FakeTensor([SAMPLE_TOLERANCE] * 24), FakeTensor, _task(), 24_000
+    )
+    assert audio.pcm_s16le == struct.pack("<h", 32767) * 24
+    beyond = FakeTensor([SAMPLE_TOLERANCE * 1.5] * 24)
+    with pytest.raises(RenderError) as caught:
+        tensor_to_pcm(beyond, FakeTensor, _task(), 24_000)
+    assert caught.value.code == ErrorCode.INVALID_AUDIO
 
 
 def test_output_bounds_checked_before_materialization() -> None:
@@ -425,7 +464,8 @@ def test_adapter_exact_local_api_and_sanitized_stages(
     assert FakeModel.loaded_config is not None
     assert FakeModel.loaded_config.name == Path(config.config_path).name
     assert FakeModel.prompt is not None
-    assert FakeModel.prompt.name == "prompt.safetensors"
+    # Snapshot assets are named by digest so two cast voices cannot collide.
+    assert FakeModel.prompt.name == f"{config.voices[0].sha256}.safetensors"
     assert FakeModel.text == "exact task text"
     assert len(audio.pcm_s16le) == 48
     for stage, code in (
@@ -453,18 +493,18 @@ def test_private_production_factory_requires_complete_approved_voice(
         "voice",
         "Voice",
         True,
-        config.voice_provenance,
-        config.voice_license_id,
+        config.voices[0].provenance,
+        config.voices[0].license_id,
         False,
         "en",
-        config.voice_asset_sha256,
+        config.voices[0].sha256,
         (config.model_revision,),
     )
     bindings = pocket_production_bindings(config, voice)
     assert bindings.engine_specification == EngineSpecification.pocket(config)
     assert bindings.voice is voice
     with pytest.raises(VoiceError) as caught:
-        pocket_production_bindings(replace(config, commercial_use_allowed=True), voice)
+        pocket_production_bindings(_with_asset(config, commercial_use_allowed=True), voice)
     assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
     with pytest.raises(VoiceError) as disabled:
         pocket_production_bindings(config, replace(voice, enabled=False))
@@ -505,12 +545,12 @@ def test_every_malformed_model_field_is_stably_model_invalid(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("voice_asset_path", 1),
-        ("voice_asset_sha256", None),
-        ("voice_asset_sha256", "A" * 64),
-        ("voice_provenance", []),
-        ("voice_license_id", "  "),
-        ("voice_rights", False),
+        ("path", 1),
+        ("sha256", None),
+        ("sha256", "A" * 64),
+        ("provenance", []),
+        ("license_id", "  "),
+        ("rights", False),
         ("commercial_use_allowed", 0),
     ],
 )
@@ -519,8 +559,9 @@ def test_every_malformed_voice_field_is_stably_voice_invalid(
 ) -> None:
     config, _ = _fixture(tmp_path)
     _installed(monkeypatch)
+    broken = replace(config.voices[0], **{field: value})  # type: ignore[arg-type]
     with pytest.raises(VoiceError) as caught:
-        preflight_pocket(replace(config, **{field: value}))  # type: ignore[arg-type]
+        preflight_pocket(replace(config, voices=(broken,)))
     assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
 
 
@@ -559,8 +600,8 @@ def test_embedding_must_be_structurally_complete(
     )
     for index, malformed in enumerate(malformed_payloads):
         config, _ = _fixture(tmp_path / str(index))
-        Path(config.voice_asset_path).write_bytes(malformed)
-        bad = replace(config, voice_asset_sha256=_digest(malformed))
+        _asset_path(config).write_bytes(malformed)
+        bad = _with_asset(config, sha256=_digest(malformed))
         with pytest.raises(VoiceError) as caught:
             preflight_pocket(bad)
         assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
@@ -732,20 +773,18 @@ def test_manifest_selected_prompt_and_directory_rejections(
         "prompt.safetensors", prompt.stat().st_size, _digest(prompt.read_bytes())
     )
     bad = replace(
-        config,
+        _with_asset(config, path=str(prompt.resolve()), sha256=item.sha256),
         files=config.files + (item,),
-        voice_asset_path=str(prompt.resolve()),
-        voice_asset_sha256=item.sha256,
     )
     with pytest.raises(VoiceError):
         preflight_pocket(bad)
 
     config, _ = _fixture(tmp_path / "extension")
-    prompt = Path(config.voice_asset_path)
+    prompt = _asset_path(config)
     renamed = prompt.with_suffix(".bin")
     prompt.rename(renamed)
     with pytest.raises(VoiceError):
-        preflight_pocket(replace(config, voice_asset_path=str(renamed.resolve())))
+        preflight_pocket(_with_asset(config, path=str(renamed.resolve())))
 
     config, _ = _fixture(tmp_path / "directory")
     nested = Path(config.model_root) / "nested"
@@ -824,7 +863,7 @@ def test_snapshot_binds_loaded_bytes_despite_original_replacement(
     config, _ = _fixture(tmp_path)
     _installed(monkeypatch)
     original_yaml = Path(config.config_path).read_bytes()
-    original_wav = Path(config.voice_asset_path).read_bytes()
+    original_wav = _asset_path(config).read_bytes()
     observed: dict[str, bytes | Path] = {}
 
     class SnapshotModel:
@@ -859,8 +898,8 @@ def test_snapshot_binds_loaded_bytes_despite_original_replacement(
 
     monkeypatch.setattr(module, "_worker_marker", module._WORKER_TOKEN)
     engine = PocketTTSEngine(config)
-    Path(config.voice_asset_path).unlink()
-    Path(config.voice_asset_path).symlink_to(config_path_name)
+    _asset_path(config).unlink()
+    _asset_path(config).symlink_to(config_path_name)
     engine.synthesize(_task())
     assert observed["yaml"] == original_yaml
     assert observed["wav"] == original_wav

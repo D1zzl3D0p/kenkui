@@ -36,7 +36,9 @@ active environment.
   untrusted archive to bypass this check.
 - `archive_limit`: a fixed ZIP/XML/spine/text safety budget was exceeded.
 - `empty_chapter`, `chapter_not_found`, `reversed_chapter_range`: inspect chapter
-  IDs and visible text before selecting.
+  IDs and visible text before selecting. `empty_chapter` means the whole book
+  yielded no visible text; individual text-free spine items, such as image-only
+  covers and title pages, are skipped and never appear in inspection.
 
 See [security boundaries](security.md) for exact limits.
 

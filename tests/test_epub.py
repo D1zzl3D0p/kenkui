@@ -11,6 +11,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 import kenkui as kk
+from conftest import log_field
 from kenkui._domain.selection import select_chapters
 from kenkui._domain.text import SPACE_CODEPOINTS, normalize_text
 from kenkui._epub import parser as epub_parser
@@ -629,7 +630,50 @@ def test_inspection_logs_safe_parse_context(
         for entry in caplog.records
         if getattr(entry, "event", None) == "inspection_completed"
     )
-    assert record.boundary == "parse"
-    assert record.chapter_count == 1
+    assert log_field(record, "boundary") == "parse"
+    assert log_field(record, "chapter_count") == 1
     assert str(source) not in caplog.text
     assert "Secret source text." not in caplog.text
+
+
+def test_textless_spine_items_are_skipped_not_fatal(tmp_path: Path) -> None:
+    """Image-only cover/title pages are skipped instead of failing the book."""
+    source = make_epub(
+        tmp_path / "image-front-matter.epub",
+        chapters={
+            "cover": xhtml('<div><img src="../images/cover.jpg" alt=""/></div>'),
+            "title": xhtml('<div><img src="../images/title.jpg" alt=""/></div>'),
+            "one": xhtml("<p>Real text.</p>"),
+            "two": xhtml("<p>More text.</p>"),
+        },
+        spine=["cover", "title", "one", "two"],
+    )
+    chapters = kk.epub(source).inspect().chapters
+    assert [chapter.text for chapter in chapters] == ["Real text.", "More text."]
+    assert [chapter.index for chapter in chapters] == [0, 1]
+
+
+def test_chapter_records_every_visible_heading(tmp_path: Path) -> None:
+    """Headings are captured as normalized strings, title first."""
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={
+            "one": xhtml(
+                "<h1>Chapter One</h1><p>He woke.</p><h2>A Section</h2><p>She slept.</p>"
+            )
+        },
+        spine=["one"],
+    )
+    chapter = epub_parser.inspect_epub(source).chapters[0]
+    assert chapter.headings == ("Chapter One", "A Section")
+    assert chapter.title == "Chapter One"
+
+
+def test_chapter_without_headings_records_none(tmp_path: Path) -> None:
+    """A chapter with no h1-h6 carries an empty heading tuple."""
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml("<p>Just prose.</p>")},
+        spine=["one"],
+    )
+    assert epub_parser.inspect_epub(source).chapters[0].headings == ()

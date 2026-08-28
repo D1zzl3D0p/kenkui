@@ -26,11 +26,22 @@ class ErrorCode(StrEnum):
     VOICE_UNKNOWN = "voice_unknown"
     ENGINE_NOT_CLONING_CAPABLE = "engine_not_cloning_capable"
     VOICE_VARIETY_INVALID = "voice_variety_invalid"
+    CASTING_METHOD_UNKNOWN = "casting_method_unknown"
+    CAST_POOL_EMPTY = "cast_pool_empty"
+    CAST_LANGUAGE_MIXED = "cast_language_mixed"
+    CHARACTER_UNKNOWN = "character_unknown"
+    CAST_UNATTRIBUTED = "cast_unattributed"
+    INVALID_SERIES = "invalid_series"
+    MODEL_CALL_FAILED = "model_call_failed"
+    MODEL_RESPONSE_INVALID = "model_response_invalid"
+    ATTRIBUTION_UNAVAILABLE = "attribution_unavailable"
     TTS_REQUIRED = "tts_required"
     EMPTY_SPEECH = "empty_speech"
     INVALID_SOURCE_HASH = "invalid_source_hash"
     INVALID_MODEL_REVISION = "invalid_model_revision"
     INVALID_METADATA = "invalid_metadata"
+    INVALID_PRONUNCIATION = "invalid_pronunciation"
+    INVALID_PAUSE = "invalid_pause"
     INVALID_WORKERS = "invalid_workers"
     INVALID_OUTPUT = "invalid_output"
     OUTPUT_EXISTS = "output_exists"
@@ -58,12 +69,15 @@ class ErrorCode(StrEnum):
     ASSEMBLY_FAILED = "assembly_failed"
     ENCODING_FAILED = "encoding_failed"
     COVER_FAILED = "cover_failed"
+    COVER_INVALID = "cover_invalid"
     PROBE_FAILED = "probe_failed"
     DECODE_FAILED = "decode_failed"
     INVALID_ARTIFACT = "invalid_artifact"
     PUBLICATION_FAILED = "publication_failed"
     CALLBACK_FAILED = "callback_failed"
     CANCELLED = "cancelled"
+    SERIES_VOICE_MISSING = "series_voice_missing"
+    SERIES_NARRATOR_CHANGED = "series_narrator_changed"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -90,11 +104,26 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
         "The engine lacks voice-cloning weights required for this voice."
     ),
     ErrorCode.VOICE_VARIETY_INVALID: "The voice variety or state is not recognized.",
+    ErrorCode.CASTING_METHOD_UNKNOWN: "The casting method is not recognized.",
+    ErrorCode.CAST_POOL_EMPTY: "No loaded voice is available to cast characters.",
+    ErrorCode.CAST_LANGUAGE_MIXED: ("Every voice in one cast must share a language."),
+    ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
+    ErrorCode.CAST_UNATTRIBUTED: ("A character cast requires quote attribution."),
+    ErrorCode.INVALID_SERIES: "A series needs a name and a positive book number.",
+    ErrorCode.MODEL_CALL_FAILED: "The language model could not be reached.",
+    ErrorCode.MODEL_RESPONSE_INVALID: (
+        "The language model returned an unusable response."
+    ),
+    ErrorCode.ATTRIBUTION_UNAVAILABLE: (
+        "Character casting requires inferred characters."
+    ),
     ErrorCode.TTS_REQUIRED: "Explicit TTS intent is required.",
     ErrorCode.EMPTY_SPEECH: "Selected speech must be non-empty and exactly counted.",
     ErrorCode.INVALID_SOURCE_HASH: "The source-bytes hash is invalid.",
     ErrorCode.INVALID_MODEL_REVISION: "The model revision is invalid.",
     ErrorCode.INVALID_METADATA: "The metadata intent is invalid.",
+    ErrorCode.INVALID_PRONUNCIATION: "The pronunciation entry is invalid.",
+    ErrorCode.INVALID_PAUSE: "The pause duration is invalid.",
     ErrorCode.INVALID_WORKERS: "Workers must be 'auto' or a positive integer.",
     ErrorCode.INVALID_OUTPUT: "The output must be an M4B path.",
     ErrorCode.OUTPUT_EXISTS: "The output already exists.",
@@ -127,6 +156,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_AUDIO: "Synthesized audio is invalid or inconsistent.",
     ErrorCode.ASSEMBLY_FAILED: "Audiobook assembly failed.",
     ErrorCode.ENCODING_FAILED: "FFmpeg could not encode the audiobook.",
+    ErrorCode.COVER_INVALID: ("The cover image is unreadable or unsupported."),
     ErrorCode.COVER_FAILED: "The requested source cover could not be materialized.",
     ErrorCode.PROBE_FAILED: "The encoded audiobook could not be probed.",
     ErrorCode.DECODE_FAILED: "The encoded audiobook did not fully decode.",
@@ -134,6 +164,12 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.PUBLICATION_FAILED: "The audiobook artifact could not be published.",
     ErrorCode.CALLBACK_FAILED: "The execution event callback failed.",
     ErrorCode.CANCELLED: "Execution was cancelled.",
+    ErrorCode.SERIES_VOICE_MISSING: (
+        "A voice this series already cast is not in the pool."
+    ),
+    ErrorCode.SERIES_NARRATOR_CHANGED: (
+        "This series was recorded with a different narrator voice."
+    ),
 }
 
 

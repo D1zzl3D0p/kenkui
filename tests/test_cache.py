@@ -18,7 +18,12 @@ import pytest
 import kenkui as kk
 import kenkui._execution.cache as cache_module
 from kenkui._audio.m4b import FakeArtifactAssembler
-from kenkui._domain.planning import ExecutionPlan, SpeechSegment, compile_execution_plan
+from kenkui._domain.planning import (
+    CastPlan,
+    ExecutionPlan,
+    SpeechSegment,
+    compile_execution_plan,
+)
 from kenkui._execution.cache import (
     AUDIO_CONTRACT_VERSION,
     CACHE_SCHEMA_VERSION,
@@ -125,9 +130,11 @@ def test_semantic_key_sensitivity_and_shell_insensitivity(tmp_path: Path) -> Non
         store.key_for(replace(plan, model_revision="fake-v2"), segment, task, spec)
         != baseline
     )
-    changed_voice = replace(plan.voice, content_fingerprint="c" * 64)
+    changed_voice = replace(plan.cast.narrator, content_fingerprint="c" * 64)
     assert (
-        store.key_for(replace(plan, voice=changed_voice), segment, task, spec)
+        store.key_for(
+            replace(plan, cast=CastPlan.single(changed_voice)), segment, task, spec
+        )
         != baseline
     )
     assert (

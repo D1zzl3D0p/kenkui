@@ -373,3 +373,109 @@ def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
     )
     _decode_with_host_ffmpeg(cold_output)
     _decode_with_host_ffmpeg(warm_output)
+
+
+@pytest.mark.native
+def test_native_write_with_pauses_is_longer_and_still_decodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Generated silence must survive real FFmpeg encoding and decoding.
+
+    The other native cases render without pauses, so padding is zero and
+    FFmpeg never sees a padded chapter part. This is the only case that proves
+    the part-size check, the chapter markers and the encoder all agree once
+    silence is actually present.
+    """
+    chapters = {
+        "one": xhtml(f"<h1>{escape(_CHAPTER_TITLES[0])}</h1><p>Exact first.</p>"),
+        "two": xhtml(f"<h1>{escape(_CHAPTER_TITLES[1])}</h1><p>Exact second.</p>"),
+    }
+    source = make_epub(
+        tmp_path / "paused.epub", chapters=chapters, spine=("one", "two")
+    )
+    _bind(monkeypatch, EngineSpecification.fake(), FFmpegM4BAssembler())
+
+    plain = (
+        kk.epub(source).assign_voice("narrator").tts().write_m4b(tmp_path / "plain.m4b")
+    )
+    paused = (
+        kk.epub(source)
+        .pauses(chapter_ms=2000)
+        .assign_voice("narrator")
+        .tts()
+        .write_m4b(tmp_path / "paused.m4b")
+    )
+
+    assert paused.stats.duration_ms > plain.stats.duration_ms
+    assert paused.stats.rendered_chapters == _EXPECTED_CHAPTERS
+    _decode_with_host_ffmpeg(tmp_path / "paused.m4b")
+    probed = _probe_with_host_ffprobe(tmp_path / "paused.m4b")
+    assert _probe_chapter_titles(probed) == _CHAPTER_TITLES
+
+
+# A genuinely valid 1x1 PNG. A synthetic header would satisfy read_cover's
+# signature check and then be rejected by FFmpeg, so this case needs the real
+# thing to prove anything.
+_REAL_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+    "0000000c49444154789c63f8cfc0000003010100c9fe92ef0000000049454e44ae"
+    "426082"
+)
+
+
+@pytest.mark.native
+def test_native_write_embeds_a_caller_supplied_cover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller-supplied image must actually reach the encoded artifact."""
+    source = make_epub(
+        tmp_path / "cover-source.epub",
+        chapters={
+            "one": xhtml(f"<h1>{escape(_CHAPTER_TITLES[0])}</h1><p>Exact first.</p>"),
+            "two": xhtml(f"<h1>{escape(_CHAPTER_TITLES[1])}</h1><p>Exact second.</p>"),
+        },
+        spine=("one", "two"),
+        cover=False,
+    )
+    art = tmp_path / "art.png"
+    art.write_bytes(_REAL_PNG)
+    _bind(monkeypatch, EngineSpecification.fake(), FFmpegM4BAssembler())
+    output = tmp_path / "with-cover.m4b"
+
+    kk.epub(source).assign_voice("narrator").tts().metadata(
+        title=_TITLE, author=_AUTHOR, cover=art
+    ).write_m4b(output)
+
+    # The EPUB carries no cover of its own, so any video stream in the output
+    # can only have come from the caller's file.
+    _assert_probe(
+        _probe_with_host_ffprobe(output),
+        expect_cover=True,
+        chapter_titles=_CHAPTER_TITLES,
+    )
+    _decode_with_host_ffmpeg(output)
+
+
+@pytest.mark.native
+def test_native_write_rejects_an_unreadable_cover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An invalid caller cover fails the render rather than falling back."""
+    source = make_epub(
+        tmp_path / "bad-cover-source.epub",
+        chapters={"one": xhtml("<h1>One</h1><p>Exact first.</p>")},
+        spine=("one",),
+        cover=True,
+    )
+    art = tmp_path / "not-an-image.png"
+    art.write_bytes(b"definitely not a png")
+    _bind(monkeypatch, EngineSpecification.fake(), FFmpegM4BAssembler())
+    output = tmp_path / "rejected.m4b"
+
+    with pytest.raises(kk.EncodingError) as error:
+        kk.epub(source).assign_voice("narrator").tts().metadata(cover=art).write_m4b(
+            output
+        )
+
+    assert error.value.code is kk.ErrorCode.COVER_INVALID
+    assert not output.exists()

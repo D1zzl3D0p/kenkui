@@ -1,14 +1,18 @@
 """Opt-in vertical acceptance for the local single-voice M4B path."""
-# ruff: noqa: D103, PLR2004, S603
+# ruff: noqa: S603
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import json
 import os
 import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import cast
 from zipfile import ZIP_STORED, ZipFile
 
@@ -18,7 +22,6 @@ import kenkui as kk
 from kenkui._audio.production import FFmpegM4BAssembler
 from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import EngineSpecification
-
 
 pytestmark = [
     pytest.mark.native,
@@ -74,6 +77,15 @@ def _decode_m4b(output: Path) -> None:
         timeout=60,
     )
 
+def _chapter_document(title: str, sentence: str) -> str:
+    """Return one minimal XHTML chapter for the fixture EPUB."""
+    return (
+        '<html xmlns="http://www.w3.org/1999/xhtml">'
+        f"<head><title>{title}</title></head>"
+        f"<body><h1>{title}</h1><p>{sentence}</p></body></html>"
+    )
+
+
 def _fixture_epub(path: Path) -> Path:
     """Write the minimal fixed EPUB that exercises ordered chapter assembly."""
     container = """<?xml version="1.0"?>
@@ -94,8 +106,8 @@ def _fixture_epub(path: Path) -> Path:
  <spine><itemref idref="one"/><itemref idref="two"/></spine>
 </package>"""
     chapters = {
-        "one": "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>One</title></head><body><h1>One</h1><p>First fixture sentence.</p></body></html>",
-        "two": "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Two</title></head><body><h1>Two</h1><p>Second fixture sentence.</p></body></html>",
+        "one": _chapter_document("One", "First fixture sentence."),
+        "two": _chapter_document("Two", "Second fixture sentence."),
     }
     with ZipFile(path, "w") as archive:
         archive.writestr("mimetype", "application/epub+zip", compress_type=ZIP_STORED)

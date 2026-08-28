@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from kenkui._audio.ffmpeg import ResolvedFFmpeg
     from kenkui._domain.planning import ExecutionPlan
-    from kenkui._tts.protocols import SynthesizedAudio
+    from kenkui._tts.protocols import SegmentAudio
 
 _PROBE_TIMEOUT_SECONDS = 30.0
 _DECODE_TIMEOUT_SECONDS = 300.0
@@ -25,7 +25,7 @@ _TIMESTAMP_TOLERANCE_SECONDS = 0.075
 def validate_artifact(  # noqa: PLR0913 - explicit validation inputs.
     path: Path,
     plan: ExecutionPlan,
-    audio: tuple[SynthesizedAudio, ...],
+    audio: tuple[SegmentAudio, ...],
     tools: ResolvedFFmpeg,
     runner: NativeCommandRunner,
     *,
@@ -82,7 +82,7 @@ def validate_artifact(  # noqa: PLR0913 - explicit validation inputs.
 def _valid_probe(  # noqa: C901, PLR0911 - rejection predicates stay explicit.
     payload: object,
     plan: ExecutionPlan,
-    audio: tuple[SynthesizedAudio, ...],
+    audio: tuple[SegmentAudio, ...],
     *,
     expect_cover: bool,
 ) -> bool:

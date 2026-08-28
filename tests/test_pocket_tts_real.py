@@ -13,6 +13,7 @@ from kenkui._execution.process_pool import EngineSpecification, render_spawned
 from kenkui._tts.pocket import (
     PocketEngineConfig,
     PocketManifestFile,
+    VoiceAsset,
     preflight_pocket,
 )
 from kenkui._tts.protocols import SynthesisTask
@@ -36,14 +37,18 @@ def test_explicit_approved_local_pocket_install() -> None:
         model_revision=payload["model_revision"],
         package_version=payload["package_version"],
         files=tuple(PocketManifestFile(**item) for item in payload["files"]),
-        voice_asset_path=str(Path(voice_name).resolve(strict=True)),
-        voice_asset_sha256=payload["voice_prompt_sha256"],
-        voice_variety="wav",
+        voices=(
+            VoiceAsset(
+                path=str(Path(voice_name).resolve(strict=True)),
+                sha256=payload["voice_prompt_sha256"],
+                variety="wav",
+                provenance=payload["voice_provenance"],
+                license_id=payload["voice_license_id"],
+                rights=payload["voice_rights"],
+                commercial_use_allowed=payload["commercial_use_allowed"],
+            ),
+        ),
         cloning_capable=True,
-        voice_provenance=payload["voice_provenance"],
-        voice_license_id=payload["voice_license_id"],
-        voice_rights=payload["voice_rights"],
-        commercial_use_allowed=payload["commercial_use_allowed"],
         sample_rate_hz=payload["sample_rate_hz"],
     )
     preflight_pocket(config)

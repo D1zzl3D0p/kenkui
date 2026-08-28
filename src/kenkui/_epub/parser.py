@@ -240,13 +240,13 @@ def _chapter_text(
     body: Element,
     fragments: dict[str, Element | None],
     fragment: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, tuple[str, ...]]:
     scope = _body_scope(body, fragments, fragment)
     emitter = _TextEmitter()
     _emit_element(scope, emitter)
     text = normalize_text(emitter.value())
     if not text:
-        raise SourceError(ErrorCode.EMPTY_CHAPTER)
+        return "", "", ()
     headings = _visible_headings(scope)
     title = headings[0] if headings else ""
     if not title:
@@ -258,7 +258,7 @@ def _chapter_text(
             if document_titles
             else ""
         )
-    return title, text
+    return title, text, tuple(headings)
 
 
 def _member_map(archive: TypedZipFile) -> dict[str, str]:
@@ -314,6 +314,21 @@ def _metadata(
     return BookMetadata(title or None, author or None, cover_available)
 
 
+def _document(
+    archive: TypedZipFile,
+    members: dict[str, str],
+    member: str,
+    cache: dict[str, tuple[Element, Element, dict[str, Element | None]]],
+) -> tuple[Element, Element, dict[str, Element | None]]:
+    document = cache.get(member)
+    if document is None:
+        root = _xhtml(_read(archive, members, member))
+        body, fragments = _body_fragment_index(root)
+        document = (root, body, fragments)
+        cache[member] = document
+    return document
+
+
 def _spine_chapters(
     archive: TypedZipFile,
     members: dict[str, str],
@@ -326,11 +341,11 @@ def _spine_chapters(
     if len(spine_items) > MAX_SPINE_CHAPTERS:
         raise SourceError(ErrorCode.ARCHIVE_LIMIT)
     occurrences: Counter[tuple[str, str]] = Counter()
-    material_cache: dict[tuple[str, str], tuple[str, str]] = {}
+    material_cache: dict[tuple[str, str], tuple[str, str, tuple[str, ...]]] = {}
     document_cache: dict[str, tuple[Element, Element, dict[str, Element | None]]] = {}
     speech_characters = 0
     chapters: list[ChapterInspection] = []
-    for index, itemref in enumerate(spine_items):
+    for itemref in spine_items:
         idref = itemref.attrib.get("idref", "")
         try:
             member, fragment, _properties = manifest[idref]
@@ -343,18 +358,17 @@ def _spine_chapters(
         occurrences[identity] += 1
         material = material_cache.get(identity)
         if material is None:
-            document = document_cache.get(member)
-            if document is None:
-                root = _xhtml(_read(archive, members, member))
-                body, fragments = _body_fragment_index(root)
-                document = (root, body, fragments)
-                document_cache[member] = document
+            document = _document(archive, members, member, document_cache)
             material = _chapter_text(*document, fragment)
             material_cache[identity] = material
-        title, text = material
+        title, text, headings = material
+        if not text:
+            # Image-only pages (covers, title pages, plates) carry no speech.
+            continue
         speech_characters += len(text)
         if speech_characters > MAX_SPEECH_CHARACTERS:
             raise SourceError(ErrorCode.ARCHIVE_LIMIT)
+        index = len(chapters)
         chapters.append(
             ChapterInspection(
                 chapter_id(member, occurrence, fragment),
@@ -362,8 +376,11 @@ def _spine_chapters(
                 title or f"Chapter {index + 1}",
                 len(text),
                 text,
+                headings,
             )
         )
+    if not chapters:
+        raise SourceError(ErrorCode.EMPTY_CHAPTER)
     return tuple(chapters)
 
 

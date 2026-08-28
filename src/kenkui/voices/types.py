@@ -7,6 +7,10 @@ from typing import Literal
 
 VoiceVariety = Literal["built-in", "pre-compiled", "wav"]
 VoiceState = Literal["registered", "loaded", "missing"]
+# How the rendered voice is generally heard, used only to build casting pools.
+# None means unsourced, and an unsourced voice never joins a gendered pool:
+# a display name is Kenkui's own invention and says nothing about the speaker.
+PerceivedGender = Literal["feminine", "masculine"] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,3 +41,4 @@ class Voice:
     state: VoiceState = "registered"
     asset_bytes: int | None = None
     engine: Engine | None = None
+    perceived_gender: PerceivedGender = None

@@ -120,7 +120,7 @@ class CacheStore:
                     "INSERT OR IGNORE INTO voices(voice_id,content_fingerprint,metadata_json,created_ns) VALUES(?,?,?,?)",
                     (
                         voice_id,
-                        plan.voice.content_fingerprint,
+                        plan.cast.narrator.content_fingerprint,
                         _canonical_json(voice_material),
                         now,
                     ),
@@ -146,7 +146,10 @@ class CacheStore:
         material = {
             "audio_contract_version": AUDIO_CONTRACT_VERSION,
             "cache_schema_version": CACHE_SCHEMA_VERSION,
-            "engine": _engine_material(specification),
+            "engine": _engine_material(
+                specification,
+                plan.cast.voice_for(segment.speaker_id).content_fingerprint,
+            ),
             "model_revision": plan.model_revision,
             "normalization_schema": plan.schema_versions.normalization,
             "render_schema": plan.schema_versions.render,
@@ -159,7 +162,7 @@ class CacheStore:
                 "id": segment.id,
                 "ordinal": segment.ordinal,
             },
-            "voice": _voice_material(plan),
+            "voice": _voice_material(plan, segment),
             "pcm": {"channels": task.channels, "sample_rate_hz": task.sample_rate_hz},
         }
         return _sha256_json(material)
@@ -964,8 +967,17 @@ def _audio_matches(audio: SynthesizedAudio, task: SynthesisTask) -> bool:
     )
 
 
-def _voice_material(plan: ExecutionPlan) -> dict[str, object]:
-    voice = plan.voice
+def _voice_material(
+    plan: ExecutionPlan, segment: SpeechSegment | None = None
+) -> dict[str, object]:
+    """Return the voice identity that renders one segment.
+
+    Per segment rather than per plan: in a cast, two characters speaking the
+    same words must not collide on one cache key.
+    """
+    voice = (
+        plan.cast.voice_for(segment.speaker_id) if segment else plan.cast.narrator
+    )
     return {
         "commercial_use_allowed": voice.commercial_use_allowed,
         "content_fingerprint": voice.content_fingerprint,
@@ -976,15 +988,28 @@ def _voice_material(plan: ExecutionPlan) -> dict[str, object]:
     }
 
 
-def _engine_material(specification: EngineSpecification) -> dict[str, object]:
+def _engine_material(
+    specification: EngineSpecification, voice_sha256: str = ""
+) -> dict[str, object]:
+    """Return engine identity, narrowed to the voice that renders one segment.
+
+    The pocket config lists the whole cast. Keying every segment on all of it
+    would make adding one character voice change the key of every segment in
+    the book, including narration that did not change, so a re-cast would
+    re-synthesize work already paid for. The rendering voice is carried by the
+    separate "voice" key, which is where a cast difference belongs.
+    """
     if specification.kind == "pocket":
         pocket = specification.pocket_config
-        return {
-            "kind": specification.kind,
-            "semantic_config": pocket.semantic_material()
-            if pocket is not None
-            else None,
-        }
+        material = pocket.semantic_material() if pocket is not None else None
+        voices = material.get("voices") if material is not None else None
+        if voice_sha256 and isinstance(voices, tuple) and material is not None:
+            material["voices"] = tuple(
+                item
+                for item in voices
+                if isinstance(item, dict) and item.get("sha256") == voice_sha256
+            )
+        return {"kind": specification.kind, "semantic_config": material}
     config = specification.fake_config
     return {
         "kind": specification.kind,

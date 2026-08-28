@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -10,13 +11,27 @@ from typing import TYPE_CHECKING, cast, get_args
 import pytest
 
 import kenkui as kk
+from kenkui._domain.casting import CharacterProfile
+from kenkui._domain.operations import (
+    AssignVoices,
+    AttributeQuotes,
+    InferCharacters,
+    Pauses,
+    SpokenForm,
+    SynthesizeSpeech,
+)
+from kenkui.pipeline import _log_ungendered_cast
+from kenkui.voices.types import PerceivedGender, Voice
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from typing import Any
 
-EXPECTED_OPERATION_COUNT = 5
+EXPECTED_OPERATION_COUNT = 4
 IO_ERROR_MESSAGE = "pipeline construction performed I/O"
+PAUSE_CHAPTER_MS = 1500
+PAUSE_HEADING_MS = 600
+PAUSE_PARAGRAPH_MS = 250
 
 
 def test_construction_is_lazy_and_book_dispatches_without_reading(
@@ -42,7 +57,6 @@ def test_construction_is_lazy_and_book_dispatches_without_reading(
     source = kk.book("unread.epub")
     pipeline = (
         source.select_chapters("chapter-1", "chapter-2")
-        .normalize_text()
         .assign_voice("narrator")
         .tts()
         .metadata(title=None, author="Writer", cover=None)
@@ -52,6 +66,73 @@ def test_construction_is_lazy_and_book_dispatches_without_reading(
     assert source.source.format == "epub"
     assert source.operations == ()
     assert len(pipeline.operations) == EXPECTED_OPERATION_COUNT
+
+
+def test_magic_run_writes_a_single_voice_book_beside_the_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing single-voice intent or a wrong default destination loses the render."""
+    captured: list[tuple[Path, tuple[object, ...]]] = []
+    expected = object()
+
+    def capture_write(self: kk.Pipeline, output: str | Path) -> object:
+        captured.append((Path(output), self.operations))
+        return expected
+
+    monkeypatch.setattr(kk.Pipeline, "write", capture_write)
+
+    magic_run = getattr(kk, "magic_run", None)
+    assert magic_run is not None
+    assert magic_run("novel.epub", narrator="eponine") is expected
+
+    assert captured == [
+        (
+            Path("novel.m4b"),
+            (
+                AssignVoices(
+                    narrator_voice_id="eponine",
+                    unknown_voice_id="eponine",
+                    cast=(),
+                    method="gendered",
+                ),
+                SynthesizeSpeech(),
+            ),
+        )
+    ]
+
+
+def test_magic_run_uses_the_default_deepseek_model_for_multi_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting multi-voice analysis would silently collapse character dialogue."""
+    captured: list[tuple[Path, tuple[object, ...]]] = []
+
+    def capture_write(self: kk.Pipeline, output: str | Path) -> object:
+        captured.append((Path(output), self.operations))
+        return object()
+
+    monkeypatch.setattr(kk.Pipeline, "write", capture_write)
+
+    magic_run = getattr(kk, "magic_run", None)
+    assert magic_run is not None
+    magic_run("novel.epub", narrator="eponine", multi=True)
+
+    assert captured == [
+        (
+            Path("novel.m4b"),
+            (
+                InferCharacters("deepseek/deepseek-v4-flash"),
+                AttributeQuotes("deepseek/deepseek-v4-flash"),
+                AssignVoices(
+                    narrator_voice_id="eponine",
+                    unknown_voice_id="eponine",
+                    cast=(),
+                    method="gendered",
+                ),
+                SynthesizeSpeech(),
+            ),
+        )
+    ]
 
 
 def test_pipeline_is_frozen_branchable_and_operations_are_values() -> None:
@@ -67,13 +148,13 @@ def test_pipeline_is_frozen_branchable_and_operations_are_values() -> None:
     with pytest.raises(FrozenInstanceError):
         first.source = root.source  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
-        first.operations[-1].voice_id = "changed"  # type: ignore[misc,union-attr]
+        first.operations[-1].narrator_voice_id = "x"  # type: ignore[misc,union-attr]
 
 
 def test_duplicate_and_contradictory_operations_have_stable_codes() -> None:
     """Invalid semantic chains fail deterministically at their cheapest boundary."""
     with pytest.raises(kk.ValidationError) as duplicate:
-        kk.epub("book.epub").normalize_text().normalize_text()
+        kk.epub("book.epub").pronounce().pronounce()
     assert duplicate.value.code == kk.ErrorCode.DUPLICATE_OPERATION
 
     with pytest.raises(kk.ValidationError) as missing_voice:
@@ -224,6 +305,7 @@ def test_public_values_events_errors_and_results_are_frozen() -> None:
             setattr(value, attribute, None)
 
     assert set(get_args(kk.ExecutionEvent)) == {
+        kk.CastResolved,
         kk.Started,
         kk.StageStarted,
         kk.StageProgress,
@@ -266,7 +348,18 @@ def test_public_exports_are_intentional() -> None:
         "load_voice",
         "remove_voice",
         "unload_voice",
+        "list_castings",
+        "list_series",
+        "magic_run",
+        "read_lexicon",
+        "remove_casting",
+        "remove_attribution",
+        "remove_series",
+        "SeriesCharacter",
+        "SeriesRecord",
+        "CastResolved",
         "book",
+        "builtin_lexicon",
         "epub",
         "Pipeline",
         "Source",
@@ -299,3 +392,164 @@ def test_public_exports_are_intentional() -> None:
     }
     assert set(kk.__all__) == expected
 
+
+def test_pronounce_records_intent_without_effects() -> None:
+    """The operation captures configuration as an immutable value."""
+    pipeline = kk.epub("book.epub").pronounce({"Cthulhu": "kuh-THOO-loo"})
+    recorded = pipeline.operations[0]
+    assert isinstance(recorded, SpokenForm)
+    assert recorded.numbers == "conservative"
+    assert recorded.builtin_lexicon is True
+    assert recorded.lexicon == (("Cthulhu", "kuh-THOO-loo"),)
+
+
+def test_pronounce_is_branchable_and_absent_by_default() -> None:
+    """A pipeline that never calls pronounce records no spoken-form intent."""
+    root = kk.epub("book.epub")
+    branch = root.pronounce()
+    assert root.operations == ()
+    assert any(isinstance(item, SpokenForm) for item in branch.operations)
+
+
+def test_pronounce_rejects_an_unknown_tier() -> None:
+    """Only the four defined tiers are accepted."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pronounce(numbers="wild")
+    assert error.value.code is kk.ErrorCode.INVALID_PRONUNCIATION
+
+
+def test_pronounce_rejects_a_malformed_entry() -> None:
+    """Caller entries are validated at the Pipeline boundary, not at render."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pronounce({"": "x"})
+    assert error.value.code is kk.ErrorCode.INVALID_PRONUNCIATION
+
+
+def test_pronounce_cannot_be_requested_twice() -> None:
+    """Duplicate operations are refused by the existing append rule."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pronounce().pronounce()
+    assert error.value.code is kk.ErrorCode.DUPLICATE_OPERATION
+
+
+def test_pauses_records_five_independent_durations() -> None:
+    """Each boundary kind is separately variable."""
+    pipeline = kk.epub("book.epub").pauses(
+        chapter_ms=1500, heading_after_ms=600, paragraph_ms=250
+    )
+    recorded = pipeline.operations[0]
+    assert isinstance(recorded, Pauses)
+    assert recorded.chapter_ms == PAUSE_CHAPTER_MS
+    assert recorded.heading_after_ms == PAUSE_HEADING_MS
+    assert recorded.paragraph_ms == PAUSE_PARAGRAPH_MS
+    assert recorded.heading_before_ms == 0
+    assert recorded.line_ms == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"chapter_ms": -1},
+        {"line_ms": -100},
+        {"paragraph_ms": 60_001},
+    ],
+)
+def test_pauses_rejects_out_of_range_durations(kwargs: dict[str, int]) -> None:
+    """Negative and absurd durations are refused at the Pipeline boundary."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").pauses(**kwargs)
+    assert error.value.code is kk.ErrorCode.INVALID_PAUSE
+
+
+def test_pauses_defaults_to_silence_free() -> None:
+    """Calling pauses with no argument enables nothing."""
+    recorded = kk.epub("book.epub").pauses().operations[0]
+    assert isinstance(recorded, Pauses)
+    assert recorded == Pauses()
+
+
+def _traited_voice(voice_id: str, gender: PerceivedGender) -> Voice:
+    return Voice(
+        id=voice_id,
+        name=voice_id.title(),
+        enabled=True,
+        provenance="test",
+        license_id="CC-BY-4.0",
+        commercial_use_allowed=False,
+        language="english",
+        state="loaded",
+        perceived_gender=gender,
+    )
+
+
+def _speaker(character_id: str, gender: str | None) -> CharacterProfile:
+    return CharacterProfile(character_id, character_id.title(), gender, 100, ("ch1",))
+
+
+def test_an_ungendered_cast_is_logged_for_the_operator(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The silence that let a pool carrying no gender traits go unnoticed.
+
+    `candidates` falls back to the whole pool, so a gendered cast that
+    cannot be honoured renders happily in arbitrary voices. Nothing else in
+    the suite can observe that, because the fallback is the designed
+    behaviour; only the log distinguishes it from a cast that worked.
+    """
+    with caplog.at_level(logging.WARNING):
+        _log_ungendered_cast(
+            "gendered",
+            (_speaker("her", "feminine"),),
+            (_traited_voice("c", "masculine"),),
+        )
+    assert "ungendered_cast" in caplog.text
+
+
+def test_a_served_cast_logs_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    """No noise when the pool can honour the method."""
+    pool = (_traited_voice("c", "masculine"), _traited_voice("a", "feminine"))
+    with caplog.at_level(logging.WARNING):
+        _log_ungendered_cast("gendered", (_speaker("her", "feminine"),), pool)
+    assert "ungendered_cast" not in caplog.text
+
+
+def test_the_random_method_is_never_reported(caplog: pytest.LogCaptureFixture) -> None:
+    """The random method never promised a gendered pool."""
+    with caplog.at_level(logging.WARNING):
+        _log_ungendered_cast(
+            "random",
+            (_speaker("her", "feminine"),),
+            (_traited_voice("c", "masculine"),),
+        )
+    assert "ungendered_cast" not in caplog.text
+
+
+def test_series_records_intent_without_reading_anything() -> None:
+    """Membership is declared, never derived: no EPUB carries it."""
+    pipeline = kk.epub("book.epub").series("stormlight", book=3)
+    recorded = pipeline.operations[-1]
+    assert recorded.series_id == "stormlight"
+    assert recorded.book == 3  # noqa: PLR2004 - the book number passed in above
+    assert recorded.allow_recast is False
+    assert recorded.allow_narrator_change is False
+
+
+def test_an_empty_series_id_is_refused() -> None:
+    """A series with no name cannot be looked up again."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").series("   ")
+    assert error.value.code == kk.ErrorCode.INVALID_SERIES
+
+
+def test_a_negative_book_number_is_refused() -> None:
+    """A non-positive book number cannot order a series."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").series("stormlight", book=0)
+    assert error.value.code == kk.ErrorCode.INVALID_SERIES
+
+
+def test_two_series_declarations_are_refused() -> None:
+    """A book belongs to one series."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").series("a").series("b")
+    assert error.value.code == kk.ErrorCode.DUPLICATE_OPERATION

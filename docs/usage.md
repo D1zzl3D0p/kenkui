@@ -16,7 +16,6 @@ source = kk.book("novel.epub")
 all_chapters = source.assign_voice("narrator").tts()
 selection = (
     source.select_chapters("chapter-a", "chapter-c")
-    .normalize_text()
     .assign_voice("narrator")
     .tts()
     .metadata(title="Novel", author="Writer", cover="source")
@@ -28,6 +27,25 @@ Use either `select_chapters(*ids)` or the inclusive
 `select_chapter_range(start_id, end_id)`, before `tts()`. Chapter IDs come from
 `inspect()` and are stable functions of canonical EPUB member/fragment identity
 and occurrence. Duplicate operations and invalid ordering fail immediately.
+
+## One-call rendering
+
+`magic_run(book_path, *, narrator, multi=False, model="deepseek/deepseek-v4-flash")`
+provides the small, defaulted rendering surface. It derives an `.m4b` output
+beside the EPUB and returns the normal `Result`.
+
+```python
+import kenkui as kk
+
+single = kk.magic_run("novel.epub", narrator="eponine")
+multi = kk.magic_run("novel.epub", narrator="eponine", multi=True)
+```
+
+`multi=True` adds character inference, quote attribution, and automatic casting.
+The default model is the LiteLLM identifier `deepseek/deepseek-v4-flash`; pass
+`model=` to select another configured provider/model. The helper exposes no
+selection, output, overwrite, callback, worker, or cast controls; use the
+fluent API for those cases.
 
 ## Validate and inspect
 
@@ -62,13 +80,15 @@ validation, rendering, callback, cancellation, or encoding failure cannot publis
 the work-in-progress candidate.
 
 ```python
-from kenkui import CancellationToken, StageProgress
+from kenkui import CancellationToken, CastResolved, StageProgress
 
 token = CancellationToken()
 
 
 def progress(event: object) -> None:
-    if isinstance(event, StageProgress):
+    if isinstance(event, CastResolved):
+        print(dict(event.assignments))
+    elif isinstance(event, StageProgress):
         print(event.stage, event.completed, event.total, event.chapter_id)
 
 
@@ -101,6 +121,12 @@ atomic commit. Only after a successful commit are publication `StageCompleted`
 and terminal `Completed` emitted. Both are best-effort; either callback may fail
 without revoking the published output. A publish failure emits neither.
 
+For a multi-voice pipeline, `CastResolved` arrives after attribution and casting
+but before any renderer worker starts. Its `assignments` contain
+`(character_id, voice_id)` pairs, so a callback can log or inspect the cast and
+cancel before synthesis begins. Single-voice runs emit the same event with no
+assignments.
+
 ## Cancellation and workers
 
 `CancellationToken.cancel()` is thread-safe and idempotent. Pass the token to a
@@ -129,7 +155,6 @@ kk.load_voice("eponine")
 
 result = (
     kk.book("book.epub")
-    .normalize_text()
     .assign_voice("eponine")
     .tts()
     .write("book.m4b")
@@ -160,7 +185,8 @@ A voice is `registered`, `loaded`, or — reported by `list_voices` only —
 are implicitly registered by the catalog, so `load_voice` works on them
 directly. `unload_voice` keeps your rights metadata; `remove_voice` discards it.
 
-There are no bulk verbs. Multi-voice work composes over `list_voices()`:
+There are no bulk provisioning verbs. Provisioning several voices at once
+composes over `list_voices()`:
 
 ```python
 for voice in kk.list_voices():
@@ -174,6 +200,126 @@ disk = sum(e.size_bytes for e in engines)
 Engines are derived state with no verbs of their own: they are provisioned when
 a voice needs one and pruned when the last loaded voice referencing one goes
 away. `Voice.engine` exposes the engine a loaded voice uses.
+
+## Casting characters
+
+One voice is the degenerate cast. These two are the same pipeline:
+
+```python
+kk.epub("book.epub").assign_voice("eponine")
+kk.epub("book.epub").assign_voices(narrator="eponine")
+```
+
+A full cast adds character inference and dialogue attribution, both of which
+name the model to use:
+
+```python
+result = (
+    kk.epub("book.epub")
+    .infer_characters(model="anthropic/claude-sonnet-5")
+    .attribute_quotes(model="anthropic/claude-sonnet-5")
+    .assign_voices(narrator="eponine", method="gendered")
+    .tts()
+    .write("book.m4b")
+)
+```
+
+### Resolve before write
+
+`write()` resolves voices, model attribution, and casting when it needs to.
+Call `resolve()` first only when you want to pay for that work early and inspect
+the completed cast before rendering:
+
+```python
+resolved = pipeline.resolve()
+assert resolved.inspect().casting is not None
+result = resolved.write("book.m4b")
+```
+
+`resolve()` returns an immutable pipeline with the same intent. It is
+idempotent: a second call reuses the resolved values, and `write()` reuses them
+too.
+
+Order does not matter. Only `tts()` must come last.
+
+### Narrator and unknown voices
+
+`narrator` speaks everything that is not attributed dialogue. `unknown` speaks
+dialogue nobody could be placed for, and defaults to the narrator's voice, so
+an unplaced line sounds like narration rather than like a third character. Set
+it separately to make the distinction audible:
+
+```python
+.assign_voices(narrator="eponine", unknown="paul")
+```
+
+Both configured voices are excluded from the pool characters are cast from.
+The narrator speaks in every chapter, so sharing its voice with a character
+would collide everywhere.
+
+### Unnamed speakers
+
+`attribute_quotes()` can also place a speaker the text identifies without
+naming, such as a guard, innkeeper, or first man. This happens automatically:
+use the normal inference, attribution, and casting pipeline above; do not add
+or pin a role identifier yourself. Each identified role is scoped to its
+chapter, so two such speakers in one scene receive different voices, while the
+same role word in another chapter is treated as another speaker. When the text
+does not identify the speaker, the dialogue remains `unknown` and uses the
+fallback described above.
+
+### Methods
+
+A method decides which voices a character is eligible for. The shared solver
+then does the assigning.
+
+| Method | Eligible voices |
+| --- | --- |
+| `gendered` | voices whose `perceived_gender` matches the character's |
+| `random` | the whole pool |
+
+Neither is random in the sense of varying between runs. Same book, same
+method, same pool always gives the same cast: reproducibility is required, and
+the solver's ordering supplies the variation instead.
+
+A character whose gender was never inferred falls back to the whole pool. A
+voice whose gender was never *sourced* never joins a gendered pool, because a
+missing trait is an admission of ignorance rather than a wildcard.
+
+### Pinning a choice
+
+```python
+.assign_voices(narrator="eponine", cast={"javert": "charles"})
+```
+
+Pinned entries are constraints on the solver, not suggestions.
+
+### How voices are chosen
+
+Characters who speak in the same chapter never share a voice. Among the voices
+still free, the solver takes the least-used one, weighted by how much each
+character actually speaks — so a lead does not land on the voice a walk-on
+already holds. Voices spread before they repeat, and repeat only once the pool
+is under pressure.
+
+When the pool cannot satisfy that, the solver minimises the clash and logs
+`cast_collision`. It is not raised and not reported to the caller: a collision
+means the pool ran short, which is fixed by provisioning more voices.
+
+### Stored work
+
+Attribution is expensive; casting is free. Both are stored in
+`casting.sqlite3` beside the voice manifest, keyed so that exploring ten
+castings of one book costs one model pass.
+
+```python
+kk.list_castings()
+kk.remove_casting(casting_id)      # free to rebuild
+kk.remove_attribution(attribution_id)  # cascades; costs a fresh model pass
+```
+
+The two removal verbs are separate because their costs differ by orders of
+magnitude.
 
 ### Registering your own voice
 
@@ -205,3 +351,189 @@ or `${XDG_CACHE_HOME:-~/.cache}/kenkui/v1/manifest.json` (Linux).
 `KENKUI_POCKET_MANIFEST` overrides that path for operator-controlled
 deployments, with unchanged strict-validation semantics. With neither present,
 `write()` fails closed with `renderer_unavailable`.
+
+## Series
+
+A character who appears in several volumes should sound like one person in
+all of them. Declare which series a book belongs to and Kenkui keeps their
+voice:
+
+```python
+kk.epub("oathbringer.epub").series("stormlight", book=3)
+```
+
+Membership is declared, never derived. EPUBs do not carry series metadata in
+practice, so the name is yours to choose. `book` is recorded with the render's
+intent and nothing reads it: `list_series()` orders by series name, and
+continuity never consults it. Pass it if it documents your own call sites;
+it changes nothing. Continuity is decided by who the characters are:
+identity resolution matches this volume's roster against every name the
+series has seen, the same way it matches names within one book.
+
+A character the series already cast keeps their voice. A newcomer is cast
+from the least-used voices of their gender, counting what earlier volumes
+already spent, so voices keep spreading across the series rather than
+restarting each book. `narrator` and `unknown` behave as they do without a
+series; only cast characters accumulate.
+
+### Fixing a wrong assignment
+
+Pass `cast={...}` the same way you would without a series. An explicit
+assignment for this render wins over the series' stored pin, and the series
+then adopts it: this book and every one rendered after it use the voice you
+just named. This is the supported way to correct one character's voice
+without discarding the whole series.
+
+```python
+kk.epub("book.epub").series("stormlight", book=4).assign_voices(
+    narrator="eponine", cast={"kaladin": "charles"}
+)
+```
+
+### What refuses a render
+
+Two ways a series can be contradicted are checked in `validate()`, before any
+model call:
+
+| code | meaning | override |
+|---|---|---|
+| `series_voice_missing` | a voice this series already cast is not currently loaded | `allow_recast=True` |
+| `series_narrator_changed` | this render's narrator differs from the one the series recorded | `allow_narrator_change=True` |
+
+`resolve()` never calls `validate()`, so a render that reaches it proceeds
+either way — the difference the flags make is not whether the render happens,
+but what gets written back:
+
+- `allow_recast=True` re-solves the affected character and **persists** the
+  replacement voice, so the series converges on it from this volume on.
+- `allow_narrator_change=True` **persists** the new narrator as the series'
+  narrator from this volume on.
+- Without the flag, the render still proceeds using whatever the solver
+  chose (the speech has to go somewhere), but the series record is left
+  untouched. The stored voice or narrator survives, so the next `validate()`
+  keeps reporting the same problem — the render was forced, not authorised.
+
+Every case where this volume's cast disagrees with what the series has
+stored — a dropped pin, an explicit `cast=` override, or a changed narrator —
+logs a `WARNING` with `boundary="series"`, whether or not a flag was passed.
+A forced or overridden render still says what it did.
+
+```python
+kk.epub("book.epub").series(
+    "stormlight", book=5, allow_recast=True, allow_narrator_change=True
+)
+```
+
+### Listing and removal
+
+```python
+kk.list_series()
+kk.remove_series(series_id)
+```
+
+`list_series()` returns every stored `SeriesRecord`, each holding its
+characters in prominence order — most spoken first. `remove_series(series_id)`
+drops a series' pins entirely; the next volume declaring that series id is
+cast fresh, with no memory of the ones before it.
+
+## Shaping speech
+
+Nothing below is applied unless you ask for it. A pipeline that calls neither
+`pronounce()` nor `pauses()` renders exactly as it did before these existed,
+down to the segment identities, so no cached audio is invalidated by upgrading.
+
+```python
+from pathlib import Path
+
+import kenkui as kk
+
+pipeline = (
+    kk.epub("book.epub")
+    .pronounce({"Cthulhu": "kuh-THOO-loo"}, numbers="standard")
+    .pauses(chapter_ms=1500, heading_after_ms=600, paragraph_ms=250)
+    .assign_voice("alba")
+    .tts()
+    .metadata(cover=Path("cover.jpg"))
+)
+```
+
+### Pronunciation and numbers
+
+`pronounce()` changes what the engine says, never what you are billed for.
+`ExecutionStats.normalized_speech_characters` keeps counting the source text
+while `synthesized_characters` follows the expansion.
+
+Normalization is not part of this and is not optional. NFC, line endings,
+Unicode spaces, and whitespace runs are settled when the source is parsed, and
+character counts refer to that normalized string. `pronounce()` is the only
+stage that rewrites text for speech, and it runs last, per segment.
+
+A small built-in lexicon applies by default once you call `pronounce()`; pass
+`builtin=False` to disable it. Your own entries always win over it, match whole
+words case-insensitively, and take the source's capitalization shape, so one
+entry covers `cello`, `Cello`, and `CELLO`.
+
+Keep a larger table in a file rather than a literal, and read it with
+`read_lexicon()`. It accepts a plain object of word to replacement, or the
+shape the shipped table uses, and validates exactly as an inline dict does.
+`builtin_lexicon()` returns a copy of what Kenkui ships, so you can extend it
+rather than replace it.
+
+```python
+mine = kk.builtin_lexicon() | kk.read_lexicon("pronunciations.json")
+pipeline = kk.epub("book.epub").pronounce(mine, builtin=False)
+```
+
+`numbers` selects how much guessing you accept. Anything a tier declines is
+left verbatim for your own entries to handle.
+
+| tier | adds |
+|---|---|
+| `off` | nothing |
+| `conservative` (default) | grouped integers, decimals, negatives, ordinals, percent, currency, units after a number |
+| `standard` | years as pairs, clock times, numeric ranges, Roman numerals after Chapter/Part/Act or a regnal name |
+| `aggressive` | bare Roman numerals, `No. 5`, fractions |
+
+A tier is a preset over individually switchable features, not a package. Pass
+any of `currency`, `percent`, `ordinals`, `units`, `decimals`, `integers`,
+`years`, `clock`, `roman`, `fractions`, `numbered` as a keyword to override
+it: `False` declines a form the tier supplies, `True` asks for one it does
+not, without accepting the rest of the tier that carries it.
+
+```python
+pipeline.pronounce(numbers="standard", roman=False)
+```
+
+Features compose rather than nest, so declining a specific form leaves a
+general one free to match inside it: `currency=False` alone reads `£5` as
+`£five`, because the integer rule still applies. Decline `integers` too to
+leave the digits alone.
+
+An override changes segment identity, so a book already rendered without one
+re-synthesizes. Passing none leaves identities byte-identical.
+
+`St.`, `Dr.`, and `Mrs.` are never expanded at any tier. English only: a
+non-English narrator voice disables the stage rather than mangling the text.
+
+### Pauses
+
+Each boundary carries its own duration in milliseconds, and zero disables that
+tier completely — including the extra segmenting it would otherwise cause, so
+leaving `line_ms` at zero costs nothing.
+
+Durations are free to retune: changing 250 ms to 600 ms reuses every cached
+segment, because only turning a tier on or off changes where a segment ends.
+`chapter_ms` never re-segments at all.
+
+The gap between two chapters belongs to the chapter that precedes it, so
+skipping forward lands on speech rather than silence, and a book never ends on
+dead air. Where several reasons meet — a chapter ending immediately before a
+chapter title — the longest one wins rather than all of them adding up.
+
+### Cover art
+
+`metadata(cover=...)` accepts `"source"` (the default), `None`, or a path to a
+JPEG or PNG. A supplied image that cannot be read or is not one of those two
+formats fails the render rather than quietly falling back to the book's own
+art. The plan records the image's content, not its location, so moving the file
+does not change the output.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -37,28 +38,36 @@ def _config(tmp_path: Path | None = None) -> pocket.PocketEngineConfig:
         model_revision="revision-1",
         package_version="2.1.0",
         files=(pocket.PocketManifestFile("english.yaml", 4, "a" * 64),),
-        voice_asset_path=asset,
-        voice_asset_sha256="b" * 64,
-        voice_variety="built-in",
+        voices=(
+            pocket.VoiceAsset(
+                path=asset,
+                sha256="b" * 64,
+                variety="built-in",
+                provenance="kyutai catalog",
+                license_id="CC-BY-4.0",
+                rights="review required",
+                commercial_use_allowed=False,
+            ),
+        ),
         cloning_capable=False,
-        voice_provenance="kyutai catalog",
-        voice_license_id="CC-BY-4.0",
-        voice_rights="review required",
-        commercial_use_allowed=False,
         sample_rate_hz=24000,
     )
 
 
 def test_semantic_material_includes_variety_and_asset_hash(tmp_path: Path) -> None:
     material = _config(tmp_path).semantic_material()
-    assert material["voice_variety"] == "built-in"
-    assert material["voice_asset_sha256"] == "b" * 64
+    voices = cast("tuple[dict[str, object], ...]", material["voices"])
+    assert voices[0]["variety"] == "built-in"
+    assert voices[0]["sha256"] == "b" * 64
     assert "voice_prompt_sha256" not in material
 
 
 def test_semantic_material_changes_with_variety(tmp_path: Path) -> None:
     base = _config(tmp_path)
-    other = dataclasses.replace(base, voice_variety="pre-compiled")
+    other = dataclasses.replace(
+        base,
+        voices=(dataclasses.replace(base.voices[0], variety="pre-compiled"),),
+    )
     assert base.semantic_material() != other.semantic_material()
 
 
@@ -105,7 +114,7 @@ def _detached_engine(model: _Model) -> pocket.PocketTTSEngine:
     engine = pocket.PocketTTSEngine.__new__(pocket.PocketTTSEngine)
     object.__setattr__(engine, "_model", model)
     object.__setattr__(engine, "_config", _config())
-    object.__setattr__(engine, "_state", None)
+    object.__setattr__(engine, "_states", {})
     # __del__ calls close(), which reads these; omitting them raises during
     # garbage collection and surfaces as an unraisable-exception warning.
     object.__setattr__(engine, "_snapshot", None)
@@ -113,11 +122,12 @@ def _detached_engine(model: _Model) -> pocket.PocketTTSEngine:
     return engine
 
 
-def test_voice_state_is_derived_once_per_engine() -> None:
+def test_voice_state_is_derived_once_per_voice() -> None:
     model = _Model()
     engine = _detached_engine(model)
-    first = engine._voice_state()
-    second = engine._voice_state()
+    digest = "b" * 64
+    first = engine._voice_state(digest)
+    second = engine._voice_state(digest)
     assert first is second
     assert model.state_calls == 1
 
@@ -125,7 +135,7 @@ def test_voice_state_is_derived_once_per_engine() -> None:
 def test_voice_state_is_passed_a_path_not_a_string() -> None:
     """A str would let pocket-tts call download_if_necessary; a Path cannot."""
     model = _Model()
-    state = _detached_engine(model)._voice_state()
+    state = _detached_engine(model)._voice_state("b" * 64)
     assert isinstance(state["conditioning"], Path)
 
 

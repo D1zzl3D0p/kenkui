@@ -2,36 +2,49 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Final
+from functools import lru_cache
+from importlib import metadata
+from pathlib import Path
+from typing import Any, Final
+
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 from kenkui.errors import ErrorCode, VoiceError
-from kenkui.voices.types import Voice
+from kenkui.observability import get_logger, log_event
+from kenkui.voices.types import PerceivedGender, Voice
 
-EMBEDDING_REVISION: Final = "e041936c75475d350b405bc870bcf7c22da4e9e6"
-_EMBEDDING_REPO: Final = "kyutai/pocket-tts-without-voice-cloning"
+_LOGGER = get_logger(__name__)
 
-_VCTK_RIGHTS: Final = (
-    "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms "
-    "and speaker consent for your intended use before commercial deployment."
-)
-_EARS_RIGHTS: Final = (
-    "Derived from the EARS corpus. Treat as research-only/noncommercial unless "
-    "your own review of the source terms concludes otherwise."
-)
-_EXPRESSO_RIGHTS: Final = (
-    "Derived from the Expresso dataset. Treat as research-only/noncommercial "
-    "unless your own review of the source terms concludes otherwise."
-)
-_DONATION_RIGHTS: Final = (
-    "Voice donation distributed by kyutai. Confirm the donor's permission "
-    "scope for your intended use."
-)
-_COMMON_VOICE_RIGHTS: Final = (
-    "Derived from Common Voice via kyutai/pocket-tts. Review the Common Voice "
-    "terms for your intended use before commercial deployment."
-)
+_BUILTIN_MANIFEST: Final = Path(__file__).with_name("builtin.json")
 
+
+def _embedding_pin() -> tuple[str, str]:
+    """Return the (repo_id, revision) the ungated embeddings are pinned to."""
+    payload = json.loads(_BUILTIN_MANIFEST.read_text(encoding="utf-8"))
+    return payload["embedding"]["repo_id"], payload["embedding"]["revision"]
+
+
+_EMBEDDING_REPO, EMBEDDING_REVISION = _embedding_pin()
+
+# The pre-compiled Kenkui voice pack. Where it lives and which revision it
+# pins are data in the manifest, not constants here: a constant in Python
+# source is what previously let the pack and the runtime diverge in silence.
+_PACK_MANIFEST: Final = Path(__file__).with_name("pack.json")
+_REBUILD_HINT: Final = (
+    "Rebuild the pack for this pocket-tts: "
+    "hf download D1zzl3D0p/kenkui-voices --repo-type dataset "
+    "--local-dir kenkui-voices && cd kenkui-voices/tools && uv sync && "
+    "uv run python rebuild.py --all --force"
+)
+_GENDERS: Final[dict[str, PerceivedGender]] = {
+    "Male": "masculine",
+    "Female": "feminine",
+}
 
 @dataclass(frozen=True, slots=True)
 class CatalogEntry:
@@ -44,157 +57,204 @@ class CatalogEntry:
     license_id: str
     commercial_use_allowed: bool
     voice_rights: str
+    # Set for pack voices, which are fetched from the Kenkui voice pack rather
+    # than derived from a kyutai catalog name. None means derive the kyutai
+    # embedding URL from the language and ID.
+    asset_url: str | None = None
+    # Unsourced for every built-in entry below. kyutai's VCTK_Voice_Names.csv covers a
+    # different speaker selection than these voices, and VCTK's speaker-info.txt
+    # ships only inside the full corpus download. Sourced traits arrive with the
+    # pre-compiled voice pack; guessing from the display names above -- which
+    # Kenkui invented -- would be worse than admitting the gap.
+    perceived_gender: PerceivedGender = None
 
 
-def _vctk(voice_id: str, name: str, filename: str) -> CatalogEntry:
+def _builtin_entry(voice: dict[str, Any]) -> CatalogEntry:
+    """Convert one builtin.json record into a catalog entry."""
+    return CatalogEntry(
+        id=voice["voice_id"],
+        name=voice["display_name"],
+        language=voice["language"],
+        origin_url=voice["origin_url"],
+        license_id=voice["license_id"],
+        commercial_use_allowed=bool(voice["commercial_use_allowed"]),
+        voice_rights=voice["voice_rights"],
+        perceived_gender=voice["perceived_gender"],
+    )
+
+
+@lru_cache(maxsize=1)
+def load_builtin() -> tuple[CatalogEntry, ...]:
+    """Read the kyutai predefined voices that ship with the package.
+
+    Unlike the pack, these are not optional. A missing or unreadable file is a
+    broken install, not a degraded one, so the error propagates.
+    """
+    payload = json.loads(_BUILTIN_MANIFEST.read_text(encoding="utf-8"))
+    return tuple(_builtin_entry(voice) for voice in payload["voices"])
+
+
+@dataclass(frozen=True, slots=True)
+class PackLoad:
+    """The pack as resolved against the installed pocket-tts.
+
+    `incompatible` is None when the pack loaded or was simply absent, and a
+    message naming both versions when the pack exists but cannot be used. The
+    distinction matters: an absent pack is a degraded install, an incompatible
+    one is a misconfiguration that must not fail quietly.
+    """
+
+    entries: tuple[CatalogEntry, ...]
+    incompatible: str | None
+
+
+def installed_pocket_version() -> str:
+    """Return the installed pocket-tts version."""
+    return metadata.version("pocket-tts")
+
+
+def _incompatibility(declared: str) -> str | None:
+    """Return why the installed pocket-tts cannot use this pack, or None."""
+    installed = installed_pocket_version()
+    try:
+        if Version(installed) in SpecifierSet(declared):
+            return None
+    except (InvalidSpecifier, InvalidVersion):
+        return (
+            f"the voice pack declares an unreadable pocket-tts range "
+            f"{declared!r}; installed is {installed}. {_REBUILD_HINT}"
+        )
+    return (
+        f"the voice pack was compiled for pocket-tts {declared} but "
+        f"{installed} is installed. Its embeddings would load without error "
+        f"and render audio containing no words. {_REBUILD_HINT}"
+    )
+
+
+def _pack_entry(
+    voice: dict[str, Any], voice_id: str, assets: dict[str, str]
+) -> CatalogEntry:
+    """Convert one pack manifest record into a catalog entry."""
+    repo = assets["repo_id"]
+    revision = assets["revision"]
     return CatalogEntry(
         id=voice_id,
-        name=name,
-        language="english",
-        origin_url=f"hf://kyutai/tts-voices/vctk/{filename}",
-        license_id="CC-BY-4.0",
-        commercial_use_allowed=False,
-        voice_rights=_VCTK_RIGHTS,
+        name=voice["display_name"],
+        language=voice["language"],
+        origin_url=f"hf://{voice['source']['repo_id']}/{voice['source']['path']}",
+        license_id=voice["license_id"],
+        commercial_use_allowed=bool(voice["commercial_use_allowed"]),
+        voice_rights=voice["voice_rights"],
+        asset_url=f"hf://{repo}/{voice['compiled']['path']}@{revision}",
+        perceived_gender=_GENDERS.get(voice["gender"]),
     )
 
 
-def _zero(voice_id: str, name: str) -> CatalogEntry:
-    return CatalogEntry(
-        id=voice_id,
-        name=name,
-        language="english",
-        origin_url=f"hf://kyutai/tts-voices/voice-zero/{voice_id}.wav",
-        license_id="unreviewed",
-        commercial_use_allowed=False,
-        voice_rights=_DONATION_RIGHTS,
-    )
+@lru_cache(maxsize=1)
+def load_pack() -> PackLoad:
+    """Read the bundled voice pack and resolve it against pocket-tts.
+
+    Static package data, not a network or user source: no request is made and
+    no path comes from a caller. A missing or unreadable manifest degrades to
+    the built-in catalog rather than failing an import, because the pack is an
+    addition and Kenkui must work without it. A pack that is present but
+    compiled for a different pocket-tts major is a different matter: its
+    voices are withheld and the reason is kept, so using one raises instead of
+    rendering silence.
+    """
+    try:
+        payload = json.loads(_PACK_MANIFEST.read_text(encoding="utf-8"))
+        voices = payload["voices"]
+        assets = payload["assets"]
+        declared = payload["pocket_tts"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return PackLoad((), None)
+
+    incompatible = _incompatibility(declared)
+    if incompatible is not None:
+        return PackLoad((), incompatible)
+
+    built_in = {entry.id for entry in load_builtin()}
+    entries: list[CatalogEntry] = []
+    try:
+        for voice in voices:
+            # A voice with no compiled block is unpublished: a gap in the pack,
+            # not a reason to abandon the other ninety-four.
+            if not voice.get("compiled"):
+                continue
+            # Short display names read far better at a call site than the full
+            # slug. Where one would shadow a built-in the pack voice keeps its
+            # slug: they are different speakers who happen to share a name, so
+            # dropping either would lose a voice.
+            short = str(voice["display_name"]).lower()
+            entries.append(
+                _pack_entry(
+                    voice, voice["voice_id"] if short in built_in else short, assets
+                )
+            )
+    except (KeyError, TypeError, AttributeError):
+        # One malformed record makes the whole pack untrustworthy, and the
+        # catalog is built at import: raising here would break `import kenkui`
+        # rather than degrade to the built-in voices this promises. Logged
+        # because the returned shape is identical to an absent pack, and an
+        # operator whose ninety-five voices vanished needs to know why.
+        log_event(
+            _LOGGER,
+            "voice_pack_malformed",
+            level=logging.WARNING,
+            context={"boundary": "voices", "path": _PACK_MANIFEST.name},
+        )
+        return PackLoad((), None)
+    return PackLoad(tuple(entries), None)
 
 
-def _donation(voice_id: str, name: str, filename: str) -> CatalogEntry:
-    return CatalogEntry(
-        id=voice_id,
-        name=name,
-        language="english",
-        origin_url=f"hf://kyutai/tts-voices/voice-donations/{filename}",
-        license_id="unreviewed",
-        commercial_use_allowed=False,
-        voice_rights=_DONATION_RIGHTS,
-    )
+@lru_cache(maxsize=1)
+def _withheld_pack_ids() -> frozenset[str]:
+    """Return the voice IDs an incompatible pack is keeping out of the catalog."""
+    if load_pack().incompatible is None:
+        return frozenset()
+    try:
+        payload = json.loads(_PACK_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    ids: set[str] = set()
+    # Per record rather than around the loop: aborting on the first malformed
+    # entry would leave every later voice unguarded, so an incompatible pack
+    # would raise VOICE_UNKNOWN for them instead of VOICE_INCOMPATIBLE and its
+    # rebuild hint.
+    for voice in _iterable(payload.get("voices", ())):
+        with suppress(KeyError, TypeError, AttributeError):
+            ids.add(voice["voice_id"])
+            ids.add(str(voice["display_name"]).lower())
+    return frozenset(ids)
 
 
-_POCKET_PIN: Final = "@64ab7d24c479d736a83b8cc666c4a776fca30fda"
+def _iterable(value: object) -> tuple[Any, ...]:
+    """Return a safely iterable view of a manifest collection."""
+    return tuple(value) if isinstance(value, list) else ()
 
-CATALOG: Final[dict[str, CatalogEntry]] = {
-    entry.id: entry
-    for entry in (
-        _vctk("anna", "Anna", "p228_023_enhanced.wav"),
-        _vctk("vera", "Vera", "p229_023_enhanced.wav"),
-        _vctk("fantine", "Fantine", "p244_023_enhanced.wav"),
-        _vctk("charles", "Charles", "p254_023_enhanced.wav"),
-        _vctk("paul", "Paul", "p259_023_enhanced.wav"),
-        _vctk("eponine", "Eponine", "p262_023_enhanced.wav"),
-        _vctk("azelma", "Azelma", "p303_023_enhanced.wav"),
-        _vctk("george", "George", "p315_023_enhanced.wav"),
-        _vctk("mary", "Mary", "p333_023_enhanced.wav"),
-        _vctk("jane", "Jane", "p339_023_enhanced.wav"),
-        _vctk("michael", "Michael", "p360_023_enhanced.wav"),
-        _vctk("eve", "Eve", "p361_023_enhanced.wav"),
-        _zero("bill_boerst", "Bill Boerst"),
-        _zero("peter_yearsley", "Peter Yearsley"),
-        _zero("stuart_bell", "Stuart Bell"),
-        _zero("caro_davy", "Caro Davy"),
-        _donation("marius", "Marius", "Selfie.wav"),
-        _donation("javert", "Javert", "Butter.wav"),
-        CatalogEntry(
-            id="cosette",
-            name="Cosette",
-            language="english",
-            origin_url=(
-                "hf://kyutai/tts-voices/expresso/"
-                "ex04-ex02_confused_001_channel1_499s.wav"
-            ),
-            license_id="CC-BY-NC-4.0",
-            commercial_use_allowed=False,
-            voice_rights=_EXPRESSO_RIGHTS,
-        ),
-        CatalogEntry(
-            id="jean",
-            name="Jean",
-            language="english",
-            origin_url=(
-                "hf://kyutai/tts-voices/ears/p010/freeform_speech_01_enhanced.wav"
-            ),
-            license_id="CC-BY-NC-4.0",
-            commercial_use_allowed=False,
-            voice_rights=_EARS_RIGHTS,
-        ),
-        CatalogEntry(
-            id="alba",
-            name="Alba",
-            language="english",
-            origin_url="hf://kyutai/tts-voices/alba-mackenna/casual.wav",
-            license_id="unreviewed",
-            commercial_use_allowed=False,
-            voice_rights=_DONATION_RIGHTS,
-        ),
-        CatalogEntry(
-            id="giovanni",
-            name="Giovanni",
-            language="italian",
-            origin_url=(
-                "hf://kyutai/pocket-tts/"
-                f"common_voice_it_36520747-enhanced-v2.mp3{_POCKET_PIN}"
-            ),
-            license_id="CC0-1.0",
-            commercial_use_allowed=False,
-            voice_rights=_COMMON_VOICE_RIGHTS,
-        ),
-        CatalogEntry(
-            id="lola",
-            name="Lola",
-            language="spanish",
-            origin_url=(
-                "hf://kyutai/pocket-tts/"
-                f"common_voice_es_19762977-enhanced-v2.mp3{_POCKET_PIN}"
-            ),
-            license_id="CC0-1.0",
-            commercial_use_allowed=False,
-            voice_rights=_COMMON_VOICE_RIGHTS,
-        ),
-        CatalogEntry(
-            id="juergen",
-            name="Juergen",
-            language="german",
-            origin_url=f"hf://kyutai/pocket-tts/de-DE-juergen.mp3{_POCKET_PIN}",
-            license_id="unreviewed",
-            commercial_use_allowed=False,
-            voice_rights=_DONATION_RIGHTS,
-        ),
-        CatalogEntry(
-            id="rafael",
-            name="Rafael",
-            language="portuguese",
-            origin_url=(
-                f"hf://kyutai/pocket-tts/g-Vi8PgmSY0-enhanced-v2.wav{_POCKET_PIN}"
-            ),
-            license_id="unreviewed",
-            commercial_use_allowed=False,
-            voice_rights=_DONATION_RIGHTS,
-        ),
-        CatalogEntry(
-            id="estelle",
-            name="Estelle",
-            language="french_24l",
-            origin_url=(
-                "hf://kyutai/tts-voices/unmute-prod-website/developpeuse-3.wav"
-                "@1fc7395b7e012e2bbebfca14b942a4ef62ccc899"
-            ),
-            license_id="unreviewed",
-            commercial_use_allowed=False,
-            voice_rights=_DONATION_RIGHTS,
-        ),
-    )
+
+def pack_voice_guard(voice_id: str) -> None:
+    """Raise if this ID names a voice an incompatible pack is withholding."""
+    reason = load_pack().incompatible
+    if reason is not None and voice_id in _withheld_pack_ids():
+        raise VoiceError(ErrorCode.VOICE_INCOMPATIBLE, reason)
+
+
+def _catalog() -> dict[str, CatalogEntry]:
+    """Merge the built-in catalog with the pack, built-ins winning."""
+    merged = {entry.id: entry for entry in load_pack().entries}
+    merged.update({entry.id: entry for entry in load_builtin()})
+    return merged
+
+
+# The kyutai predefined voices alone. Kept addressable so the upstream-drift
+# guard compares against what upstream actually ships, rather than against the
+# merged catalog the voice pack also feeds.
+BUILT_IN_CATALOG: Final[dict[str, CatalogEntry]] = {
+    entry.id: entry for entry in load_builtin()
 }
+CATALOG: Final[dict[str, CatalogEntry]] = _catalog()
 
 
 def embedding_url(language: str, name: str) -> str:
@@ -205,8 +265,22 @@ def embedding_url(language: str, name: str) -> str:
     )
 
 
+def asset_url(voice_id: str, language: str) -> str:
+    """Return where one catalog voice's embedding is fetched from.
+
+    Pack voices carry their own pinned URL; kyutai built-ins derive theirs
+    from the language and catalog name.
+    """
+    pack_voice_guard(voice_id)
+    entry = CATALOG.get(voice_id)
+    if entry is not None and entry.asset_url is not None:
+        return entry.asset_url
+    return embedding_url(language, voice_id)
+
+
 def catalog_voice(voice_id: str) -> Voice:
     """Return catalog metadata for one built-in voice as a registered Voice."""
+    pack_voice_guard(voice_id)
     entry = CATALOG.get(voice_id)
     if entry is None:
         raise VoiceError(ErrorCode.VOICE_UNKNOWN)
@@ -220,4 +294,5 @@ def catalog_voice(voice_id: str) -> Voice:
         language=entry.language,
         variety="built-in",
         state="registered",
+        perceived_gender=entry.perceived_gender,
     )
