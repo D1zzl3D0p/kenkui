@@ -6,6 +6,8 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+import pytest
+
 import kenkui as kk
 from conftest import log_field
 from kenkui._audio.m4b import FakeArtifactAssembler
@@ -18,8 +20,6 @@ from test_epub import make_epub, xhtml
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 # Two loaded voices, neither the narrator, so the solver has somewhere to
 # spread the cast. Language matches the fixture narrator below.
@@ -534,3 +534,155 @@ def test_allow_narrator_change_adopts_the_new_narrator(
             .resolve()
         )
     assert "series_override" not in caplog.text
+
+
+def test_an_unauthorised_narrator_change_does_not_corrupt_the_series(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """resolve() never validates, so an unauthorised change must not stick.
+
+    Otherwise ``write()`` refuses this pipeline (SERIES_NARRATOR_CHANGED)
+    while ``resolve().write()`` would already have repointed the series to
+    whatever ``narrator=`` said -- a typo permanently redirecting a series
+    with no permission ever granted.
+    """
+    _render_volume(tmp_path, monkeypatch, "javert", book=1)
+    before = store.read_series("s")
+    assert before is not None
+    assert before.narrator_voice_id == "eponine"
+
+    _stub_resolution(monkeypatch, "javert")
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    pipeline = (
+        kk.epub(path)
+        .series("s", book=2)  # no allow_narrator_change
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="cosette")
+    )
+    pipeline.resolve()
+
+    unchanged = store.read_series("s")
+    assert unchanged is not None
+    assert unchanged.narrator_voice_id == "eponine"
+
+    # The discrepancy this render just introduced must still be visible to
+    # the next validate(), the same as if resolve() had never run.
+    issues = {issue.code for issue in pipeline.validate().issues}
+    assert kk.ErrorCode.SERIES_NARRATOR_CHANGED in issues
+
+
+def test_a_render_that_fails_at_binding_leaves_the_series_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The series must not record a cast the render never actually produced.
+
+    The narrator alone resolves fine -- that binding runs early, purely to
+    read the narrator's language for the pool filter -- but resolving the
+    *whole* cast's bindings is what can fail on an unprovisioned voice, and
+    it must be checked before, not after, the series is written.
+    """
+    seed = store.SeriesRecord(
+        "s",
+        "eponine",
+        (
+            store.SeriesCharacter(
+                canonical_id="javert",
+                display_name="Javert",
+                gender="feminine",
+                voice_id="alf",
+                spoken_characters=100,
+                aliases=("Javert",),
+            ),
+        ),
+    )
+    store.write_series(seed)
+    monkeypatch.setattr(
+        "kenkui.pipeline._attribution_client", lambda: _Roster("javert")
+    )
+    monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE))
+
+    def _bindings(_voice_id: str, *, also: tuple[str, ...] = ()) -> ExecutionBindings:
+        if also:
+            raise kk.VoiceError(kk.ErrorCode.VOICE_DISABLED)
+        return ExecutionBindings(
+            EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
+        )
+
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", _bindings)
+
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    with pytest.raises(kk.VoiceError):
+        (
+            kk.epub(path)
+            .series("s", book=2)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+
+    assert store.read_series("s") == seed
+
+
+def test_an_unauthorised_drop_renders_but_leaves_the_series_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without allow_recast, a dropped pin must not launder itself away.
+
+    The solver still has to choose something for the render -- the speech
+    cannot vanish -- but persisting that choice would erase the operator's
+    only signal that the pinned voice went missing, and the next
+    validate() would fall silent about a problem that still exists.
+    """
+    seed = store.SeriesRecord(
+        "s",
+        "eponine",
+        (
+            store.SeriesCharacter(
+                canonical_id="javert",
+                display_name="Javert",
+                gender="feminine",
+                voice_id="ghost",
+                spoken_characters=100,
+                aliases=("Javert",),
+            ),
+        ),
+    )
+    store.write_series(seed)
+    _stub_resolution(monkeypatch, "javert")
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    pipeline = (
+        kk.epub(path)
+        .series("s", book=2)  # no allow_recast
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+    )
+    resolved = pipeline.resolve()
+    assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+    assert assignments["javert"] != "ghost"  # the render still had to choose
+
+    # Speech and aliases still accumulate normally -- only the voice itself
+    # must not launder away the missing pin. Contrast with
+    # `test_allow_recast_converges_once_the_dropped_pin_is_replaced`, where
+    # the same drop, authorised, *does* replace the voice.
+    persisted = store.read_series("s")
+    assert persisted is not None
+    javert = next(c for c in persisted.characters if c.canonical_id == "javert")
+    assert javert.voice_id == "ghost"
+
+    issues = {issue.code for issue in pipeline.validate().issues}
+    assert kk.ErrorCode.SERIES_VOICE_MISSING in issues

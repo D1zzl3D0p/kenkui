@@ -514,6 +514,87 @@ def _issue(code: ErrorCode) -> ValidationIssue:
     return ValidationIssue(code, str(ValidationError(code)))
 
 
+@dataclass(frozen=True, slots=True)
+class _SeriesPins:
+    """What a series' stored cast contributes to one render's CastingRequest."""
+
+    explicit: dict[str, str]
+    prior_load: dict[str, int]
+    dropped_pins: tuple[str, ...]
+    dropped_voice_ids: Mapping[str, str]
+    overridden_pins: tuple[str, ...]
+
+
+def _series_pins(
+    stored: SeriesRecord | None,
+    characters: tuple[CharacterProfile, ...],
+    casting: AssignVoices,
+    pool: tuple[Voice, ...],
+) -> _SeriesPins:
+    """Fold a series' stored cast into pins, prior load, and what gave way.
+
+    Split out of `_resolve_all` on its own merits, not only for complexity:
+    this is a self-contained fold over `stored.characters` that needs
+    nothing `_resolve_all` computes afterwards, and nothing after it needs
+    to know how a pin was decided, only what was decided.
+    """
+    from ._characters.series import match_roster  # noqa: PLC0415 - see below
+
+    explicit = dict(casting.cast)
+    prior_load: dict[str, int] = {}
+    if stored is None:
+        return _SeriesPins(explicit, prior_load, (), {}, ())
+
+    dropped_pins: list[str] = []
+    dropped_voice_ids: dict[str, str] = {}
+    overridden_pins: list[str] = []
+    # Reserved ids are excluded the same way `_castable` excludes them from
+    # the solver's own pool: the narrator speaks in every chapter, so a pin
+    # equal to it (or to `unknown`) is never an honourable pin, it is a
+    # character quietly wearing the narrator's voice.
+    pool_ids = {voice.id for voice in pool} - {
+        casting.narrator_voice_id,
+        casting.unknown_voice_id,
+    }
+    by_canonical = {c.canonical_id: c for c in stored.characters}
+    for book_id, canonical in match_roster(stored, characters).items():
+        known = by_canonical[canonical]
+        if book_id in explicit:
+            # This render's caller named a voice for this character directly
+            # (``explicit`` starts as exactly that mapping), which is more
+            # specific than a series default and the only way to correct a
+            # series pin without discarding the whole series. Left as the
+            # caller set it; the series adopts it in `_resolve_all`.
+            if explicit[book_id] != known.voice_id:
+                overridden_pins.append(book_id)
+            continue
+        # A pin the pool cannot honour reaches here under allow_recast
+        # through write() (validate() refuses it otherwise), but also
+        # through resolve(), which never validates at all, and through a
+        # mismatch validate()'s own pool cannot see -- a voice loaded but of
+        # a different language than this render's narrator, which `pool`
+        # excludes and validate()'s check does not. Dropping it lets the
+        # solver choose afresh either way; whether that choice gets written
+        # back to the series depends on `allow_recast`, decided by the
+        # caller once the solver's outcome exists.
+        if known.voice_id in pool_ids:
+            explicit[book_id] = known.voice_id
+        else:
+            dropped_pins.append(book_id)
+            dropped_voice_ids[book_id] = known.voice_id
+    for known in stored.characters:
+        prior_load[known.voice_id] = (
+            prior_load.get(known.voice_id, 0) + known.spoken_characters
+        )
+    return _SeriesPins(
+        explicit,
+        prior_load,
+        tuple(dropped_pins),
+        dropped_voice_ids,
+        tuple(overridden_pins),
+    )
+
+
 def _resolve_all(
     pipeline: Pipeline, cancel: CancellationToken | None = None
 ) -> Resolved:
@@ -530,7 +611,7 @@ def _resolve_all(
         resolve_cast,
         store,
     )
-    from ._characters.series import match_roster, merged_series  # noqa: PLC0415
+    from ._characters.series import merged_series  # noqa: PLC0415
     from .voices.provision import list_voices  # noqa: PLC0415 - resolved per
     # call so the managed cache root can be redirected, as the store is.
 
@@ -580,50 +661,14 @@ def _resolve_all(
         (item for item in pipeline.operations if isinstance(item, Series)), None
     )
     stored = store.read_series(series.series_id) if series is not None else None
-    explicit = dict(casting.cast)
-    prior_load: dict[str, int] = {}
-    dropped_pins: list[str] = []
-    overridden_pins: list[str] = []
-    if stored is not None:
-        # Reserved ids are excluded the same way `_castable` excludes them
-        # from the solver's own pool: the narrator speaks in every chapter,
-        # so a pin equal to it (or to `unknown`) is never an honourable
-        # pin, it is a character quietly wearing the narrator's voice.
-        pool_ids = {voice.id for voice in pool} - {
-            casting.narrator_voice_id,
-            casting.unknown_voice_id,
-        }
-        by_canonical = {c.canonical_id: c for c in stored.characters}
-        for book_id, canonical in match_roster(stored, record.characters).items():
-            known = by_canonical[canonical]
-            if book_id in explicit:
-                # This render's caller named a voice for this character
-                # directly (``explicit`` starts as exactly that mapping),
-                # which is more specific than a series default and the only
-                # way to correct a series pin without discarding the whole
-                # series. Left as the caller set it; the series adopts it
-                # below, in `merged_series`.
-                if explicit[book_id] != known.voice_id:
-                    overridden_pins.append(book_id)
-                continue
-            # A pin the pool cannot honour reaches here under allow_recast
-            # through write() (validate() refuses it otherwise), but also
-            # through resolve(), which never validates at all, and through
-            # a mismatch validate()'s own pool cannot see -- a voice loaded
-            # but of a different language than this render's narrator,
-            # which `pool` excludes and validate()'s check does not.
-            # Dropping it lets the solver choose afresh either way.
-            if known.voice_id in pool_ids:
-                explicit[book_id] = known.voice_id
-            else:
-                dropped_pins.append(book_id)
-        for known in stored.characters:
-            prior_load[known.voice_id] = (
-                prior_load.get(known.voice_id, 0) + known.spoken_characters
-            )
+    pins = _series_pins(stored, record.characters, casting, pool)
     if series is not None:
         _log_series_overrides(
-            series, stored, dropped_pins, overridden_pins, casting.narrator_voice_id
+            series,
+            stored,
+            pins.dropped_pins,
+            pins.overridden_pins,
+            casting.narrator_voice_id,
         )
 
     # Stored, not just solved: the cast is what list_castings names and what
@@ -634,22 +679,45 @@ def _resolve_all(
         CastingRequest(
             characters=record.characters,
             pool=pool,
-            explicit=explicit,
+            explicit=pins.explicit,
             narrator_voice_id=casting.narrator_voice_id,
             unknown_voice_id=casting.unknown_voice_id,
             method=cast("CastingMethod", casting.method),
-            prior_load=prior_load,
+            prior_load=pins.prior_load,
         ),
     )
+    # Resolved before the series is written, not after: this is what can
+    # fail on an unprovisioned voice, and a doomed render must not persist a
+    # cast it never actually produced.
+    final_bindings = _resolved_execution_bindings(
+        casting.narrator_voice_id,
+        also=(casting.unknown_voice_id, *sorted(set(outcome.assignments.values()))),
+    )
     if series is not None:
+        persisted_assignments = dict(outcome.assignments)
+        if pins.dropped_pins and not series.allow_recast:
+            # Reached only through resolve(), which never validates -- write()
+            # would have refused this render before here. The render still
+            # has to use whatever the solver chose (the speech cannot just
+            # vanish), but persisting that choice would erase the operator's
+            # only signal that a voice went missing: the next validate()
+            # would no longer report it. It would also be wrong for a pin
+            # dropped only because it is the wrong language for *this*
+            # volume -- that voice is still correct for others. Either way
+            # the series keeps what it already had.
+            persisted_assignments.update(pins.dropped_voice_ids)
         # book_digest makes a re-render of this exact volume replace its own
         # contribution rather than add to it -- see merged_series.
         store.write_series(
             merged_series(
                 stored,
                 record.characters,
-                outcome.assignments,
-                casting.narrator_voice_id,
+                persisted_assignments,
+                (
+                    casting.narrator_voice_id
+                    if stored is None or series.allow_narrator_change
+                    else stored.narrator_voice_id
+                ),
                 series.series_id,
                 book_digest=digest,
             )
@@ -661,10 +729,7 @@ def _resolve_all(
         unknown_voice_id=casting.unknown_voice_id,
         spans=record.spans,
         collisions=outcome.collisions,
-        bindings=_resolved_execution_bindings(
-            casting.narrator_voice_id,
-            also=(casting.unknown_voice_id, *sorted(set(outcome.assignments.values()))),
-        ),
+        bindings=final_bindings,
     )
 
 
