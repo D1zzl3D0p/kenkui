@@ -979,3 +979,23 @@ def test_a_missing_series_voice_names_its_characters_for_the_operator(
     assert log_field(named[0], "series_id") == "s"
     assert log_field(named[0], "characters") == "Javert"
     assert log_field(named[0], "voice_ids") == "ghost"
+
+
+def test_validate_reports_a_series_without_voices_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """validate() reports problems; it never raises on the way to reporting.
+
+    A pipeline that declares a series but never calls `.assign_voices()` has
+    no AssignVoices operation, and the series block asked for one anyway --
+    `next()` with no default, so the caller got a bare StopIteration instead
+    of the ValidationResult already holding the very issue that explains it.
+    """
+    path = make_epub(
+        tmp_path / "volume-1.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+    result = kk.epub(path).series("s", book=1).validate()
+    assert isinstance(result, kk.ValidationResult)
+    assert kk.ErrorCode.VOICE_REQUIRED in {issue.code for issue in result.issues}

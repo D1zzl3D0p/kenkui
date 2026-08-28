@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from kenkui._characters import store
+from kenkui._characters.infer import merge_rosters, normalise_roster
 from kenkui._characters.series import match_roster, merged_series
 from kenkui._domain.casting import CharacterProfile
 
@@ -290,3 +293,74 @@ def test_an_alias_two_series_characters_share_matches_nobody() -> None:
         ),
     )
     assert match_roster(record, (_profile("elizabeth", "Elizabeth"),)) == {}
+
+
+def _roster(payload: list[dict[str, str]], spoken: dict[str, int]) -> tuple[
+    CharacterProfile, ...
+]:
+    """Build a volume's roster the way a render does, from a model answer."""
+    merged = merge_rosters((normalise_roster(payload),))
+    return tuple(
+        replace(character, spoken_characters=spoken[character.id])
+        for character in merged
+    )
+
+
+def test_two_of_one_volumes_people_do_not_collapse_onto_one_canonical() -> None:
+    """The digest reuse rule must not fold this volume's own characters.
+
+    A slot carrying this ``book_digest`` proves it belongs to *some*
+    character of this volume, not to *this* one -- and every mint this call
+    makes writes that digest. So "Guard" minting ``guard-2`` left its digest
+    where a later "Warden", whose model-given raw id simply *is* ``guard-2``,
+    found it and folded onto Guard: one voice for two people, Guard's own
+    voice and speech discarded, and the series treating them as one person
+    in every volume after. Under-merging is the failure this module accepts;
+    this is the other one.
+    """
+    volume_one = _roster([{"id": "guard", "name": "Gaoler"}], {"guard": 100})
+    record = merged_series(
+        None, volume_one, {"guard": "alf"}, "eponine", "s", book_digest="volume-1",
+    )
+    volume_two = _roster(
+        [{"id": "guard", "name": "Guard"}, {"id": "guard-2", "name": "Warden"}],
+        {"guard": 200, "guard-2": 300},
+    )
+    updated = merged_series(
+        record,
+        volume_two,
+        {"guard": "aoife", "guard-2": "aaron"},
+        "eponine",
+        "s",
+        book_digest="volume-2",
+    )
+
+    by_display = {c.display_name: c for c in updated.characters}
+    assert set(by_display) == {"Gaoler", "Guard", "Warden"}
+    assert len({c.canonical_id for c in updated.characters}) == 3  # noqa: PLR2004
+    assert by_display["Gaoler"].voice_id == "alf"
+    assert by_display["Gaoler"].spoken_characters == 100  # noqa: PLR2004
+    assert by_display["Guard"].voice_id == "aoife"
+    assert by_display["Guard"].spoken_characters == 200  # noqa: PLR2004
+    assert by_display["Warden"].voice_id == "aaron"
+    assert by_display["Warden"].spoken_characters == 300  # noqa: PLR2004
+    # Nobody wears anybody else's name: a fold shows up here first.
+    assert by_display["Guard"].aliases == ("Guard",)
+    assert by_display["Warden"].aliases == ("Warden",)
+
+    # And re-rendering that same volume still reuses those three, which is
+    # the reason the digest rule exists -- the two must both hold at once.
+    for _ in range(3):
+        updated = merged_series(
+            updated,
+            volume_two,
+            {"guard": "aoife", "guard-2": "aaron"},
+            "eponine",
+            "s",
+            book_digest="volume-2",
+        )
+        assert len(updated.characters) == 3  # noqa: PLR2004 - Gaoler, Guard, Warden
+    again = {c.display_name: c for c in updated.characters}
+    assert again["Guard"].spoken_characters == 200  # noqa: PLR2004 - replaced, not piled
+    assert again["Warden"].spoken_characters == 300  # noqa: PLR2004
+    assert again["Warden"].voice_id == "aaron"

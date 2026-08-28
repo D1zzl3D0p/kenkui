@@ -19,7 +19,7 @@ from kenkui._characters.infer import ROLE_PREFIX
 from kenkui._characters.store import SeriesCharacter, SeriesRecord
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Container, Mapping, Sequence
 
     from kenkui._domain.casting import CharacterProfile
 
@@ -154,7 +154,10 @@ def _claimed_slots(base: str, known: Mapping[str, SeriesCharacter]) -> list[str]
 
 
 def _mint_canonical(
-    base: str, known: Mapping[str, SeriesCharacter], book_digest: str | None = None
+    base: str,
+    known: Mapping[str, SeriesCharacter],
+    book_digest: str | None = None,
+    claimed: Container[str] = frozenset(),
 ) -> str:
     """Return the id this series holds for a character no name matched.
 
@@ -174,10 +177,26 @@ def _mint_canonical(
     replace anything and the ``book_digest`` idempotency was defeated by
     the very path meant to be safe. An id already carrying a contribution
     from THIS volume is that same character seen again, so it is reused.
+
+    That ledger test only holds across calls. Within one call it says the
+    slot belongs to *some* character of this volume, which is no longer
+    evidence about *this* one, because this call has been writing the same
+    digest into every slot it touches: a "Guard" minting ``guard-2``
+    earlier in this very roster leaves its digest there for a later
+    "Warden" whose raw id happens to be ``guard-2`` to find, and the two
+    become one person on one voice, permanently and silently. ``claimed``
+    is what this call has already handed out, and is excluded from the
+    scan -- a slot spoken for by another character of this same volume is
+    by construction not this character seen again. Keying the ledger on
+    the source character id instead would tell the two apart directly, but
+    it rewrites a stored schema (and its migration) to answer a question
+    that is only ever asked about one in-flight call.
     """
     slots = _claimed_slots(base, known)
     if book_digest is not None:
         for canonical in slots:
+            if canonical in claimed:
+                continue
             if book_digest in dict(known[canonical].contributions):
                 return canonical
     return base if not slots else f"{base}-{len(slots) + 1}"
@@ -247,6 +266,10 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
     """
     matched = match_roster(record, characters)
     known = {c.canonical_id: c for c in (record.characters if record else ())}
+    # Every canonical this call has handed out. Two characters of one volume
+    # are two people, so a slot already spoken for here is closed to the
+    # rest of them -- see `_mint_canonical`.
+    claimed: set[str] = set()
     for character in characters:
         voice_id = assignments.get(character.id)
         if voice_id is None:
@@ -257,7 +280,8 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
         # unmatched character's id can coincide with someone else's.
         canonical = matched.get(character.id)
         if canonical is None:
-            canonical = _mint_canonical(character.id, known, book_digest)
+            canonical = _mint_canonical(character.id, known, book_digest, claimed)
+        claimed.add(canonical)
         existing = known.get(canonical)
         aliases = {*character.aliases, character.display_name}
         if existing is None:

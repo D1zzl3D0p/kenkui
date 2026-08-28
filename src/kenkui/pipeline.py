@@ -353,14 +353,23 @@ class Pipeline:
         series = next(
             (item for item in self.operations if isinstance(item, Series)), None
         )
-        if series is not None:
+        # The series checks are all about the voices this render would cast
+        # with, so a pipeline that declares a series but never calls
+        # `.assign_voices()` has nothing for them to read -- and
+        # `render_intent_errors` has already queued the missing narrator as
+        # an issue. Reporting that is validate()'s whole contract; asking
+        # `_casting()` for an operation that is not there turned the report
+        # into a StopIteration and told the caller nothing at all.
+        casting = next(
+            (item for item in self.operations if isinstance(item, AssignVoices)), None
+        )
+        if series is not None and casting is not None:
             from ._characters import store  # noqa: PLC0415 - see below
             from .voices.provision import list_voices  # noqa: PLC0415
             # Both are import-time cost callers who never declare a series
             # should not pay: the store and the voice manifest are only
             # touched once a pipeline actually names one.
 
-            casting = self._casting()
             stored = store.read_series(series.series_id)
             codes = series_intent_errors(
                 self.operations,
