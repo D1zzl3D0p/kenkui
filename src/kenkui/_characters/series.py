@@ -87,18 +87,50 @@ def _mint_canonical(base: str, known: Mapping[str, SeriesCharacter]) -> str:
     return f"{base}-{suffix}"
 
 
-def merged_series(
+def _accumulate(
+    existing: SeriesCharacter, spoken_characters: int, book_digest: str | None
+) -> tuple[int, tuple[tuple[str, int], ...]]:
+    """Fold in one character's speech, replacing rather than repeating a volume.
+
+    Untracked contributions (``book_digest`` was never supplied, on this call
+    or any earlier one that reached this canonical id) still just add: there
+    is nothing to compare the new amount against. A named volume that has
+    contributed before has its old amount removed before the new one is
+    added, so re-merging it lands on the new total rather than the sum of
+    both.
+    """
+    if book_digest is None:
+        return existing.spoken_characters + spoken_characters, existing.contributions
+    ledger = dict(existing.contributions)
+    total = existing.spoken_characters - ledger.get(book_digest, 0) + spoken_characters
+    ledger[book_digest] = spoken_characters
+    return total, tuple(sorted(ledger.items()))
+
+
+def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
     record: SeriesRecord | None,
     characters: Sequence[CharacterProfile],
     assignments: Mapping[str, str],
     narrator_voice_id: str,
     series_id: str,
+    *,
+    book_digest: str | None = None,
 ) -> SeriesRecord:
     """Return the series as it stands after this volume.
 
     A returning character keeps the voice the series gave them and gains this
     volume's speech and surface forms. A newcomer joins with whatever voice
     the solver just chose.
+
+    ``book_digest`` identifies the volume whose speech is being folded in --
+    the same content hash attribution is keyed by, so an edited copy of a
+    volume is a different one. Without it, speech accumulates blindly: two
+    calls over the same volume's assignments add its total twice. Naming the
+    volume lets a repeat call replace what it contributed last time rather
+    than pile on top of it, which is what a re-render is -- the ordinary way
+    to render a book, since ``resolve()`` and ``write()`` both call this on
+    every run, not just the first. Omitting it keeps the old, purely additive
+    behaviour exactly, for callers with no volume identity to offer.
     """
     matched = match_roster(record, characters)
     known = {c.canonical_id: c for c in (record.characters if record else ())}
@@ -122,8 +154,16 @@ def merged_series(
                 voice_id=voice_id,
                 spoken_characters=character.spoken_characters,
                 aliases=tuple(sorted(aliases)),
+                contributions=(
+                    (book_digest, character.spoken_characters),
+                )
+                if book_digest is not None
+                else (),
             )
             continue
+        total, contributions = _accumulate(
+            existing, character.spoken_characters, book_digest
+        )
         known[canonical] = SeriesCharacter(
             canonical_id=canonical,
             display_name=existing.display_name,
@@ -131,9 +171,9 @@ def merged_series(
             # volume answering None must not un-gender a cast character.
             gender=existing.gender if existing.gender is not None else character.gender,
             voice_id=existing.voice_id,
-            spoken_characters=existing.spoken_characters
-            + character.spoken_characters,
+            spoken_characters=total,
             aliases=tuple(sorted({*existing.aliases, *aliases})),
+            contributions=contributions,
         )
     return SeriesRecord(
         series_id=series_id,

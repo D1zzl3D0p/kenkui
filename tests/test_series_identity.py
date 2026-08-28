@@ -166,3 +166,48 @@ def test_unmatched_newcomer_does_not_inherit_an_unrelated_slug_collision() -> No
     assert by_display["Town Guard"].spoken_characters == 100  # noqa: PLR2004
     assert by_display["Castle Guard"].voice_id == "v2"
     assert by_display["Castle Guard"].spoken_characters == 100  # noqa: PLR2004
+
+
+def test_merging_the_same_volume_twice_replaces_its_contribution() -> None:
+    """A re-render must not double the count for the same volume.
+
+    ``resolve()``/``write()`` call this on every run, so re-rendering one
+    volume is ordinary, not hypothetical -- without ``book_digest`` a second
+    pass over the same speech would add it again rather than replace it.
+    """
+    first = merged_series(
+        None, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        book_digest="volume-1",
+    )
+    again = merged_series(
+        first, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        book_digest="volume-1",
+    )
+    kaladin = next(c for c in again.characters if c.canonical_id == "kaladin")
+    assert kaladin.spoken_characters == 100  # noqa: PLR2004 - unchanged by the redo
+
+
+def test_merging_a_different_volume_still_accumulates() -> None:
+    """Naming volumes must not turn off the series' whole point: accumulation."""
+    first = merged_series(
+        None, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        book_digest="volume-1",
+    )
+    second = merged_series(
+        first, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        book_digest="volume-2",
+    )
+    kaladin = next(c for c in second.characters if c.canonical_id == "kaladin")
+    assert kaladin.spoken_characters == 200  # noqa: PLR2004 - 100 each, two volumes
+
+
+def test_an_unnamed_volume_still_accumulates_as_before() -> None:
+    """Omitting ``book_digest`` keeps the original, purely additive contract."""
+    first = merged_series(
+        None, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+    )
+    second = merged_series(
+        first, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+    )
+    kaladin = next(c for c in second.characters if c.canonical_id == "kaladin")
+    assert kaladin.spoken_characters == 200  # noqa: PLR2004 - additive, as always

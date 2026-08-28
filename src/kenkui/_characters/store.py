@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS series_aliases(
     alias TEXT NOT NULL,
     canonical_id TEXT NOT NULL,
     PRIMARY KEY (series_id, alias));
+
+CREATE TABLE IF NOT EXISTS series_contributions(
+    series_id TEXT NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
+    canonical_id TEXT NOT NULL,
+    book_digest TEXT NOT NULL,
+    spoken_characters INTEGER NOT NULL,
+    PRIMARY KEY (series_id, canonical_id, book_digest));
 """
 
 
@@ -142,6 +149,11 @@ class SeriesCharacter:
     voice_id: str
     spoken_characters: int
     aliases: tuple[str, ...]
+    # Per-volume ledger behind `spoken_characters`, keyed by book digest.
+    # Empty for a character no merge has ever named a volume for; see
+    # `_characters.series.merged_series`. Never read outside that module --
+    # everything else wants the total, not the breakdown.
+    contributions: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +537,10 @@ def write_series(record: SeriesRecord, path: Path | None = None) -> None:
             connection.execute(
                 "DELETE FROM series_aliases WHERE series_id=?", (record.series_id,)
             )
+            connection.execute(
+                "DELETE FROM series_contributions WHERE series_id=?",
+                (record.series_id,),
+            )
             for character in record.characters:
                 connection.execute(
                     "INSERT INTO series_characters(series_id,canonical_id,"
@@ -545,6 +561,12 @@ def write_series(record: SeriesRecord, path: Path | None = None) -> None:
                         "canonical_id) VALUES(?,?,?)",
                         (record.series_id, alias, character.canonical_id),
                     )
+                for book_digest, spoken in character.contributions:
+                    connection.execute(
+                        "INSERT INTO series_contributions(series_id,canonical_id,"
+                        "book_digest,spoken_characters) VALUES(?,?,?,?)",
+                        (record.series_id, character.canonical_id, book_digest, spoken),
+                    )
     except sqlite3.Error as error:
         message = f"could not write series to {path or default_store_path()}"
         raise OSError(message) from error
@@ -560,6 +582,15 @@ def _series_from_row(
         (row["series_id"],),
     ):
         aliases.setdefault(item["canonical_id"], []).append(item["alias"])
+    contributions: dict[str, list[tuple[str, int]]] = {}
+    for item in connection.execute(
+        "SELECT canonical_id,book_digest,spoken_characters FROM "
+        "series_contributions WHERE series_id=? ORDER BY book_digest",
+        (row["series_id"],),
+    ):
+        contributions.setdefault(item["canonical_id"], []).append(
+            (item["book_digest"], item["spoken_characters"])
+        )
     characters = tuple(
         SeriesCharacter(
             canonical_id=item["canonical_id"],
@@ -568,6 +599,7 @@ def _series_from_row(
             voice_id=item["voice_id"],
             spoken_characters=item["spoken_characters"],
             aliases=tuple(aliases.get(item["canonical_id"], ())),
+            contributions=tuple(contributions.get(item["canonical_id"], ())),
         )
         for item in connection.execute(
             "SELECT * FROM series_characters WHERE series_id=? "

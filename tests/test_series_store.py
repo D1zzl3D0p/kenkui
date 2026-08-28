@@ -174,3 +174,21 @@ def test_a_character_with_several_aliases_round_trips(tmp_path: Path) -> None:
     by_id = {c.canonical_id: c for c in read.characters}
     assert by_id["kaladin"].aliases == ("Kal", "Radiant", "Stormblessed")
     assert by_id["shallan"].aliases == ("Veil",)
+
+
+def test_a_character_with_book_contributions_round_trips(tmp_path: Path) -> None:
+    """The per-volume ledger behind spoken_characters survives a round trip."""
+    path = tmp_path / "s.sqlite3"
+    kaladin = store.SeriesCharacter(
+        canonical_id="kaladin",
+        display_name="Kaladin",
+        gender="masculine",
+        voice_id="alf",
+        spoken_characters=300,
+        aliases=(),
+        contributions=(("volume-1", 100), ("volume-2", 200)),
+    )
+    store.write_series(store.SeriesRecord("stormlight", "eponine", (kaladin,)), path)
+    read = store.read_series("stormlight", path)
+    assert read is not None
+    assert read.characters[0].contributions == (("volume-1", 100), ("volume-2", 200))

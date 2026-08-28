@@ -54,6 +54,8 @@ if TYPE_CHECKING:
     import os
     from collections.abc import Callable, Mapping, Sequence
 
+    from ._characters.llm import Client
+    from ._characters.store import SeriesRecord
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
     from .inspection import BookInspection
@@ -526,7 +528,9 @@ def _resolve_all(
     from ._characters import (  # noqa: PLC0415 - see below
         resolve_attribution,
         resolve_cast,
+        store,
     )
+    from ._characters.series import match_roster, merged_series  # noqa: PLC0415
     from .voices.provision import list_voices  # noqa: PLC0415 - resolved per
     # call so the managed cache root can be redirected, as the store is.
 
@@ -551,11 +555,13 @@ def _resolve_all(
         None,
     )
     inspection = pipeline.inspect()
+    digest = _source_digest(pipeline.source.path)
     record = resolve_attribution(
         inspection,
-        _source_digest(pipeline.source.path),
+        digest,
         attributing.model_id,
         roster_model_id=inferring.model_id if inferring is not None else None,
+        client=_attribution_client(),
         cancel=cancel,
     )
     pool = tuple(
@@ -564,6 +570,38 @@ def _resolve_all(
         if voice.state == "loaded" and voice.language == bindings.voice.language
     )
     _log_ungendered_cast(casting.method, record.characters, pool)
+
+    # A book carrying no .series() call touches none of this: `series` is
+    # None, `stored` stays None, and `explicit`/`prior_load` end up exactly
+    # what they always were. That is load-bearing, not incidental -- a
+    # regression here would silently re-cast every book anyone has already
+    # rendered.
+    series = next(
+        (item for item in pipeline.operations if isinstance(item, Series)), None
+    )
+    stored = store.read_series(series.series_id) if series is not None else None
+    explicit = dict(casting.cast)
+    prior_load: dict[str, int] = {}
+    dropped_pins: list[str] = []
+    if stored is not None:
+        pool_ids = {voice.id for voice in pool}
+        by_canonical = {c.canonical_id: c for c in stored.characters}
+        for book_id, canonical in match_roster(stored, record.characters).items():
+            known = by_canonical[canonical]
+            # A pin the pool cannot honour only reaches here under
+            # allow_recast; validate() refuses it otherwise. Dropping it
+            # lets the solver choose afresh, which is what was asked for.
+            if known.voice_id in pool_ids:
+                explicit[book_id] = known.voice_id
+            else:
+                dropped_pins.append(book_id)
+        for known in stored.characters:
+            prior_load[known.voice_id] = (
+                prior_load.get(known.voice_id, 0) + known.spoken_characters
+            )
+    if series is not None:
+        _log_series_overrides(series, stored, dropped_pins, casting.narrator_voice_id)
+
     # Stored, not just solved: the cast is what list_castings names and what
     # remove_casting discards, and neither can see a cast that only ever
     # existed for the duration of one render.
@@ -572,12 +610,26 @@ def _resolve_all(
         CastingRequest(
             characters=record.characters,
             pool=pool,
-            explicit=dict(casting.cast),
+            explicit=explicit,
             narrator_voice_id=casting.narrator_voice_id,
             unknown_voice_id=casting.unknown_voice_id,
             method=cast("CastingMethod", casting.method),
+            prior_load=prior_load,
         ),
     )
+    if series is not None:
+        # book_digest makes a re-render of this exact volume replace its own
+        # contribution rather than add to it -- see merged_series.
+        store.write_series(
+            merged_series(
+                stored,
+                record.characters,
+                outcome.assignments,
+                casting.narrator_voice_id,
+                series.series_id,
+                book_digest=digest,
+            )
+        )
     # Re-resolve with the whole cast so every assigned voice's asset reaches
     # the engine config; one worker then holds one model and N states.
     return Resolved(
@@ -636,6 +688,50 @@ def _log_ungendered_cast(
             "sample": ", ".join(affected[:5]),
             "traited_voices": sum(v.perceived_gender is not None for v in pool),
             "pool": len(pool),
+        },
+    )
+
+
+def _attribution_client() -> Client | None:
+    """Compatibility seam for private tests that replace the model boundary.
+
+    `resolve_attribution` accepts a `client` explicitly so a test never
+    reaches a provider, but `Pipeline` exposes no public argument for one --
+    adding a caller-facing parameter just to satisfy a test would put a model
+    concern in front of every user of the public API. Tests instead
+    monkeypatch this function, the same seam `_execution_bindings` already
+    is for the rendering side.
+    """
+    return None
+
+
+def _log_series_overrides(
+    series: Series,
+    stored: SeriesRecord | None,
+    dropped_pins: Sequence[str],
+    narrator_voice_id: str,
+) -> None:
+    """Record a forced series override for an operator, not for the caller.
+
+    `allow_recast` and `allow_narrator_change` exist to let a render proceed
+    over a contradiction `validate()` would otherwise refuse. Proceeding
+    silently would leave nobody able to tell that it happened -- a forced
+    render must still say what it did.
+    """
+    narrator_changed = (
+        stored is not None and stored.narrator_voice_id != narrator_voice_id
+    )
+    if not dropped_pins and not narrator_changed:
+        return
+    log_event(
+        _LOGGER,
+        "series_override",
+        level=logging.WARNING,
+        context={
+            "boundary": "series",
+            "series_id": series.series_id,
+            "dropped_pins": ", ".join(dropped_pins),
+            "narrator_changed": narrator_changed,
         },
     )
 
