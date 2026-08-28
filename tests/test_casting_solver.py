@@ -282,3 +282,25 @@ def test_a_served_pool_reports_nothing() -> None:
     characters = (_character("her", "feminine", 100, ("ch1",)),)
     assert ungendered_pool_characters("gendered", characters, pool) == ()
 
+
+def test_prior_load_steers_the_next_volume() -> None:
+    """A voice the series has already spent is not the least-used one.
+
+    Without this the second volume restarts the count and hands its first
+    character the same voice the first volume did.
+    """
+    characters = (_character("newcomer", "feminine", 100, ("ch1",)),)
+    fresh = solve(_request(characters))
+    spent = solve(
+        _request(characters, prior_load={fresh.assignments["newcomer"]: 10_000})
+    )
+    assert spent.assignments["newcomer"] != fresh.assignments["newcomer"]
+
+
+def test_no_prior_load_is_todays_behaviour() -> None:
+    """A pipeline that never mentions a series must cast exactly as before."""
+    characters = (_character("solo", "feminine", 100, ("ch1",)),)
+    assert solve(_request(characters)).assignments == solve(
+        _request(characters, prior_load={})
+    ).assignments
+

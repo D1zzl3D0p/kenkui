@@ -12,6 +12,7 @@ method later means writing one filter rather than a second solver.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, cast
 
 from kenkui.errors import ErrorCode, ValidationError
@@ -65,6 +66,10 @@ class CastingRequest:
     narrator_voice_id: str
     unknown_voice_id: str
     method: CastingMethod
+    # Voice usage carried in from outside this book, in spoken characters.
+    # A series continues its spread across volumes rather than restarting
+    # it; empty is exactly today's behaviour.
+    prior_load: Mapping[str, int] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +153,9 @@ def solve(request: CastingRequest) -> CastingOutcome:
 
     neighbours = _neighbours(request.characters)
     assignments: dict[str, str] = dict(request.explicit)
-    load: dict[str, int] = {voice.id: 0 for voice in pool}
+    load: dict[str, int] = {
+        voice.id: request.prior_load.get(voice.id, 0) for voice in pool
+    }
     for character_id, voice_id in assignments.items():
         load[voice_id] = (
             load.get(voice_id, 0) + by_id[character_id].spoken_characters
