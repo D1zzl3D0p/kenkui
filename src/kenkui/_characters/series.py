@@ -51,7 +51,40 @@ def match_roster(
         }
         if len(hosts) == 1:
             matched[character.id] = next(iter(hosts))
-    return matched
+
+    # Two characters in *this* volume can each independently reach the same
+    # series person -- a maid named "Elizabeth" and the protagonist "Lizzy"
+    # both land on the series' one Elizabeth Bennet. Attaching either would
+    # discard one of this volume's own solved voices to wear hers, which is
+    # the over-merge this module exists to refuse. A canonical claimed by
+    # more than one local character is withheld from all of its claimants;
+    # each keeps its own, separately-solved voice instead.
+    claimants: dict[str, list[str]] = {}
+    for character_id, canonical in matched.items():
+        claimants.setdefault(canonical, []).append(character_id)
+    return {
+        character_id: canonical
+        for character_id, canonical in matched.items()
+        if len(claimants[canonical]) == 1
+    }
+
+
+def _mint_canonical(base: str, known: Mapping[str, SeriesCharacter]) -> str:
+    """Return an id the series has not already claimed for someone else.
+
+    Character ids are slugged from display names alone (see ``infer.py``),
+    so two unrelated people in different volumes can land on the same raw
+    id even though ``match_roster`` found no name link between them --
+    two "Guard"s, say. Handing the newcomer the raw id anyway would fold
+    them into whoever already holds it with no name comparison involved;
+    minting a fresh, deterministic id keeps them the two people they are.
+    """
+    if base not in known:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in known:
+        suffix += 1
+    return f"{base}-{suffix}"
 
 
 def merged_series(
@@ -73,7 +106,12 @@ def merged_series(
         voice_id = assignments.get(character.id)
         if voice_id is None:
             continue
-        canonical = matched.get(character.id, character.id)
+        # A canonical from match_roster is a name-checked return; falling
+        # back to the raw id is only safe once it is confirmed free, since
+        # an unmatched character's id can coincide with someone else's.
+        canonical = matched.get(character.id)
+        if canonical is None:
+            canonical = _mint_canonical(character.id, known)
         existing = known.get(canonical)
         aliases = {*character.aliases, character.display_name}
         if existing is None:

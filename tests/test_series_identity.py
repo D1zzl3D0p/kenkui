@@ -114,3 +114,55 @@ def test_merging_adds_a_newcomer() -> None:
     assert updated.narrator_voice_id == "eponine"
     assert [c.canonical_id for c in updated.characters] == ["shallan"]
     assert updated.characters[0].voice_id == "aoife"
+
+
+def test_two_local_characters_claiming_one_series_person_match_neither() -> None:
+    """A maid named "Elizabeth" and the protagonist "Lizzy" are not one person.
+
+    Both surface forms the series accumulated for Elizabeth Bennet also reach
+    two different characters in this volume. Attaching either would hand one
+    of them her voice and discard the one the in-volume solver already gave
+    them, so a canonical id claimed by more than one local character is
+    refused for all of its claimants -- the same one-person-two-voices bias
+    `identity` states, applied across the series boundary too.
+    """
+    record = store.SeriesRecord(
+        "s", "eponine",
+        (_known("elizabeth-bennet", "Elizabeth Bennet", ("Elizabeth", "Lizzy")),),
+    )
+    characters = (_profile("elizabeth-maid", "Elizabeth"), _profile("lizzy", "Lizzy"))
+    assert match_roster(record, characters) == {}
+
+    updated = merged_series(
+        record, characters, {"elizabeth-maid": "v1", "lizzy": "v2"}, "eponine", "s",
+    )
+    assert len(updated.characters) == 3  # noqa: PLR2004 - two locals plus the untouched original
+    by_id = {c.canonical_id: c.voice_id for c in updated.characters}
+    assert by_id["elizabeth-maid"] == "v1"
+    assert by_id["lizzy"] == "v2"
+    assert by_id["elizabeth-bennet"] == "alf"
+
+
+def test_unmatched_newcomer_does_not_inherit_an_unrelated_slug_collision() -> None:
+    """Two different volumes' characters can slug to the same raw id.
+
+    Volume 1's "Town Guard" and a later volume's "Castle Guard" are different
+    people who never matched by name. merged_series must not fall back to the
+    raw character id when that id is already claimed by someone else in the
+    series -- doing so would hand the second guard the first guard's voice
+    and running total with no name comparison ever happening.
+    """
+    record = merged_series(
+        None, (_profile("guard", "Town Guard"),), {"guard": "v1"}, "n", "s",
+    )
+    updated = merged_series(
+        record, (_profile("guard", "Castle Guard"),), {"guard": "v2"}, "n", "s",
+    )
+    assert len(updated.characters) == 2  # noqa: PLR2004 - two distinct guards
+    canonical_ids = {c.canonical_id for c in updated.characters}
+    assert len(canonical_ids) == 2  # noqa: PLR2004 - two distinct guards
+    by_display = {c.display_name: c for c in updated.characters}
+    assert by_display["Town Guard"].voice_id == "v1"
+    assert by_display["Town Guard"].spoken_characters == 100  # noqa: PLR2004
+    assert by_display["Castle Guard"].voice_id == "v2"
+    assert by_display["Castle Guard"].spoken_characters == 100  # noqa: PLR2004
