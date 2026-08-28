@@ -518,3 +518,34 @@ def test_the_random_method_is_never_reported(caplog: pytest.LogCaptureFixture) -
             (_traited_voice("c", "masculine"),),
         )
     assert "ungendered_cast" not in caplog.text
+
+
+def test_series_records_intent_without_reading_anything() -> None:
+    """Membership is declared, never derived: no EPUB carries it."""
+    pipeline = kk.epub("book.epub").series("stormlight", book=3)
+    recorded = pipeline.operations[-1]
+    assert recorded.series_id == "stormlight"
+    assert recorded.book == 3  # noqa: PLR2004 - the book number passed in above
+    assert recorded.allow_recast is False
+    assert recorded.allow_narrator_change is False
+
+
+def test_an_empty_series_id_is_refused() -> None:
+    """A series with no name cannot be looked up again."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").series("   ")
+    assert error.value.code == kk.ErrorCode.INVALID_SERIES
+
+
+def test_a_negative_book_number_is_refused() -> None:
+    """A non-positive book number cannot order a series."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").series("stormlight", book=0)
+    assert error.value.code == kk.ErrorCode.INVALID_SERIES
+
+
+def test_two_series_declarations_are_refused() -> None:
+    """A book belongs to one series."""
+    with pytest.raises(kk.ValidationError) as error:
+        kk.epub("book.epub").series("a").series("b")
+    assert error.value.code == kk.ErrorCode.DUPLICATE_OPERATION

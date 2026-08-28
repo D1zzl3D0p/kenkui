@@ -25,6 +25,7 @@ from ._domain.operations import (
     Pauses,
     SelectChapterRange,
     SelectChapters,
+    Series,
     SpokenForm,
     SynthesizeSpeech,
     append_unique,
@@ -289,6 +290,40 @@ class Pipeline:
         if author is not None and not author.strip():
             raise ValidationError(ErrorCode.INVALID_METADATA)
         return self._append(MetadataIntent(title, author, cover))
+
+    def series(
+        self,
+        series_id: str,
+        *,
+        book: int | None = None,
+        allow_recast: bool = False,
+        allow_narrator_change: bool = False,
+    ) -> Pipeline:
+        """Return a branch tying this book to a series.
+
+        A character the series already cast keeps their voice, and voices
+        continue spreading across volumes rather than restarting. ``book`` is
+        recorded for ordering only: continuity is decided by identity, not by
+        volume number.
+
+        Two ways a series can be contradicted fail before any model call:
+        a pinned voice missing from the pool, and a narrator differing from
+        the one the series recorded. ``allow_recast`` re-solves the affected
+        characters and updates their pins; ``allow_narrator_change`` adopts
+        the new narrator from this volume on. Both log when they take effect.
+        """
+        name = series_id.strip()
+        if not name or (book is not None and book < 1):
+            raise ValidationError(ErrorCode.INVALID_SERIES)
+        return self._append(
+            Series(
+                series_id=name,
+                book=book,
+                allow_recast=allow_recast,
+                allow_narrator_change=allow_narrator_change,
+            ),
+            before_tts=True,
+        )
 
     def resolve(self) -> Pipeline:
         """Resolve voices, attribution, and casting, returning a new Pipeline.

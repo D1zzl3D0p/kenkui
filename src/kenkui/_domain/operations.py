@@ -104,6 +104,20 @@ class MetadataIntent:
     cover: Literal["source"] | Path | None = "source"
 
 
+@dataclass(frozen=True, slots=True)
+class Series:
+    """Which series this book belongs to, and how strictly to honour it.
+
+    Declared, never derived: no EPUB in practice carries series metadata,
+    so there is nothing to read it from.
+    """
+
+    series_id: str
+    book: int | None = None
+    allow_recast: bool = False
+    allow_narrator_change: bool = False
+
+
 Operation: TypeAlias = (
     SelectChapters
     | SelectChapterRange
@@ -114,6 +128,7 @@ Operation: TypeAlias = (
     | AssignVoices
     | SynthesizeSpeech
     | MetadataIntent
+    | Series
 )
 _OperationT = TypeVar("_OperationT", bound=Operation)
 

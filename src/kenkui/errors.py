@@ -31,6 +31,7 @@ class ErrorCode(StrEnum):
     CAST_LANGUAGE_MIXED = "cast_language_mixed"
     CHARACTER_UNKNOWN = "character_unknown"
     CAST_UNATTRIBUTED = "cast_unattributed"
+    INVALID_SERIES = "invalid_series"
     MODEL_CALL_FAILED = "model_call_failed"
     MODEL_RESPONSE_INVALID = "model_response_invalid"
     ATTRIBUTION_UNAVAILABLE = "attribution_unavailable"
@@ -106,6 +107,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.CAST_LANGUAGE_MIXED: ("Every voice in one cast must share a language."),
     ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
     ErrorCode.CAST_UNATTRIBUTED: ("A character cast requires quote attribution."),
+    ErrorCode.INVALID_SERIES: "A series needs a name and a positive book number.",
     ErrorCode.MODEL_CALL_FAILED: "The language model could not be reached.",
     ErrorCode.MODEL_RESPONSE_INVALID: (
         "The language model returned an unusable response."
