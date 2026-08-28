@@ -1,9 +1,13 @@
 """Intentional public package interface for Kenkui."""
 
 from ._characters.store import (
+    SeriesCharacter,
+    SeriesRecord,
     list_castings,
+    list_series,
     remove_attribution,
     remove_casting,
+    remove_series,
 )
 from ._domain.operations import MetadataIntent
 from .api import (
@@ -71,6 +75,8 @@ __all__ = [
     "Pipeline",
     "RenderError",
     "Result",
+    "SeriesCharacter",
+    "SeriesRecord",
     "Source",
     "SourceError",
     "StageCompleted",
@@ -89,12 +95,14 @@ __all__ = [
     "builtin_lexicon",
     "epub",
     "list_castings",
+    "list_series",
     "list_voices",
     "load_voice",
     "magic_run",
     "read_lexicon",
     "remove_attribution",
     "remove_casting",
+    "remove_series",
     "remove_voice",
     "unload_voice",
 ]

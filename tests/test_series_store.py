@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import kenkui as kk
 from kenkui._characters import store
 
 if TYPE_CHECKING:
@@ -192,3 +193,11 @@ def test_a_character_with_book_contributions_round_trips(tmp_path: Path) -> None
     read = store.read_series("stormlight", path)
     assert read is not None
     assert read.characters[0].contributions == (("volume-1", 100), ("volume-2", 200))
+
+
+def test_the_public_pair_is_exported() -> None:
+    """Mirrors list_castings / remove_casting: see it, or start over."""
+    assert callable(kk.list_series)
+    assert callable(kk.remove_series)
+    assert kk.SeriesRecord is store.SeriesRecord
+    assert kk.SeriesCharacter is store.SeriesCharacter

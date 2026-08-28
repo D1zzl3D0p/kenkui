@@ -352,6 +352,88 @@ or `${XDG_CACHE_HOME:-~/.cache}/kenkui/v1/manifest.json` (Linux).
 deployments, with unchanged strict-validation semantics. With neither present,
 `write()` fails closed with `renderer_unavailable`.
 
+## Series
+
+A character who appears in several volumes should sound like one person in
+all of them. Declare which series a book belongs to and Kenkui keeps their
+voice:
+
+```python
+kk.epub("oathbringer.epub").series("stormlight", book=3)
+```
+
+Membership is declared, never derived. EPUBs do not carry series metadata in
+practice, so the name is yours to choose, and `book` is recorded for ordering
+only. Continuity is decided by who the characters are, not by volume number:
+identity resolution matches this volume's roster against every name the
+series has seen, the same way it matches names within one book.
+
+A character the series already cast keeps their voice. A newcomer is cast
+from the least-used voices of their gender, counting what earlier volumes
+already spent, so voices keep spreading across the series rather than
+restarting each book. `narrator` and `unknown` behave as they do without a
+series; only cast characters accumulate.
+
+### Fixing a wrong assignment
+
+Pass `cast={...}` the same way you would without a series. An explicit
+assignment for this render wins over the series' stored pin, and the series
+then adopts it: this book and every one rendered after it use the voice you
+just named. This is the supported way to correct one character's voice
+without discarding the whole series.
+
+```python
+kk.epub("book.epub").series("stormlight", book=4).assign_voices(
+    narrator="eponine", cast={"kaladin": "charles"}
+)
+```
+
+### What refuses a render
+
+Two ways a series can be contradicted are checked in `validate()`, before any
+model call:
+
+| code | meaning | override |
+|---|---|---|
+| `series_voice_missing` | a voice this series already cast is not currently loaded | `allow_recast=True` |
+| `series_narrator_changed` | this render's narrator differs from the one the series recorded | `allow_narrator_change=True` |
+
+`resolve()` never calls `validate()`, so a render that reaches it proceeds
+either way — the difference the flags make is not whether the render happens,
+but what gets written back:
+
+- `allow_recast=True` re-solves the affected character and **persists** the
+  replacement voice, so the series converges on it from this volume on.
+- `allow_narrator_change=True` **persists** the new narrator as the series'
+  narrator from this volume on.
+- Without the flag, the render still proceeds using whatever the solver
+  chose (the speech has to go somewhere), but the series record is left
+  untouched. The stored voice or narrator survives, so the next `validate()`
+  keeps reporting the same problem — the render was forced, not authorised.
+
+Every case where this volume's cast disagrees with what the series has
+stored — a dropped pin, an explicit `cast=` override, or a changed narrator —
+logs a `WARNING` with `boundary="series"`, whether or not a flag was passed.
+A forced or overridden render still says what it did.
+
+```python
+kk.epub("book.epub").series(
+    "stormlight", book=5, allow_recast=True, allow_narrator_change=True
+)
+```
+
+### Listing and removal
+
+```python
+kk.list_series()
+kk.remove_series(series_id)
+```
+
+`list_series()` returns every stored `SeriesRecord`, each holding its
+characters in prominence order — most spoken first. `remove_series(series_id)`
+drops a series' pins entirely; the next volume declaring that series id is
+cast fresh, with no memory of the ones before it.
+
 ## Shaping speech
 
 Nothing below is applied unless you ask for it. A pipeline that calls neither
