@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 
@@ -50,9 +52,7 @@ class ScriptedClient:
                     ]
                 }
             )
-        return json.dumps(
-            {"attributions": [{"quote_id": 0, "speaker": self.speaker}]}
-        )
+        return json.dumps({"attributions": [{"quote_id": 0, "speaker": self.speaker}]})
 
 
 def _inspection(text: str = TEXT) -> kk.BookInspection:
@@ -275,7 +275,7 @@ def test_coverage_separates_unknown_from_dropped() -> None:
     assert len(dialogue) == _FIXTURE_QUOTES
 
     # ScriptedClient answers quote_id 0 only, so every later quote is dropped.
-    _, _, coverage = attribute_chapter(
+    _, coverage = attribute_chapter(
         chapter,
         (CharacterProfile("dhatt", "Dhatt", None, 0, ()),),
         "fake/model",
@@ -312,3 +312,56 @@ def test_folded_aliases_survive_measurement_and_the_store() -> None:
     assert stored is not None
     restored = next(c for c in stored.characters if c.id == "lizbyet-corwi")
     assert set(restored.aliases) == {"Corwi", "Lizbyet Corwi"}
+
+
+class _ConcurrentClient:
+    """Answers every roster and attribution prompt while tracking overlap."""
+
+    def __init__(self) -> None:
+        """Start with no observed concurrency."""
+        self._lock = threading.Lock()
+        self._in_flight = 0
+        self.max_concurrent = 0
+
+    def complete(self, model: str, prompt: str) -> str:
+        """Hold each call briefly so overlapping calls are observable."""
+        assert model
+        if "List the speaking characters" in prompt:
+            return json.dumps(
+                {
+                    "characters": [
+                        {"id": "javert", "name": "Javert", "gender": "masculine"}
+                    ]
+                }
+            )
+        with self._lock:
+            self._in_flight += 1
+            self.max_concurrent = max(self.max_concurrent, self._in_flight)
+        time.sleep(0.15)
+        with self._lock:
+            self._in_flight -= 1
+        return json.dumps({"attributions": [{"quote_id": 0, "speaker": "javert"}]})
+
+
+def _multi_chapter_inspection(count: int) -> kk.BookInspection:
+    chapters = tuple(
+        kk.ChapterInspection(f"ch{i}", i, f"One {i}", len(LINE), LINE)
+        for i in range(count)
+    )
+    metadata = kk.BookMetadata("T", "A", cover_available=False)
+    return kk.BookInspection(metadata, chapters)
+
+
+def test_chapters_are_attributed_concurrently() -> None:
+    """Chapters are independent model calls; they must not queue single-file."""
+    client = _ConcurrentClient()
+    resolve_attribution(_multi_chapter_inspection(4), BOOK, "fake/model", client=client)
+    assert client.max_concurrent > 1
+
+
+def test_attribution_prompts_carry_no_recent_speakers() -> None:
+    """Continuity chaining is gone; no prompt may ask for recent speakers."""
+    client = ScriptedClient()
+    resolve_attribution(_inspection(), BOOK, "fake/model", client=client)
+    assert client.calls
+    assert all("Recently speaking" not in prompt for prompt in client.calls)

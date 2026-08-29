@@ -17,10 +17,7 @@ from typing import TYPE_CHECKING
 
 from kenkui._characters.infer import PRONOUNS, ROLE_PREFIX, UNKNOWN, slugify
 from kenkui._characters.llm import complete_json
-from kenkui._characters.prompts import (
-    ATTRIBUTION_PROMPT,
-    CONTINUITY_SPEAKERS,
-)
+from kenkui._characters.prompts import ATTRIBUTION_PROMPT
 from kenkui._characters.quotes import TextSpan, extract_spans
 from kenkui._domain.planning import SpeakerSpan
 from kenkui.errors import ModelError
@@ -127,14 +124,13 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     model_id: str,
     *,
     client: Client | None = None,
-    recent: Sequence[str] = (),
     spans: tuple[TextSpan, ...] | None = None,
     narrator_id: str | None = None,
-) -> tuple[tuple[SpeakerSpan, ...], tuple[str, ...], AttributionCoverage]:
-    """Return one chapter's speaker spans and the speakers that ended it.
+) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage]:
+    """Return one chapter's speaker spans and how its quotes were accounted for.
 
-    The trailing speakers feed the next chapter's prompt, so a conversation
-    running across a chapter boundary keeps its alternation.
+    Chapters are independent: nothing is carried between them, so they can be
+    attributed concurrently.
 
     ``spans`` accepts an already-extracted partition, so a caller that had to
     look for dialogue before deciding to call does not pay for a second scan.
@@ -147,7 +143,6 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         # Nothing to attribute, so nothing is worth a model call.
         return (
             _all_narrated(spans),
-            tuple(recent),
             AttributionCoverage(len(dialogue), 0, 0, 0),
         )
 
@@ -157,7 +152,6 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     ]
     prompt = ATTRIBUTION_PROMPT.format(
         roster=_escaped(_roster_block(characters, narrator_id)),
-        recent=_escaped(", ".join(recent) or "(start of book)"),
         passage=_escaped(chapter.text),
         quotes=_escaped(json.dumps(quotes, ensure_ascii=False, indent=2)),
     )
@@ -190,11 +184,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         )
         for span in spans
     )
-    named = [speaker for speaker in speakers if speaker is not None]
-    # A chapter where nobody could be placed carries the previous chapter's
-    # speakers forward rather than resetting continuity to nothing.
-    trailing = tuple(named[-CONTINUITY_SPEAKERS:]) if named else tuple(recent)
-    return resolved, trailing, coverage
+    return resolved, coverage
 
 
 def _all_narrated(spans: Sequence[TextSpan]) -> tuple[SpeakerSpan, ...]:

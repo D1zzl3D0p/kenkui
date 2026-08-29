@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
-from kenkui._characters.llm import complete_json
+from kenkui._characters.llm import _LiteLLMClient, complete_json
 from kenkui.errors import ErrorCode, ModelError
 
 
@@ -31,8 +34,43 @@ class FakeClient:
         return reply
 
 
+def test_litellm_client_bounds_provider_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unresponsive provider must not hold the batch forever."""
+
+    def completion(**kwargs: object) -> SimpleNamespace:
+        if kwargs.get("timeout") != _REQUEST_TIMEOUT_SECONDS:
+            raise TimeoutError
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))]
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+
+    assert _LiteLLMClient().complete("openrouter/test", "prompt") == "answer"
+
+
+def test_litellm_client_disables_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reasoning tokens dominate attribution latency; they must be off."""
+
+    def completion(**kwargs: object) -> SimpleNamespace:
+        if kwargs.get("reasoning_effort") != "none":
+            raise TimeoutError
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))]
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+
+    assert _LiteLLMClient().complete("openrouter/test", "prompt") == "answer"
+
+
 SCHEMA = {"items": list}
 _RETRIED_ONCE = 2
+_REQUEST_TIMEOUT_SECONDS = 300.0
 
 
 def test_valid_json_is_returned() -> None:
@@ -101,8 +139,6 @@ def test_failures_do_not_leak_book_text(caplog: pytest.LogCaptureFixture) -> Non
     manuscript = "The unpublished manuscript sentence."
     client = FakeClient("not json", "not json", "not json")
     with pytest.raises(ModelError) as caught:
-        complete_json(
-            "fake/model", manuscript, SCHEMA, client=client, backoff_base=0.0
-        )
+        complete_json("fake/model", manuscript, SCHEMA, client=client, backoff_base=0.0)
     assert manuscript not in str(caught.value)
     assert manuscript not in caplog.text

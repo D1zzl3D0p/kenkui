@@ -26,6 +26,7 @@ _LOGGER = get_logger(__name__)
 
 DEFAULT_ATTEMPTS = 3
 DEFAULT_BACKOFF_BASE = 2.0
+_REQUEST_TIMEOUT_SECONDS = 300.0
 
 # Retrying a bug burns provider calls to fail the same way, and retrying an
 # interrupt swallows a Ctrl-C during what may be a very long attribution pass.
@@ -54,6 +55,10 @@ class _LiteLLMClient:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+            # Reasoning tokens dominated attribution latency; these calls are
+            # extraction, not deliberation.
+            reasoning_effort="none",
         )
         return str(response.choices[0].message.content)
 

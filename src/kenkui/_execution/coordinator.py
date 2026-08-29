@@ -190,7 +190,7 @@ def _stage_boundary(stage: str) -> str:
     }[stage]
 
 
-def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
+def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration boundary.
     pipeline: Pipeline,
     output: Path,
     *,
@@ -199,6 +199,7 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
     cancel: CancellationToken | None,
     workers: int | Literal["auto"],
     overwrite: bool,
+    keep_audio_cache: bool,
     assignments: Mapping[str, str] | None = None,
     unknown_voice_id: str | None = None,
     spans: tuple[SpeakerSpan, ...] = (),
@@ -298,6 +299,11 @@ def execute_sequential(  # noqa: PLR0913 - explicit orchestration boundary.
         _publish(publication, output, overwrite=overwrite)
 
         # Publication is the commit. Nothing after this point may revoke success.
+        # The render is done and published, so its audio cache has served its
+        # purpose; release it unless the caller opted to keep it. Fail-open.
+        if bindings.cache_store is not None and not keep_audio_cache:
+            bindings.cache_store.clear_book(plan.source_bytes_hash)
+
         emitter.emit_stage_completed_best_effort("publication")
         emitter.emit_completed_best_effort()
         return result  # noqa: TRY300 - commit success remains in the guarded scope.

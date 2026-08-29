@@ -98,10 +98,12 @@ unwritable storage, or SQLite failure become misses. Such failures cannot turn a
 otherwise correct uncached render into failure. This does not mean unsafe data is
 accepted; it means the cache is bypassed.
 
-Finite quotas are 4,096 segment rows, 512 MiB of distinct payload bytes, and
-1,024 run rows. Each maintenance call evicts/scans bounded batches (32 database
-rows and at most 64 orphan names). Payload reclamation takes the digest lock and
-rechecks references under `BEGIN IMMEDIATE` immediately before unlinking.
+Retention is per-book and explicit. A successful publication clears the
+published book's rows, runs, book, and unreferenced payloads, so a finished
+book stops holding its rendered audio on disk; ``write(..., keep_audio_cache=
+True)`` opts out. Run rows keep a finite bound of 1,024. Each maintenance call
+scans at most 64 orphan names. Payload reclamation takes the digest lock and
+rechecks references under ``BEGIN IMMEDIATE`` immediately before unlinking.
 Cleanup removes only validated old regular temporaries and unreferenced regular,
 single-link sidecars; poisoned/unsafe nodes are left untouched. Book/voice/run
 metadata is pruned in bounded batches.

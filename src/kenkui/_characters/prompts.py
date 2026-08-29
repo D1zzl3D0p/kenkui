@@ -12,11 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-PROMPT_VERSION = "characters-v4"
-
-# Speakers carried into the next window so the model can hold A-B-A-B
-# conversational momentum across a boundary it cannot see past.
-CONTINUITY_SPEAKERS = 4
+PROMPT_VERSION = "characters-v5"
 
 # The role words that state a gender outright. An innkeeper or a guard may be
 # anyone, and casting them from a gendered pool would be a guess; a woman is a
@@ -74,8 +70,6 @@ Return ONLY JSON:
 CHARACTERS
 Return the id exactly as written here, never the display name.
 {roster}
-
-Recently speaking, for continuity: {recent}
 
 Passage:
 ---

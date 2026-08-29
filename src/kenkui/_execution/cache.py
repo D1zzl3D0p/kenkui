@@ -43,10 +43,8 @@ _RETRY_DELAY_SECONDS = 0.025
 _LOCK_WAIT_SECONDS = 0.5
 _ORPHAN_AGE_SECONDS = 24 * 60 * 60
 
-# Finite persistent-retention policy.  Maintenance performs at most one bounded
-# batch per call, so a poisoned database cannot force unbounded work or memory.
-MAX_SEGMENT_ENTRIES = 4096
-MAX_TOTAL_PAYLOAD_BYTES = 512 * 1024 * 1024
+# Relational metadata keeps a finite bound; rendered audio does not. Books
+# clear their own cache on success, so retention is per-book and explicit.
 MAX_RUN_ROWS = 1024
 MAINTENANCE_BATCH = 32
 ORPHAN_SCAN_LIMIT = 64
@@ -306,6 +304,35 @@ class CacheStore:
             self._maintenance()
         except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError):
             return
+
+    def clear_book(self, book_id: str) -> None:
+        """Delete one book's segments and relational rows, then reclaim payloads.
+
+        Called after a successful publication: a finished book stops holding
+        its rendered audio on disk. Fail-open like everything else here -- a
+        fault leaves stale entries, which only cost disk space.
+        """
+        if not self._enabled:
+            return
+        digests: list[str] = []
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    "SELECT DISTINCT payload_sha256 FROM segment_cache WHERE book_id=?",
+                    (book_id,),
+                ).fetchall()
+                digests = [str(row[0]) for row in rows]
+                connection.execute(
+                    "DELETE FROM segment_cache WHERE book_id=?", (book_id,)
+                )
+                connection.execute("DELETE FROM runs WHERE book_id=?", (book_id,))
+                connection.execute("DELETE FROM books WHERE book_id=?", (book_id,))
+                connection.commit()
+        except (OSError, sqlite3.Error):
+            return
+        for digest in digests:
+            self._delete_digest_if_unreferenced(digest)
 
     def _delete(self, key: str) -> None:
         """Delete one metadata row and race-safely reclaim its payload."""
@@ -733,38 +760,10 @@ class CacheStore:
             return
 
     def _maintenance(self) -> None:
-        self._prune_entries()
         self._prune_relational_metadata()
         self._scan_orphans(
             ORPHAN_SCAN_LIMIT, older_than=time.time() - _ORPHAN_AGE_SECONDS
         )
-
-    def _prune_entries(self) -> None:
-        """Evict at most one deterministic LRU batch and safely reclaim payloads."""
-        try:
-            with self._connection() as connection:
-                count = int(
-                    connection.execute("SELECT count(*) FROM segment_cache").fetchone()[
-                        0
-                    ]
-                )
-                total = int(
-                    connection.execute(
-                        "SELECT COALESCE(SUM(payload_bytes),0) FROM (SELECT payload_sha256,MAX(payload_bytes) payload_bytes FROM segment_cache GROUP BY payload_sha256)"
-                    ).fetchone()[0]
-                )
-                if count <= MAX_SEGMENT_ENTRIES and total <= MAX_TOTAL_PAYLOAD_BYTES:
-                    return
-                rows = connection.execute(
-                    "SELECT cache_key,payload_sha256 FROM segment_cache ORDER BY access_ns,created_ns,cache_key LIMIT ?",
-                    (MAINTENANCE_BATCH,),
-                ).fetchall()
-            for row in rows:
-                digest = self._discard_metadata(str(row[0]))
-                if digest is not None:
-                    self._delete_digest_if_unreferenced(digest)
-        except (OSError, sqlite3.Error, TypeError, ValueError):
-            return
 
     def _prune_relational_metadata(self) -> None:
         try:
@@ -975,9 +974,7 @@ def _voice_material(
     Per segment rather than per plan: in a cast, two characters speaking the
     same words must not collide on one cache key.
     """
-    voice = (
-        plan.cast.voice_for(segment.speaker_id) if segment else plan.cast.narrator
-    )
+    voice = plan.cast.voice_for(segment.speaker_id) if segment else plan.cast.narrator
     return {
         "commercial_use_allowed": voice.commercial_use_allowed,
         "content_fingerprint": voice.content_fingerprint,

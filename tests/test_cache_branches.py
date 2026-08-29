@@ -54,7 +54,6 @@ def test_context_entry_and_exit_failures_are_fail_open(
     assert store.lookup(key, segment, task) is None
     store.store(key, segment, task, audio, None)
     store._clear()
-    store._prune_entries()
     store._prune_relational_metadata()
     assert store._discard_metadata(key) is None
 
@@ -395,34 +394,6 @@ def test_orphan_scan_is_bounded_and_tolerates_stat_and_directory_failures(
     payloads.chmod(0o700)
 
 
-def test_byte_quota_prunes_victim_and_missing_payload_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _, plan, segment, task, audio = _material(tmp_path)
-    store = CacheStore(tmp_path / "cache")
-    first = hashlib.sha256(b"quota-first").hexdigest()
-    second = hashlib.sha256(b"quota-second").hexdigest()
-    store.store(first, segment, task, audio, None)
-    changed = bytes([audio.pcm_s16le[0] ^ 1]) + audio.pcm_s16le[1:]
-    store.store(second, segment, task, replace(audio, pcm_s16le=changed), None)
-    monkeypatch.setattr(cache_module, "MAX_SEGMENT_ENTRIES", 100)
-    # Maintenance is intentionally bounded to one LRU batch per call.  A
-    # one-row batch demonstrates byte-quota eviction without over-asserting how
-    # many rows a larger bounded batch is allowed to evict.
-    monkeypatch.setattr(cache_module, "MAINTENANCE_BATCH", 1)
-    retained_bytes = len(changed)
-    monkeypatch.setattr(cache_module, "MAX_TOTAL_PAYLOAD_BYTES", retained_bytes)
-    store._prune_entries()
-    with sqlite3.connect(store._database) as connection:
-        assert (
-            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0] == 1
-        )
-
-    monkeypatch.setattr(CacheStore, "_discard_metadata", lambda self, key: None)
-    monkeypatch.setattr(cache_module, "MAX_SEGMENT_ENTRIES", 0)
-    store._prune_entries()
-
-
 def test_low_level_row_read_unlink_and_ownership_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -453,3 +424,54 @@ def test_low_level_row_read_unlink_and_ownership_validation(
         assert not cache_module._safe_regular(path.stat())
     finally:
         os.close(descriptor)
+
+
+def test_maintenance_keeps_every_entry_without_a_quota(tmp_path: Path) -> None:
+    """The byte and entry caps are gone; maintenance must not evict anything."""
+    _, plan, segment, task, audio = _material(tmp_path)
+    store = CacheStore(tmp_path / "cache")
+    first = _key(store, plan, segment, task)
+    second = hashlib.sha256(b"cap-second").hexdigest()
+    store.store(first, segment, task, audio, None)
+    changed = bytes([audio.pcm_s16le[0] ^ 1]) + audio.pcm_s16le[1:]
+    store.store(second, segment, task, replace(audio, pcm_s16le=changed), None)
+
+    store._maintenance()
+
+    with sqlite3.connect(store._database) as connection:
+        count = connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0]
+    assert count == 2
+
+
+def test_clear_book_removes_only_that_books_rows_and_unique_payloads(
+    tmp_path: Path,
+) -> None:
+    """A finished book releases its audio; other books keep theirs."""
+    _, plan, segment, task, audio = _material(tmp_path)
+    store = CacheStore(tmp_path / "cache")
+    context = store.prepare_run(plan)
+    other_plan = replace(plan, source_bytes_hash="b" * 64)
+    other_context = store.prepare_run(other_plan)
+
+    shared = _key(store, plan, segment, task)
+    store.store(shared, segment, task, audio, context)
+    # The other book's segment shares the exact PCM bytes, so the payload is
+    # content-addressed across books and must survive the first book's clear.
+    other_key = hashlib.sha256(b"other-book-segment").hexdigest()
+    store.store(other_key, segment, task, audio, other_context)
+    # And one payload unique to the first book.
+    changed = bytes([audio.pcm_s16le[0] ^ 1]) + audio.pcm_s16le[1:]
+    unique_digest = hashlib.sha256(changed).hexdigest()
+    unique_key = hashlib.sha256(b"unique-first-book").hexdigest()
+    store.store(unique_key, segment, task, replace(audio, pcm_s16le=changed), context)
+
+    store.clear_book(plan.source_bytes_hash)
+
+    with sqlite3.connect(store._database) as connection:
+        remaining = connection.execute("SELECT book_id FROM segment_cache").fetchall()
+        assert [row[0] for row in remaining] == ["b" * 64]
+        assert connection.execute("SELECT count(*) FROM books").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
+    payloads = store._directory / "payloads"
+    assert not (payloads / f"{unique_digest}.pcm").exists()
+    assert store.lookup(other_key, segment, task) is not None

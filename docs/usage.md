@@ -30,7 +30,7 @@ and occurrence. Duplicate operations and invalid ordering fail immediately.
 
 ## One-call rendering
 
-`magic_run(book_path, *, narrator, multi=False, model="deepseek/deepseek-v4-flash")`
+`magic_run(book_path, *, narrator, multi=False, model="openrouter/deepseek/deepseek-v4-flash")`
 provides the small, defaulted rendering surface. It derives an `.m4b` output
 beside the EPUB and returns the normal `Result`.
 
@@ -42,7 +42,7 @@ multi = kk.magic_run("novel.epub", narrator="eponine", multi=True)
 ```
 
 `multi=True` adds character inference, quote attribution, and automatic casting.
-The default model is the LiteLLM identifier `deepseek/deepseek-v4-flash`; pass
+The default model is the LiteLLM identifier `openrouter/deepseek/deepseek-v4-flash`; pass
 `model=` to select another configured provider/model. The helper exposes no
 selection, output, overwrite, callback, worker, or cast controls; use the
 fluent API for those cases.
@@ -78,6 +78,10 @@ exist and the suffix must be `.m4b`. Existing regular output raises
 `output_exists` unless `overwrite=True`. Publication uses an atomic final replace;
 validation, rendering, callback, cancellation, or encoding failure cannot publish
 the work-in-progress candidate.
+A successful publication clears that book's private audio cache, so a finished
+book stops holding its rendered PCM on disk. Pass ``keep_audio_cache=True`` to
+keep the segments and re-render the book without paying for synthesis again
+(for example while retuning pauses or voices).
 
 ```python
 from kenkui import CancellationToken, CastResolved, StageProgress
@@ -98,6 +102,7 @@ result = selection.write_m4b(
     cancel=token,
     workers="auto",
     overwrite=False,
+    keep_audio_cache=False,
 )
 print(result.output)
 print(result.stats)

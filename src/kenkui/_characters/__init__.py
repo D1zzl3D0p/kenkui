@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
-from kenkui._characters import store
+from kenkui._characters import spacy_roster, store
 from kenkui._characters.attribution import (
     AttributionCoverage,
     attribute_chapter,
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from kenkui._characters.llm import Client
+    from kenkui._characters.quotes import TextSpan
     from kenkui._domain.planning import SpeakerSpan
     from kenkui.cancellation import CancellationToken
     from kenkui.inspection import BookInspection
@@ -70,6 +72,10 @@ _ROSTER_SCHEMA: Mapping[str, type] = {"characters": list}
 # Above this share of a chapter dropped, the response is the problem
 # rather than the passage.
 _DROPPED_WARN_RATIO = 0.05
+
+# Chapters are independent model calls; this bounds how many are in flight so
+# a provider's rate limits stay respected.
+_ATTRIBUTION_CONCURRENCY = 8
 
 
 def _roster_for(
@@ -175,23 +181,18 @@ def _measured(
     roles = {
         span.character_id
         for span in spans
-        if span.character_id is not None
-        and span.character_id.startswith(ROLE_PREFIX)
+        if span.character_id is not None and span.character_id.startswith(ROLE_PREFIX)
     }
     synthesised = tuple(
         CharacterProfile(
             id=role,
-            display_name=role.removeprefix(ROLE_PREFIX).split("@")[0].replace(
-                "-", " "
-            ),
+            display_name=role.removeprefix(ROLE_PREFIX).split("@")[0].replace("-", " "),
             gender=ROLE_GENDERS.get(role.removeprefix(ROLE_PREFIX).split("@")[0]),
             spoken_characters=volume.get(role, 0),
             chapter_ids=tuple(chapters.get(role, ())),
             # A role is minted with one surface form -- its display name --
             # never a roster entry with variant names to fold together.
-            aliases=(
-                role.removeprefix(ROLE_PREFIX).split("@")[0].replace("-", " "),
-            ),
+            aliases=(role.removeprefix(ROLE_PREFIX).split("@")[0].replace("-", " "),),
         )
         for role in sorted(roles)
     )
@@ -232,47 +233,19 @@ def resolve_cast(record: AttributionRecord, request: CastingRequest) -> CastingO
     return outcome
 
 
-def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
+def _model_roster(
     inspection: BookInspection,
-    source_hash: str,
-    model_id: str,
-    *,
-    roster_model_id: str | None = None,
-    client: Client | None = None,
-    cancel: CancellationToken | None = None,
-) -> AttributionRecord:
-    """Return stored attribution for this book and model, else derive it.
+    extracted: Mapping[str, tuple[TextSpan, ...]],
+    roster_model: str,
+    client: Client | None,
+    cancel: CancellationToken | None,
+) -> tuple[tuple[CharacterProfile, ...], str | None]:
+    """Infer the roster by asking a model about each chapter in turn.
 
-    Called only from the shell. Cancellation is checked between chapters
-    because a long book is a long sequence of model calls, and the only other
-    check happens once before rendering starts.
-
-    ``roster_model_id`` names the model that infers characters, which the
-    caller may choose independently of the one that attributes quotes. It
-    keys the record too: a roster derived by a different model is different
-    material, not a cache hit.
+    One call per chapter that contains dialogue, merged afterwards. The
+    alternative offline pass is `spacy_roster.infer_roster`, which reads the
+    whole book at once because it can.
     """
-    roster_model = roster_model_id or model_id
-    key = store.attribution_key(
-        source_hash,
-        model_id,
-        PROMPT_VERSION,
-        PARAMS,
-        tuple(chapter.id for chapter in inspection.chapters),
-        (PARSER_SCHEMA_VERSION, NORMALIZATION_SCHEMA_VERSION),
-        roster_model_id=roster_model,
-    )
-    cached = store.read_attribution(key)
-    if cached is not None:
-        return cached
-
-    # Extracted once and reused: both passes below need the same partition,
-    # and scanning a 600k-character book twice for it is pure waste.
-    extracted = {
-        chapter.id: extract_spans(chapter.id, chapter.text)
-        for chapter in inspection.chapters
-    }
-
     rosters: list[tuple[CharacterProfile, ...]] = []
     narrators: Counter[str] = Counter()
     for chapter in inspection.chapters:
@@ -307,22 +280,129 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     ):
         narrator_id = None
 
-    spans: list[SpeakerSpan] = []
-    recent: tuple[str, ...] = ()
-    for chapter in inspection.chapters:
-        if cancel is not None:
-            cancel.raise_if_cancelled()
-        chapter_spans, recent, coverage = attribute_chapter(
-            chapter,
-            characters,
-            model_id,
-            client=client,
-            recent=recent,
-            spans=extracted[chapter.id],
-            narrator_id=narrator_id,
+    return characters, narrator_id
+
+
+def _chapter_roster(
+    characters: Sequence[CharacterProfile],
+    chapter_id: str,
+    narrator_id: str | None,
+) -> tuple[CharacterProfile, ...]:
+    """Narrow the roster to the characters this chapter can plausibly contain.
+
+    The prompt used to carry the whole book's roster into every chapter, and
+    had to: the model roster is built one chapter at a time and cannot say
+    where anyone appears until attribution has already run, so `chapter_ids`
+    is empty at this point on that path. A roster with no placement is passed
+    through untouched, or filtering it would empty every chapter.
+
+    A spaCy roster does know. It read the whole book to build the roster, and
+    recorded the chapters each name was seen in, so a chapter can be offered
+    the twenty characters it contains rather than the hundred the book does.
+    The narrator is kept regardless of where they were seen: they are marked
+    in the prompt block and so have to be in it.
+    """
+    if not any(character.chapter_ids for character in characters):
+        return tuple(characters)
+    keep = {
+        character.id for character in characters if chapter_id in character.chapter_ids
+    }
+    if narrator_id is not None:
+        keep.add(narrator_id)
+    narrowed = tuple(character for character in characters if character.id in keep)
+    # A chapter whose speakers are all named by role rather than by name
+    # matches nobody. Passing nothing would skip the model call and narrate
+    # every line of it; passing the book lets attribution mint those roles.
+    return narrowed or tuple(characters)
+
+
+def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
+    inspection: BookInspection,
+    source_hash: str,
+    model_id: str,
+    *,
+    roster_model_id: str | None = None,
+    client: Client | None = None,
+    cancel: CancellationToken | None = None,
+) -> AttributionRecord:
+    """Return stored attribution for this book and model, else derive it.
+
+    Called only from the shell. Cancellation is checked as chapter calls
+    complete, because a long book is a long sequence of model calls, and the
+    only other check happens once before rendering starts.
+
+    ``roster_model_id`` names the model that infers characters, which the
+    caller may choose independently of the one that attributes quotes. It
+    keys the record too: a roster derived by a different model is different
+    material, not a cache hit.
+    """
+    roster_model = roster_model_id or model_id
+    key = store.attribution_key(
+        source_hash,
+        model_id,
+        PROMPT_VERSION,
+        PARAMS,
+        tuple(chapter.id for chapter in inspection.chapters),
+        (PARSER_SCHEMA_VERSION, NORMALIZATION_SCHEMA_VERSION),
+        roster_model_id=roster_model,
+    )
+    cached = store.read_attribution(key)
+    if cached is not None:
+        return cached
+
+    # Extracted once and reused: both passes below need the same partition,
+    # and scanning a 600k-character book twice for it is pure waste.
+    extracted = {
+        chapter.id: extract_spans(chapter.id, chapter.text)
+        for chapter in inspection.chapters
+    }
+
+    spacy_pipeline = spacy_roster.pipeline_for(roster_model)
+    if spacy_pipeline is not None:
+        # One offline pass over the whole book, replacing the per-chapter model
+        # roster entirely. Nothing below this branch reaches a model, and the
+        # attribution pass that follows is untouched: it still receives a
+        # roster of the same shape and answers against it the same way.
+        characters, narrator_id = spacy_roster.infer_roster(
+            inspection.chapters, extracted, pipeline=spacy_pipeline
         )
-        _log_coverage(chapter.id, coverage)
-        spans.extend(chapter_spans)
+    else:
+        characters, narrator_id = _model_roster(
+            inspection, extracted, roster_model, client, cancel
+        )
+
+    # Chapters are independent calls, so they run concurrently and are
+    # re-ordered below: the record's spans must stay in chapter order.
+    attributed: dict[str, tuple[tuple[SpeakerSpan, ...], AttributionCoverage]] = {}
+    workers = min(_ATTRIBUTION_CONCURRENCY, len(inspection.chapters))
+    if workers > 0:
+        rosters = {
+            chapter.id: _chapter_roster(characters, chapter.id, narrator_id)
+            for chapter in inspection.chapters
+        }
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    attribute_chapter,
+                    chapter,
+                    rosters[chapter.id],
+                    model_id,
+                    client=client,
+                    spans=extracted[chapter.id],
+                    narrator_id=narrator_id,
+                ): chapter
+                for chapter in inspection.chapters
+            }
+            for future in as_completed(futures):
+                if cancel is not None:
+                    cancel.raise_if_cancelled()
+                chapter = futures[future]
+                attributed[chapter.id] = future.result()
+                _log_coverage(chapter.id, attributed[chapter.id][1])
+
+    spans: list[SpeakerSpan] = []
+    for chapter in inspection.chapters:
+        spans.extend(attributed[chapter.id][0])
 
     record = AttributionRecord(
         attribution_id=key,

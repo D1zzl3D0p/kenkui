@@ -738,7 +738,9 @@ def test_execution_logs_structured_cache_context(
     pipeline.write_m4b(tmp_path / "result.m4b")
 
     record = next(
-        entry for entry in caplog.records if getattr(entry, "event", None) == "cache_miss"
+        entry
+        for entry in caplog.records
+        if getattr(entry, "event", None) == "cache_miss"
     )
     assert log_field(record, "boundary") == "cache"
     assert str(source) not in caplog.text
@@ -794,3 +796,52 @@ def test_rendered_audio_reaching_assembly_carries_no_pcm_payload(
     assert assembler.audio
     for item in assembler.audio:
         assert not hasattr(item, "pcm_s16le")
+
+
+def _bindings_with_cache(tmp_path: Path) -> ExecutionBindings:
+    return ExecutionBindings(
+        EngineSpecification.fake(),
+        FakeArtifactAssembler(),
+        _voice(),
+        "fake-v1",
+        CacheStore(tmp_path / "cache"),
+    )
+
+
+def _segment_cache_rows(store: CacheStore) -> int:
+    import sqlite3  # noqa: PLC0415 - test-local import
+
+    with sqlite3.connect(store._database) as connection:  # noqa: SLF001 - fixture observes the store's own database.
+        return int(
+            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0]
+        )
+
+
+def test_publication_clears_the_books_audio_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A finished book releases its rendered audio back to disk."""
+    pipeline, _, _ = _pipeline(tmp_path)
+    bindings = _bindings_with_cache(tmp_path)
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    output = tmp_path / "cleared.m4b"
+
+    pipeline.write_m4b(output)
+
+    assert output.exists()
+    assert _segment_cache_rows(bindings.cache_store) == 0
+
+
+def test_keep_audio_cache_option_preserves_the_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The opt-out keeps every rendered segment for the next run."""
+    pipeline, _, _ = _pipeline(tmp_path)
+    bindings = _bindings_with_cache(tmp_path)
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    output = tmp_path / "kept.m4b"
+
+    pipeline.write_m4b(output, keep_audio_cache=True)
+
+    assert output.exists()
+    assert _segment_cache_rows(bindings.cache_store) == 2

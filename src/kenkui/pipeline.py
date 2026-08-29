@@ -424,7 +424,7 @@ class Pipeline:
         )
         return selected
 
-    def write(
+    def write(  # noqa: PLR0913 - explicit orchestration boundary.
         self,
         output: str | os.PathLike[str],
         *,
@@ -432,6 +432,7 @@ class Pipeline:
         cancel: CancellationToken | None = None,
         workers: int | Literal["auto"] = "auto",
         overwrite: bool = False,
+        keep_audio_cache: bool = False,
     ) -> Result:
         """Write an M4B through the private execution orchestration boundary."""
         return self.write_m4b(
@@ -440,9 +441,10 @@ class Pipeline:
             cancel=cancel,
             workers=workers,
             overwrite=overwrite,
+            keep_audio_cache=keep_audio_cache,
         )
 
-    def write_m4b(
+    def write_m4b(  # noqa: PLR0913 - explicit orchestration boundary.
         self,
         output: str | os.PathLike[str],
         *,
@@ -450,6 +452,7 @@ class Pipeline:
         cancel: CancellationToken | None = None,
         workers: int | Literal["auto"] = "auto",
         overwrite: bool = False,
+        keep_audio_cache: bool = False,
     ) -> Result:
         """Validate controls and execute using privately bound rendering resources."""
         validation = self.validate()
@@ -490,6 +493,7 @@ class Pipeline:
             cancel=cancel,
             workers=workers,
             overwrite=overwrite,
+            keep_audio_cache=keep_audio_cache,
             assignments=resolved.cast_assignments,
             unknown_voice_id=resolved.unknown_voice_id,
             spans=resolved.spans,
@@ -523,10 +527,20 @@ def _voice_id(voice: str | Voice) -> str:
 
 
 def _model_id(model: str) -> str:
-    """Return a non-empty model identifier."""
+    """Return a non-empty model identifier, checking a spaCy id's shape.
+
+    Only the shape: whether the named pipeline is actually installed is a
+    question for resolution, which is where loading it happens. But "spacy:"
+    names nothing at all, and that is a typo the caller should see where they
+    wrote it rather than an hour later.
+    """
+    from ._characters.spacy_roster import is_spacy, pipeline_for  # noqa: PLC0415
+
     model_id = model.strip()
     if not model_id:
-        raise ValidationError(ErrorCode.INVALID_VOICE)
+        raise ValidationError(ErrorCode.INVALID_MODEL)
+    if is_spacy(model_id) and pipeline_for(model_id) is None:
+        raise ValidationError(ErrorCode.INVALID_MODEL)
     return model_id
 
 
@@ -602,9 +616,7 @@ def _series_pool_ids(
     in the series as missing.
     """
     reserved = {narrator_voice_id, unknown_voice_id}
-    narrator = next(
-        (voice for voice in voices if voice.id == narrator_voice_id), None
-    )
+    narrator = next((voice for voice in voices if voice.id == narrator_voice_id), None)
     return frozenset(
         voice.id
         for voice in voices

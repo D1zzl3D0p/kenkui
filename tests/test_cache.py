@@ -75,7 +75,10 @@ def test_cache_cold_warm_public_equivalence_and_no_warm_spawn(
     monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
     first_events: list[kk.ExecutionEvent] = []
     first = pipeline.write_m4b(
-        tmp_path / "cold.m4b", workers=2, on_event=first_events.append
+        tmp_path / "cold.m4b",
+        workers=2,
+        keep_audio_cache=True,
+        on_event=first_events.append,
     )
     cold_bytes = (tmp_path / "cold.m4b").read_bytes()
 
@@ -85,7 +88,10 @@ def test_cache_cold_warm_public_equivalence_and_no_warm_spawn(
     monkeypatch.setattr("kenkui._execution.coordinator.render_spawned", forbidden)
     second_events: list[kk.ExecutionEvent] = []
     second = pipeline.write_m4b(
-        tmp_path / "warm.m4b", workers=1, on_event=second_events.append
+        tmp_path / "warm.m4b",
+        workers=1,
+        keep_audio_cache=True,
+        on_event=second_events.append,
     )
 
     assert first.stats == second.stats
@@ -276,10 +282,6 @@ def test_database_lock_and_unusable_location_degrade_without_render_failure(
     existing_payload = store._payload_path(existing_digest)
     assert existing_payload.exists()
 
-    # Reproduce the quota bypass: publishing before BEGIN used to strand every
-    # unique payload while SQLite was locked, with cleanup deferred for 24 hours.
-    monkeypatch.setattr(cache_module, "MAX_SEGMENT_ENTRIES", 1)
-    monkeypatch.setattr(cache_module, "MAX_TOTAL_PAYLOAD_BYTES", 1)
     payloads_before = {path.name for path in (root / "payloads").glob("*.pcm")}
     lock = sqlite3.connect(root / "cache.sqlite3", timeout=0)
     lock.execute("BEGIN EXCLUSIVE")
@@ -521,14 +523,11 @@ def test_cleanup_rechecks_reference_after_concurrent_store_commit(
     assert store.lookup(second_key, segment, task) == audio
 
 
-def test_entry_byte_and_run_quotas_are_bounded(
+def test_run_rows_stay_bounded_and_audio_is_never_evicted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Runs keep a finite bound; rendered audio retention is per-book only."""
     _, plan, segment, task, audio = _material(tmp_path)
-    monkeypatch.setattr(cache_module, "MAX_SEGMENT_ENTRIES", 2)
-    monkeypatch.setattr(
-        cache_module, "MAX_TOTAL_PAYLOAD_BYTES", len(audio.pcm_s16le) * 2
-    )
     monkeypatch.setattr(cache_module, "MAX_RUN_ROWS", 2)
     root = tmp_path / "cache"
     store = CacheStore(root)
@@ -540,18 +539,15 @@ def test_entry_byte_and_run_quotas_are_bounded(
         store.store(key, segment, task, changed_audio, context)
     with sqlite3.connect(root / "cache.sqlite3") as connection:
         assert (
-            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0] <= 2
+            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0] == 6
         )
         assert connection.execute("SELECT count(*) FROM runs").fetchone()[0] <= 2
-        payload_bytes = connection.execute(
-            "SELECT COALESCE(SUM(payload_bytes),0) FROM (SELECT payload_sha256,MAX(payload_bytes) payload_bytes FROM segment_cache GROUP BY payload_sha256)"
-        ).fetchone()[0]
-        assert payload_bytes <= len(audio.pcm_s16le) * 2
 
 
-def test_poisoned_large_database_prunes_only_one_limit_batch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_poisoned_database_maintenance_evicts_nothing(
+    tmp_path: Path,
 ) -> None:
+    """A database full of junk rows is left alone, not pruned behind the user."""
     _, plan, segment, task, audio = _material(tmp_path)
     root = tmp_path / "cache"
     store = CacheStore(root)
@@ -574,10 +570,11 @@ def test_poisoned_large_database_prunes_only_one_limit_batch(
                 f"INSERT INTO segment_cache VALUES({placeholders})",
                 values,
             )
-    monkeypatch.setattr(cache_module, "MAX_SEGMENT_ENTRIES", 0)
-    monkeypatch.setattr(cache_module, "MAINTENANCE_BATCH", 7)
-    store._prune_entries()
+
+    store._maintenance()
+
     with sqlite3.connect(root / "cache.sqlite3") as connection:
         assert (
-            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0] == 94
+            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0]
+            == 101
         )
