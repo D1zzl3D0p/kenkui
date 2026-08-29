@@ -299,9 +299,7 @@ def merged_series(  # noqa: PLR0913 - one call site, every input explicit.
                 voice_id=voice_id,
                 spoken_characters=character.spoken_characters,
                 aliases=tuple(sorted(aliases)),
-                contributions=(
-                    (book_digest, character.spoken_characters),
-                )
+                contributions=((book_digest, character.spoken_characters),)
                 if book_digest is not None
                 else (),
             )

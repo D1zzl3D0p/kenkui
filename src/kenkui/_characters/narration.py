@@ -18,10 +18,23 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+# Both tenses. A first-person narrator writing in the present says "I say",
+# never "I says", so the bare stem is the only form that appears -- and
+# omitting it read an entire first-person-present novel as third-person and
+# left its narrator uncast. Measured on one: "I say" 161 times to "I said" 6.
+#
+# The bare stems cannot widen this to third person, because both branches of
+# `_FIRST_PERSON_TAG` require a literal "I" adjacent to the verb: "he says"
+# matches no branch, and "he say" is not English.
 _VERBS = (
-    r"said|says|asked|asks|replied|answered|told|murmured|muttered|whispered"
-    r"|shouted|called|cried|repeated|added|agreed|demanded|admitted|observed"
-    r"|managed|offered|insisted|protested|snapped|breathed"
+    r"said|says|say|asked|asks|ask|replied|replies|reply|answered|answers"
+    r"|answer|told|tells|tell|murmured|murmurs|murmur|muttered|mutters|mutter"
+    r"|whispered|whispers|whisper|shouted|shouts|shout|called|calls|call"
+    r"|cried|cries|cry|repeated|repeats|repeat|added|adds|add|agreed|agrees"
+    r"|agree|demanded|demands|demand|admitted|admits|admit|observed|observes"
+    r"|observe|managed|manages|manage|offered|offers|offer|insisted|insists"
+    r"|insist|protested|protests|protest|snapped|snaps|snap|breathed"
+    r"|breathes|breathe"
 )
 
 # "I said" and "said I", the two orders English puts a first-person tag in.

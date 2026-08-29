@@ -58,14 +58,10 @@ MAX_TTS_SEGMENT_CHARACTERS = 1000
 # and returns as unusable audio. Kenkui splits such a run itself while a natural
 # boundary is still available.
 POCKET_SEPARATORS = ".!?,;:"
-# Calibrated against the engine's own tokenizer, counting the way it does: it
-# replaces newlines with spaces before tokenizing, so a run is measured after
-# that collapse. Over one 594k-character book, leaving runs unsplit produced a
-# worst run of 320 tokens against a 50-token limit -- the case that generates
-# past the limit and returns unusable audio. A 100-character budget holds the
-# worst run to 58 tokens for about 30% more segments; tighter budgets fragment
-# ordinary prose for little further gain.
-MAX_SEPARATOR_FREE_CHARACTERS = 100
+# The engine's tokenizer can emit one token per character in punctuation-dense
+# catalogue text. Keep any run it cannot split below its 50-token limit even in
+# that worst case. Its normal sentence packing still handles ordinary prose.
+MAX_SEPARATOR_FREE_CHARACTERS = 48
 # Break points ranked by how natural the resulting pause sounds. Each tier keeps
 # its separator in the preceding chunk so joining stays exact.
 _BREAK_TIERS = (

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 from typing import TYPE_CHECKING, BinaryIO, Protocol, cast, runtime_checkable
@@ -14,6 +15,7 @@ _STDERR_LIMIT_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 _KILL_REAP_TIMEOUT_SECONDS = 5.0
 _READER_JOIN_TIMEOUT_SECONDS = 5.0
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -179,6 +181,25 @@ class SubprocessRunner:
         )
 
 
+def _failure_reason(stderr: object) -> str:
+    """Classify known FFmpeg failures without logging untrusted tool output."""
+    if type(stderr) is not str:
+        return "nonzero_exit"
+    detail = stderr.casefold()
+    for needle, reason in (
+        ("no space left on device", "no_space"),
+        ("permission denied", "permission_denied"),
+        ("invalid argument", "invalid_argument"),
+        ("unknown encoder", "unknown_encoder"),
+        ("error initializing output stream", "encoder_initialization_failed"),
+        ("error opening output", "output_open_failed"),
+        ("conversion failed", "conversion_failed"),
+    ):
+        if needle in detail:
+            return reason
+    return "nonzero_exit"
+
+
 def run_checked(
     runner: NativeCommandRunner,
     argv: Sequence[str],
@@ -193,11 +214,15 @@ def run_checked(
         result = runner.run(tuple(argv), timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         failed = True
-    if (
-        failed
-        or result is None
-        or type(result.returncode) is not int
-        or result.returncode != 0
-    ):
+    if failed or result is None:
+        _LOGGER.warning("native_command_failed code=%s runner_error=true", code.value)
+        raise EncodingError(code) from None
+    if type(result.returncode) is not int or result.returncode != 0:
+        _LOGGER.warning(
+            "native_command_failed code=%s returncode=%s reason=%s",
+            code.value,
+            result.returncode,
+            _failure_reason(result.stderr),
+        )
         raise EncodingError(code) from None
     return result

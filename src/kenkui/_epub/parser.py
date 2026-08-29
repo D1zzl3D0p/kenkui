@@ -122,7 +122,22 @@ def _enforce_xml_limits(
 
 def _xml(data: bytes) -> Element:
     try:
-        events = safe_iterparse(BytesIO(data), events=("start", "end"), forbid_dtd=True)
+        # A DOCTYPE is permitted; declaring entities is not. EPUB 3 *requires*
+        # `<!DOCTYPE html>` on every content document and EPUB 2 producers emit
+        # the XHTML 1.1 public identifier, so refusing every DTD refused most
+        # real books -- both a spec-compliant EPUB 3 and anything Calibre
+        # produced. The attacks this guards against are entity attacks, not the
+        # declaration itself: `forbid_entities` stops nested expansion
+        # (billion laughs) and `forbid_external` stops external references
+        # (XXE), and both are still refused. A DOCTYPE with no internal subset
+        # declares nothing and expands to nothing.
+        events = safe_iterparse(
+            BytesIO(data),
+            events=("start", "end"),
+            forbid_dtd=False,
+            forbid_entities=True,
+            forbid_external=True,
+        )
         depth = 0
         elements = 0
         attributes = 0

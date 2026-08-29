@@ -269,8 +269,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
     }
     if "aliases_json" not in existing:
         connection.execute(
-            "ALTER TABLE characters "
-            "ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
+            "ALTER TABLE characters ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
         )
     _widen_series_alias_key(connection)
 
@@ -414,9 +413,7 @@ def read_attribution(
                 "WHERE attribution_id=? ORDER BY character_id,ordinal",
                 (attribution_id,),
             ):
-                chapters.setdefault(link["character_id"], []).append(
-                    link["chapter_id"]
-                )
+                chapters.setdefault(link["character_id"], []).append(link["chapter_id"])
             characters = tuple(
                 CharacterProfile(
                     item["character_id"],
@@ -612,9 +609,7 @@ def write_series(record: SeriesRecord, path: Path | None = None) -> None:
         raise OSError(message) from error
 
 
-def _series_from_row(
-    connection: sqlite3.Connection, row: sqlite3.Row
-) -> SeriesRecord:
+def _series_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> SeriesRecord:
     aliases: dict[str, list[str]] = {}
     for item in connection.execute(
         "SELECT alias,canonical_id FROM series_aliases WHERE series_id=? "
@@ -686,9 +681,7 @@ def remove_series(series_id: str, path: Path | None = None) -> None:
     """Drop a series and its pins. The next volume is cast fresh."""
     try:
         with _connect(path) as connection, connection:
-            connection.execute(
-                "DELETE FROM series WHERE series_id=?", (series_id,)
-            )
+            connection.execute("DELETE FROM series WHERE series_id=?", (series_id,))
     except sqlite3.Error as error:
         message = f"could not remove series from {path or default_store_path()}"
         raise OSError(message) from error

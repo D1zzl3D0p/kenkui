@@ -677,3 +677,77 @@ def test_chapter_without_headings_records_none(tmp_path: Path) -> None:
         spine=["one"],
     )
     assert epub_parser.inspect_epub(source).chapters[0].headings == ()
+
+
+@pytest.mark.parametrize(
+    ("label", "doctype"),
+    [
+        # EPUB 3 requires exactly this on every XHTML content document.
+        ("epub3", "<!DOCTYPE html>"),
+        # What EPUB 2 producers, including Calibre, still emit.
+        (
+            "epub2",
+            (
+                '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"'
+                ' "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">'
+            ),
+        ),
+    ],
+)
+def test_doctype_without_internal_subset_is_read(
+    tmp_path: Path, label: str, doctype: str
+) -> None:
+    """A DOCTYPE declaring no entities is ordinary EPUB, not an attack.
+
+    Refusing every DTD rejected the majority of real books: the EPUB 3 spec
+    mandates `<!DOCTYPE html>`, so the strict rule made spec-compliant sources
+    unreadable. What has to stay refused is an entity declaration, which the
+    neighbouring tests pin.
+    """
+    source = make_epub(
+        tmp_path / f"doctype-{label}.epub",
+        chapters={"one": doctype + xhtml("<p>He woke.</p>")},
+        spine=["one"],
+    )
+
+    chapter = epub_parser.inspect_epub(source).chapters[0]
+    assert chapter.text == "He woke."
+
+
+def test_external_entity_declaration_is_still_refused(tmp_path: Path) -> None:
+    """An XXE payload stays refused now that a bare DOCTYPE is allowed."""
+    source = make_epub(
+        tmp_path / "xxe.epub",
+        chapters={
+            "one": (
+                '<!DOCTYPE html [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+                "<html><body>&xxe;</body></html>"
+            )
+        },
+        spine=["one"],
+    )
+
+    with pytest.raises(kk.SourceError) as caught:
+        kk.epub(source).inspect()
+    assert caught.value.code == kk.ErrorCode.MALFORMED_EPUB
+
+
+def test_nested_entity_expansion_is_still_refused(tmp_path: Path) -> None:
+    """The billion-laughs shape stays refused: entities are what is dangerous."""
+    source = make_epub(
+        tmp_path / "billion-laughs.epub",
+        chapters={
+            "one": (
+                "<!DOCTYPE lolz ["
+                '<!ENTITY lol "lol">'
+                '<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;">'
+                '<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;">'
+                "]><html><body>&lol3;</body></html>"
+            )
+        },
+        spine=["one"],
+    )
+
+    with pytest.raises(kk.SourceError) as caught:
+        kk.epub(source).inspect()
+    assert caught.value.code == kk.ErrorCode.MALFORMED_EPUB

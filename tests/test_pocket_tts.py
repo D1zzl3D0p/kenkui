@@ -96,6 +96,17 @@ def _fixture(tmp_path: Path) -> tuple[PocketEngineConfig, VoicePlan]:
     return config, voice
 
 
+def test_voice_config_accepts_large_cast(tmp_path: Path) -> None:
+    """Long books may resolve hundreds of distinct character voices."""
+    from kenkui._tts import pocket
+
+    config, _ = _fixture(tmp_path)
+    asset = config.voices[0]
+    voices = tuple(replace(asset, sha256=f"{index:064x}") for index in range(500))
+
+    assert pocket._validate_fields(replace(config, voices=voices)).voices == voices
+
+
 def _asset_path(config: PocketEngineConfig) -> Path:
     """Return the single voice asset path, for tests that mutate it on disk."""
     return Path(config.voices[0].path)

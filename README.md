@@ -114,7 +114,7 @@ cast_result = magic_run("book.epub", narrator="eponine", multi=True)
 ```
 
 Single-voice is the default. Multi-voice runs use
-`deepseek/deepseek-v4-flash` unless `model=` supplies a different LiteLLM
+`openrouter/deepseek/deepseek-v4-flash` unless `model=` supplies a different LiteLLM
 provider/model identifier. Multi-voice runs perform character inference and
 quote attribution, which can make provider requests.
 

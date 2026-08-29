@@ -32,8 +32,11 @@ class ErrorCode(StrEnum):
     CHARACTER_UNKNOWN = "character_unknown"
     CAST_UNATTRIBUTED = "cast_unattributed"
     INVALID_SERIES = "invalid_series"
+    INVALID_MODEL = "invalid_model"
     MODEL_CALL_FAILED = "model_call_failed"
     MODEL_RESPONSE_INVALID = "model_response_invalid"
+    SPACY_PACKAGE_MISSING = "spacy_package_missing"
+    SPACY_PIPELINE_MISSING = "spacy_pipeline_missing"
     ATTRIBUTION_UNAVAILABLE = "attribution_unavailable"
     TTS_REQUIRED = "tts_required"
     EMPTY_SPEECH = "empty_speech"
@@ -110,10 +113,13 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.CHARACTER_UNKNOWN: "A cast entry names a character not in the roster.",
     ErrorCode.CAST_UNATTRIBUTED: ("A character cast requires quote attribution."),
     ErrorCode.INVALID_SERIES: "A series needs a name and a positive book number.",
+    ErrorCode.INVALID_MODEL: "The model identifier is invalid.",
     ErrorCode.MODEL_CALL_FAILED: "The language model could not be reached.",
     ErrorCode.MODEL_RESPONSE_INVALID: (
         "The language model returned an unusable response."
     ),
+    ErrorCode.SPACY_PACKAGE_MISSING: ("The optional spaCy package is not installed."),
+    ErrorCode.SPACY_PIPELINE_MISSING: ("The named spaCy pipeline is not installed."),
     ErrorCode.ATTRIBUTION_UNAVAILABLE: (
         "Character casting requires inferred characters."
     ),

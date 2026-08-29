@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import subprocess
 import sys
 from dataclasses import dataclass, field, replace
@@ -104,6 +105,35 @@ class MockRunner(NativeCommandRunner):
         if command[-1] == "-":
             return "decode"
         return "encode"
+
+
+def test_failed_native_command_logs_exit_without_stderr(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The caller can distinguish an encoder exit without leaking tool output."""
+    class FailedRunner:
+        def run(
+            self, argv: Sequence[str], *, timeout: float
+        ) -> subprocess.CompletedProcess[str]:
+            assert timeout == 5
+            return subprocess.CompletedProcess(argv, 23, "", "token=/private/secret")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="kenkui._audio.native"),
+        pytest.raises(kk.EncodingError),
+    ):
+        run_checked(
+            FailedRunner(),
+            ("ffmpeg", "-i", "input.pcm"),
+            timeout=5,
+            code=kk.ErrorCode.ENCODING_FAILED,
+        )
+
+    assert (
+        "native_command_failed code=encoding_failed returncode=23 reason=nonzero_exit"
+        in caplog.text
+    )
+    assert "/private/secret" not in caplog.text
 
 
 def _plan(*, cover: CoverIntent = CoverIntent.NONE) -> ExecutionPlan:

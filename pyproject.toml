@@ -45,6 +45,11 @@ dependencies = [
 # Retained as an empty alias so existing `kenkui[pocket]` installs keep working.
 # See spec section 10: this is the path back if pocket-tts becomes optional again.
 pocket = []
+# Offline character inference: `infer_characters("spacy")`. Optional because the
+# model roster is still the default and spaCy plus a pipeline is a large install
+# for a caller who never selects it. A pipeline is a separate download:
+#   python -m spacy download en_core_web_lg
+spacy = ["spacy>=3.7,<4"]
 
 [project.urls]
 Documentation = "https://kenkui.readthedocs.io"

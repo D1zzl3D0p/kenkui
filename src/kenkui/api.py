@@ -34,7 +34,7 @@ def magic_run(
     *,
     narrator: str,
     multi: bool = False,
-    model: str = "deepseek/deepseek-v4-flash",
+    model: str = "openrouter/deepseek/deepseek-v4-flash",
 ) -> Result:
     """Render an EPUB with one narrator or an automatically assigned cast."""
     output = Path(book_path).with_suffix(".m4b")

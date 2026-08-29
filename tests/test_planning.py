@@ -456,3 +456,14 @@ def test_dashes_break_text_that_offers_no_whitespace_at_all() -> None:
 
     assert "".join(chunks) == text
     assert all(chunk.endswith("-") for chunk in chunks[:-1])
+
+
+def test_token_dense_separator_free_text_uses_a_safe_character_budget() -> None:
+    """Hyphenated catalogue text cannot reach Pocket-TTS's 50-token limit."""
+    safe_character_budget = 48
+    text = "a-" * 60
+
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert all(len(chunk) <= safe_character_budget for chunk in chunks)

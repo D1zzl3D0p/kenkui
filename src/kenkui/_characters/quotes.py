@@ -74,8 +74,10 @@ def _closing_index(text: str, closer: str, start: int) -> int:
     while index != -1:
         # don't / Darcy's: a closer with a word character on both sides is an
         # apostrophe, so keep looking for the real one.
-        if closer == "\u2019" and _is_word_character(text, index - 1) and (
-            _is_word_character(text, index + 1)
+        if (
+            closer == "\u2019"
+            and _is_word_character(text, index - 1)
+            and (_is_word_character(text, index + 1))
         ):
             index = text.find(closer, index + 1)
             continue

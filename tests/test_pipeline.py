@@ -101,7 +101,7 @@ def test_magic_run_writes_a_single_voice_book_beside_the_source(
     ]
 
 
-def test_magic_run_uses_the_default_deepseek_model_for_multi_voice(
+def test_magic_run_uses_the_default_openrouter_model_for_multi_voice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Omitting multi-voice analysis would silently collapse character dialogue."""
@@ -121,8 +121,8 @@ def test_magic_run_uses_the_default_deepseek_model_for_multi_voice(
         (
             Path("novel.m4b"),
             (
-                InferCharacters("deepseek/deepseek-v4-flash"),
-                AttributeQuotes("deepseek/deepseek-v4-flash"),
+                InferCharacters("openrouter/deepseek/deepseek-v4-flash"),
+                AttributeQuotes("openrouter/deepseek/deepseek-v4-flash"),
                 AssignVoices(
                     narrator_voice_id="eponine",
                     unknown_voice_id="eponine",

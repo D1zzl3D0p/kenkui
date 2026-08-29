@@ -42,9 +42,6 @@ MAX_OUTPUT_SAMPLES: Final = 32 * 1024 * 1024
 # keeps the fail-closed signal that a bare clamp would discard.
 SAMPLE_TOLERANCE: Final = 2.0
 MAX_TIMEOUT_SECONDS: Final = 3600.0
-# A cast is bounded so a hostile manifest cannot force unbounded state
-# derivation in a worker. The English catalog holds 21 voices.
-MAX_CAST_VOICES: Final = 64
 _TENSOR_CHUNK_SAMPLES: Final = 64 * 1024
 _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -200,7 +197,6 @@ def _validate_fields(config: object) -> PocketEngineConfig:
     if (
         type(config.voices) is not tuple
         or not config.voices
-        or len(config.voices) > MAX_CAST_VOICES
     ):
         raise _voice_failure()
     digests: set[str] = set()

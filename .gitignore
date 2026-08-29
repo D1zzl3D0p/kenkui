@@ -18,6 +18,7 @@ venv/
 
 # Local spike outputs (scripts and textual evidence remain reviewable)
 spikes/**/results/artifacts/
+spikes/examples/runs/
 
 # Builds
 dist/
