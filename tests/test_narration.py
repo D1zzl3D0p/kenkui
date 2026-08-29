@@ -390,3 +390,36 @@ def test_an_ungendered_role_word_stays_unknown() -> None:
     spans = (SpeakerSpan("ch3", 0, 10, "role:innkeeper@ch3"),)
     profiles = {character.id: character for character in _measured((), spans)}
     assert profiles["role:innkeeper@ch3"].gender is None
+
+
+def test_present_tense_first_person_tags_are_counted() -> None:
+    """A narrator writing now, not remembering.
+
+    Measured on one such novel: "I say" 161 times against "I said" 6. Matching
+    only the past tense read the whole book as third-person and left its
+    narrator uncast.
+    """
+    for tag in ("“Go,” I say.", "“Why?” I ask.", "“Fine,” I reply."):
+        end = tag.index("”") + 1
+        assert first_person_tags(tag, [end]) == 1, tag
+
+
+def test_past_tense_first_person_tags_still_count() -> None:
+    """What the widening was widened from, pinned so it cannot be dropped."""
+    for tag in ("“Go,” I said.", "“Why?” I asked."):
+        end = tag.index("”") + 1
+        assert first_person_tags(tag, [end]) == 1, tag
+
+
+def test_third_person_present_is_not_a_first_person_tag() -> None:
+    """Widening to bare verbs must not make "he says" first person."""
+    for tag in ("“Go,” he says.", "“Now,” she asks.", "“Fine,” Darrow says."):
+        end = tag.index("”") + 1
+        assert first_person_tags(tag, [end]) == 0, tag
+
+
+def test_a_present_tense_chapter_reads_as_first_person() -> None:
+    """Enough present-tense tags turn the chapter, exactly as past ones do."""
+    text = "“Go,” I say. “Now,” I say. “Please,” I ask."
+    ends = [index + 1 for index, char in enumerate(text) if char == "”"]
+    assert is_first_person(text, ends)
