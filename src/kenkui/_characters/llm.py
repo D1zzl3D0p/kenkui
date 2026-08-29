@@ -26,7 +26,7 @@ _LOGGER = get_logger(__name__)
 
 DEFAULT_ATTEMPTS = 3
 DEFAULT_BACKOFF_BASE = 2.0
-_REQUEST_TIMEOUT_SECONDS = 300.0
+_REQUEST_TIMEOUT_SECONDS = 600.0
 
 # Retrying a bug burns provider calls to fail the same way, and retrying an
 # interrupt swallows a Ctrl-C during what may be a very long attribution pass.

@@ -70,7 +70,7 @@ def test_litellm_client_disables_reasoning(
 
 SCHEMA = {"items": list}
 _RETRIED_ONCE = 2
-_REQUEST_TIMEOUT_SECONDS = 300.0
+_REQUEST_TIMEOUT_SECONDS = 600.0
 
 
 def test_valid_json_is_returned() -> None:

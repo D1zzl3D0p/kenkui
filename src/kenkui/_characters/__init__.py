@@ -72,10 +72,10 @@ _ROSTER_SCHEMA: Mapping[str, type] = {"characters": list}
 # Above this share of a chapter dropped, the response is the problem
 # rather than the passage.
 _DROPPED_WARN_RATIO = 0.05
-
-# Chapters are independent model calls; this bounds how many are in flight so
-# a provider's rate limits stay respected.
-_ATTRIBUTION_CONCURRENCY = 8
+# Chapters are independent model calls; this bounds how many are in flight.
+# The upstream provider queues rather than refusing (no 429s at 24), so the
+# bound trades tail latency for throughput instead of rate-limit safety.
+_ATTRIBUTION_CONCURRENCY = 12
 
 
 def _roster_for(
