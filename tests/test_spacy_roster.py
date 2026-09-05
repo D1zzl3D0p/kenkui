@@ -116,6 +116,45 @@ class TestInference:
         by_id = {character.id: character for character in characters}
         assert by_id["egwene"].gender == "feminine"
 
+    def test_gender_resolves_in_a_dense_two_hander(self) -> None:
+        """Both people share every line, so a wide window cancels them out.
+
+        A symmetric window counts the other character's pronouns as evidence
+        about this one, and in a scene like this the two tallies converge until
+        neither holds a margin. Both then abstain -- and an unsourced gender is
+        answered with the whole voice pool, which is how a woman draws a
+        masculine voice.
+
+        The nearest following pronoun refers to the name it follows, so it is
+        unmoved by who else is in the scene.
+        """
+        two_hander = """
+Tam al'Thor set down his axe. Egwene watched her brother closely.
+Tam al'Thor shook his head. Egwene folded her hands in her lap.
+Tam al'Thor raised his voice. Egwene lowered her eyes.
+Tam al'Thor took his horse. Egwene gathered her basket.
+"""
+
+        characters, _ = roster_of(two_hander)
+        by_id = {character.id: character for character in characters}
+
+        assert by_id["egwene"].gender == "feminine"
+        assert by_id["tam-al-thor"].gender == "masculine"
+
+    def test_a_gendered_honorific_outranks_nearby_pronouns(self) -> None:
+        """"Aunt" states the answer; the pronouns nearby are about someone else."""
+        text = (
+            "Aunt Vera set down the tray. He had left the door open again.\n"
+            "Aunt Vera frowned at him. He said nothing at all.\n"
+            "Aunt Vera poured the tea. He watched her hands.\n"
+            "Aunt Vera sighed. He shrugged at Aunt Vera and looked away.\n"
+        )
+
+        characters, _ = roster_of(text)
+        by_id = {character.id: character for character in characters}
+
+        assert by_id["aunt-vera"].gender == "feminine"
+
     @pytest.mark.parametrize(
         ("votes", "expected"),
         [
@@ -138,7 +177,7 @@ class TestInference:
         pool. A wrong guess is worse than none: it silently restricts a
         character to voices that sound wrong for them.
         """
-        assert spacy_roster._vote_gender(Counter(votes)) == expected  # noqa: SLF001
+        assert spacy_roster._majority(Counter(votes)) == expected  # noqa: SLF001
 
     def test_pronouns_never_become_characters(self) -> None:
         """A pronoun as an id would collapse every speaker of that gender into one."""

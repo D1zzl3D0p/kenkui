@@ -70,8 +70,19 @@ MAX_CHARACTERS = 2000
 # spaCy's default cap is a document length no novel chapter approaches, but a
 # concatenated book does.
 MAX_PARSE_CHARACTERS = 5_000_000
-# How far either side of a name to look for a gendering pronoun.
-_GENDER_WINDOW = 40
+# How far past a name to look for the pronoun that refers to it. The scan stops
+# at the first gendered pronoun, and at any intervening proper noun -- once
+# another name has come between, the pronoun is more likely theirs.
+#
+# This replaces a symmetric +/-40-token window that counted every gendered
+# pronoun near a name. That measured how many men and women were in the scene
+# rather than who the name was, so two characters who share their scenes
+# cancelled each other out: on one novel the female lead scored feminine 2500
+# to masculine 1269, a ratio of 1.97 against the 2.0 margin below, and so
+# abstained -- which sends her to the whole voice pool and can hand her a
+# masculine voice. The nearest-pronoun signal scores her 339 to 87, and also
+# resolves the male lead, whom the window could not resolve at any width.
+_GENDER_LOOKAHEAD = 12
 # Votes required before a gender is claimed at all, and the margin the winner
 # must hold over the loser. A character seen twice near "she" is not evidence.
 _GENDER_MINIMUM = 3
@@ -374,6 +385,66 @@ _PHRASE_STARTERS = frozenset(
 
 _FEMININE = frozenset({"she", "her", "hers", "herself"})
 _MASCULINE = frozenset({"he", "him", "his", "himself"})
+# Honorifics and kinship terms that state a gender outright. Read from the name
+# span itself and the token before it, never from the stripped name: this is the
+# strongest evidence a text offers about how a character should sound, and it
+# costs nothing to collect.
+#
+# Kept deliberately apart from _TITLES, which _strip_titles consumes. Adding
+# these there would rename "Aunt Vera" to "Vera" and "Mr. Neeson" to "Neeson",
+# changing character ids and what the cast is keyed on -- a different change
+# with a much wider blast radius than gendering them correctly.
+_FEMININE_TITLES = frozenset(
+    {
+        "mrs",
+        "ms",
+        "miss",
+        "madam",
+        "madame",
+        "mistress",
+        "lady",
+        "dame",
+        "queen",
+        "princess",
+        "duchess",
+        "countess",
+        "baroness",
+        "sister",
+        "mother",
+        "mom",
+        "mum",
+        "mama",
+        "aunt",
+        "auntie",
+        "grandma",
+        "grandmother",
+        "granny",
+        "widow",
+    }
+)
+_MASCULINE_TITLES = frozenset(
+    {
+        "mr",
+        "mister",
+        "sir",
+        "lord",
+        "master",
+        "king",
+        "prince",
+        "duke",
+        "baron",
+        "earl",
+        "brother",
+        "father",
+        "dad",
+        "papa",
+        "uncle",
+        "grandpa",
+        "grandfather",
+        "monsieur",
+        "herr",
+    }
+)
 _MIN_NAME_CHARACTERS = 3
 _MAX_NAME_TOKENS = 4
 
@@ -507,6 +578,9 @@ class _Signals:
         self.titled: Counter[str] = Counter()  # preceded by Lord/Lady/Master
         self.chapters: dict[str, set[str]] = defaultdict(set)
         self.gender: dict[str, Counter[str]] = defaultdict(Counter)
+        # Honorific evidence, kept apart from the pronoun tally because it
+        # outranks it rather than adding to it.
+        self.title_gender: dict[str, Counter[str]] = defaultdict(Counter)
         # Per chapter, for first-person detection: a narrator is addressed
         # without ever speaking, and that shows up only chapter by chapter.
         self.addressed_in: dict[str, Counter[str]] = defaultdict(Counter)
@@ -528,7 +602,7 @@ class _Signals:
         )
 
 
-def _scan(  # noqa: C901 - one branch per signal, and they are independent
+def _scan(
     doc: Any,  # noqa: ANN401 - a spaCy Doc; the package ships no stubs
     chapter_id: str,
     quote_bounds: Sequence[tuple[int, int]],
@@ -557,27 +631,59 @@ def _scan(  # noqa: C901 - one branch per signal, and they are independent
             into.animate[name] += 1
         if token.i and token.nbor(-1).lower_ in _TITLES:
             into.titled[name] += 1
-        window = doc[max(0, token.i - _GENDER_WINDOW) : token.i + _GENDER_WINDOW]
-        for other in window:
-            if other.lower_ in _FEMININE:
-                into.gender[name]["feminine"] += 1
-            elif other.lower_ in _MASCULINE:
-                into.gender[name]["masculine"] += 1
+        _gender_signals(doc, span, name, into)
 
 
-def _vote_gender(votes: Counter[str]) -> str | None:
-    """Pick a gender only on a clear majority, else leave it unsourced.
+def _gender_signals(
+    doc: Any,  # noqa: ANN401 - a spaCy Doc; the package ships no stubs
+    span: Any,  # noqa: ANN401 - a spaCy Span
+    name: str,
+    into: _Signals,
+) -> None:
+    """Record the honorific attached to one mention, and the pronoun after it."""
+    words = span.text.split()
+    leading = words[0].lower().strip(".") if words else ""
+    preceding = doc[span.start - 1].lower_.strip(".") if span.start else ""
+    for word in (leading, preceding):
+        if word in _FEMININE_TITLES:
+            into.title_gender[name]["feminine"] += 1
+            break
+        if word in _MASCULINE_TITLES:
+            into.title_gender[name]["masculine"] += 1
+            break
+    for other in doc[span.end : span.end + _GENDER_LOOKAHEAD]:
+        if other.pos_ == "PROPN":
+            break  # another name came between; the pronoun is likely theirs
+        if other.lower_ in _FEMININE:
+            into.gender[name]["feminine"] += 1
+            break
+        if other.lower_ in _MASCULINE:
+            into.gender[name]["masculine"] += 1
+            break
 
-    An unsourced gender is an admission of ignorance, and `casting.candidates`
-    answers it by offering the whole pool. A wrong guess is worse: it silently
-    restricts a character to voices that sound wrong for them.
-    """
+
+def _majority(votes: Counter[str]) -> str | None:
+    """Pick a gender only on a clear majority, else leave it unsourced."""
     top = votes.most_common(1)
     if not top or top[0][1] < _GENDER_MINIMUM:
         return None
     winner, count = top[0]
     other = votes["masculine" if winner == "feminine" else "feminine"]
     return winner if count >= _GENDER_MARGIN * other else None
+
+
+def _gender_of(pronouns: Counter[str], titles: Counter[str]) -> str | None:
+    """Decide from honorifics first, then from the pronouns that follow the name.
+
+    An honorific states the gender outright, so it wins wherever it clears the
+    threshold. The pronouns near "Aunt Vera" are frequently about whoever she
+    is speaking to, and must not be allowed to overturn the word "Aunt".
+
+    An unsourced gender is an admission of ignorance, and `casting.candidates`
+    answers it by offering the whole pool. A wrong guess is worse: it silently
+    restricts a character to voices that sound wrong for them.
+    """
+    return _majority(titles) or _majority(pronouns)
 
 
 def _canonical_names(signals: _Signals, kept: set[str]) -> dict[str, str]:
@@ -695,12 +801,14 @@ def infer_roster(
                 "evidence": 0,
                 "chapter_ids": set(),
                 "gender": Counter(),
+                "title_gender": Counter(),
             },
         )
         row["aliases"].add(name)
         row["evidence"] += signals.evidence(name)
         row["chapter_ids"] |= signals.chapters[name]
         row["gender"].update(signals.gender[name])
+        row["title_gender"].update(signals.title_gender[name])
 
     # Ranked by evidence to apply the cap, then returned sorted by id: the
     # plan fingerprint requires a total order that content alone decides.
@@ -713,7 +821,7 @@ def infer_roster(
                 CharacterProfile(
                     id=slugify(row["display_name"]),
                     display_name=row["display_name"],
-                    gender=_vote_gender(row["gender"]),
+                    gender=_gender_of(row["gender"], row["title_gender"]),
                     spoken_characters=0,
                     chapter_ids=tuple(sorted(row["chapter_ids"])),
                     aliases=tuple(sorted(row["aliases"])),
