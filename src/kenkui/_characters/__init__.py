@@ -17,7 +17,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
-from kenkui._characters import spacy_roster, store
+from kenkui._characters import dialogue_tags, spacy_roster, store
 from kenkui._characters.attribution import (
     AttributionCoverage,
     attribute_chapter,
@@ -410,7 +410,13 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         model_id=model_id,
         prompt_version=PROMPT_VERSION,
         params=PARAMS,
-        characters=_measured(characters, spans),
+        # Attribution has just decided who speaks each quote, so `"..." she
+        # said` now genders a character we can name. Applied here rather than
+        # in the roster because the roster runs before any speaker is known.
+        characters=dialogue_tags.apply(
+            _measured(characters, spans),
+            dialogue_tags.tag_genders(inspection.chapters, spans),
+        ),
         spans=tuple(spans),
     )
     store.write_attribution(record)
