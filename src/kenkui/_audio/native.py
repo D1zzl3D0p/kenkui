@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, BinaryIO, Protocol, cast, runtime_checkable
 from kenkui.errors import EncodingError, ErrorCode
 
 _STDOUT_LIMIT_BYTES = 2 * 1024 * 1024
-_STDERR_LIMIT_BYTES = 64 * 1024
+_STDERR_LIMIT_BYTES: int | None = None  # Unlimited: ffmpeg stderr must never overflow.
 _READ_CHUNK_BYTES = 64 * 1024
 _KILL_REAP_TIMEOUT_SECONDS = 5.0
 _READER_JOIN_TIMEOUT_SECONDS = 5.0
@@ -33,9 +33,9 @@ class NativeCommandRunner(Protocol):
 
 
 class _BoundedCapture:
-    """Drain one pipe to EOF while retaining no more than its exact cap."""
+    """Drain one pipe to EOF; retain at most its cap, or everything if None."""
 
-    def __init__(self, limit: int) -> None:
+    def __init__(self, limit: int | None) -> None:
         self._limit = limit
         self._retained = bytearray()
         self.overflow = False
@@ -51,11 +51,14 @@ class _BoundedCapture:
                 chunk = pipe.read(_READ_CHUNK_BYTES)
                 if not chunk:
                     break
-                available = self._limit - len(self._retained)
-                if available > 0:
-                    self._retained.extend(chunk[:available])
-                if len(chunk) > available:
-                    self.overflow = True
+                if self._limit is None:
+                    self._retained.extend(chunk)
+                else:
+                    available = self._limit - len(self._retained)
+                    if available > 0:
+                        self._retained.extend(chunk[:available])
+                    if len(chunk) > available:
+                        self.overflow = True
         except Exception:
             self.error = True
         finally:

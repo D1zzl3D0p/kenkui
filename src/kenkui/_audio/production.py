@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from kenkui._audio.m4b import AssemblyRequest
 
-_ENCODE_TIMEOUT_SECONDS = 300.0
+_ENCODE_TIMEOUT_SECONDS = 3600.0
 _READ_CHUNK_BYTES = 64 * 1024
 
 
