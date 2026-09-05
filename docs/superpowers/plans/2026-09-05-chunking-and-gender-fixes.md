@@ -815,7 +815,15 @@ Adds gendered honorifics, which state the answer outright."
 
 Your idea: attribution already knows who spoke each quote, so `"..." she said` genders that speaker directly. This is the cleanest signal in the book — the pronoun in a dialogue tag refers to the speaker by construction, with none of the proximity noise.
 
-**Sizing, measured on Folding Space:** of 1694 quotes, tags resolve to `name` 290, `pronoun` 134 (8%), `other` 525, none 745. So ~134 zero-noise votes per book, concentrated on the main speakers — exactly the characters casting cares about. Sparse but high-value, and free: attribution has already run.
+**Sizing — corrected after implementation.** An earlier estimate of "134 pronoun tags (8%) on Folding Space" was wrong: it counted pronoun subjects of speech verbs anywhere within a 120-character window, which catches ordinary narration as well as tags. Counting actual dialogue tags — a pronoun and speech verb immediately against the quote — gives a very different, and far more book-dependent, picture:
+
+| book | trailing tags | leading tags |
+|---|---:|---:|
+| Dune | 596 | 102 |
+| Red Rising | 156 | 0 |
+| The Subtle Art of Folding Space | **3** | 0 |
+
+Folding Space carries its dialogue almost entirely on noun phrases ("the woman says") and subordinate clauses ("As Ellie says this"). **So this signal contributes essentially nothing to the book that prompted the report** — Task 4 is what fixes Ellie — while it is a substantial cross-check on Dune and Red Rising. It is worth having: nearly free, almost error-free where it fires, and concentrated on the heaviest speakers. But `spacy_roster` has to stand on its own, and the plan should not have implied otherwise.
 
 **On a dedicated LLM pass:** not needed, and not recommended as a *separate* pass. Attribution already carries the speaker, so this is pure post-processing of data you have paid for. If Tasks 4 and 5 still leave a main character unsourced, the cheaper escalation is **one** call per *book* over the ~20-name roster ("which of these names is male, female, or unclear?"), not a per-chapter pass — but only add it if measurement shows it is needed.
 
