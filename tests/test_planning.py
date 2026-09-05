@@ -388,16 +388,50 @@ def test_separator_free_runs_are_split_at_line_breaks() -> None:
         assert _worst_separator_free_run(chunk) <= budget
 
 
-def test_comma_free_run_on_sentence_is_split_at_whitespace() -> None:
-    """A run-on sentence with no comma is indivisible to the engine without help."""
-    text = "and then " * 120
+def _ends_on_a_word(chunk: str) -> bool:
+    """Whether a fragment ends alphanumeric, which the engine completes with a stop."""
+    stripped = chunk.rstrip()
+    return bool(stripped) and stripped[-1].isalnum()
+
+
+def test_forced_cut_never_ends_a_fragment_on_a_word() -> None:
+    """Pocket-TTS appends a full stop to any fragment ending alphanumeric.
+
+    Every segment is its own generate_audio call, so a cut mid-sentence is
+    synthesized as a completed sentence -- audible as a break three or four
+    words in, which is the defect this guards. Only a break that leaves
+    punctuation or a line break behind is safe to force.
+    """
+    text = "Ellie stared at the horizon and said nothing at all for a very long while."
+
     chunks = _chunks(text)
 
     assert "".join(chunks) == text
-    assert len(chunks) > 1
-    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
-    for chunk in chunks:
-        assert _worst_separator_free_run(chunk) <= budget
+    assert not any(_ends_on_a_word(chunk) for chunk in chunks[:-1])
+
+
+def test_comma_free_run_on_sentence_is_left_to_the_engine() -> None:
+    """The run budget no longer fragments a run holding no clean boundary.
+
+    Formerly this was split at whitespace every 48 characters to hold the
+    engine's token limit. Measured with Whisper, that limit costs no words
+    below 80 tokens, while the cut costs a false sentence ending on every
+    fragment -- a certain defect traded for a risk that does not bite.
+
+    Only MAX_TTS_SEGMENT_CHARACTERS still divides it, and that bound cannot be
+    declined, so this text -- 1080 characters carrying no punctuation at all --
+    takes exactly one unavoidable whitespace cut rather than twenty-odd.
+    """
+    text = "and then " * 120
+    bound = planning.MAX_TTS_SEGMENT_CHARACTERS
+    expected_chunks = -(-len(text) // bound)  # one cut, so two chunks
+    assert len(text) > bound
+
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert len(chunks) == expected_chunks
+    assert all(len(chunk) <= bound for chunk in chunks)
 
 
 def test_comma_bearing_prose_is_not_split_by_the_run_budget() -> None:

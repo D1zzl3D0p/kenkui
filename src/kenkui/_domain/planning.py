@@ -70,6 +70,22 @@ _BREAK_TIERS = (
     r"\s+",
     r"[-\u2010-\u2015]",
 )
+# The subset of _BREAK_TIERS whose cut leaves the preceding fragment ending in
+# punctuation or a line break. Pocket-TTS's prepare_text_prompt appends a full
+# stop to any input ending alphanumeric, and every segment is its own
+# generate_audio call, so a cut on the bare-whitespace tier is synthesized as a
+# completed sentence -- an audible break mid-clause. Its own splitter never
+# does this: it cuts on ".!?" or ",;:" and keeps the separator, so its
+# fragments always end in punctuation and the stop is never appended.
+#
+# A forced cut may therefore use every tier except bare whitespace. Where none
+# of these is available the run is left whole and the engine packs it
+# internally, which measured at zero word loss below 80 tokens.
+_CLEAN_BREAK_TIERS = (
+    r"\n\s*",
+    r"[.!?][\"')\]]*\s+|[,;:][\"')\]]*\s+",
+    r"[-\u2010-\u2015]",
+)
 # A better boundary is only worth taking when it still fills the window. Without
 # this, one early line break would strand a nearly empty chunk and multiply the
 # per-segment synthesis overhead across a book. Measured over one 594k-character
@@ -567,14 +583,16 @@ def _spans_for(
     return ordered
 
 
-def _break_offset(text: str, start: int, stop: int) -> int:
+def _break_offset(
+    text: str, start: int, stop: int, tiers: tuple[str, ...] = _BREAK_TIERS
+) -> int:
     """Offset past the best boundary in ``text[start:stop]``, or 0 when none fits."""
     window = text[start:stop]
     if not window:
         return 0
     threshold = len(window) * MIN_BREAK_FILL
     fullest = 0
-    for pattern in _BREAK_TIERS:
+    for pattern in tiers:
         offsets = [match.end() for match in re.finditer(pattern, window)]
         if not offsets:
             continue
@@ -615,15 +633,21 @@ def _chunk_span(chapter: ChapterInspection, text: str) -> tuple[str, ...]:
         hard_end = min(start + MAX_TTS_SEGMENT_CHARACTERS, len(text))
         end = hard_end
         if hard_end < len(text):
-            offset = _break_offset(text, start, hard_end)
+            # A clean boundary first, for the same reason the forced cut below
+            # insists on one. Unlike that cut this one cannot be declined --
+            # the character bound has to hold -- so bare whitespace remains the
+            # fallback for a window holding no punctuation at all.
+            offset = _break_offset(
+                text, start, hard_end, _CLEAN_BREAK_TIERS
+            ) or _break_offset(text, start, hard_end)
             if offset:
                 end = start + offset
         budget_end = _separator_free_end(text, start, hard_end)
         if budget_end < end:
-            # Cutting needs a natural boundary. Without one the character bound
-            # still applies, which keeps an unbroken token from being split
-            # mid-word into two mispronounced halves.
-            forced = _break_offset(text, start, budget_end)
+            # Cutting needs a boundary that leaves punctuation behind. A bare
+            # whitespace cut would render as a completed sentence, so where no
+            # clean boundary exists the run is left for the engine to pack.
+            forced = _break_offset(text, start, budget_end, _CLEAN_BREAK_TIERS)
             if forced:
                 end = start + forced
         if end <= start:  # Defensive hard fallback for arbitrarily long tokens.

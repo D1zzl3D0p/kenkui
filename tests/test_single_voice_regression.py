@@ -39,26 +39,18 @@ BASELINE_TEXT = " ".join(_SENTENCES * 4)
 
 BASELINE_SEGMENT_IDS = (
     "seg-nfc-space-newline-v1-v2-3d052fd0eb57686108a036c8",
-    "seg-nfc-space-newline-v1-v2-9d060ee1b2a5906cc0c7f640",
-    "seg-nfc-space-newline-v1-v2-f846836f767f82a8c5b7925d",
-    "seg-nfc-space-newline-v1-v2-7da99c55109c2fb8e4f8b141",
-    "seg-nfc-space-newline-v1-v2-5a7f17a2862d907181c20192",
-    "seg-nfc-space-newline-v1-v2-086e2e9ff50a9eb7a57cf46a",
-    "seg-nfc-space-newline-v1-v2-961bee8640a49e79ba470ffa",
-    "seg-nfc-space-newline-v1-v2-a8a74781eb1afff57d299394",
-    "seg-nfc-space-newline-v1-v2-00020e97bafc2a7b6196ba7d",
+    "seg-nfc-space-newline-v1-v2-411ebf2cbb4f3c4c9fa3db42",
+    "seg-nfc-space-newline-v1-v2-6cfe94ab714de3c6583f9233",
+    "seg-nfc-space-newline-v1-v2-1db914b4c538e7b70fbae5d5",
 )
 BASELINE_FINGERPRINT = (
-    "28c06048fab8bbcf0be6459ffc821deba06ed38dbdd3fd5e0cf66e761db1e707"
+    "8241814e7d195be200a79acf2b6d07e02ba3f7859e546908515ed15a2b0bd074"
 )
-# Regenerated to the values d6705fe actually produces, which its own commit
-# message flagged as owed and never paid. They are recorded here as the honest
-# current state, not as a target: two segments of (987, 656) became nine, four
-# of them 46 characters long, because MAX_SEPARATOR_FREE_CHARACTERS was
-# tightened to 48 and now cuts inside almost every sentence. The chunking fix
-# moves these again, and that is the point -- a red guard proves nothing, so it
-# is made green here first and the next diff against it is the real evidence.
-BASELINE_LENGTHS = (201, 46, 365, 46, 365, 46, 365, 46, 163)
+# Every one of these ends on punctuation, which is the property that matters:
+# the engine appends a full stop only to a fragment ending alphanumeric. The
+# previous nine included four 46-character fragments cut mid-clause, each of
+# which was therefore spoken as a finished sentence.
+BASELINE_LENGTHS = (201, 1000, 233, 209)
 
 
 def _plan() -> ExecutionPlan:
