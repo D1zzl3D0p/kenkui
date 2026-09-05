@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import kenkui as kk
+from kenkui import _characters
 from kenkui._characters import (
     _chapter_roster,
     resolve_attribution,
@@ -18,6 +19,7 @@ from kenkui._characters import (
 )
 from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
+from kenkui._domain.planning import SpeakerSpan
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -392,3 +394,61 @@ class TestChapterRoster:
         roster = (self._profile("darrow", ("ch-9",)),)
         kept = _chapter_roster(roster, "ch-1", None)
         assert kept == roster
+
+
+class TestStaleRosterRefresh:
+    """A stored record must not replay genders derived by older inference."""
+
+    def _inspection(self, text: str) -> kk.BookInspection:
+        return kk.BookInspection(
+            kk.BookMetadata("T", "A", cover_available=False),
+            (kk.ChapterInspection("ch-1", 0, "One", len(text), text),),
+        )
+
+    def _record(self, text: str, gender: str | None) -> object:
+        return _characters.store.AttributionRecord(
+            attribution_id="a" * 64,
+            book_id="b" * 64,
+            model_id="spacy",
+            prompt_version="characters-v5",
+            params={},
+            characters=(
+                CharacterProfile("egwene", "Egwene", gender, 40, ("ch-1",)),
+            ),
+            spans=(SpeakerSpan("ch-1", 0, len(text), "egwene"),),
+        )
+
+    def test_a_stale_gender_is_re_derived_from_the_current_roster(self) -> None:
+        """The cache key cannot see that gender inference changed.
+
+        It keys on the parser, the normalizer, the prompt and the models --
+        none of which move when the roster's own logic is fixed. A record
+        written by the old inference would otherwise re-cast the whole book
+        the old way, which is the defect the fix was for.
+        """
+        stale = self._record(SEPARATED, None)
+        inspection = self._inspection(SEPARATED)
+
+        refreshed = _characters._with_current_roster(stale, inspection, "spacy")  # noqa: SLF001
+
+        assert refreshed.characters[0].gender == "feminine"
+
+    def test_the_expensive_spans_are_never_re_bought(self) -> None:
+        """Gender never enters the attribution prompt, so the spans still hold."""
+        stale = self._record(SEPARATED, None)
+        inspection = self._inspection(SEPARATED)
+
+        refreshed = _characters._with_current_roster(stale, inspection, "spacy")  # noqa: SLF001
+
+        assert refreshed.spans == stale.spans
+
+    def test_a_model_roster_is_left_alone(self) -> None:
+        """Refreshing an LLM roster would cost what this exists to avoid."""
+        stale = self._record(SEPARATED, None)
+        inspection = self._inspection(SEPARATED)
+
+        untouched = _characters._with_current_roster(  # noqa: SLF001
+            stale, inspection, "openrouter/deepseek/deepseek-v4-flash"
+        )
+
+        assert untouched == stale

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from kenkui._characters import dialogue_tags, spacy_roster, store
@@ -316,6 +317,60 @@ def _chapter_roster(
     return narrowed or tuple(characters)
 
 
+def _with_current_roster(
+    record: AttributionRecord,
+    inspection: BookInspection,
+    roster_model: str,
+) -> AttributionRecord:
+    """Re-derive a stored record's genders without re-attributing its quotes.
+
+    The spans are the expensive half and they are untouched by this: the
+    attribution prompt carries only character ids and display names, never
+    gender, so nothing about how a character is gendered can change which
+    quote was assigned to whom. Keying the record on the roster's own version
+    instead would be correct and ruinous -- it would re-buy every model call in
+    the book to change one field per character.
+
+    The offline roster costs 8 seconds on a 380k-character book and 18 on
+    Dune, so it is simply re-run. Only the gender is transplanted, and only
+    onto ids the record already holds: the cached spans refer to those ids,
+    and adopting a fresh roster wholesale could leave a span pointing at a
+    character no longer present.
+
+    A model-derived roster is returned untouched, because refreshing it would
+    cost exactly what this exists to avoid.
+    """
+    pipeline = spacy_roster.pipeline_for(roster_model)
+    if pipeline is None:
+        return record
+    extracted = {
+        chapter.id: extract_spans(chapter.id, chapter.text)
+        for chapter in inspection.chapters
+    }
+    fresh, _ = spacy_roster.infer_roster(
+        inspection.chapters, extracted, pipeline=pipeline
+    )
+    genders = {character.id: character.gender for character in fresh}
+    characters = tuple(
+        type(character)(
+            id=character.id,
+            display_name=character.display_name,
+            gender=genders.get(character.id, character.gender),
+            spoken_characters=character.spoken_characters,
+            chapter_ids=character.chapter_ids,
+            aliases=character.aliases,
+        )
+        for character in record.characters
+    )
+    return replace(
+        record,
+        characters=dialogue_tags.apply(
+            characters,
+            dialogue_tags.tag_genders(inspection.chapters, record.spans),
+        ),
+    )
+
+
 def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     inspection: BookInspection,
     source_hash: str,
@@ -348,7 +403,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     )
     cached = store.read_attribution(key)
     if cached is not None:
-        return cached
+        return _with_current_roster(cached, inspection, roster_model)
 
     # Extracted once and reused: both passes below need the same partition,
     # and scanning a 600k-character book twice for it is pure waste.
