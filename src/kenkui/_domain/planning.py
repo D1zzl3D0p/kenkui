@@ -519,6 +519,12 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                     silence[-1] = max(silence[-1], gap_ms(reasons, pauses))
                 continue
             for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
+                if not chunk.strip():
+                    # A break cut can leave a whitespace-only tail chunk, such
+                    # as a paragraph's trailing newline. It carries no speech,
+                    # and the engine cannot synthesize empty text, so it is
+                    # dropped; the fragment's gap lands on the last real chunk.
+                    continue
                 result.append(
                     _segment(
                         chapter,
@@ -534,10 +540,13 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                 silence.append(0)
             if silence:
                 silence[-1] = max(silence[-1], gap_ms(reasons, pauses))
-    if carried:
-        # Unreachable for normalized text, which never ends a chapter in
-        # whitespace. Emitting rather than dropping keeps the partition
-        # exact if it ever becomes reachable.
+    if carried.strip():
+        # Normalized text is not expected to end a chapter in whitespace, but
+        # spoken-form transforms can leave one (epigraph pages). A whitespace
+        # -only segment has no speech to synthesize and would fail the engine,
+        # so a truly empty carry is dropped; the chapter's trailing gap already
+        # landed on the last real segment. Emitting keeps the partition exact
+        # whenever the carry contains any speakable text.
         result.append(
             _segment(chapter, len(result), 0, carried, spoken=spoken, tiers=tiers)
         )
