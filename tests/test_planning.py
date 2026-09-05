@@ -443,6 +443,22 @@ def test_comma_bearing_prose_is_not_split_by_the_run_budget() -> None:
     assert len(chunks) == 1
 
 
+def test_an_early_comma_does_not_strand_the_clause_after_it() -> None:
+    """A short opening clause is not torn off the long run that follows it.
+
+    This is what the budget decides. The run after the comma is well inside
+    it, so nothing is cut; at 48 the same text was severed at the comma,
+    because the budget was exceeded while the only clean boundary available
+    lay five characters in.
+    """
+    text = "Yes, " + "and he walked a very long way without stopping " * 3
+
+    chunks = _chunks(text)
+
+    assert "".join(chunks) == text
+    assert len(chunks) == 1
+
+
 def test_unbroken_token_keeps_the_character_bound() -> None:
     """With no whitespace to cut on, the run budget defers to the character bound."""
     text = "x" * (planning.MAX_TTS_SEGMENT_CHARACTERS + 1)
@@ -492,12 +508,19 @@ def test_dashes_break_text_that_offers_no_whitespace_at_all() -> None:
     assert all(chunk.endswith("-") for chunk in chunks[:-1])
 
 
-def test_token_dense_separator_free_text_uses_a_safe_character_budget() -> None:
-    """Hyphenated catalogue text cannot reach Pocket-TTS's 50-token limit."""
-    safe_character_budget = 48
-    text = "a-" * 60
+def test_token_dense_separator_free_text_is_split_at_its_hyphens() -> None:
+    """Catalogue text offers no ".!?,;:" the engine can divide, so Kenkui divides it.
+
+    The hyphen tier is clean -- each fragment ends in "-", so the engine
+    appends no full stop and the cut carries no false sentence ending.
+    """
+    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
+    text = "a-" * budget  # twice the budget in characters, so the guard must fire
 
     chunks = _chunks(text)
 
     assert "".join(chunks) == text
-    assert all(len(chunk) <= safe_character_budget for chunk in chunks)
+    assert len(chunks) > 1
+    assert all(chunk.endswith("-") for chunk in chunks[:-1])
+    for chunk in chunks:
+        assert _worst_separator_free_run(chunk) <= budget

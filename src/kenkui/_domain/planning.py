@@ -48,8 +48,8 @@ PARSER_SCHEMA_VERSION = "epub-visible-text-v1"
 NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
 PLANNING_SCHEMA_VERSION = "execution-plan-v2"
 RENDER_SCHEMA_VERSION = "m4b-render-v1"
-CHUNKING_SCHEMA_VERSION = "tts-chunks-v2"
-CHUNKING_V3_SCHEMA_VERSION = "tts-chunks-v3"
+CHUNKING_SCHEMA_VERSION = "tts-chunks-v4"
+CHUNKING_V3_SCHEMA_VERSION = "tts-chunks-v5"
 _NO_PAUSES = Pauses()
 MAX_TTS_SEGMENT_CHARACTERS = 1000
 # Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
@@ -58,10 +58,24 @@ MAX_TTS_SEGMENT_CHARACTERS = 1000
 # and returns as unusable audio. Kenkui splits such a run itself while a natural
 # boundary is still available.
 POCKET_SEPARATORS = ".!?,;:"
-# The engine's tokenizer can emit one token per character in punctuation-dense
-# catalogue text. Keep any run it cannot split below its 50-token limit even in
-# that worst case. Its normal sentence packing still handles ordinary prose.
-MAX_SEPARATOR_FREE_CHARACTERS = 48
+# Calibrated against the engine's own tokenizer over three full books, counting
+# the way it does (newlines collapse to spaces before tokenizing). English prose
+# runs about 2.8-3.2 characters per token, not the one-token-per-character worst
+# case a previous value assumed: at 200 characters the worst separator-free run
+# measured 70-104 tokens, and only 31-126 runs per whole book exceeded the
+# engine's 50-token limit at all.
+#
+# That limit is softer than it looks. Transcribing synthesized runs with Whisper
+# puts word loss at zero through 80 tokens -- 60% past the limit -- and at 0.4%
+# through 150, rising to 3% only beyond that. 200 characters holds every book
+# measured inside the zero-loss band, while leaving the guard able to divide the
+# genuinely pathological runs that reach 207 tokens without it.
+#
+# The earlier value of 48 held every run under the limit and cost 78-86% of all
+# segments a cut mid-clause, which the engine then spoke as a finished sentence.
+# 150 is the conservative alternative: about 4% more segments for a slightly
+# tighter token tail.
+MAX_SEPARATOR_FREE_CHARACTERS = 200
 # Break points ranked by how natural the resulting pause sounds. Each tier keeps
 # its separator in the preceding chunk so joining stays exact.
 _BREAK_TIERS = (

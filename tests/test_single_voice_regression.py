@@ -5,10 +5,14 @@ change and pasted in verbatim. That ordering is the point: a regression test
 written against post-change output proves only that the code agrees with
 itself.
 
-A chapter with no attributed dialogue is one speaker span, so the frozen
-tts-chunks-v2 chunker sees exactly what it saw before and every segment
-identity is unchanged. That in turn means no existing cache entry is
-invalidated by this work.
+A chapter with no attributed dialogue is one speaker span, so the chunker
+sees exactly what it saw before and the chunk boundaries below are the
+original ones.
+
+The segment identities are not: the chunker moved to tts-chunks-v4 to fix
+a regression that cut inside almost every sentence, and the schema was
+bumped deliberately so that every cached segment misses rather than
+replaying audio built by the broken boundaries.
 """
 
 from __future__ import annotations
@@ -38,19 +42,17 @@ _SENTENCES = [
 BASELINE_TEXT = " ".join(_SENTENCES * 4)
 
 BASELINE_SEGMENT_IDS = (
-    "seg-nfc-space-newline-v1-v2-3d052fd0eb57686108a036c8",
-    "seg-nfc-space-newline-v1-v2-411ebf2cbb4f3c4c9fa3db42",
-    "seg-nfc-space-newline-v1-v2-6cfe94ab714de3c6583f9233",
-    "seg-nfc-space-newline-v1-v2-1db914b4c538e7b70fbae5d5",
+    "seg-nfc-space-newline-v1-v2-32626a21bac8a96d1ec70bda",
+    "seg-nfc-space-newline-v1-v2-17711f281fc7934b528212a7",
 )
 BASELINE_FINGERPRINT = (
-    "8241814e7d195be200a79acf2b6d07e02ba3f7859e546908515ed15a2b0bd074"
+    "b5f97903c2b91f41bf834358a3ab22ede39ac74601e7e046ff372b67580a25df"
 )
-# Every one of these ends on punctuation, which is the property that matters:
-# the engine appends a full stop only to a fragment ending alphanumeric. The
-# previous nine included four 46-character fragments cut mid-clause, each of
-# which was therefore spoken as a finished sentence.
-BASELINE_LENGTHS = (201, 1000, 233, 209)
+# Back to the two segments this file was first written against, before
+# d6705fe tightened the separator budget to 48 and split them into nine. The
+# boundaries are the original ones; only the ids and fingerprint differ, because
+# the chunking schema was bumped to force every cached segment to miss.
+BASELINE_LENGTHS = (987, 656)
 
 
 def _plan() -> ExecutionPlan:
@@ -83,7 +85,7 @@ def _plan() -> ExecutionPlan:
 
 def test_chunking_schema_version_is_frozen() -> None:
     """Bumping this invalidates every cached segment in every user's cache."""
-    assert CHUNKING_SCHEMA_VERSION == "tts-chunks-v2"
+    assert CHUNKING_SCHEMA_VERSION == "tts-chunks-v4"
 
 
 def test_single_voice_segment_identities_are_unchanged() -> None:
