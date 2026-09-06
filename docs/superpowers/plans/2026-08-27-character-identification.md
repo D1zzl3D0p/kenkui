@@ -91,18 +91,27 @@ def test_manifest_voice_inherits_catalog_gender(tmp_path, monkeypatch):
 
     voice_id = next(k for k, v in CATALOG.items() if v.perceived_gender == "feminine")
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({
-        "schema_version": 1,
-        "engines": {},
-        "voices": {
-            voice_id: {
-                "name": "Test", "language": "english", "variety": "built-in",
-                "state": "registered", "engine_id": "english",
-                "provenance": "test", "license_id": "CC-BY-4.0",
-                "commercial_use_allowed": False, "voice_rights": "test",
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "engines": {},
+                "voices": {
+                    voice_id: {
+                        "name": "Test",
+                        "language": "english",
+                        "variety": "built-in",
+                        "state": "registered",
+                        "engine_id": "english",
+                        "provenance": "test",
+                        "license_id": "CC-BY-4.0",
+                        "commercial_use_allowed": False,
+                        "voice_rights": "test",
+                    }
+                },
             }
-        },
-    }))
+        )
+    )
 
     found = next(v for v in list_voices(manifest=manifest) if v.id == voice_id)
     assert found.perceived_gender == "feminine"
@@ -151,8 +160,11 @@ def test_gendered_cast_admits_no_opposite_gender_voice():
 
     pool = tuple(list_voices())
     character = CharacterProfile(
-        id="x", display_name="X", gender="feminine",
-        spoken_characters=100, chapter_ids=(),
+        id="x",
+        display_name="X",
+        gender="feminine",
+        spoken_characters=100,
+        chapter_ids=(),
     )
     admitted = candidates("gendered", character, pool)
     assert admitted, "pool must contain at least one feminine voice"
@@ -211,11 +223,13 @@ Expected: FAIL — `KeyError: 'perceived_gender'`
 Where `load_voice` and `add_voice` build a `VoiceRecord` for a catalog-known id, pass the catalog trait:
 
 ```python
-perceived_gender=(
-    perceived_gender
-    if perceived_gender is not None
-    else (CATALOG[voice_id].perceived_gender if voice_id in CATALOG else None)
-),
+perceived_gender = (
+    (
+        perceived_gender
+        if perceived_gender is not None
+        else (CATALOG[voice_id].perceived_gender if voice_id in CATALOG else None)
+    ),
+)
 ```
 
 `manifest._voice_payload` already writes the field when it is not `None`, so no serialisation change is needed.
@@ -253,8 +267,10 @@ git commit -m "fix: record a catalog voice's perceived gender when registering i
 def test_ungendered_pool_is_reported():
     """A gendered cast with no matching voice names the affected characters."""
     pool = (_voice("m1", "masculine"),)
-    characters = (_character("her", gender="feminine"),
-                  _character("him", gender="masculine"))
+    characters = (
+        _character("her", gender="feminine"),
+        _character("him", gender="masculine"),
+    )
     assert ungendered_pool_characters("gendered", characters, pool) == ("her",)
 
 
@@ -356,7 +372,7 @@ git commit -m "feat: report a gendered cast the voice pool cannot honour"
 
 ```python
 def test_prefix_short_form_attaches_to_its_only_host():
-    """"Tye" is Tyador when no other name could claim it."""
+    """ "Tye" is Tyador when no other name could claim it."""
     entity = {"Tyador Borlu": "Tyador Borlu"}
     assert resolve_short_forms(["Tye"], entity).assigned["Tye"] == "Tyador Borlu"
 
@@ -458,10 +474,27 @@ Add beside `PREFIX_TITLES` in `identity.py`:
 # two for the whole book.
 RANK_WORDS: frozenset[str] = frozenset(
     {
-        "senior", "junior", "chief", "deputy", "assistant", "acting",
-        "detective", "constable", "officer", "commissar", "commissioner",
-        "professor", "warden", "marshal", "brigadier", "corporal",
-        "lieutenant", "ensign", "governor", "ambassador", "secretary",
+        "senior",
+        "junior",
+        "chief",
+        "deputy",
+        "assistant",
+        "acting",
+        "detective",
+        "constable",
+        "officer",
+        "commissar",
+        "commissioner",
+        "professor",
+        "warden",
+        "marshal",
+        "brigadier",
+        "corporal",
+        "lieutenant",
+        "ensign",
+        "governor",
+        "ambassador",
+        "secretary",
     }
 )
 ```
@@ -486,13 +519,20 @@ Expected: PASS
 ```python
 def test_production_splits_now_merge():
     """The three pairs that were cast as six voices resolve to three."""
-    names = ["Inspector Borlu", "Tyador Borlu", "Senior Detective Dhatt",
-             "Dhatt", "Lizbyet Corwi"]
+    names = [
+        "Inspector Borlu",
+        "Tyador Borlu",
+        "Senior Detective Dhatt",
+        "Dhatt",
+        "Lizbyet Corwi",
+    ]
     entity = group_full_names(names)
     assert entity["Inspector Borlu"] == entity["Tyador Borlu"]
     assert entity["Senior Detective Dhatt"] == entity["Dhatt"]
-    assert resolve_short_forms(["Corwi", "Tye"], entity).assigned["Corwi"] == \
-        entity["Lizbyet Corwi"]
+    assert (
+        resolve_short_forms(["Corwi", "Tye"], entity).assigned["Corwi"]
+        == entity["Lizbyet Corwi"]
+    )
 ```
 
 Run: `.venv/bin/pytest tests/test_identity.py::test_production_splits_now_merge -v`
@@ -523,12 +563,14 @@ git commit -m "fix: treat a rank or occupation as a title without repetition"
 
 ```python
 def test_gendered_role_words_carry_their_gender():
-    """"role:woman@ch3" is feminine; the text said so."""
+    """ "role:woman@ch3" is feminine; the text said so."""
     from kenkui._characters import _measured
 
-    spans = (SpeakerSpan("ch3", 0, 10, "role:woman@ch3"),
-             SpeakerSpan("ch3", 10, 20, "role:old-man@ch3"),
-             SpeakerSpan("ch3", 20, 30, "role:innkeeper@ch3"))
+    spans = (
+        SpeakerSpan("ch3", 0, 10, "role:woman@ch3"),
+        SpeakerSpan("ch3", 10, 20, "role:old-man@ch3"),
+        SpeakerSpan("ch3", 20, 30, "role:innkeeper@ch3"),
+    )
     profiles = {c.id: c for c in _measured((), spans)}
     assert profiles["role:woman@ch3"].gender == "feminine"
     assert profiles["role:old-man@ch3"].gender == "masculine"
@@ -552,12 +594,20 @@ In `prompts.py`:
 # The role words that state a gender. An innkeeper or a guard may be anyone,
 # and casting them from a gendered pool would be a guess; a woman is a woman.
 ROLE_GENDERS: Mapping[str, str] = {
-    "woman": "feminine", "girl": "feminine", "old-woman": "feminine",
-    "young-woman": "feminine", "first-woman": "feminine",
-    "second-woman": "feminine", "third-woman": "feminine",
-    "man": "masculine", "boy": "masculine", "old-man": "masculine",
-    "young-man": "masculine", "first-man": "masculine",
-    "second-man": "masculine", "third-man": "masculine",
+    "woman": "feminine",
+    "girl": "feminine",
+    "old-woman": "feminine",
+    "young-woman": "feminine",
+    "first-woman": "feminine",
+    "second-woman": "feminine",
+    "third-woman": "feminine",
+    "man": "masculine",
+    "boy": "masculine",
+    "old-man": "masculine",
+    "young-man": "masculine",
+    "first-man": "masculine",
+    "second-man": "masculine",
+    "third-man": "masculine",
 }
 ```
 
@@ -565,7 +615,7 @@ In `__init__.py`, replace `gender=None` in the synthesised profile with a
 lookup on the role's bare word:
 
 ```python
-gender=ROLE_GENDERS.get(role.removeprefix("role:").split("@")[0]),
+gender = (ROLE_GENDERS.get(role.removeprefix("role:").split("@")[0]),)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -599,13 +649,14 @@ git commit -m "feat: cast gendered role words from the matching voice pool"
 ```python
 def test_unknown_name_becomes_a_chapter_scoped_role():
     """A speaker the roster missed still gets a voice of their own."""
-    assert _resolve("Rochambeaux", frozenset({"dhatt"}), chapter_id="ch13") \
+    assert (
+        _resolve("Rochambeaux", frozenset({"dhatt"}), chapter_id="ch13")
         == "role:rochambeaux@ch13"
+    )
 
 
 def test_role_word_outside_the_old_list_is_accepted():
-    assert _resolve("officer", frozenset(), chapter_id="ch13") \
-        == "role:officer@ch13"
+    assert _resolve("officer", frozenset(), chapter_id="ch13") == "role:officer@ch13"
 
 
 def test_a_pronoun_is_still_refused():
@@ -688,9 +739,17 @@ git commit -m "feat: mint a role for any speaker the roster did not list"
 ```python
 def test_coverage_separates_unknown_from_dropped():
     """Two quotes: one answered unknown, one never returned."""
-    client = ScriptedClient([json.dumps({"attributions": [
-        {"quote_id": 0, "speaker": "unknown"},
-    ]})])
+    client = ScriptedClient(
+        [
+            json.dumps(
+                {
+                    "attributions": [
+                        {"quote_id": 0, "speaker": "unknown"},
+                    ]
+                }
+            )
+        ]
+    )
     chapter = _inspection('"One," he said. "Two," she said.').chapters[0]
     _, _, coverage = attribute_chapter(
         chapter, (_character("dhatt"),), "m/x", client=client
@@ -772,6 +831,7 @@ speak in a voice of the other gender? That is the defect a listener hears,
 and nothing in the unit suite can observe it, because it only appears once
 a real roster meets a real voice pool.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -815,8 +875,10 @@ def main() -> int:
         else:
             opposite += 1
             verdict = "WRONG GENDER"
-        print(f"{row['character_id'][:28]:28} {str(row['gender'])[:10]:10} "
-              f"{row['voice_id'][:12]:12} {str(voice_gender)[:10]:10} {verdict}")
+        print(
+            f"{row['character_id'][:28]:28} {str(row['gender'])[:10]:10} "
+            f"{row['voice_id'][:12]:12} {str(voice_gender)[:10]:10} {verdict}"
+        )
 
     print(f"\nmatched: {matched}   opposite: {opposite}   ungendered: {ungendered}")
     return 1 if opposite else 0
@@ -937,7 +999,7 @@ def test_honorific_on_a_full_name_settles_gender() -> None:
 
 
 def test_a_bare_surname_is_never_enough() -> None:
-    """"you're Mr. Corwi are you" is a character misspeaking, not evidence."""
+    """ "you're Mr. Corwi are you" is a character misspeaking, not evidence."""
     assert from_honorific(_character("c", display_name="Corwi")) is None
 ```
 
@@ -950,10 +1012,17 @@ Expected: FAIL — module does not exist
 
 ```python
 _HONORIFICS: Mapping[str, PerceivedGender] = {
-    "mr": "masculine", "mister": "masculine", "sir": "masculine",
-    "lord": "masculine", "master": "masculine",
-    "mrs": "feminine", "ms": "feminine", "miss": "feminine",
-    "lady": "feminine", "madam": "feminine", "dame": "feminine",
+    "mr": "masculine",
+    "mister": "masculine",
+    "sir": "masculine",
+    "lord": "masculine",
+    "master": "masculine",
+    "mrs": "feminine",
+    "ms": "feminine",
+    "miss": "feminine",
+    "lady": "feminine",
+    "madam": "feminine",
+    "dame": "feminine",
 }
 
 
@@ -1012,8 +1081,7 @@ def test_a_single_contrary_tag_does_not_flip_a_majority() -> None:
     unit = '"Hi," he said. '
     text = unit * 9 + '"Hi," she said. '
     spans = tuple(
-        SpeakerSpan("ch1", i * len(unit), i * len(unit) + 6, "x")
-        for i in range(10)
+        SpeakerSpan("ch1", i * len(unit), i * len(unit) + 6, "x") for i in range(10)
     )
     assert from_dialogue_tags(spans, {"ch1": text}) == {"x": "masculine"}
 

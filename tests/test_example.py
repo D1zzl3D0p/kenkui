@@ -31,9 +31,7 @@ class Pipeline:
         """Initialize an empty call log."""
         self.calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    def _record(
-        self, name: str, *args: object, **kwargs: object
-    ) -> Self:
+    def _record(self, name: str, *args: object, **kwargs: object) -> Self:
         self.calls.append((name, args, kwargs))
         return self
 
@@ -130,9 +128,7 @@ def test_magic_run_uses_the_attribution_model(
         calls.append((path, kwargs))
         return "result"
 
-    monkeypatch.setattr(
-        example, "kk", SimpleNamespace(magic_run=fake_magic_run)
-    )
+    monkeypatch.setattr(example, "kk", SimpleNamespace(magic_run=fake_magic_run))
 
     assert example.magic_run(epub) == "result"
     assert calls == [
@@ -156,6 +152,7 @@ def test_main_renders_every_listed_book(monkeypatch: pytest.MonkeyPatch) -> None
         rendered.append(book)
 
     monkeypatch.setattr(example, "explicit_run", explicit_run)
+
     def configure_logging(**_kwargs: object) -> None:
         return None
 

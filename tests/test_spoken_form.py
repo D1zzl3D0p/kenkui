@@ -61,7 +61,10 @@ def test_a_feature_can_be_turned_off_below_its_tier() -> None:
         source, numbers="conservative", lexicon=(), builtin=False
     )
     assert "five pounds" not in to_spoken(
-        source, numbers="conservative", lexicon=(), builtin=False,
+        source,
+        numbers="conservative",
+        lexicon=(),
+        builtin=False,
         features={"currency": False},
     )
 
@@ -108,14 +111,20 @@ def test_features_compose_rather_than_nest() -> None:
     source = "It cost £5."
     assert (
         to_spoken(
-            source, numbers="conservative", lexicon=(), builtin=False,
+            source,
+            numbers="conservative",
+            lexicon=(),
+            builtin=False,
             features={"currency": False},
         )
         == "It cost £five."
     )
     assert (
         to_spoken(
-            source, numbers="conservative", lexicon=(), builtin=False,
+            source,
+            numbers="conservative",
+            lexicon=(),
+            builtin=False,
             features={"currency": False, "integers": False},
         )
         == source

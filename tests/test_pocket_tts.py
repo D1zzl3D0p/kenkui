@@ -515,7 +515,9 @@ def test_private_production_factory_requires_complete_approved_voice(
     assert bindings.engine_specification == EngineSpecification.pocket(config)
     assert bindings.voice is voice
     with pytest.raises(VoiceError) as caught:
-        pocket_production_bindings(_with_asset(config, commercial_use_allowed=True), voice)
+        pocket_production_bindings(
+            _with_asset(config, commercial_use_allowed=True), voice
+        )
     assert caught.value.code == ErrorCode.POCKET_VOICE_INVALID
     with pytest.raises(VoiceError) as disabled:
         pocket_production_bindings(config, replace(voice, enabled=False))

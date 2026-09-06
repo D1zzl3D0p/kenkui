@@ -62,8 +62,9 @@ def test_writing_again_replaces_the_series(tmp_path: Path) -> None:
         store.SeriesRecord("s", "eponine", (_character("a", "alf"),)), path
     )
     store.write_series(
-        store.SeriesRecord("s", "eponine", (_character("a", "alf"),
-                                            _character("b", "aoife"))),
+        store.SeriesRecord(
+            "s", "eponine", (_character("a", "alf"), _character("b", "aoife"))
+        ),
         path,
     )
     read = store.read_series("s", path)

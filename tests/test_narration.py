@@ -307,8 +307,7 @@ def test_a_name_outside_the_roster_becomes_a_role() -> None:
         == "role:rochambeaux@ch13"
     )
     assert (
-        _resolve("officer", frozenset(), None, chapter_id="ch13")
-        == "role:officer@ch13"
+        _resolve("officer", frozenset(), None, chapter_id="ch13") == "role:officer@ch13"
     )
 
 
@@ -366,7 +365,7 @@ def test_a_role_id_synthesised_by_measured_satisfies_the_invariant() -> None:
 
 
 def test_gendered_role_words_carry_their_own_gender() -> None:
-    """"role:woman@ch3" is feminine because the text said so.
+    """The role woman is feminine because the text said so.
 
     Seven of the fifteen largest ungendered entries in a real run were role
     words that state a gender outright. Synthesising them as unknown sent

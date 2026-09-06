@@ -115,10 +115,12 @@ def test_unknown_method_is_rejected() -> None:
 def test_same_chapter_characters_never_share_a_voice() -> None:
     """The rule the whole feature exists to enforce."""
     outcome = solve(
-        _request((
-            _character("darcy", "masculine", 400, ("ch1",)),
-            _character("bingley", "masculine", 300, ("ch1",)),
-        ))
+        _request(
+            (
+                _character("darcy", "masculine", 400, ("ch1",)),
+                _character("bingley", "masculine", 300, ("ch1",)),
+            )
+        )
     )
     assert outcome.assignments["darcy"] != outcome.assignments["bingley"]
     assert outcome.collisions == ()
@@ -131,10 +133,12 @@ def test_voices_spread_before_they_repeat() -> None:
     is what keeps a large cast sounding varied.
     """
     outcome = solve(
-        _request((
-            _character("darcy", "masculine", 400, ("ch1",)),
-            _character("wickham", "masculine", 300, ("ch2",)),
-        ))
+        _request(
+            (
+                _character("darcy", "masculine", 400, ("ch1",)),
+                _character("wickham", "masculine", 300, ("ch2",)),
+            )
+        )
     )
     assert outcome.assignments["darcy"] != outcome.assignments["wickham"]
     assert outcome.collisions == ()
@@ -143,8 +147,7 @@ def test_voices_spread_before_they_repeat() -> None:
 def test_non_co_occurring_characters_share_once_the_pool_runs_out() -> None:
     """Sharing is legal across chapters, and is not a collision."""
     characters = tuple(
-        _character(f"m{index}", "masculine", 100, (f"ch{index}",))
-        for index in range(4)
+        _character(f"m{index}", "masculine", 100, (f"ch{index}",)) for index in range(4)
     )
     outcome = solve(_request(characters, narrator_voice_id="marius"))
     assert len(set(outcome.assignments.values())) == _FREE_AFTER_RESERVING_MARIUS
@@ -154,11 +157,13 @@ def test_non_co_occurring_characters_share_once_the_pool_runs_out() -> None:
 def test_least_used_prefers_the_quietest_voice_by_speech_volume() -> None:
     """A lead must not land on the voice a talkative character already holds."""
     outcome = solve(
-        _request((
-            _character("darcy", "masculine", 5000, ("ch1",)),
-            _character("collins", "masculine", 50, ("ch2",)),
-            _character("wickham", "masculine", 4000, ("ch3",)),
-        ))
+        _request(
+            (
+                _character("darcy", "masculine", 5000, ("ch1",)),
+                _character("collins", "masculine", 50, ("ch2",)),
+                _character("wickham", "masculine", 4000, ("ch3",)),
+            )
+        )
     )
     assert outcome.assignments["wickham"] != outcome.assignments["darcy"]
 
@@ -228,9 +233,7 @@ def test_exhausted_pool_collides_minimally_and_reports_it() -> None:
     assert len(set(outcome.assignments.values())) == _FREE_AFTER_RESERVING_MARIUS
     assert outcome.collisions
     quietest = {"man2", "man3"}
-    assert any(
-        c.first in quietest or c.second in quietest for c in outcome.collisions
-    )
+    assert any(c.first in quietest or c.second in quietest for c in outcome.collisions)
 
 
 def test_solving_is_deterministic_regardless_of_input_order() -> None:
@@ -301,10 +304,10 @@ def test_prior_load_steers_the_next_volume() -> None:
 def test_no_prior_load_is_todays_behaviour() -> None:
     """A pipeline that never mentions a series must cast exactly as before."""
     characters = (_character("solo", "feminine", 100, ("ch1",)),)
-    assert solve(_request(characters)).assignments == solve(
-        _request(characters, prior_load={})
-    ).assignments
-
+    assert (
+        solve(_request(characters)).assignments
+        == solve(_request(characters, prior_load={})).assignments
+    )
 
 
 def test_two_pinned_characters_sharing_a_chapter_collide() -> None:
@@ -326,9 +329,7 @@ def test_two_pinned_characters_sharing_a_chapter_collide() -> None:
             explicit={"darcy": "charles", "bingley": "charles"},
         )
     )
-    assert outcome.collisions == (
-        Collision("ch1", "darcy", "bingley", "charles"),
-    )
+    assert outcome.collisions == (Collision("ch1", "darcy", "bingley", "charles"),)
 
 
 def test_pins_on_distinct_voices_report_no_collision() -> None:

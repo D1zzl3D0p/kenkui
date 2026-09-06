@@ -74,8 +74,10 @@ Resolve before starting: either commit those changes first (so the baseline is a
 The cut is audible, not merely a seam, because of `pocket_tts.models.tts_model.prepare_text_prompt`:
 
 ```python
-if not text[0].isupper(): text = text[0].upper() + text[1:]
-if text[-1].isalnum():    text = text + "."     # <- appended full stop
+if not text[0].isupper():
+    text = text[0].upper() + text[1:]
+if text[-1].isalnum():
+    text = text + "."  # <- appended full stop
 ```
 
 Each kenkui segment is its own `generate_audio` call (`_tts/pocket.py:844`), so a fragment ending in a bare word is synthesized as a complete sentence with falling terminal intonation.
@@ -329,7 +331,9 @@ def test_forced_cut_never_ends_a_fragment_on_a_word() -> None:
     chunks = _chunks(text)
 
     assert "".join(chunks) == text
-    assert not any(chunk.rstrip() and chunk.rstrip()[-1].isalnum() for chunk in chunks[:-1])
+    assert not any(
+        chunk.rstrip() and chunk.rstrip()[-1].isalnum() for chunk in chunks[:-1]
+    )
 
 
 def test_comma_free_prose_sentence_is_left_whole() -> None:
@@ -436,7 +440,9 @@ def test_comma_free_run_on_sentence_is_left_to_the_engine() -> None:
     chunks = _chunks(text)
 
     assert "".join(chunks) == text
-    assert not any(chunk.rstrip() and chunk.rstrip()[-1].isalnum() for chunk in chunks[:-1])
+    assert not any(
+        chunk.rstrip() and chunk.rstrip()[-1].isalnum() for chunk in chunks[:-1]
+    )
 ```
 
 Note it may still split at the 1000-character hard bound; the assertion allows that and only forbids the alphanumeric ending.
@@ -603,7 +609,7 @@ def test_gender_resolves_in_a_dense_two_hander() -> None:
 
 
 def test_a_gendered_honorific_outranks_nearby_pronouns() -> None:
-    """"Aunt" is decisive; pronouns near her name are not about her."""
+    """ "Aunt" is decisive; pronouns near her name are not about her."""
     text = (
         "Aunt Vera set down the tray. He had left the door open again.\n"
         "Aunt Vera frowned at him. He said nothing at all.\n"
@@ -660,17 +666,55 @@ Add after `_TITLES` (`spacy_roster.py:293`). Deliberately separate from `_TITLES
 # change her character id.
 _FEMININE_TITLES = frozenset(
     {
-        "mrs", "ms", "miss", "madam", "madame", "mistress", "lady", "dame",
-        "queen", "princess", "duchess", "countess", "baroness", "sister",
-        "mother", "mom", "mum", "mama", "aunt", "auntie", "grandma",
-        "grandmother", "granny", "nan", "widow",
+        "mrs",
+        "ms",
+        "miss",
+        "madam",
+        "madame",
+        "mistress",
+        "lady",
+        "dame",
+        "queen",
+        "princess",
+        "duchess",
+        "countess",
+        "baroness",
+        "sister",
+        "mother",
+        "mom",
+        "mum",
+        "mama",
+        "aunt",
+        "auntie",
+        "grandma",
+        "grandmother",
+        "granny",
+        "nan",
+        "widow",
     }
 )
 _MASCULINE_TITLES = frozenset(
     {
-        "mr", "mister", "sir", "lord", "master", "king", "prince", "duke",
-        "baron", "earl", "brother", "father", "dad", "papa", "uncle",
-        "grandpa", "grandfather", "monsieur", "herr", "senor",
+        "mr",
+        "mister",
+        "sir",
+        "lord",
+        "master",
+        "king",
+        "prince",
+        "duke",
+        "baron",
+        "earl",
+        "brother",
+        "father",
+        "dad",
+        "papa",
+        "uncle",
+        "grandpa",
+        "grandfather",
+        "monsieur",
+        "herr",
+        "senor",
     }
 )
 ```
@@ -748,7 +792,7 @@ In the merge loop (`spacy_roster.py:703`), beside `row["gender"].update(...)`:
 Add `"title_gender": Counter(),` to the `setdefault` dict at `spacy_roster.py:697`, and change the profile construction at `spacy_roster.py:716`:
 
 ```python
-                    gender=_gender_of(row["gender"], row["title_gender"]),
+gender = (_gender_of(row["gender"], row["title_gender"]),)
 ```
 
 - [ ] **Step 9: Update the parametrised margin test**
@@ -1082,13 +1126,15 @@ from kenkui._characters import dialogue_tags, spacy_roster, store
 Then change the `characters=` argument at `__init__.py:412`:
 
 ```python
-        # Attribution has just decided who speaks each quote, so `"..." she
-        # said` now genders a known character. Done here, not in the roster:
-        # the roster runs before any speaker is known.
-        characters=dialogue_tags.apply(
-            _measured(characters, spans),
-            dialogue_tags.tag_genders(inspection.chapters, spans),
-        ),
+# Attribution has just decided who speaks each quote, so `"..." she
+# said` now genders a known character. Done here, not in the roster:
+# the roster runs before any speaker is known.
+characters = (
+    dialogue_tags.apply(
+        _measured(characters, spans),
+        dialogue_tags.tag_genders(inspection.chapters, spans),
+    ),
+)
 ```
 
 - [ ] **Step 6: Verify against the real book end to end**

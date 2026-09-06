@@ -153,9 +153,7 @@ def test_attribution_key_covers_everything_that_determines_content() -> None:
     assert base != store.attribution_key(BOOK, "other/model", PROMPT_VERSION, PARAMS)
     assert base != store.attribution_key(BOOK, MODEL, "characters-v2", PARAMS)
     other_params = {"temperature": 1}
-    assert base != store.attribution_key(
-        BOOK, MODEL, PROMPT_VERSION, other_params
-    )
+    assert base != store.attribution_key(BOOK, MODEL, PROMPT_VERSION, other_params)
 
 
 def test_cast_key_is_order_independent_for_pins() -> None:

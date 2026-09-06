@@ -107,8 +107,14 @@ Construct XHTML with an `h1` containing `Prologue`, an ordinary paragraph contai
 
 ```python
 chapter = inspect_epub(source).chapters[0]
-pieces = split_structural(chapter.text, frozenset(chapter.heading_block_indices), pauses)
-assert [piece.reasons for piece in pieces] == [frozenset({HEADING_AFTER}), frozenset({PARAGRAPH}), frozenset()]
+pieces = split_structural(
+    chapter.text, frozenset(chapter.heading_block_indices), pauses
+)
+assert [piece.reasons for piece in pieces] == [
+    frozenset({HEADING_AFTER}),
+    frozenset({PARAGRAPH}),
+    frozenset(),
+]
 ```
 
 Also retain the existing public `chapter.headings == ("Chapter One", "A Section")` assertion.
@@ -234,9 +240,12 @@ Beside the existing content-fingerprint mutation assertion, replace only `voice_
 
 ```python
 changed_voice = replace(plan.cast.narrator, voice_rights="withdrawn consent")
-assert store.key_for(
-    replace(plan, cast=CastPlan.single(changed_voice)), segment, task, spec
-) != baseline
+assert (
+    store.key_for(
+        replace(plan, cast=CastPlan.single(changed_voice)), segment, task, spec
+    )
+    != baseline
+)
 ```
 
 Add an assertion that the resulting canonical key material contains only a SHA-256 digest of the statement, never its plaintext.
@@ -310,9 +319,13 @@ Monkeypatch `_execution_bindings` with a same-signature function that raises `Ty
 
 ```python
 calls: list[tuple[str, tuple[str, ...]]] = []
+
+
 def boom(voice_id: str, *, also: Sequence[str] = ()) -> ExecutionBindings:
     calls.append((voice_id, tuple(also)))
     raise TypeError("invalid manifest field")
+
+
 with pytest.raises(TypeError, match="invalid manifest field"):
     pipeline.write_m4b(output)
 assert calls == [("eponine", ())]

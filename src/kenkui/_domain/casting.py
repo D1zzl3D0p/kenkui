@@ -157,9 +157,7 @@ def solve(request: CastingRequest) -> CastingOutcome:
         voice.id: request.prior_load.get(voice.id, 0) for voice in pool
     }
     for character_id, voice_id in assignments.items():
-        load[voice_id] = (
-            load.get(voice_id, 0) + by_id[character_id].spoken_characters
-        )
+        load[voice_id] = load.get(voice_id, 0) + by_id[character_id].spoken_characters
 
     collisions: list[Collision] = _pinned_collisions(
         request.explicit, request.characters, neighbours

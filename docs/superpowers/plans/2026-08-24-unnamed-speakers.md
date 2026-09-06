@@ -85,8 +85,12 @@ def test_detect_titles_learns_invented_honorifics() -> None:
 
 
 def test_invented_honorific_does_not_split_one_person() -> None:
-    names = ["Brightlord Dalinar", "Brightlord Sadeas", "Brightlord Roshone",
-             "Dalinar Kholin"]
+    names = [
+        "Brightlord Dalinar",
+        "Brightlord Sadeas",
+        "Brightlord Roshone",
+        "Dalinar Kholin",
+    ]
     titles = detect_titles(names)
     assert same_person("Brightlord Dalinar", "Dalinar Kholin", titles) is True
 
@@ -107,7 +111,10 @@ def test_short_form_with_two_hosts_is_dropped() -> None:
     entity = group_full_names(["Charles Hayter", "Charles Musgrove"])
     resolved = resolve_short_forms(["Charles"], entity)
     assert "Charles" not in resolved.assigned
-    assert sorted(resolved.ambiguous["Charles"]) == ["Charles Hayter", "Charles Musgrove"]
+    assert sorted(resolved.ambiguous["Charles"]) == [
+        "Charles Hayter",
+        "Charles Musgrove",
+    ]
 
 
 def test_short_form_with_no_host_stands_alone() -> None:
@@ -146,15 +153,50 @@ if TYPE_CHECKING:
 # Elliot" are two Elliots, "Mr Geary" and "Mrs Geary" a husband and wife who
 # both speak. Honorifics that FOLLOW attach to one person: "Moiraine Sedai"
 # and "Moiraine Aes Sedai" are one Moiraine.
-PREFIX_TITLES: frozenset[str] = frozenset({
-    "mr", "mrs", "miss", "ms", "master", "mistress", "lord", "lady", "sir",
-    "dame", "dr", "doctor", "captain", "admiral", "colonel", "major",
-    "general", "inspector", "sergeant", "king", "queen", "prince", "princess",
-    "goodman", "goodwife", "mother", "father", "elder", "mayor",
-})
-SUFFIX_TITLES: frozenset[str] = frozenset({
-    "sedai", "aes", "gaidin", "jr", "sr", "ii", "iii",
-})
+PREFIX_TITLES: frozenset[str] = frozenset(
+    {
+        "mr",
+        "mrs",
+        "miss",
+        "ms",
+        "master",
+        "mistress",
+        "lord",
+        "lady",
+        "sir",
+        "dame",
+        "dr",
+        "doctor",
+        "captain",
+        "admiral",
+        "colonel",
+        "major",
+        "general",
+        "inspector",
+        "sergeant",
+        "king",
+        "queen",
+        "prince",
+        "princess",
+        "goodman",
+        "goodwife",
+        "mother",
+        "father",
+        "elder",
+        "mayor",
+    }
+)
+SUFFIX_TITLES: frozenset[str] = frozenset(
+    {
+        "sedai",
+        "aes",
+        "gaidin",
+        "jr",
+        "sr",
+        "ii",
+        "iii",
+    }
+)
 
 
 class ShortForms(NamedTuple):
@@ -189,9 +231,7 @@ def same_person(
     return rest_a == rest_b or rest_a < rest_b or rest_b < rest_a
 
 
-def detect_titles(
-    names: Sequence[str], threshold: int = 3
-) -> frozenset[str]:
+def detect_titles(names: Sequence[str], threshold: int = 3) -> frozenset[str]:
     """Find a book's own honorifics: leading tokens shared by many names.
 
     No fixed list holds every invented honorific, and a missed one splits a
@@ -224,9 +264,7 @@ def group_full_names(names: Sequence[str]) -> dict[str, str]:
     return entity
 
 
-def resolve_short_forms(
-    shorts: Sequence[str], entity: Mapping[str, str]
-) -> ShortForms:
+def resolve_short_forms(shorts: Sequence[str], entity: Mapping[str, str]) -> ShortForms:
     """Attach each bare name to its entity, or refuse when two could claim it.
 
     A refused short form is dropped rather than kept. Keeping it as its own
@@ -292,27 +330,33 @@ def _profile(character_id: str, display: str) -> CharacterProfile:
 
 
 def test_merge_rosters_folds_one_person_under_two_names() -> None:
-    merged = merge_rosters((
-        (_profile("moiraine-sedai", "Moiraine Sedai"),),
-        (_profile("moiraine-aes-sedai", "Moiraine Aes Sedai"),),
-    ))
+    merged = merge_rosters(
+        (
+            (_profile("moiraine-sedai", "Moiraine Sedai"),),
+            (_profile("moiraine-aes-sedai", "Moiraine Aes Sedai"),),
+        )
+    )
     assert len(merged) == 1
 
 
 def test_merge_rosters_keeps_two_people_apart() -> None:
-    merged = merge_rosters((
-        (_profile("mr-elliot", "Mr Elliot"),),
-        (_profile("miss-elliot", "Miss Elliot"),),
-    ))
+    merged = merge_rosters(
+        (
+            (_profile("mr-elliot", "Mr Elliot"),),
+            (_profile("miss-elliot", "Miss Elliot"),),
+        )
+    )
     assert len(merged) == 2
 
 
 def test_merge_rosters_drops_an_ambiguous_short_form() -> None:
-    merged = merge_rosters((
-        (_profile("charles-hayter", "Charles Hayter"),),
-        (_profile("charles-musgrove", "Charles Musgrove"),),
-        (_profile("charles", "Charles"),),
-    ))
+    merged = merge_rosters(
+        (
+            (_profile("charles-hayter", "Charles Hayter"),),
+            (_profile("charles-musgrove", "Charles Musgrove"),),
+            (_profile("charles", "Charles"),),
+        )
+    )
     assert sorted(character.id for character in merged) == [
         "charles-hayter",
         "charles-musgrove",
@@ -320,10 +364,12 @@ def test_merge_rosters_drops_an_ambiguous_short_form() -> None:
 
 
 def test_merge_rosters_attaches_an_unambiguous_short_form() -> None:
-    merged = merge_rosters((
-        (_profile("tam-althor", "Tam al'Thor"),),
-        (_profile("tam", "Tam"),),
-    ))
+    merged = merge_rosters(
+        (
+            (_profile("tam-althor", "Tam al'Thor"),),
+            (_profile("tam", "Tam"),),
+        )
+    )
     assert len(merged) == 1
     assert merged[0].id == "tam-althor"
 ```
@@ -569,12 +615,14 @@ class NarratedClient:
         assert model
         if "List the speaking characters" in prompt:
             self.roster_prompts.append(prompt)
-            return json.dumps({
-                "characters": [
-                    {"id": "nieshka", "name": "Nieshka", "gender": "feminine"}
-                ],
-                "narrator": "nieshka",
-            })
+            return json.dumps(
+                {
+                    "characters": [
+                        {"id": "nieshka", "name": "Nieshka", "gender": "feminine"}
+                    ],
+                    "narrator": "nieshka",
+                }
+            )
         return json.dumps({"attributions": [{"quote_id": 0, "speaker": "narrator"}]})
 
 
@@ -917,7 +965,6 @@ def test_the_same_role_in_two_chapters_is_two_characters() -> None:
 
 def test_a_roster_character_still_wins_over_a_role() -> None:
     assert _resolve("rand", frozenset({"rand"}), None, chapter_id="ch-1") == "rand"
-
 ```
 
 - [ ] **Step 2: Run test to verify it fails**

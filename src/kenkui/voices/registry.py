@@ -46,6 +46,7 @@ _GENDERS: Final[dict[str, PerceivedGender]] = {
     "Female": "feminine",
 }
 
+
 @dataclass(frozen=True, slots=True)
 class CatalogEntry:
     """One upstream predefined voice and the rights Kenkui records for it."""

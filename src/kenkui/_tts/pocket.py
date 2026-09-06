@@ -194,10 +194,7 @@ def _validate_fields(config: object) -> PocketEngineConfig:
         raise _model_failure()
     if type(config.cloning_capable) is not bool:
         raise _model_failure()
-    if (
-        type(config.voices) is not tuple
-        or not config.voices
-    ):
+    if type(config.voices) is not tuple or not config.voices:
         raise _voice_failure()
     digests: set[str] = set()
     for voice in config.voices:

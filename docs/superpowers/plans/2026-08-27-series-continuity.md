@@ -101,7 +101,7 @@ the folded character's name and the head's own:
 and pass them when building the merged profile:
 
 ```python
-            aliases=tuple(sorted(aliases[head_id])),
+aliases = (tuple(sorted(aliases[head_id])),)
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -139,8 +139,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
     }
     if "aliases_json" not in existing:
         connection.execute(
-            "ALTER TABLE characters "
-            "ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
+            "ALTER TABLE characters ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'"
         )
 ```
 
@@ -303,8 +302,9 @@ def test_writing_again_replaces_the_series(tmp_path: Path) -> None:
         store.SeriesRecord("s", "eponine", (_character("a", "alf"),)), path
     )
     store.write_series(
-        store.SeriesRecord("s", "eponine", (_character("a", "alf"),
-                                            _character("b", "aoife"))),
+        store.SeriesRecord(
+            "s", "eponine", (_character("a", "alf"), _character("b", "aoife"))
+        ),
         path,
     )
     read = store.read_series("s", path)
@@ -442,9 +442,7 @@ def write_series(record: SeriesRecord, path: Path | None = None) -> None:
         raise OSError(message) from error
 
 
-def _series_from_row(
-    connection: sqlite3.Connection, row: sqlite3.Row
-) -> SeriesRecord:
+def _series_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> SeriesRecord:
     aliases: dict[str, list[str]] = {}
     for item in connection.execute(
         "SELECT alias,canonical_id FROM series_aliases WHERE series_id=? "
@@ -554,7 +552,9 @@ from kenkui._characters.series import match_roster, merged_series
 from kenkui._domain.casting import CharacterProfile
 
 
-def _known(canonical_id: str, display: str, aliases: tuple[str, ...]) -> store.SeriesCharacter:
+def _known(
+    canonical_id: str, display: str, aliases: tuple[str, ...]
+) -> store.SeriesCharacter:
     return store.SeriesCharacter(
         canonical_id=canonical_id,
         display_name=display,
@@ -579,9 +579,15 @@ def _profile(character_id: str, display: str, *aliases: str) -> CharacterProfile
 def test_an_exact_alias_matches() -> None:
     """Volume 3 says "Kaladin"; volume 1 recorded it as an alias."""
     record = store.SeriesRecord(
-        "stormlight", "eponine",
-        (_known("kaladin-stormblessed", "Kaladin Stormblessed",
-                ("Kaladin", "Kaladin Stormblessed")),),
+        "stormlight",
+        "eponine",
+        (
+            _known(
+                "kaladin-stormblessed",
+                "Kaladin Stormblessed",
+                ("Kaladin", "Kaladin Stormblessed"),
+            ),
+        ),
     )
     matched = match_roster(record, (_profile("kaladin", "Kaladin"),))
     assert matched == {"kaladin": "kaladin-stormblessed"}
@@ -594,7 +600,8 @@ def test_a_nested_name_matches_without_an_exact_alias() -> None:
     and it was never stored as an alias, so an exact hit cannot find it.
     """
     record = store.SeriesRecord(
-        "stormlight", "eponine",
+        "stormlight",
+        "eponine",
         (_known("dalinar-kholin", "Dalinar Kholin", ("Dalinar Kholin",)),),
     )
     matched = match_roster(record, (_profile("dalinar", "Dalinar"),))
@@ -604,15 +611,20 @@ def test_a_nested_name_matches_without_an_exact_alias() -> None:
 def test_two_people_sharing_a_surname_do_not_match() -> None:
     """Over-merging gives two people one voice, which is the worse failure."""
     record = store.SeriesRecord(
-        "s", "eponine", (_known("charles-hayter", "Charles Hayter", ("Charles Hayter",)),)
+        "s",
+        "eponine",
+        (_known("charles-hayter", "Charles Hayter", ("Charles Hayter",)),),
     )
-    assert match_roster(record, (_profile("charles-musgrove", "Charles Musgrove"),)) == {}
+    assert (
+        match_roster(record, (_profile("charles-musgrove", "Charles Musgrove"),)) == {}
+    )
 
 
 def test_an_ambiguous_short_form_matches_nobody() -> None:
     """Two hosts could claim it, so it names neither."""
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (
             _known("charles-hayter", "Charles Hayter", ("Charles Hayter",)),
             _known("charles-musgrove", "Charles Musgrove", ("Charles Musgrove",)),
@@ -629,8 +641,15 @@ def test_no_series_yet_matches_nothing() -> None:
 def test_merging_accumulates_speech_and_aliases() -> None:
     """A returning character's totals grow; their voice does not change."""
     record = store.SeriesRecord(
-        "s", "eponine", (_known("kaladin-stormblessed", "Kaladin Stormblessed",
-                                ("Kaladin Stormblessed",)),),
+        "s",
+        "eponine",
+        (
+            _known(
+                "kaladin-stormblessed",
+                "Kaladin Stormblessed",
+                ("Kaladin Stormblessed",),
+            ),
+        ),
     )
     updated = merged_series(
         record,
@@ -639,7 +658,9 @@ def test_merging_accumulates_speech_and_aliases() -> None:
         "eponine",
         "s",
     )
-    kaladin = next(c for c in updated.characters if c.canonical_id == "kaladin-stormblessed")
+    kaladin = next(
+        c for c in updated.characters if c.canonical_id == "kaladin-stormblessed"
+    )
     assert kaladin.voice_id == "alf"
     assert kaladin.spoken_characters == 600
     assert "Kaladin" in kaladin.aliases
@@ -648,8 +669,11 @@ def test_merging_accumulates_speech_and_aliases() -> None:
 def test_merging_adds_a_newcomer() -> None:
     """A character the series has not met joins it with the voice just solved."""
     updated = merged_series(
-        None, (_profile("shallan", "Shallan Davar"),), {"shallan": "aoife"},
-        "eponine", "s",
+        None,
+        (_profile("shallan", "Shallan Davar"),),
+        {"shallan": "aoife"},
+        "eponine",
+        "s",
     )
     assert updated.series_id == "s"
     assert updated.narrator_voice_id == "eponine"
@@ -762,8 +786,7 @@ def merged_series(  # noqa: PLR0913 - one call site, all inputs explicit.
             # volume answering None must not un-gender a cast character.
             gender=existing.gender if existing.gender is not None else character.gender,
             voice_id=existing.voice_id,
-            spoken_characters=existing.spoken_characters
-            + character.spoken_characters,
+            spoken_characters=existing.spoken_characters + character.spoken_characters,
             aliases=tuple(sorted({*existing.aliases, *aliases})),
         )
     return SeriesRecord(
@@ -825,9 +848,10 @@ def test_prior_load_steers_the_next_volume() -> None:
 def test_no_prior_load_is_todays_behaviour() -> None:
     """A pipeline that never mentions a series must cast exactly as before."""
     characters = (_character("solo", "feminine", 100, ("ch1",)),)
-    assert solve(_request(characters)).assignments == solve(
-        _request(characters, prior_load={})
-    ).assignments
+    assert (
+        solve(_request(characters)).assignments
+        == solve(_request(characters, prior_load={})).assignments
+    )
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -852,9 +876,7 @@ shared across instances.
 In `solve`, replace the `load` initialisation:
 
 ```python
-    load: dict[str, int] = {
-        voice.id: request.prior_load.get(voice.id, 0) for voice in pool
-    }
+load: dict[str, int] = {voice.id: request.prior_load.get(voice.id, 0) for voice in pool}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1050,7 +1072,9 @@ def _record() -> store.SeriesRecord:
         series_id="s",
         narrator_voice_id="eponine",
         characters=(
-            store.SeriesCharacter("kaladin", "Kaladin", "masculine", "alf", 100, ("Kaladin",)),
+            store.SeriesCharacter(
+                "kaladin", "Kaladin", "masculine", "alf", 100, ("Kaladin",)
+            ),
         ),
     )
 
@@ -1108,8 +1132,10 @@ def test_a_pipeline_without_a_series_is_unaffected() -> None:
     """Every existing pipeline keeps validating exactly as it did."""
     only_voices = (
         AssignVoices(
-            narrator_voice_id="eponine", unknown_voice_id="eponine",
-            cast=(), method="gendered",
+            narrator_voice_id="eponine",
+            unknown_voice_id="eponine",
+            cast=(),
+            method="gendered",
         ),
     )
     assert series_intent_errors(only_voices, _record(), frozenset()) == ()
@@ -1167,7 +1193,11 @@ def series_intent_errors(
     ):
         errors.append(ErrorCode.SERIES_VOICE_MISSING)
     narrator = next(
-        (item.narrator_voice_id for item in operations if isinstance(item, AssignVoices)),
+        (
+            item.narrator_voice_id
+            for item in operations
+            if isinstance(item, AssignVoices)
+        ),
         None,
     )
     if (
@@ -1187,24 +1217,21 @@ Import `Series` and `AssignVoices` from `._domain.operations` and
 In `Pipeline.validate`, after the existing `render_intent_errors` extension:
 
 ```python
-        series = next(
-            (item for item in self.operations if isinstance(item, Series)), None
-        )
-        if series is not None:
-            from ._characters import store  # noqa: PLC0415 - store is only
-            # touched by a pipeline that declared a series.
-            from .voices.provision import list_voices  # noqa: PLC0415
+series = next((item for item in self.operations if isinstance(item, Series)), None)
+if series is not None:
+    from ._characters import store  # noqa: PLC0415 - store is only
 
-            issues.extend(
-                _issue(code)
-                for code in series_intent_errors(
-                    self.operations,
-                    store.read_series(series.series_id),
-                    frozenset(
-                        voice.id for voice in list_voices() if voice.state == "loaded"
-                    ),
-                )
-            )
+    # touched by a pipeline that declared a series.
+    from .voices.provision import list_voices  # noqa: PLC0415
+
+    issues.extend(
+        _issue(code)
+        for code in series_intent_errors(
+            self.operations,
+            store.read_series(series.series_id),
+            frozenset(voice.id for voice in list_voices() if voice.state == "loaded"),
+        )
+    )
 ```
 
 - [ ] **Step 6: Run test to verify it passes**
@@ -1339,25 +1366,23 @@ In `src/kenkui/pipeline.py`, in `_resolve_all` after `record` is obtained and
 before `resolve_cast` is called:
 
 ```python
-    series = next(
-        (item for item in pipeline.operations if isinstance(item, Series)), None
-    )
-    stored = store.read_series(series.series_id) if series is not None else None
-    explicit = dict(casting.cast)
-    prior_load: dict[str, int] = {}
-    if stored is not None:
-        by_canonical = {c.canonical_id: c for c in stored.characters}
-        for book_id, canonical in match_roster(stored, record.characters).items():
-            known = by_canonical[canonical]
-            # A pin the pool cannot honour only reaches here under
-            # allow_recast; validate() refuses it otherwise. Dropping it
-            # lets the solver choose afresh, which is what was asked for.
-            if known.voice_id in {voice.id for voice in pool}:
-                explicit[book_id] = known.voice_id
-        for known in stored.characters:
-            prior_load[known.voice_id] = (
-                prior_load.get(known.voice_id, 0) + known.spoken_characters
-            )
+series = next((item for item in pipeline.operations if isinstance(item, Series)), None)
+stored = store.read_series(series.series_id) if series is not None else None
+explicit = dict(casting.cast)
+prior_load: dict[str, int] = {}
+if stored is not None:
+    by_canonical = {c.canonical_id: c for c in stored.characters}
+    for book_id, canonical in match_roster(stored, record.characters).items():
+        known = by_canonical[canonical]
+        # A pin the pool cannot honour only reaches here under
+        # allow_recast; validate() refuses it otherwise. Dropping it
+        # lets the solver choose afresh, which is what was asked for.
+        if known.voice_id in {voice.id for voice in pool}:
+            explicit[book_id] = known.voice_id
+    for known in stored.characters:
+        prior_load[known.voice_id] = (
+            prior_load.get(known.voice_id, 0) + known.spoken_characters
+        )
 ```
 
 Pass `explicit=explicit` and `prior_load=prior_load` into the `CastingRequest`,

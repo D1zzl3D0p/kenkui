@@ -111,6 +111,7 @@ def test_failed_native_command_logs_exit_without_stderr(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The caller can distinguish an encoder exit without leaking tool output."""
+
     class FailedRunner:
         def run(
             self, argv: Sequence[str], *, timeout: float
@@ -602,9 +603,7 @@ def test_mixed_sample_rates_are_rejected_before_any_subprocess(tmp_path: Path) -
     runner = MockRunner(probe_payload=_probe())
     mixed = (_audio()[0], replace(_audio()[1], sample_rate_hz=22_050))
     with pytest.raises(kk.EncodingError) as caught:
-        _assembler(runner).assemble(
-            _request(_plan(), mixed, tmp_path / "mixed.m4b")
-        )
+        _assembler(runner).assemble(_request(_plan(), mixed, tmp_path / "mixed.m4b"))
     assert caught.value.code == kk.ErrorCode.ASSEMBLY_FAILED
     assert not runner.calls
 

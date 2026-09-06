@@ -77,6 +77,7 @@ def _decode_m4b(output: Path) -> None:
         timeout=60,
     )
 
+
 def _chapter_document(title: str, sentence: str) -> str:
     """Return one minimal XHTML chapter for the fixture EPUB."""
     return (

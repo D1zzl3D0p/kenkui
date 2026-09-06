@@ -60,12 +60,7 @@ def test_render_a_real_m4b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     kk.load_voice("eponine", manifest=manifest)
     monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(manifest))
     output = tmp_path / "out.m4b"
-    result = (
-        kk.book(_book(tmp_path))
-        .assign_voice("eponine")
-        .tts()
-        .write(output)
-    )
+    result = kk.book(_book(tmp_path)).assign_voice("eponine").tts().write(output)
     assert Path(result.output).is_file()
     assert Path(result.output).stat().st_size > 0
 

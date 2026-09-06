@@ -37,9 +37,15 @@ def _profile(character_id: str, display: str, *aliases: str) -> CharacterProfile
 def test_an_exact_alias_matches() -> None:
     """Volume 3 says "Kaladin"; volume 1 recorded it as an alias."""
     record = store.SeriesRecord(
-        "stormlight", "eponine",
-        (_known("kaladin-stormblessed", "Kaladin Stormblessed",
-                ("Kaladin", "Kaladin Stormblessed")),),
+        "stormlight",
+        "eponine",
+        (
+            _known(
+                "kaladin-stormblessed",
+                "Kaladin Stormblessed",
+                ("Kaladin", "Kaladin Stormblessed"),
+            ),
+        ),
     )
     matched = match_roster(record, (_profile("kaladin", "Kaladin"),))
     assert matched == {"kaladin": "kaladin-stormblessed"}
@@ -52,7 +58,8 @@ def test_a_nested_name_matches_without_an_exact_alias() -> None:
     and it was never stored as an alias, so an exact hit cannot find it.
     """
     record = store.SeriesRecord(
-        "stormlight", "eponine",
+        "stormlight",
+        "eponine",
         (_known("dalinar-kholin", "Dalinar Kholin", ("Dalinar Kholin",)),),
     )
     matched = match_roster(record, (_profile("dalinar", "Dalinar"),))
@@ -62,7 +69,8 @@ def test_a_nested_name_matches_without_an_exact_alias() -> None:
 def test_two_people_sharing_a_surname_do_not_match() -> None:
     """Over-merging gives two people one voice, which is the worse failure."""
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (_known("charles-hayter", "Charles Hayter", ("Charles Hayter",)),),
     )
     matched = match_roster(record, (_profile("charles-musgrove", "Charles Musgrove"),))
@@ -72,7 +80,8 @@ def test_two_people_sharing_a_surname_do_not_match() -> None:
 def test_an_ambiguous_short_form_matches_nobody() -> None:
     """Two hosts could claim it, so it names neither."""
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (
             _known("charles-hayter", "Charles Hayter", ("Charles Hayter",)),
             _known("charles-musgrove", "Charles Musgrove", ("Charles Musgrove",)),
@@ -89,8 +98,15 @@ def test_no_series_yet_matches_nothing() -> None:
 def test_merging_accumulates_speech_and_aliases() -> None:
     """A returning character's totals grow; their voice does not change."""
     record = store.SeriesRecord(
-        "s", "eponine", (_known("kaladin-stormblessed", "Kaladin Stormblessed",
-                                ("Kaladin Stormblessed",)),),
+        "s",
+        "eponine",
+        (
+            _known(
+                "kaladin-stormblessed",
+                "Kaladin Stormblessed",
+                ("Kaladin Stormblessed",),
+            ),
+        ),
     )
     updated = merged_series(
         record,
@@ -110,8 +126,11 @@ def test_merging_accumulates_speech_and_aliases() -> None:
 def test_merging_adds_a_newcomer() -> None:
     """A character the series has not met joins it with the voice just solved."""
     updated = merged_series(
-        None, (_profile("shallan", "Shallan Davar"),), {"shallan": "aoife"},
-        "eponine", "s",
+        None,
+        (_profile("shallan", "Shallan Davar"),),
+        {"shallan": "aoife"},
+        "eponine",
+        "s",
     )
     assert updated.series_id == "s"
     assert updated.narrator_voice_id == "eponine"
@@ -130,14 +149,19 @@ def test_two_local_characters_claiming_one_series_person_match_neither() -> None
     `identity` states, applied across the series boundary too.
     """
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (_known("elizabeth-bennet", "Elizabeth Bennet", ("Elizabeth", "Lizzy")),),
     )
     characters = (_profile("elizabeth-maid", "Elizabeth"), _profile("lizzy", "Lizzy"))
     assert match_roster(record, characters) == {}
 
     updated = merged_series(
-        record, characters, {"elizabeth-maid": "v1", "lizzy": "v2"}, "eponine", "s",
+        record,
+        characters,
+        {"elizabeth-maid": "v1", "lizzy": "v2"},
+        "eponine",
+        "s",
     )
     assert len(updated.characters) == 3  # noqa: PLR2004 - two locals plus the untouched original
     by_id = {c.canonical_id: c.voice_id for c in updated.characters}
@@ -156,10 +180,18 @@ def test_unmatched_newcomer_does_not_inherit_an_unrelated_slug_collision() -> No
     and running total with no name comparison ever happening.
     """
     record = merged_series(
-        None, (_profile("guard", "Town Guard"),), {"guard": "v1"}, "n", "s",
+        None,
+        (_profile("guard", "Town Guard"),),
+        {"guard": "v1"},
+        "n",
+        "s",
     )
     updated = merged_series(
-        record, (_profile("guard", "Castle Guard"),), {"guard": "v2"}, "n", "s",
+        record,
+        (_profile("guard", "Castle Guard"),),
+        {"guard": "v2"},
+        "n",
+        "s",
     )
     assert len(updated.characters) == 2  # noqa: PLR2004 - two distinct guards
     canonical_ids = {c.canonical_id for c in updated.characters}
@@ -179,11 +211,19 @@ def test_merging_the_same_volume_twice_replaces_its_contribution() -> None:
     pass over the same speech would add it again rather than replace it.
     """
     first = merged_series(
-        None, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        None,
+        (_profile("kaladin", "Kaladin"),),
+        {"kaladin": "alf"},
+        "eponine",
+        "s",
         book_digest="volume-1",
     )
     again = merged_series(
-        first, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        first,
+        (_profile("kaladin", "Kaladin"),),
+        {"kaladin": "alf"},
+        "eponine",
+        "s",
         book_digest="volume-1",
     )
     kaladin = next(c for c in again.characters if c.canonical_id == "kaladin")
@@ -193,11 +233,19 @@ def test_merging_the_same_volume_twice_replaces_its_contribution() -> None:
 def test_merging_a_different_volume_still_accumulates() -> None:
     """Naming volumes must not turn off the series' whole point: accumulation."""
     first = merged_series(
-        None, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        None,
+        (_profile("kaladin", "Kaladin"),),
+        {"kaladin": "alf"},
+        "eponine",
+        "s",
         book_digest="volume-1",
     )
     second = merged_series(
-        first, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        first,
+        (_profile("kaladin", "Kaladin"),),
+        {"kaladin": "alf"},
+        "eponine",
+        "s",
         book_digest="volume-2",
     )
     kaladin = next(c for c in second.characters if c.canonical_id == "kaladin")
@@ -207,10 +255,18 @@ def test_merging_a_different_volume_still_accumulates() -> None:
 def test_an_unnamed_volume_still_accumulates_as_before() -> None:
     """Omitting ``book_digest`` keeps the original, purely additive contract."""
     first = merged_series(
-        None, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        None,
+        (_profile("kaladin", "Kaladin"),),
+        {"kaladin": "alf"},
+        "eponine",
+        "s",
     )
     second = merged_series(
-        first, (_profile("kaladin", "Kaladin"),), {"kaladin": "alf"}, "eponine", "s",
+        first,
+        (_profile("kaladin", "Kaladin"),),
+        {"kaladin": "alf"},
+        "eponine",
+        "s",
     )
     kaladin = next(c for c in second.characters if c.canonical_id == "kaladin")
     assert kaladin.spoken_characters == 200  # noqa: PLR2004 - additive, as always
@@ -228,13 +284,18 @@ def test_re_merging_an_unchanged_volume_does_not_mint_a_new_canonical() -> None:
     bound while re-casting the volume every time.
     """
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (_known("elizabeth-bennet", "Elizabeth Bennet", ("Elizabeth", "Lizzy")),),
     )
     characters = (_profile("elizabeth", "Elizabeth"), _profile("lizzy", "Lizzy"))
     for _ in range(4):
         record = merged_series(
-            record, characters, {"elizabeth": "v1", "lizzy": "v2"}, "eponine", "s",
+            record,
+            characters,
+            {"elizabeth": "v1", "lizzy": "v2"},
+            "eponine",
+            "s",
             book_digest="volume-1",
         )
         assert {c.canonical_id for c in record.characters} == {
@@ -258,7 +319,8 @@ def test_a_bare_series_alias_does_not_capture_a_longer_new_name() -> None:
     the same way round.
     """
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (
             _known(
                 "dalinar-kholin",
@@ -272,9 +334,7 @@ def test_a_bare_series_alias_does_not_capture_a_longer_new_name() -> None:
 
 def test_a_bare_series_forename_does_not_capture_a_longer_new_name() -> None:
     """The forename variant of the same defect: "John" hosting "John Watson"."""
-    record = store.SeriesRecord(
-        "s", "eponine", (_known("john", "John", ("John",)),)
-    )
+    record = store.SeriesRecord("s", "eponine", (_known("john", "John", ("John",)),))
     assert match_roster(record, (_profile("john-watson", "John Watson"),)) == {}
 
 
@@ -286,7 +346,8 @@ def test_an_alias_two_series_characters_share_matches_nobody() -> None:
     sharing a short form do.
     """
     record = store.SeriesRecord(
-        "s", "eponine",
+        "s",
+        "eponine",
         (
             _known("elizabeth-bennet", "Elizabeth Bennet", ("Elizabeth",)),
             _known("elizabeth-gardiner", "Elizabeth Gardiner", ("Elizabeth",)),
@@ -295,9 +356,9 @@ def test_an_alias_two_series_characters_share_matches_nobody() -> None:
     assert match_roster(record, (_profile("elizabeth", "Elizabeth"),)) == {}
 
 
-def _roster(payload: list[dict[str, str]], spoken: dict[str, int]) -> tuple[
-    CharacterProfile, ...
-]:
+def _roster(
+    payload: list[dict[str, str]], spoken: dict[str, int]
+) -> tuple[CharacterProfile, ...]:
     """Build a volume's roster the way a render does, from a model answer."""
     merged = merge_rosters((normalise_roster(payload),))
     return tuple(
@@ -320,7 +381,12 @@ def test_two_of_one_volumes_people_do_not_collapse_onto_one_canonical() -> None:
     """
     volume_one = _roster([{"id": "guard", "name": "Gaoler"}], {"guard": 100})
     record = merged_series(
-        None, volume_one, {"guard": "alf"}, "eponine", "s", book_digest="volume-1",
+        None,
+        volume_one,
+        {"guard": "alf"},
+        "eponine",
+        "s",
+        book_digest="volume-1",
     )
     volume_two = _roster(
         [{"id": "guard", "name": "Guard"}, {"id": "guard-2", "name": "Warden"}],

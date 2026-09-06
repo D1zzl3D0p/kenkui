@@ -78,5 +78,10 @@ class Completed:
 
 ExecutionEvent: TypeAlias = (
     CastResolved
-    | Started | StageStarted | StageProgress | StageCompleted | Warning | Completed
+    | Started
+    | StageStarted
+    | StageProgress
+    | StageCompleted
+    | Warning
+    | Completed
 )

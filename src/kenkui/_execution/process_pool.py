@@ -651,9 +651,7 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
                         if state.process.exitcode != 0 or state.pending:
                             _fail(
                                 active,
-                                _reported_failure(
-                                    workspace, worker_index, state
-                                ),
+                                _reported_failure(workspace, worker_index, state),
                             )
                         with suppress(BaseException):
                             state.process.close()
@@ -705,13 +703,9 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
             _terminate_and_reap(active)
 
 
-def _reported_failure(
-    workspace: Path, worker_index: int, state: _Active
-) -> ErrorCode:
+def _reported_failure(workspace: Path, worker_index: int, state: _Active) -> ErrorCode:
     """Log why a worker failed, then return the code the caller should receive."""
-    code = _failure_code(
-        workspace / f"{_FAILURE_PREFIX}{worker_index}", workspace
-    )
+    code = _failure_code(workspace / f"{_FAILURE_PREFIX}{worker_index}", workspace)
     pending = sorted(state.pending)
     chapter_id = ""
     for index, task in state.assignments:
