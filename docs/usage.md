@@ -271,9 +271,9 @@ it separately to make the distinction audible:
 .assign_voices(narrator="eponine", unknown="paul")
 ```
 
-Both configured voices are excluded from the pool characters are cast from.
-The narrator speaks in every chapter, so sharing its voice with a character
-would collide everywhere.
+Character casting prefers voices distinct from both configured voices. If none
+remain, it shares the available voices with narration. With one loaded voice,
+the entire book is spoken by that voice, including all attributed dialogue.
 
 ### Unnamed speakers
 
@@ -300,9 +300,10 @@ Neither is random in the sense of varying between runs. Same book, same
 method, same pool always gives the same cast: reproducibility is required, and
 the solver's ordering supplies the variation instead.
 
-A character whose gender was never inferred falls back to the whole pool. A
-voice whose gender was never *sourced* never joins a gendered pool, because a
-missing trait is an admission of ignorance rather than a wildcard.
+A character whose gender was never inferred uses the whole character pool.
+For a known gender, sourced matching voices are preferred. If none match,
+casting falls back to the available pool; a missing trait is not treated as
+evidence of a match.
 
 ### Pinning a choice
 
@@ -320,9 +321,10 @@ character actually speaks — so a lead does not land on the voice a walk-on
 already holds. Voices spread before they repeat, and repeat only once the pool
 is under pressure.
 
-When the pool cannot satisfy that, the solver minimises the clash and logs
-`cast_collision`. It is not raised and not reported to the caller: a collision
-means the pool ran short, which is fixed by provisioning more voices.
+Voice sharing is expected when the cast exceeds the available pool: a book
+with 120 characters and six voices still gets a complete cast. The solver
+balances reuse and records same-chapter sharing as `cast_collision` log entries
+without failing the conversion. Additional voices can improve distinctness.
 
 ### Stored work
 

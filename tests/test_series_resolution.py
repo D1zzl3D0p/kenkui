@@ -146,6 +146,35 @@ def test_a_returning_character_keeps_their_voice(
     assert first["javert"] == second["javert"]
 
 
+def test_a_series_can_share_its_only_voice_with_every_character(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolution and validation agree that a narrator-only pool is usable."""
+    _stub_resolution(monkeypatch, "javert")
+    monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_NARRATOR,))
+    path = make_epub(
+        tmp_path / "solo.epub",
+        chapters={"one": xhtml('<p>"Hello," said Javert.</p>')},
+        spine=("one",),
+    )
+    for volume in (1, 2):
+        resolved = (
+            kk.epub(path)
+            .series("solo-series", book=volume)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .tts()
+            .resolve()
+        )
+        assert resolved._resolved is not None  # noqa: SLF001
+        assert resolved._resolved.cast_assignments == {"javert": "eponine"}  # noqa: SLF001
+        assert resolved.validate().is_valid
+    stored = store.read_series("solo-series")
+    assert stored is not None
+    assert stored.characters[0].voice_id == "eponine"
+
+
 def test_cancellation_during_binding_does_not_commit_a_series(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

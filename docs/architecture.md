@@ -157,9 +157,9 @@ so no credential and no request can reach them.
 A book narrated in the first person names its narrator during roster
 inference, and attribution marks them in the roster it sends. Their id is an
 ordinary character id, so their spoken lines and their narration differ only in
-which voice casting gives them: `_castable` withholds the narrator voice from
-every character, so a narrating character cannot be given the voice their own
-narration uses.
+which voice casting gives them. Character casting prefers voices distinct from
+narration, but shares the available voices when no distinct voice exists. A
+single loaded voice can therefore narrate every part of the book.
 
 Attribution also handles a speaker the text identifies by role but never names,
 such as a guard, innkeeper, or first man. The model returns a short role word;

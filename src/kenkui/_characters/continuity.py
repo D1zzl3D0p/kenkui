@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from kenkui._characters.series import match_roster
+from kenkui._domain.casting import character_voice_pool
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -30,20 +31,24 @@ class SeriesPins:
 def eligible_series_voice_ids(
     voices: Sequence[Voice], narrator_voice_id: str, unknown_voice_id: str
 ) -> frozenset[str]:
-    """Return loaded, language-compatible voices excluding reserved narrators.
+    """Return loaded, language-compatible voices available for character casting.
 
     Validation uses the same pool rules as resolution. If the narrator is not
     known yet, its language cannot be checked; voice resolution reports that
     resource error separately.
     """
-    reserved = {narrator_voice_id, unknown_voice_id}
     narrator = next((voice for voice in voices if voice.id == narrator_voice_id), None)
-    return frozenset(
-        voice.id
+    compatible = tuple(
+        voice
         for voice in voices
         if voice.state == "loaded"
         and (narrator is None or voice.language == narrator.language)
-        and voice.id not in reserved
+    )
+    return frozenset(
+        voice.id
+        for voice in character_voice_pool(
+            compatible, narrator_voice_id, unknown_voice_id
+        )
     )
 
 
@@ -67,10 +72,10 @@ def prepare_series_cast(
     dropped_voice_ids: dict[str, str] = {}
     overridden_pins: list[str] = []
     if stored is not None:
-        pool_ids = frozenset(voice.id for voice in pool) - {
-            casting.narrator_voice_id,
-            casting.unknown_voice_id,
-        }
+        available = character_voice_pool(
+            pool, casting.narrator_voice_id, casting.unknown_voice_id
+        )
+        pool_ids = frozenset(voice.id for voice in available)
         by_canonical = {c.canonical_id: c for c in stored.characters}
         character_genders = {c.id: c.gender for c in characters}
         voice_genders = {voice.id: voice.perceived_gender for voice in pool}
@@ -87,6 +92,10 @@ def prepare_series_cast(
                 and character_genders.get(book_id) is not None
                 and voice_genders.get(known.voice_id) is not None
                 and character_genders[book_id] != voice_genders[known.voice_id]
+                and any(
+                    voice.perceived_gender == character_genders[book_id]
+                    for voice in available
+                )
             )
             if known.voice_id in pool_ids and not contradicts:
                 explicit[book_id] = known.voice_id

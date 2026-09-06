@@ -8,8 +8,8 @@ from typing import Literal
 VoiceVariety = Literal["built-in", "pre-compiled", "wav"]
 VoiceState = Literal["registered", "loaded", "missing"]
 # How the rendered voice is generally heard, used only to build casting pools.
-# None means unsourced, and an unsourced voice never joins a gendered pool:
-# a display name is Kenkui's own invention and says nothing about the speaker.
+# None means unsourced, not a gender match. Such voices remain available when
+# no matching voice exists; a display name is not evidence about the speaker.
 PerceivedGender = Literal["feminine", "masculine"] | None
 
 

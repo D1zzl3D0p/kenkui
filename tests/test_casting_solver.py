@@ -239,19 +239,43 @@ def test_reserved_roles_are_excluded_from_every_method() -> None:
     assert outcome.assignments["darcy"] not in {"charles", "paul"}
 
 
-def test_empty_pool_after_reservation_is_rejected() -> None:
-    """Reserving the only voice leaves nothing to cast with."""
-    outcome_pool = (_voice("solo", "feminine"),)
+@pytest.mark.parametrize("voice_count", [1, 6])
+def test_a_large_cast_reuses_the_available_voices(voice_count: int) -> None:
+    """A 120-character book remains renderable even with only its narrator."""
+    characters = tuple(
+        _character(f"person-{index:03}", "masculine", 100, ("ch1",))
+        for index in range(120)
+    )
+    pool = tuple(_voice(f"voice-{index}", "feminine") for index in range(voice_count))
+    outcome = solve(
+        _request(
+            characters,
+            pool=pool,
+            narrator_voice_id="voice-0",
+            unknown_voice_id="voice-0",
+        )
+    )
+    assert set(outcome.assignments) == {character.id for character in characters}
+    expected_voices = {voice.id for voice in pool[1:] or pool}
+    assert set(outcome.assignments.values()) == expected_voices
+    assert outcome.collisions
+
+
+def test_an_actually_empty_pool_cannot_cast_an_unassigned_character() -> None:
+    """Sharing cannot invent a voice that does not exist."""
     with pytest.raises(ValidationError) as caught:
         solve(
             _request(
                 (_character("darcy", None, 400, ("ch1",)),),
-                pool=outcome_pool,
-                narrator_voice_id="solo",
-                unknown_voice_id="solo",
+                pool=(),
             )
         )
     assert caught.value.code is ErrorCode.CAST_POOL_EMPTY
+
+
+def test_an_empty_roster_needs_no_character_pool() -> None:
+    """A book without identified dialogue can keep its narration unchanged."""
+    assert solve(_request((), pool=())).assignments == {}
 
 
 def test_exhausted_pool_collides_minimally_and_reports_it() -> None:

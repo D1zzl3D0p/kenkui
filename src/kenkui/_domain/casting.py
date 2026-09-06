@@ -110,9 +110,9 @@ def candidates(
 
     A character whose gender was never inferred falls back to the whole pool,
     because refusing to cast them would silently drop their speech. The reverse
-    does not hold: a voice whose trait is unsourced never joins a gendered
-    pool, since a missing trait is an admission of ignorance rather than a
-    wildcard.
+    does not imply a match: an unsourced voice is excluded when matching
+    voices exist. If no voice matches, use the available pool so every
+    character still has a voice.
     """
     validate_method(method)
     if method == "random" or character.gender is None:
@@ -156,7 +156,9 @@ def solve(request: CastingRequest) -> CastingOutcome:
     result cannot depend on the order the caller supplied. The plan fingerprint
     depends on that: equal intent must yield an equal plan.
     """
-    pool = _castable(request)
+    pool = character_voice_pool(
+        request.pool, request.narrator_voice_id, request.unknown_voice_id
+    )
     by_id = {character.id: character for character in request.characters}
     for character_id in request.explicit:
         if character_id not in by_id:
@@ -174,6 +176,8 @@ def solve(request: CastingRequest) -> CastingOutcome:
         request.explicit, request.characters, neighbours
     )
     remaining = [c for c in request.characters if c.id not in assignments]
+    if remaining and not pool:
+        raise ValidationError(ErrorCode.CAST_POOL_EMPTY)
     while remaining:
         character = _most_constrained(remaining, neighbours, assignments)
         remaining.remove(character)
@@ -197,19 +201,17 @@ def solve(request: CastingRequest) -> CastingOutcome:
     return CastingOutcome(assignments, tuple(collisions))
 
 
-def _castable(request: CastingRequest) -> tuple[Voice, ...]:
-    """Drop the reserved roles from the pool.
+def character_voice_pool(
+    voices: Sequence[Voice], narrator_voice_id: str, unknown_voice_id: str
+) -> tuple[Voice, ...]:
+    """Prefer voices distinct from narration, sharing when none remain.
 
-    The narrator speaks in every chapter, so as a vertex it is adjacent to
-    every character. Excluding its voice is pre-colouring a universally
-    adjacent vertex rather than a special case, which is why the exclusion
-    applies to every method and not only the gendered one.
+    The shell supplies loaded, language-compatible voices. A single available
+    voice can narrate the entire book, including every attributed character.
     """
-    reserved = {request.narrator_voice_id, request.unknown_voice_id}
-    pool = tuple(voice for voice in request.pool if voice.id not in reserved)
-    if not pool:
-        raise ValidationError(ErrorCode.CAST_POOL_EMPTY)
-    return pool
+    reserved = {narrator_voice_id, unknown_voice_id}
+    distinct = tuple(voice for voice in voices if voice.id not in reserved)
+    return distinct or tuple(voices)
 
 
 def _neighbours(
