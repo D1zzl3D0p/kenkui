@@ -2,6 +2,10 @@ site_name: Kenkui
 site_description: Documentation for the Kenkui Python package
 repo_url: https://github.com/kenkui/kenkui
 strict: true
+# Historical implementation proposals remain in the repository, but are not
+# current user guidance and must not appear in the published site or search.
+exclude_docs: |
+  /superpowers/
 
 theme:
   name: material
@@ -10,6 +14,7 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Immutable API: usage.md
+  - Public API reference: api.md
   - Architecture: architecture.md
   - Security boundaries: security.md
   - Models and voices: models-and-voices.md
@@ -23,3 +28,11 @@ plugins:
       handlers:
         python:
           paths: [src]
+          options:
+            show_root_heading: true
+            show_source: false
+            show_if_no_docstring: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            filters: ["!^_"]

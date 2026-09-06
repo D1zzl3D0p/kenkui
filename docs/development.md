@@ -1,5 +1,11 @@
 # Contributing, testing, and release checks
 
+Current user documentation is listed in `mkdocs.yml`. The `docs/superpowers/`
+directory retains historical plans and design proposals for repository research;
+they may describe superseded APIs and are excluded from the published site and
+its search index. Treat the usage guide and generated public API reference as
+the current interface documentation.
+
 ## Locked setup
 
 Kenkui supports CPython 3.11 through 3.13. Install

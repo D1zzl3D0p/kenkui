@@ -2,6 +2,8 @@
 
 Only names exported by `kenkui.__all__` are public. Modules whose names start
 with `_` are implementation details and may change without compatibility notice.
+The [public API reference](api.md) lists every exported name and the current
+method signatures; this guide explains how to compose them.
 
 ## Construct and branch
 
@@ -254,8 +256,10 @@ kk.epub("book.epub").assign_voice("eponine")
 kk.epub("book.epub").assign_voices(narrator="eponine")
 ```
 
-A full cast adds character inference and dialogue attribution, both of which
-name the model to use:
+A full cast adds character inference and dialogue attribution. Each names its
+model independently. Discovery can also use the optional local
+[spaCy pipeline](installation.md#optional-offline-character-discovery-with-spacy);
+quote attribution uses a configured LiteLLM provider:
 
 ```python
 import os
@@ -411,8 +415,9 @@ the entire book is spoken by that voice, including all attributed dialogue.
 naming, such as a guard, innkeeper, or first man. This happens automatically:
 use the normal inference, attribution, and casting pipeline above; do not add
 or pin a role identifier yourself. Each identified role is scoped to its
-chapter, so two such speakers in one scene receive different voices, while the
-same role word in another chapter is treated as another speaker. When the text
+chapter. Casting tries to give speakers in one scene different voices, but
+shares them when the available pool requires it. The same role word in another
+chapter is treated as another speaker. When the text
 does not identify the speaker, the dialogue remains `unknown` and uses the
 fallback described above.
 
@@ -550,23 +555,25 @@ model call:
 | `series_voice_missing` | a voice this series already cast is not currently loaded | `allow_recast=True` |
 | `series_narrator_changed` | this render's narrator differs from the one the series recorded | `allow_narrator_change=True` |
 
-`resolve()` never calls `validate()`, so a render that reaches it proceeds
-either way — the difference the flags make is not whether the render happens,
-but what gets written back:
+Every `write()` and `write_m4b()` calls `validate()`, including writes from an
+already resolved checkpoint. Resolving first does **not** bypass these checks.
+Set the corresponding flag on `.series(...)` to authorize the change before
+resolving and rendering:
 
 - `allow_recast=True` re-solves the affected character and **persists** the
   replacement voice, so the series converges on it from this volume on.
 - `allow_narrator_change=True` **persists** the new narrator as the series'
   narrator from this volume on.
-- Without the flag, the render still proceeds using whatever the solver
-  chose (the speech has to go somewhere), but the series record is left
-  untouched. The stored voice or narrator survives, so the next `validate()`
-  keeps reporting the same problem — the render was forced, not authorised.
+
+Standalone `resolve()` does not run full render validation: it can produce an
+inspectable cast without `.tts()`. If a continuity conflict is not authorized,
+resolution preserves the affected stored voice or narrator, and a subsequent
+write still refuses it. Use `validate()` to inspect those issues cheaply.
 
 Every case where this volume's cast disagrees with what the series has
 stored — a dropped pin, an explicit `cast=` override, or a changed narrator —
 logs a `WARNING` with `boundary="series"`, whether or not a flag was passed.
-A forced or overridden render still says what it did.
+An authorized override still says what it did.
 
 ```python
 kk.epub("book.epub").series(

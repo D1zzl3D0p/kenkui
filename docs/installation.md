@@ -38,8 +38,7 @@ python -m pip install kenkui
 ```
 
 The adapter dependencies are already included. This extra is a no-op, kept
-for compatibility with installs that requested it when Pocket
-deployment is available:
+for compatibility with older installs that requested Pocket separately:
 
 ```console
 python -m pip install "kenkui[pocket]"
@@ -58,6 +57,40 @@ The wheel does not contain model weights or voice recordings. Explicit
 `load_voice()` provisioning downloads the necessary assets and records them in
 the local manifest; rendering verifies that manifest before synthesis.
 See [Pocket-TTS adapter](pocket-tts-adapter.md).
+
+## Optional offline character discovery with spaCy
+
+The base install uses your configured LiteLLM model for character discovery.
+To discover characters locally instead, install the optional spaCy dependency
+and its English pipeline into the same Python environment:
+
+```console
+python -m pip install "kenkui[spacy]"
+python -m spacy download en_core_web_lg
+```
+
+`infer_characters("spacy")` selects `en_core_web_lg`. The download is explicit;
+Kenkui loads the installed pipeline and does not fetch it during resolution.
+To choose a smaller pipeline, install `en_core_web_sm` and use
+`infer_characters("spacy:en_core_web_sm")`. Different pipeline sizes can change
+the discovered roster. Kenkui uses dependency parsing and English speech/name
+heuristics, so this path is intended for English books.
+
+```python
+import kenkui as kk
+
+if __name__ == "__main__":
+    review = kk.epub("book.epub").infer_characters("spacy").resolve(until="characters")
+    print(review.inspect().roster)
+```
+
+This replaces character discovery only. `attribute_quotes(model)` still uses
+a LiteLLM provider/model identifier and may make network requests; `"spacy"`
+is not a quote-attribution provider. See
+[character review](usage.md#review-characters-before-attribution) to correct the
+roster before continuing. Missing dependencies raise `spacy_package_missing`
+or `spacy_pipeline_missing`; install the missing component in the environment
+running Kenkui.
 
 ## FFmpeg prerequisite
 

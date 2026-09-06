@@ -54,8 +54,18 @@ advice or a legal conclusion.
 
 ## Built-in catalog
 
-Kenkui ships metadata for the 26 predefined voices upstream publishes. The bytes
-are downloaded on first `load_voice`; nothing is bundled in the package.
+The catalog combines 26 upstream predefined voices (listed below) with 95
+precompiled Kenkui voice-pack entries. The package bundles their metadata;
+audio and embeddings are downloaded on first `load_voice()`.
+Use `list_voices()` to inspect the catalog available in your installed version.
+Pack entries use their lowercase display names as IDs, except where that would
+collide with an upstream voice; those entries retain their full pack slug.
+
+The pack declares its compatible Pocket-TTS versions. Incompatible pack voices
+are withheld and attempts to use them raise `voice_incompatible`; the 26 upstream
+voices remain available. A missing pack manifest also leaves the upstream catalog
+available. Both sources are exposed as `Voice.variety == "built-in"`; the
+`"pre-compiled"` variety identifies embeddings registered by the caller.
 
 **Every built-in voice ships as `commercial_use_allowed = false`.** None of the
 source terms were reviewed by this project, and a conservative default is the
@@ -102,8 +112,8 @@ Two entries carry corpus-specific caveats that survive any review:
 These are conservative engineering caveats, not statements about anyone's legal
 rights, and not a substitute for reviewing the exact terms yourself.
 
-The catalog is drift-tested against pocket-tts's own predefined-voice map, so an
-upstream addition or removal fails the test suite rather than degrading to
+The upstream portion is drift-tested against pocket-tts's predefined-voice map.
+An upstream addition or removal fails the test suite rather than degrading to
 `voice_unknown` at runtime.
 
 ## Asset integrity
@@ -148,5 +158,9 @@ speaker selection than those entries, and VCTK's `speaker-info.txt` ships only
 inside the full corpus download. Their display names are Kenkui's own
 inventions and say nothing about the speaker.
 
-A voice with no trait never joins a gendered pool. Guessing would be worse
-than the gap: a wrong voice is audible, a missing one just widens the pool.
+A voice with no trait is not considered a gender match. The `gendered` method
+prefers matching voices when available; if there are none, it falls back to the
+whole available character pool, including voices whose trait is absent. A
+character whose gender is unknown also uses that whole pool. Voice sharing is
+expected when characters outnumber voices, including a single voice narrating
+every part. See [casting methods](usage.md#methods).

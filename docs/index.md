@@ -23,6 +23,7 @@ Start here:
 
 - [Installation and exact support matrix](installation.md)
 - [Immutable API and execution controls](usage.md)
+- [Public API reference](api.md)
 - [Architecture, determinism, isolation, and cache](architecture.md)
 - [EPUB and local-asset security boundaries](security.md)
 - [Models, voices, rights, and current evidence](models-and-voices.md)

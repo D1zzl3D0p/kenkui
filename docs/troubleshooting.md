@@ -42,6 +42,25 @@ active environment.
 
 See [security boundaries](security.md) for exact limits.
 
+## Character analysis and checkpoints
+
+- `spacy_package_missing` / `spacy_pipeline_missing`: install the optional
+  dependency and the selected language pipeline in the active environment;
+  see [spaCy setup](installation.md#optional-offline-character-discovery-with-spacy).
+- `invalid_model`: supply a nonempty model identifier. Local roster discovery
+  accepts `"spacy"` or `"spacy:<installed_pipeline>"`; attribution needs a
+  configured LiteLLM model.
+- `invalid_roster`: correct duplicate/reserved IDs, invalid fields, chapter IDs,
+  or a narrator reference that is absent from the roster. See
+  [character review](usage.md#review-characters-before-attribution).
+- `invalid_resolution_stage`: use `until="characters"` or `until="casting"`.
+- `source_changed`: the EPUB differs from the checkpoint. Resolve it again;
+  for a reviewed roster, use `resolve(until="characters")` and review the new
+  roster before continuing. The old checkpoint remains inspectable.
+- `series_voice_missing` / `series_narrator_changed`: restore the previous voice
+  or explicitly authorize the corresponding change on `.series(...)`. Resolving
+  first does not bypass write validation; see [series](usage.md#what-refuses-a-render).
+
 ## Intent, output, events, and cancellation
 
 - `voice_required` and `tts_required`: call `assign_voice(...).tts()` in order.
