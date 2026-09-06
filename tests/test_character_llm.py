@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from kenkui._characters.llm import _LiteLLMClient, complete_json
-from kenkui.errors import ErrorCode, ModelError
+from kenkui.cancellation import CancellationToken
+from kenkui.errors import CancelledError, ErrorCode, ModelError
 
 
 class FakeClient:
@@ -142,3 +143,44 @@ def test_failures_do_not_leak_book_text(caplog: pytest.LogCaptureFixture) -> Non
         complete_json("fake/model", manuscript, SCHEMA, client=client, backoff_base=0.0)
     assert manuscript not in str(caught.value)
     assert manuscript not in caplog.text
+
+
+@pytest.mark.parametrize("response", ['{"items": []}', "invalid", None])
+def test_cancelled_provider_call_does_not_retry(response: str | None) -> None:
+    """A returned response or provider error must not conceal cancellation."""
+    token = CancellationToken()
+
+    class CancellingClient:
+        """Cancel after entering the provider boundary."""
+
+        calls = 0
+
+        def complete(self, model: str, prompt: str) -> str:
+            del model, prompt
+            self.calls += 1
+            token.cancel()
+            if response is None:
+                raise ConnectionError
+            return response
+
+    client = CancellingClient()
+    with pytest.raises(CancelledError):
+        complete_json("fake/model", "p", SCHEMA, client=client, cancel=token)
+    assert client.calls == 1
+
+
+def test_cancellation_interrupts_retry_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A retry delay checks cancellation without waiting out the whole delay."""
+    token = CancellationToken()
+    sleeps: list[float] = []
+
+    def cancel_during_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        token.cancel()
+
+    monkeypatch.setattr("kenkui._characters.llm.time.sleep", cancel_during_sleep)
+    client = FakeClient("invalid")
+    with pytest.raises(CancelledError):
+        complete_json("fake/model", "p", SCHEMA, client=client, cancel=token)
+    assert len(sleeps) == 1
+    assert sleeps == [pytest.approx(0.1)]

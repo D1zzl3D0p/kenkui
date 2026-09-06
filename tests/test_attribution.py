@@ -444,3 +444,97 @@ def test_attribution_prompts_carry_no_recent_speakers() -> None:
     resolve_attribution(_inspection(), BOOK, "fake/model", client=client)
     assert client.calls
     assert all("Recently speaking" not in prompt for prompt in client.calls)
+
+
+@pytest.mark.parametrize("workers", [1, 3])
+def test_cancellation_stops_unstarted_chapters(
+    monkeypatch: pytest.MonkeyPatch, workers: int
+) -> None:
+    """Cancellation during active calls must not buy all forty chapter calls."""
+    monkeypatch.setattr("kenkui._characters._ATTRIBUTION_CONCURRENCY", workers)
+    token = CancellationToken()
+    barrier = threading.Barrier(workers)
+
+    class CancellingClient(ScriptedClient):
+        def complete(self, model: str, prompt: str) -> str:
+            """Wait for the active batch, then cancel before workers refill."""
+            response = super().complete(model, prompt)
+            barrier.wait(timeout=5)
+            token.cancel()
+            return response
+
+    client = CancellingClient()
+    roster = CharacterRoster((CharacterProfile("javert", "Javert", None, 0, ()),))
+    with pytest.raises(CancelledError):
+        resolve_attribution(
+            _multi_chapter_inspection(40),
+            BOOK,
+            "fake/model",
+            client=client,
+            roster=roster,
+            cancel=token,
+        )
+    assert len(client.calls) == workers
+    assert store.list_castings() == ()
+
+
+def test_progress_reports_chapters_on_calling_thread_and_cache_hits() -> None:
+    """Both model stages and reused attribution remain visible to a caller."""
+    owner = threading.get_ident()
+    events: list[tuple[str, int, int, str | None]] = []
+
+    def progress(stage: str, completed: int, total: int, chapter: str | None) -> None:
+        assert threading.get_ident() == owner
+        events.append((stage, completed, total, chapter))
+
+    inspection = _multi_chapter_inspection(3)
+    client = ScriptedClient()
+    resolve_attribution(
+        inspection, BOOK, "fake/model", client=client, on_progress=progress
+    )
+    for stage in ("characters", "attribution"):
+        stage_events = [event for event in events if event[0] == stage]
+        assert [event[1] for event in stage_events] == list(range(4))
+        assert {event[2] for event in stage_events} == {len(inspection.chapters)}
+        assert {event[3] for event in stage_events[1:]} == {"ch0", "ch1", "ch2"}
+    events.clear()
+    calls = len(client.calls)
+    resolve_attribution(
+        inspection, BOOK, "fake/model", client=client, on_progress=progress
+    )
+    assert events == [("attribution", 0, 3, None), ("attribution", 3, 3, None)]
+    assert len(client.calls) == calls
+
+
+@pytest.mark.parametrize("stage", ["characters", "attribution"])
+def test_initial_progress_callback_can_cancel_without_model_calls(stage: str) -> None:
+    """Stage-start callbacks can stop before the first provider invocation."""
+    token = CancellationToken()
+    client = ScriptedClient()
+
+    def progress(current: str, completed: int, total: int, chapter: str | None) -> None:
+        del completed, total, chapter
+        if current == stage:
+            token.cancel()
+
+    if stage == "characters":
+        with pytest.raises(CancelledError):
+            discover_characters(
+                _inspection(),
+                "fake/model",
+                client=client,
+                cancel=token,
+                on_progress=progress,
+            )
+    else:
+        with pytest.raises(CancelledError):
+            resolve_attribution(
+                _inspection(),
+                BOOK,
+                "fake/model",
+                client=client,
+                roster=CharacterRoster(()),
+                cancel=token,
+                on_progress=progress,
+            )
+    assert client.calls == []

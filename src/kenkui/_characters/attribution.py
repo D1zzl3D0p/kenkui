@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from kenkui._characters.llm import Client
     from kenkui._domain.casting import CharacterProfile
+    from kenkui.cancellation import CancellationToken
     from kenkui.inspection import ChapterInspection
 
 _SCHEMA: Mapping[str, type] = {"attributions": list}
@@ -135,6 +136,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     spans: tuple[TextSpan, ...] | None = None,
     narrator_id: str | None = None,
     include_aliases: bool = False,
+    cancel: CancellationToken | None = None,
 ) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage]:
     """Return one chapter's speaker spans and how its quotes were accounted for.
 
@@ -168,7 +170,13 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     )
     known = frozenset(character.id for character in characters)
     answers = _answers(
-        model_id, prompt, client, known, narrator_id, chapter_id=chapter.id
+        model_id,
+        prompt,
+        client,
+        known,
+        narrator_id,
+        chapter_id=chapter.id,
+        cancel=cancel,
     )
 
     # A quote's id is its position among the dialogue spans, so pairing them
@@ -213,6 +221,7 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     narrator_id: str | None = None,
     *,
     chapter_id: str | None = None,
+    cancel: CancellationToken | None = None,
 ) -> dict[int, str | None]:
     """Return quote index to resolved speaker, tolerating a bad response.
 
@@ -221,7 +230,7 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     it could not place.
     """
     try:
-        payload = complete_json(model_id, prompt, _SCHEMA, client=client)
+        payload = complete_json(model_id, prompt, _SCHEMA, client=client, cancel=cancel)
     except ModelError:
         return {}
     answers: dict[int, str | None] = {}

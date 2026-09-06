@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, replace
+from itertools import islice
 from typing import TYPE_CHECKING
 
 from kenkui._characters import dialogue_tags, spacy_roster, store
@@ -54,13 +55,13 @@ from kenkui.errors import ModelError
 from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from kenkui._characters.llm import Client
     from kenkui._characters.quotes import TextSpan
     from kenkui._domain.planning import SpeakerSpan
     from kenkui.cancellation import CancellationToken
-    from kenkui.inspection import BookInspection
+    from kenkui.inspection import BookInspection, ChapterInspection
 
 __all__ = ["AttributionRecord", "resolve_attribution", "store"]
 
@@ -81,12 +82,30 @@ _DROPPED_WARN_RATIO = 0.05
 _ATTRIBUTION_CONCURRENCY = 12
 
 
+def _progress(  # noqa: PLR0913, PLR0917 - progress payload plus callback and token.
+    callback: Callable[[str, int, int, str | None], None] | None,
+    cancel: CancellationToken | None,
+    stage: str,
+    completed: int,
+    total: int,
+    chapter_id: str | None = None,
+) -> None:
+    """Report from the calling thread and honor cancellation from callbacks."""
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+    if callback is not None:
+        callback(stage, completed, total, chapter_id)
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+
+
 def _roster_for(
     chapter_text: str,
     model_id: str,
     client: Client | None,
     *,
     first_person: bool,
+    cancel: CancellationToken | None = None,
 ) -> tuple[tuple[CharacterProfile, ...], str | None]:
     """Infer one chapter's characters, and who narrates it when asked."""
     escaped = chapter_text.replace("{", "{{").replace("}", "}}")
@@ -96,6 +115,7 @@ def _roster_for(
             ROSTER_PROMPT.format(passage=escaped),
             _ROSTER_SCHEMA,
             client=client,
+            cancel=cancel,
         )
     except ModelError:
         return (), None
@@ -236,12 +256,14 @@ def resolve_cast(record: AttributionRecord, request: CastingRequest) -> CastingO
     return outcome
 
 
-def _model_roster(
+def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
     inspection: BookInspection,
     extracted: Mapping[str, tuple[TextSpan, ...]],
     roster_model: str,
     client: Client | None,
     cancel: CancellationToken | None,
+    *,
+    on_progress: Callable[[str, int, int, str | None], None] | None,
 ) -> tuple[tuple[CharacterProfile, ...], str | None]:
     """Infer the roster by asking a model about each chapter in turn.
 
@@ -251,7 +273,8 @@ def _model_roster(
     """
     rosters: list[tuple[CharacterProfile, ...]] = []
     narrators: Counter[str] = Counter()
-    for chapter in inspection.chapters:
+    total = len(inspection.chapters)
+    for completed, chapter in enumerate(inspection.chapters, start=1):
         if cancel is not None:
             cancel.raise_if_cancelled()
         # A chapter with no quoted speech has no speaker to attribute, so its
@@ -259,6 +282,7 @@ def _model_roster(
         # chapters are common enough that asking about them is real spend.
         spans_here = extracted[chapter.id]
         if not any(span.is_dialogue for span in spans_here):
+            _progress(on_progress, cancel, "characters", completed, total, chapter.id)
             continue
         ends = [span.end for span in spans_here if span.is_dialogue]
         roster, narrator = _roster_for(
@@ -266,10 +290,12 @@ def _model_roster(
             roster_model,
             client,
             first_person=is_first_person(chapter.text, ends),
+            cancel=cancel,
         )
         rosters.append(roster)
         if narrator is not None:
             narrators[narrator] += 1
+        _progress(on_progress, cancel, "characters", completed, total, chapter.id)
     characters = merge_rosters(tuple(rosters))
     # One narrator per book: chapters that disagree are outvoted rather than
     # producing a second narrating character.
@@ -410,12 +436,13 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     cancel: CancellationToken | None = None,
     roster: CharacterRoster | None = None,
     reviewed: bool = False,
+    on_progress: Callable[[str, int, int, str | None], None] | None = None,
 ) -> AttributionRecord:
     """Return stored attribution for this book and model, else derive it.
 
-    Called only from the shell. Cancellation is checked as chapter calls
-    complete, because a long book is a long sequence of model calls, and the
-    only other check happens once before rendering starts.
+    Called only from the shell. Cancellation stops queued chapter work; calls
+    already inside a provider finish before returning. Progress callbacks run
+    on the calling thread, never on the chapter workers.
 
     ``roster_model_id`` names the model that infers characters, which the
     caller may choose independently of the one that attributes quotes. It
@@ -451,11 +478,16 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     )
     cached = store.read_attribution(key)
     if cached is not None:
-        return (
+        total = len(inspection.chapters)
+        _progress(on_progress, cancel, "attribution", 0, total)
+        result = (
             cached
             if roster is not None
             else _with_current_roster(cached, inspection, roster_model)
         )
+        if total:
+            _progress(on_progress, cancel, "attribution", total, total)
+        return result
 
     # Extracted once and reused: both passes below need the same partition,
     # and scanning a 600k-character book twice for it is pure waste.
@@ -465,38 +497,22 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     }
 
     if roster is None:
-        roster = _discover_roster(inspection, extracted, roster_model, client, cancel)
+        roster = _discover_roster(
+            inspection, extracted, roster_model, client, cancel, on_progress=on_progress
+        )
     characters, narrator_id = roster.characters, roster.narrator_id
 
-    # Chapters are independent calls, so they run concurrently and are
-    # re-ordered below: the record's spans must stay in chapter order.
-    attributed: dict[str, tuple[tuple[SpeakerSpan, ...], AttributionCoverage]] = {}
-    workers = min(_ATTRIBUTION_CONCURRENCY, len(inspection.chapters))
-    if workers > 0:
-        rosters = {
-            chapter.id: _chapter_roster(characters, chapter.id, narrator_id)
-            for chapter in inspection.chapters
-        }
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(
-                    attribute_chapter,
-                    chapter,
-                    rosters[chapter.id],
-                    model_id,
-                    client=client,
-                    spans=extracted[chapter.id],
-                    narrator_id=narrator_id,
-                    include_aliases=supplied_roster,
-                ): chapter
-                for chapter in inspection.chapters
-            }
-            for future in as_completed(futures):
-                if cancel is not None:
-                    cancel.raise_if_cancelled()
-                chapter = futures[future]
-                attributed[chapter.id] = future.result()
-                _log_coverage(chapter.id, attributed[chapter.id][1])
+    attributed = _attribute_chapters(
+        inspection,
+        extracted,
+        characters,
+        narrator_id,
+        model_id,
+        client=client,
+        cancel=cancel,
+        on_progress=on_progress,
+        include_aliases=supplied_roster,
+    )
 
     spans: list[SpeakerSpan] = []
     for chapter in inspection.chapters:
@@ -530,8 +546,86 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
                 for character in record.characters
             ),
         )
+    if cancel is not None:
+        cancel.raise_if_cancelled()
     store.write_attribution(record)
     return record
+
+
+def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
+    inspection: BookInspection,
+    extracted: Mapping[str, tuple[TextSpan, ...]],
+    characters: Sequence[CharacterProfile],
+    narrator_id: str | None,
+    model_id: str,
+    *,
+    client: Client | None,
+    cancel: CancellationToken | None,
+    on_progress: Callable[[str, int, int, str | None], None] | None,
+    include_aliases: bool,
+) -> dict[str, tuple[tuple[SpeakerSpan, ...], AttributionCoverage]]:
+    """Bound in-flight work and collect chapter results on the calling thread."""
+    total = len(inspection.chapters)
+    _progress(on_progress, cancel, "attribution", 0, total)
+    attributed: dict[str, tuple[tuple[SpeakerSpan, ...], AttributionCoverage]] = {}
+    workers = min(_ATTRIBUTION_CONCURRENCY, total)
+    if workers == 0:
+        return attributed
+
+    def attribute(
+        chapter: ChapterInspection,
+    ) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage]:
+        # A future may be picked up between cancellation and pool shutdown.
+        # Check here as well as before submission, immediately before work.
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        return attribute_chapter(
+            chapter,
+            _chapter_roster(characters, chapter.id, narrator_id),
+            model_id,
+            client=client,
+            spans=extracted[chapter.id],
+            narrator_id=narrator_id,
+            include_aliases=include_aliases,
+            cancel=cancel,
+        )
+
+    chapters = iter(inspection.chapters)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = {
+            pool.submit(attribute, chapter): chapter
+            for chapter in islice(chapters, workers)
+        }
+        try:
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    if cancel is not None:
+                        cancel.raise_if_cancelled()
+                    chapter = pending.pop(future)
+                    attributed[chapter.id] = future.result()
+                    _log_coverage(chapter.id, attributed[chapter.id][1])
+                    _progress(
+                        on_progress,
+                        cancel,
+                        "attribution",
+                        len(attributed),
+                        total,
+                        chapter.id,
+                    )
+                # Refill only after completed work is observed. Long books
+                # retain at most the concurrency bound of submitted futures.
+                for chapter in islice(chapters, workers - len(pending)):
+                    if cancel is not None:
+                        cancel.raise_if_cancelled()
+                    pending[pool.submit(attribute, chapter)] = chapter
+        finally:
+            # Exceptions from a provider or progress callback also stop any
+            # work that has not started. Running provider calls cannot be
+            # forcibly interrupted safely; the context joins only those.
+            for future in pending:
+                future.cancel()
+    return attributed
 
 
 def discover_characters(
@@ -540,32 +634,39 @@ def discover_characters(
     *,
     client: Client | None = None,
     cancel: CancellationToken | None = None,
+    on_progress: Callable[[str, int, int, str | None], None] | None = None,
 ) -> CharacterRoster:
     """Discover characters without attributing quotes or writing attribution."""
     extracted = {
         chapter.id: extract_spans(chapter.id, chapter.text)
         for chapter in inspection.chapters
     }
-    return _discover_roster(inspection, extracted, model_id, client, cancel)
+    return _discover_roster(
+        inspection, extracted, model_id, client, cancel, on_progress=on_progress
+    )
 
 
-def _discover_roster(
+def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
     inspection: BookInspection,
     extracted: Mapping[str, tuple[TextSpan, ...]],
     model_id: str,
     client: Client | None,
     cancel: CancellationToken | None,
+    *,
+    on_progress: Callable[[str, int, int, str | None], None] | None,
 ) -> CharacterRoster:
-    if cancel is not None:
-        cancel.raise_if_cancelled()
+    total = len(inspection.chapters)
+    _progress(on_progress, cancel, "characters", 0, total)
     spacy_pipeline = spacy_roster.pipeline_for(model_id)
     if spacy_pipeline is not None:
         characters, narrator_id = spacy_roster.infer_roster(
             inspection.chapters, extracted, pipeline=spacy_pipeline
         )
+        if total:
+            _progress(on_progress, cancel, "characters", total, total)
     else:
         characters, narrator_id = _model_roster(
-            inspection, extracted, model_id, client, cancel
+            inspection, extracted, model_id, client, cancel, on_progress=on_progress
         )
     if cancel is not None:
         cancel.raise_if_cancelled()

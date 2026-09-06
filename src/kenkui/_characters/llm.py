@@ -16,11 +16,13 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Protocol
 
-from kenkui.errors import ErrorCode, ModelError
+from kenkui.errors import CancelledError, ErrorCode, ModelError
 from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from kenkui.cancellation import CancellationToken
 
 _LOGGER = get_logger(__name__)
 
@@ -30,7 +32,14 @@ _REQUEST_TIMEOUT_SECONDS = 600.0
 
 # Retrying a bug burns provider calls to fail the same way, and retrying an
 # interrupt swallows a Ctrl-C during what may be a very long attribution pass.
-_NEVER_RETRY = (KeyboardInterrupt, SystemExit, TypeError, AttributeError, NameError)
+_NEVER_RETRY = (
+    KeyboardInterrupt,
+    SystemExit,
+    TypeError,
+    AttributeError,
+    NameError,
+    CancelledError,
+)
 
 # Models wrap JSON in prose and fences despite being told not to.
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
@@ -106,6 +115,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
     client: Client | None = None,
     attempts: int = DEFAULT_ATTEMPTS,
     backoff_base: float = DEFAULT_BACKOFF_BASE,
+    cancel: CancellationToken | None = None,
 ) -> dict[str, Any]:
     """Return one validated JSON response, retrying transient failures.
 
@@ -121,6 +131,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
     invalid: Exception | None = None
     transport: Exception | None = None
     for attempt in range(1, attempts + 1):
+        _check_cancel(cancel)
         try:
             raw = caller.complete(model, prompt)
         except _NEVER_RETRY:
@@ -138,7 +149,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
             )
         else:
             try:
-                return _validated(_extract_json(raw), schema)
+                validated = _validated(_extract_json(raw), schema)
             except ValueError as error:
                 invalid = error
                 log_event(
@@ -146,10 +157,35 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
                     "model_response_invalid",
                     context={"boundary": "characters", "attempt": attempt},
                 )
+            else:
+                if cancel is not None:
+                    cancel.raise_if_cancelled()
+                return validated
+        _check_cancel(cancel)
         if attempt < attempts and backoff_base > 0:
-            time.sleep(backoff_base ** (attempt - 1))
+            _wait_for_retry(backoff_base ** (attempt - 1), cancel)
     # A response that arrived but never validated is the more useful diagnosis:
     # it says the model is reachable and answering the wrong shape.
     if invalid is not None:
         raise ModelError(ErrorCode.MODEL_RESPONSE_INVALID) from invalid
     raise ModelError(ErrorCode.MODEL_CALL_FAILED) from transport
+
+
+def _wait_for_retry(delay: float, cancel: CancellationToken | None) -> None:
+    """Wait between attempts without trapping cancellation in a long backoff."""
+    if cancel is None:
+        time.sleep(delay)
+        return
+    deadline = time.monotonic() + delay
+    while True:
+        cancel.raise_if_cancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 0.1))
+
+
+def _check_cancel(cancel: CancellationToken | None) -> None:
+    """Check cooperative cancellation at each provider and retry boundary."""
+    if cancel is not None:
+        cancel.raise_if_cancelled()
