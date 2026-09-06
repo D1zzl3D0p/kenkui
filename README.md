@@ -61,6 +61,10 @@ Constructors and fluent methods record intent and return new frozen pipelines;
 they do not mutate the original. `validate()` is inexpensive and does not parse
 the EPUB. `inspect()` securely parses it and returns frozen metadata/chapters.
 
+Rendering spawns worker processes, so a script that calls `write_m4b()` must
+keep that call under an `if __name__ == "__main__":` guard. See
+[Rendering spawns processes](#rendering-spawns-processes) below.
+
 ```python
 from kenkui import CancellationToken, ErrorCode, KenkuiError, epub, load_voice
 
@@ -83,21 +87,22 @@ inspection = job.inspect()
 for chapter in inspection.chapters:
     print(chapter.id, chapter.title, chapter.speech_characters)
 
-token = CancellationToken()
-try:
-    result = job.write_m4b(
-        "book.m4b",
-        workers="auto",
-        overwrite=False,
-        cancel=token,
-        on_event=lambda event: print(event),
-    )
-    print(result.output, result.stats.duration_ms)
-except KenkuiError as error:
-    if error.code is ErrorCode.RENDERER_UNAVAILABLE:
-        print("production assets are not approved/activated")
-    else:
-        raise
+if __name__ == "__main__":  # required: see "Rendering spawns processes"
+    token = CancellationToken()
+    try:
+        result = job.write_m4b(
+            "book.m4b",
+            workers="auto",
+            overwrite=False,
+            cancel=token,
+            on_event=lambda event: print(event),
+        )
+        print(result.output, result.stats.duration_ms)
+    except KenkuiError as error:
+        if error.code is ErrorCode.RENDERER_UNAVAILABLE:
+            print("production assets are not approved/activated")
+        else:
+            raise
 ```
 
 ### One-call rendering
@@ -146,6 +151,32 @@ automatically; each is scoped to its chapter. Dialogue that cannot be placed is
 narrated rather than guessed at. Attribution is stored, so re-rendering the
 same book costs no further model calls.
 
+
+### Rendering spawns processes
+
+`write_m4b()` renders in spawned worker processes. The `spawn` start method is
+the default on macOS and the only one on Windows, and it builds each worker by
+re-importing the main module. A script that calls `write_m4b()` at module level
+therefore runs that module again in every worker.
+
+Everything above the call runs again with it -- inspection, character
+inference, and attribution, which can re-issue billable model calls -- and only
+when the re-imported code reaches its own worker start does Python raise. By
+then the duplicated work has happened, the processes are competing for one
+output path and cache, and the failure surfaces as a render error that says
+nothing about recursion.
+
+Put the call under a guard:
+
+```python
+if __name__ == "__main__":
+    epub("book.epub").assign_voice("eponine").tts().write("book.m4b")
+```
+
+This is not needed when `write_m4b()` is called from inside a function that a
+guarded entry point invokes, which is the usual shape for an application; it
+matters for scripts that render at import time. Linux's default `fork` method
+does not reproduce it, so a script that works there can still fail on macOS.
 
 `write()` is an alias for `write_m4b()`. Output must end in `.m4b` and its parent
 must exist. Existing output is rejected unless `overwrite=True`; publication is
