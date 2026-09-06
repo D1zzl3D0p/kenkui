@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import FrozenInstanceError, replace
 from typing import TYPE_CHECKING
 
@@ -359,3 +360,92 @@ def test_unknown_resolution_stages_fail_at_the_api_boundary(
     with pytest.raises(kk.ValidationError) as caught:
         unresolved.resolve(until="charactres")  # type: ignore[arg-type]
     assert caught.value.code is kk.ErrorCode.INVALID_RESOLUTION_STAGE
+
+
+@pytest.mark.parametrize("until", ["characters", "casting"])
+def test_resolution_reports_model_progress_on_the_calling_thread(
+    unresolved: kk.Pipeline, until: str
+) -> None:
+    """Both checkpoints expose model work through ordered public events."""
+    events: list[kk.ExecutionEvent] = []
+    caller = threading.get_ident()
+
+    def observe(event: kk.ExecutionEvent) -> None:
+        assert threading.get_ident() == caller
+        events.append(event)
+
+    unresolved.resolve(until=until, on_event=observe)  # type: ignore[arg-type]
+    assert isinstance(events[0], kk.Started)
+    assert isinstance(events[-1], kk.Completed)
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    stages = [event.stage for event in events if isinstance(event, kk.StageStarted)]
+    expected = (
+        ["characters"] if until == "characters" else ["characters", "attribution"]
+    )
+    assert stages == expected
+    for stage in expected:
+        progress = [
+            event
+            for event in events
+            if isinstance(event, kk.StageProgress) and event.stage == stage
+        ]
+        assert progress[0].completed == 0
+        assert progress[-1].completed == progress[-1].total
+        assert progress[-1].total == 1
+
+
+def test_write_includes_model_progress_in_one_execution_sequence(
+    unresolved: kk.Pipeline, tmp_path: Path
+) -> None:
+    """Attribution and rendering share one run without duplicate sequence IDs."""
+    events: list[kk.ExecutionEvent] = []
+    unresolved.tts().write(tmp_path / "progress.m4b", workers=1, on_event=events.append)
+    assert sum(isinstance(event, kk.Started) for event in events) == 1
+    assert sum(isinstance(event, kk.Completed) for event in events) == 1
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    stages = [event.stage for event in events if isinstance(event, kk.StageStarted)]
+    assert stages[:3] == ["characters", "attribution", "planning"]
+
+
+def test_cached_checkpoint_does_not_report_model_work(
+    checkpoint: kk.Pipeline,
+) -> None:
+    """Reusing the same checkpoint reports only the successful run boundary."""
+    events: list[kk.ExecutionEvent] = []
+    assert checkpoint.resolve(on_event=events.append) is checkpoint
+    assert events == [kk.Started(1), kk.Completed(2)]
+
+
+def test_model_progress_can_cancel_before_provider_work(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers
+) -> None:
+    """A caller can stop after discovery begins without paying for a call."""
+    token = kk.CancellationToken()
+    events: list[kk.ExecutionEvent] = []
+
+    def observe(event: kk.ExecutionEvent) -> None:
+        events.append(event)
+        if isinstance(event, kk.StageStarted) and event.stage == "characters":
+            token.cancel()
+
+    with pytest.raises(kk.CancelledError):
+        unresolved.resolve(on_event=observe, cancel=token)
+    assert review_client.calls == []
+    assert not any(isinstance(event, kk.Completed) for event in events)
+
+
+def test_model_callback_failures_are_sanitized(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers
+) -> None:
+    """Provider work stops when the observer fails, without leaking its text."""
+
+    def observe(event: kk.ExecutionEvent) -> None:
+        if isinstance(event, kk.StageProgress):
+            message = "private observer details"
+            raise RuntimeError(message)  # noqa: TRY004 - deliberate observer failure
+
+    with pytest.raises(kk.RenderError) as caught:
+        unresolved.resolve(on_event=observe)
+    assert caught.value.code is kk.ErrorCode.CALLBACK_FAILED
+    assert "private observer details" not in str(caught.value)
+    assert review_client.calls == []

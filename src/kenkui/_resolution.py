@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from ._characters.models import AttributionRecord, SeriesRecord
     from ._domain.casting import CastingOutcome
     from ._execution.coordinator import ExecutionBindings
+    from ._progress import EventEmitter
     from .cancellation import CancellationToken
     from .pipeline import Pipeline
     from .voices import Voice
@@ -76,6 +77,7 @@ class Resolved:
 def resolve_inputs(
     pipeline: Pipeline,
     cancel: CancellationToken | None = None,
+    emitter: EventEmitter | None = None,
     *,
     validate_series: bool = False,
 ) -> Resolved:
@@ -139,6 +141,7 @@ def resolve_inputs(
         cancel=cancel,
         roster=inspection.roster,
         reviewed=checkpoint is not None and checkpoint.reviewed,
+        on_progress=emitter.emit_model_progress if emitter is not None else None,
     )
     if cancel is not None:
         cancel.raise_if_cancelled()
@@ -311,7 +314,9 @@ def inspect_source(
 
 
 def resolve_characters(
-    pipeline: Pipeline, cancel: CancellationToken | None
+    pipeline: Pipeline,
+    cancel: CancellationToken | None,
+    emitter: EventEmitter | None = None,
 ) -> RosterCheckpoint:
     """Stop after character discovery, without binding voices or assigning quotes."""
     from ._characters import discover_characters  # noqa: PLC0415 - model boundary
@@ -330,7 +335,11 @@ def resolve_characters(
         return checkpoint
     inspection, digest = inspect_source(pipeline, cancel)
     roster = discover_characters(
-        inspection, inferring.model_id, client=_attribution_client(), cancel=cancel
+        inspection,
+        inferring.model_id,
+        client=_attribution_client(),
+        cancel=cancel,
+        on_progress=emitter.emit_model_progress if emitter is not None else None,
     )
     return RosterCheckpoint(replace(inspection, roster=roster), digest)
 

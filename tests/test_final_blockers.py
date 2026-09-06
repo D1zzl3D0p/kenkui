@@ -90,7 +90,7 @@ def test_structured_logs_are_generic(
     )
     pipeline = kk.epub(source).assign_voice("narrator").tts()
     _bind(monkeypatch, EngineSpecification.fake(), FakeArtifactAssembler())
-    caplog.set_level("INFO", logger="kenkui._execution.coordinator")
+    caplog.set_level("INFO", logger="kenkui")
     pipeline.write_m4b(tmp_path / "secret-output.m4b")
 
     text = caplog.text

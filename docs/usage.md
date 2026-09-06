@@ -155,8 +155,9 @@ work statistics; they do not pretend cached speech ceased to exist.
 
 Events are frozen and sequence-numbered. Successful order is `Started`, stage
 start/progress/completion events, then `Completed`; recoverable conditions may
-emit `Warning`. Progress is emitted in plan order even when workers finish out of
-order. Event callbacks execute in the coordinator; if one raises before commit,
+emit `Warning`. Synthesis progress is emitted in plan order even when workers
+finish out of order; quote attribution reports chapters as they finish.
+Event callbacks execute on the calling thread; if one raises before commit,
 execution fails as `callback_failed`, workers/workspace are cleaned, and nothing
 is published. This includes every pre-commit event, including publication
 `StageStarted` and `StageProgress`, each of which is followed by a cancellation
@@ -172,12 +173,32 @@ but before any renderer worker starts. Its `assignments` contain
 cancel before synthesis begins. Single-voice runs emit the same event with no
 assignments.
 
+Model work also reports progress, before rendering starts: `characters` covers
+roster discovery and `attribution` covers quote assignment. Each stage emits
+`StageStarted`, an initial `StageProgress` at zero, progress as chapters finish,
+and `StageCompleted`. The spaCy roster reports start and completion for the whole
+selection. Reused attribution reports completion without repeating model calls.
+`write()` includes these stages in the same sequence as planning and rendering.
+
+Use the same callback for a standalone checkpoint:
+
+```python
+checkpoint = selection.resolve(on_event=progress, cancel=token)
+review = selection.resolve(until="characters", on_event=progress, cancel=token)
+```
+
+Each successful `resolve()` emits `Started` and `Completed`. Reusing an unchanged
+checkpoint emits only those two events. An observer exception fails resolution
+as `callback_failed`; completed cache or series writes are not rolled back.
+
 ## Cancellation and workers
 
 `CancellationToken.cancel()` is thread-safe and idempotent. Pass the token to
 `resolve(cancel=token)` or `write(..., cancel=token)` and cancel it from another
 thread or an event callback. Resolution checks cancellation between model calls
-and before committing series changes; a running provider call must return first.
+and before committing series changes. It cancels queued work and prevents further
+provider retries, including during retry backoff; already running provider calls
+must return before cancellation finishes.
 Completed attribution and cast cache entries may remain available for a retry.
 Cancellation is
 cooperative at bounded orchestration points, terminates/then kills children with

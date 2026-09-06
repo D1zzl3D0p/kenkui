@@ -28,6 +28,7 @@ from ._domain.operations import (
 from ._domain.selection import select_chapters, select_range
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
+from ._progress import EventEmitter
 from ._resolution import log_collisions, resolve_characters, resolve_inputs
 from ._source import source_digest
 from .api import Result, ValidationIssue, ValidationResult
@@ -305,8 +306,8 @@ class Pipeline:
 
         A character the series already cast keeps their voice, and voices
         continue spreading across volumes rather than restarting. ``book`` is
-        recorded for ordering only: continuity is decided by identity, not by
-        volume number.
+        stored in pipeline intent as an ordering hint; it does not schedule or
+        sort volumes. Continuity is decided by identity, not by volume number.
 
         Two ways a series can be contradicted fail validation before any
         model call: a pinned voice missing from the pool, and a narrator
@@ -332,6 +333,7 @@ class Pipeline:
         *,
         until: Literal["characters", "casting"] = "casting",
         cancel: CancellationToken | None = None,
+        on_event: Callable[[ExecutionEvent], None] | None = None,
     ) -> Pipeline:
         """Resolve voices, attribution, and casting, returning a new Pipeline.
 
@@ -351,22 +353,39 @@ class Pipeline:
         Pass a cancellation token to stop between model calls and before
         committing series changes. A running provider call must return before
         cooperative cancellation can take effect.
+
+        ``on_event`` receives discovery and attribution stage progress on the
+        calling thread, between Started and Completed events. An unchanged
+        checkpoint emits only those run events because no stages repeat.
         """
         if cancel is not None:
             cancel.raise_if_cancelled()
-        if until == "characters":
-            return replace(
-                self, _resolved=None, _roster=resolve_characters(self, cancel)
-            )
-        if until != "casting":
+        if until not in ("characters", "casting"):
             raise ValidationError(ErrorCode.INVALID_RESOLUTION_STAGE)
-        if (
+        emitter = EventEmitter(on_event)
+        emitter.emit_started()
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        if until == "characters":
+            result = replace(
+                self, _resolved=None, _roster=resolve_characters(self, cancel, emitter)
+            )
+        elif (
             self._resolved is not None
             and source_digest(self.source.path) == self._resolved.source_hash
         ):
-            return self
-        unresolved = replace(self, _resolved=None)
-        return replace(unresolved, _resolved=resolve_inputs(unresolved, cancel))
+            result = self
+        else:
+            unresolved = replace(self, _resolved=None)
+            result = replace(
+                unresolved, _resolved=resolve_inputs(unresolved, cancel, emitter)
+            )
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        emitter.emit_completed()
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        return result
 
     def with_characters(self, roster: CharacterRoster) -> Pipeline:
         """Return a branch using a reviewed character-discovery checkpoint.
@@ -537,10 +556,14 @@ class Pipeline:
         # unprovisioned or unknown voice must fail before any worker spawns,
         # and that ordering should be legible rather than an artifact of
         # argument-evaluation order.
+        emitter = EventEmitter(on_event)
+        emitter.emit_started()
+        if cancel is not None:
+            cancel.raise_if_cancelled()
         resolved = (
             self._resolved
             if self._resolved is not None
-            else resolve_inputs(self, cancel, validate_series=True)
+            else resolve_inputs(self, cancel, emitter, validate_series=True)
         )
         log_collisions(resolved.collisions)
         return execute_sequential(
@@ -556,6 +579,7 @@ class Pipeline:
             unknown_voice_id=resolved.unknown_voice_id,
             spans=resolved.spans,
             resolved_source_hash=resolved.source_hash,
+            emitter=emitter,
         )
 
     def _append(self, operation: Operation, *, before_tts: bool = False) -> Pipeline:

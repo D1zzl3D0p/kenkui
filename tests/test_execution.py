@@ -678,7 +678,7 @@ def test_execution_logs_structured_safe_boundary_context(
     """Lifecycle logs provide boundary fields without source or output locations."""
     pipeline, source, _ = _pipeline(tmp_path)
     _bind(monkeypatch, DeterministicFakeEngine(), FakeArtifactAssembler())
-    caplog.set_level("INFO", logger="kenkui._execution.coordinator")
+    caplog.set_level("INFO", logger="kenkui")
 
     pipeline.write_m4b(tmp_path / "result.m4b")
 

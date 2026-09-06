@@ -28,6 +28,7 @@ from kenkui._execution.process_pool import (
     render_spawned,
     resolve_workers,
 )
+from kenkui._progress import EventEmitter
 from kenkui._source import snapshot_source
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ
 from kenkui._tts.protocols import (
@@ -44,15 +45,6 @@ from kenkui.errors import (
     RenderError,
     SourceError,
 )
-from kenkui.events import (
-    CastResolved,
-    Completed,
-    ExecutionEvent,
-    StageCompleted,
-    StageProgress,
-    StageStarted,
-    Started,
-)
 from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
@@ -63,6 +55,7 @@ if TYPE_CHECKING:
     from kenkui._execution.cache import CacheStore, _RunContext
     from kenkui._execution.process_pool import WorkerRecord
     from kenkui.cancellation import CancellationToken
+    from kenkui.events import ExecutionEvent
     from kenkui.pipeline import Pipeline
     from kenkui.voices import Voice
 
@@ -95,101 +88,6 @@ class ExecutionBindings:
     cast_voices: tuple[Voice, ...] = ()
 
 
-class _Emitter:
-    """Assign monotonic sequence numbers and isolate callback invocation."""
-
-    def __init__(self, callback: Callable[[ExecutionEvent], None] | None) -> None:
-        self._callback = callback
-        self._sequence = 0
-
-    def emit_started(self) -> None:
-        self._emit(Started(self._next()))
-
-    def emit_cast_resolved(self, plan: ExecutionPlan) -> None:
-        """Publish the resolved cast before any worker exists."""
-        self._emit(
-            CastResolved(
-                self._next(),
-                "planning",
-                plan.cast.narrator.id,
-                plan.cast.unknown.id,
-                tuple(sorted(plan.cast.assignments.items())),
-            )
-        )
-
-    def emit_stage_started(self, stage: str) -> None:
-        log_event(
-            _LOGGER,
-            "execution_stage_started",
-            context={"boundary": _stage_boundary(stage), "stage": stage},
-        )
-        self._emit(StageStarted(self._next(), stage))
-
-    def emit_progress(
-        self, stage: str, completed: int, total: int, chapter_id: str | None = None
-    ) -> None:
-        self._emit(StageProgress(self._next(), stage, completed, total, chapter_id))
-
-    def emit_stage_completed(self, stage: str) -> None:
-        self._emit(StageCompleted(self._next(), stage))
-        log_event(
-            _LOGGER,
-            "execution_stage_completed",
-            context={"boundary": _stage_boundary(stage), "stage": stage},
-        )
-
-    def emit_stage_completed_best_effort(self, stage: str) -> None:
-        """Notify post-commit stage success without allowing commit revocation."""
-        try:
-            self._emit(StageCompleted(self._next(), stage))
-        except RenderError:
-            log_event(
-                _LOGGER,
-                "execution_callback_failed_post_commit",
-                level=logging.WARNING,
-                context={"boundary": "callback"},
-            )
-        log_event(
-            _LOGGER,
-            "execution_stage_completed",
-            context={"boundary": _stage_boundary(stage), "stage": stage},
-        )
-
-    def emit_completed_best_effort(self) -> None:
-        """Notify terminal success without allowing an observer to revoke commit."""
-        try:
-            self._emit(Completed(self._next()))
-        except RenderError:
-            log_event(
-                _LOGGER,
-                "execution_callback_failed_post_commit",
-                level=logging.WARNING,
-                context={"boundary": "callback"},
-            )
-
-    def _next(self) -> int:
-        self._sequence += 1
-        return self._sequence
-
-    def _emit(self, event: ExecutionEvent) -> None:
-        if self._callback is None:
-            return
-        try:
-            self._callback(event)
-        except Exception:  # noqa: BLE001 - sanitize arbitrary public callback.
-            raise RenderError(ErrorCode.CALLBACK_FAILED) from None
-
-
-def _stage_boundary(stage: str) -> str:
-    """Map internal execution stages to their public logging boundaries."""
-    return {
-        "planning": "planning",
-        "render": "rendering",
-        "assembly": "encoding",
-        "publication": "publication",
-    }[stage]
-
-
 def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration boundary.
     pipeline: Pipeline,
     output: Path,
@@ -204,6 +102,7 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
     unknown_voice_id: str | None = None,
     spans: tuple[SpeakerSpan, ...] = (),
     resolved_source_hash: str | None = None,
+    emitter: EventEmitter | None = None,
 ) -> Result:
     """Execute one immutable plan in order and transactionally publish its artifact."""
     metadata_intent = pipeline.metadata_intent
@@ -214,11 +113,13 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
         or metadata_intent.cover == "source"
         or cover_file is not None,
     )
-    emitter = _Emitter(on_event)
+    owns_emitter = emitter is None
+    emitter = emitter if emitter is not None else EventEmitter(on_event)
     workspace = _make_workspace(output.parent)
     try:
         _check_cancel(cancel)
-        emitter.emit_started()
+        if owns_emitter:
+            emitter.emit_started()
         _check_cancel(cancel)
 
         emitter.emit_stage_started("planning")
@@ -401,7 +302,7 @@ def _render(  # noqa: PLR0913
     plan: ExecutionPlan,
     engine_specification: EngineSpecification,
     worker_count: int,
-    emitter: _Emitter,
+    emitter: EventEmitter,
     cancel: CancellationToken | None,
     *,
     workspace: Path,
@@ -570,7 +471,7 @@ def _assemble(  # noqa: PLR0913, PLR0917 - explicit effect boundary.
     source_snapshot: Path,
     workspace: Path,
     assembler: ArtifactAssembler,
-    emitter: _Emitter,
+    emitter: EventEmitter,
     cancel: CancellationToken | None,
     cover_file: Path | None = None,
 ) -> AssemblyResult:
