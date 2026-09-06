@@ -442,6 +442,37 @@ class TestStaleRosterRefresh:
 
         assert refreshed.spans == stale.spans
 
+    def test_the_refreshed_genders_reach_the_store(self) -> None:
+        """A refresh that only lives in memory leaves the store contradicting itself.
+
+        The record returned here decides the cast, so the render is correct
+        either way. But the row on disk still says what the old inference said,
+        so anything reading the store -- `list_castings`, a series' pins, an
+        operator inspecting it -- sees a gender the render did not use.
+        """
+        text = SEPARATED
+        inspection = self._inspection(text)
+        stale = self._record(text, None)
+        _characters.store.write_attribution(stale)
+
+        _characters._with_current_roster(stale, inspection, "spacy")  # noqa: SLF001
+
+        stored = _characters.store.read_attribution(stale.attribution_id)
+        assert stored is not None
+        assert stored.characters[0].gender == "feminine"
+
+    def test_an_unchanged_roster_is_not_rewritten(self) -> None:
+        """Nothing to correct means no reason to rewrite every span row."""
+        text = SEPARATED
+        inspection = self._inspection(text)
+        current = self._record(text, "feminine")
+        _characters.store.write_attribution(current)
+        before = _characters.store.read_attribution(current.attribution_id)
+
+        _characters._with_current_roster(current, inspection, "spacy")  # noqa: SLF001
+
+        assert _characters.store.read_attribution(current.attribution_id) == before
+
     def test_a_model_roster_is_left_alone(self) -> None:
         """Refreshing an LLM roster would cost what this exists to avoid."""
         stale = self._record(SEPARATED, None)

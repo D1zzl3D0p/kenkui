@@ -362,13 +362,38 @@ def _with_current_roster(
         )
         for character in record.characters
     )
-    return replace(
+    refreshed = replace(
         record,
         characters=dialogue_tags.apply(
             characters,
             dialogue_tags.tag_genders(inspection.chapters, record.spans),
         ),
     )
+    before = {character.id: character.gender for character in record.characters}
+    after = {character.id: character.gender for character in refreshed.characters}
+    if after != before:
+        # Persist, or the store keeps asserting what the old inference said
+        # while the render uses this. `list_castings`, a series' pins, and
+        # anyone reading the store directly would all see a gender that no
+        # render actually used. write_attribution replaces the row wholesale,
+        # so this is an upsert rather than a duplicate.
+        #
+        # Guarded on an actual change because that rewrite also deletes and
+        # reinserts every quote span -- thirteen thousand rows for Dune -- and
+        # a steady-state render has nothing to correct.
+        store.write_attribution(refreshed)
+        log_event(
+            _LOGGER,
+            "attribution_roster_refreshed",
+            context={
+                "boundary": "characters",
+                "attribution_id": refreshed.attribution_id,
+                "regendered": sum(
+                    1 for key, value in after.items() if before.get(key) != value
+                ),
+            },
+        )
+    return refreshed
 
 
 def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
