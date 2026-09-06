@@ -139,6 +139,20 @@ resources, reporting decisions, and persisting the resulting series through
 `_characters.store`. The fluent `Pipeline` delegates to that implementation;
 its methods record intent and provide convenient entry points into the work.
 
+Character discovery is separately materializable through
+`resolve(until="characters")`. It retains a `CharacterRoster` and the exact
+source snapshot without binding voices or attributing quotes. Pure validation
+in `_characters.review` canonicalizes replacements supplied through
+`with_characters()`. Adding attribution or casting preserves that roster;
+changing the source selection invalidates it.
+
+Attribution accepts a supplied roster and skips discovery. Its cache identity
+includes the supplied roster and review status, keeping edited input separate
+from automatically derived records. Reviewed known genders survive later
+dialogue inference; unspecified genders remain inferable. Roster aliases are
+included in prompts for supplied rosters. The automatic path retains its
+existing prompts and cache identity.
+
 Character inference and dialogue attribution call a language model, which the
 pure planner must not do. They are resolved in the shell and handed to the
 planner as finished values, exactly as voice metadata already is: the planner
@@ -155,7 +169,9 @@ Synthesis, metadata, pronunciation, and pauses preserve a resolved checkpoint
 because attribution uses canonical text. Other intent changes discard it.
 Before rendering, the coordinator compares its private source snapshot with
 the resolved source hash and rejects mismatches as `source_changed`. An
-explicit `resolve()` refreshes a checkpoint whose source bytes have changed.
+explicit `resolve()` refreshes a cast checkpoint whose source bytes have changed.
+When a roster checkpoint is present, refresh discovery with
+`resolve(until="characters")` and review the new input first.
 This keeps both the reviewable checkpoint and the render tied to exact input.
 
 All model traffic happens in the parent process, beside the network voice

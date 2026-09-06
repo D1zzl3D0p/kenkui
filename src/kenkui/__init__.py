@@ -1,6 +1,6 @@
 """Intentional public package interface for Kenkui."""
 
-from ._characters.models import SeriesCharacter, SeriesRecord
+from ._characters.models import CharacterRoster, SeriesCharacter, SeriesRecord
 from ._characters.store import (
     list_castings,
     list_series,
@@ -71,6 +71,7 @@ __all__ = [
     "CastingInspection",
     "ChapterInspection",
     "CharacterProfile",
+    "CharacterRoster",
     "Collision",
     "Completed",
     "EncodingError",

@@ -229,7 +229,10 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
             raise SourceError(ErrorCode.SOURCE_CHANGED)
         _check_cancel(cancel)
         snapshot_pipeline = replace(
-            pipeline, source=replace(pipeline.source, path=snapshot), _resolved=None
+            pipeline,
+            source=replace(pipeline.source, path=snapshot),
+            _resolved=None,
+            _roster=None,
         )
         inspection = snapshot_pipeline.inspect()
         _check_cancel(cancel)

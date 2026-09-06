@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Concatenate, Literal, ParamSpec, TypeVar
 
 from ._characters.continuity import eligible_series_voice_ids
+from ._characters.review import validate_roster
 from ._domain.casting import validate_method
 from ._domain.operations import (
     AssignVoices,
@@ -27,7 +28,7 @@ from ._domain.operations import (
 from ._domain.selection import select_chapters, select_range
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
-from ._resolution import log_collisions, resolve_inputs
+from ._resolution import log_collisions, resolve_characters, resolve_inputs
 from ._source import source_digest
 from .api import Result, ValidationIssue, ValidationResult
 from .errors import (
@@ -48,8 +49,8 @@ if TYPE_CHECKING:
     import os
     from collections.abc import Callable, Mapping
 
-    from ._characters.models import SeriesRecord
-    from ._resolution import Resolved
+    from ._characters.models import CharacterRoster, SeriesRecord
+    from ._resolution import Resolved, RosterCheckpoint
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
     from .inspection import BookInspection
@@ -78,6 +79,7 @@ class Pipeline:
     # Not intent, and never part of the plan or its fingerprint: resolve()
     # parks finished values here so write() can skip re-deriving them.
     _resolved: Resolved | None = None
+    _roster: RosterCheckpoint | None = None
 
     def pipe(
         self,
@@ -325,16 +327,26 @@ class Pipeline:
             before_tts=True,
         )
 
-    def resolve(self, *, cancel: CancellationToken | None = None) -> Pipeline:
+    def resolve(
+        self,
+        *,
+        until: Literal["characters", "casting"] = "casting",
+        cancel: CancellationToken | None = None,
+    ) -> Pipeline:
         """Resolve voices, attribution, and casting, returning a new Pipeline.
 
         Optional. ``write()`` resolves internally, so this exists only to pay
         the model cost early and inspect the outcome. It is an effect -- it
         reaches the network and writes the store -- but it is immutable,
         idempotent for unchanged source bytes, and leaves intent untouched.
-        Inspect the returned pipeline to review its roster and cast. Calling
-        ``resolve()`` again after the source changes creates a new checkpoint;
-        writing the old checkpoint instead raises ``source_changed``.
+        Use ``until="characters"`` to stop after discovery without requiring
+        voices or attributing quotes. ``inspect().roster`` exposes that result;
+        ``with_characters()`` records corrections before continuing.
+
+        After source changes, a roster checkpoint must be refreshed with
+        ``resolve(until="characters")`` and reviewed again. Pipelines without
+        roster checkpoints can refresh their cast with ordinary ``resolve()``.
+        Rendering an old checkpoint raises ``source_changed``.
 
         Pass a cancellation token to stop between model calls and before
         committing series changes. A running provider call must return before
@@ -342,6 +354,12 @@ class Pipeline:
         """
         if cancel is not None:
             cancel.raise_if_cancelled()
+        if until == "characters":
+            return replace(
+                self, _resolved=None, _roster=resolve_characters(self, cancel)
+            )
+        if until != "casting":
+            raise ValidationError(ErrorCode.INVALID_RESOLUTION_STAGE)
         if (
             self._resolved is not None
             and source_digest(self.source.path) == self._resolved.source_hash
@@ -349,6 +367,29 @@ class Pipeline:
             return self
         unresolved = replace(self, _resolved=None)
         return replace(unresolved, _resolved=resolve_inputs(unresolved, cancel))
+
+    def with_characters(self, roster: CharacterRoster) -> Pipeline:
+        """Return a branch using a reviewed character-discovery checkpoint.
+
+        First call ``resolve(until="characters")``. Changes replace the roster,
+        preserve its source snapshot, and invalidate attribution and casting.
+        This method performs no I/O.
+        """
+        if self._roster is None:
+            raise ValidationError(ErrorCode.ROSTER_UNAVAILABLE)
+        inspection = self._roster.inspection
+        reviewed = validate_roster(
+            roster, frozenset(chapter.id for chapter in inspection.chapters)
+        )
+        return replace(
+            self,
+            _resolved=None,
+            _roster=replace(
+                self._roster,
+                inspection=replace(inspection, roster=reviewed, casting=None),
+                reviewed=True,
+            ),
+        )
 
     def validate(self) -> ValidationResult:
         """Perform inexpensive source and operation validation without parsing."""
@@ -408,6 +449,8 @@ class Pipeline:
         """
         if self._resolved is not None:
             return self._resolved.inspection
+        if self._roster is not None:
+            return self._roster.inspection
         source_error = source_validation_error(self.source.path)
         if source_error is not None:
             raise SourceError(source_error)
@@ -527,6 +570,11 @@ class Pipeline:
             self._resolved
             if isinstance(
                 operation, (SynthesizeSpeech, MetadataIntent, SpokenForm, Pauses)
+            )
+            else None,
+            self._roster
+            if not isinstance(
+                operation, (SelectChapters, SelectChapterRange, InferCharacters)
             )
             else None,
         )

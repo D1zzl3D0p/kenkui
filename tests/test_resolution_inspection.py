@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,9 +21,15 @@ if TYPE_CHECKING:
 class _TwoSpeakers:
     """Attribute two quotes to two characters using the real resolution path."""
 
+    def __init__(self) -> None:
+        """Track model work and allow a reviewed character ID in replies."""
+        self.calls: list[str] = []
+        self.first_speaker = "alice"
+
     def complete(self, model: str, prompt: str) -> str:
         """Return deterministic roster and attribution responses."""
         assert model == "fake/model"
+        self.calls.append(prompt)
         if "List the speaking characters" in prompt:
             return json.dumps(
                 {
@@ -35,7 +41,7 @@ class _TwoSpeakers:
         return json.dumps(
             {
                 "attributions": [
-                    {"quote_id": 0, "speaker": "alice"},
+                    {"quote_id": 0, "speaker": self.first_speaker},
                     {"quote_id": 1, "speaker": "bob"},
                 ]
             }
@@ -43,8 +49,16 @@ class _TwoSpeakers:
 
 
 @pytest.fixture
-def checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> kk.Pipeline:
-    """Resolve a two-character book against one local fake voice."""
+def review_client() -> _TwoSpeakers:
+    """Provide a deterministic model boundary with inspectable calls."""
+    return _TwoSpeakers()
+
+
+@pytest.fixture
+def unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, review_client: _TwoSpeakers
+) -> kk.Pipeline:
+    """Configure a two-character book against one local fake voice."""
     narrator = kk.Voice(
         id="narrator",
         name="Narrator",
@@ -63,7 +77,7 @@ def checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> kk.Pipeline:
     monkeypatch.setattr(
         "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
     )
-    monkeypatch.setattr("kenkui._resolution._attribution_client", _TwoSpeakers)
+    monkeypatch.setattr("kenkui._resolution._attribution_client", lambda: review_client)
     monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (narrator,))
     path = make_epub(
         tmp_path / "book.epub",
@@ -75,8 +89,13 @@ def checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> kk.Pipeline:
         .infer_characters("fake/model")
         .attribute_quotes("fake/model")
         .assign_voices(narrator="narrator")
-        .resolve()
     )
+
+
+@pytest.fixture
+def checkpoint(unresolved: kk.Pipeline) -> kk.Pipeline:
+    """Materialize a cast ready for inspection and rendering."""
+    return unresolved.resolve()
 
 
 def test_inspection_exposes_an_immutable_cast_checkpoint(
@@ -169,3 +188,174 @@ def test_selection_invalidates_the_cast_checkpoint(checkpoint: kk.Pipeline) -> N
     selected = checkpoint.select_chapters(checkpoint.inspect().chapters[0].id)
     assert selected.inspect().casting is None
     assert checkpoint.inspect().casting is not None
+
+
+def test_character_checkpoint_stops_before_voices_or_attribution(
+    unresolved: kk.Pipeline,
+    review_client: _TwoSpeakers,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery is a useful checkpoint even without any configured voice."""
+
+    def unexpected_binding(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("character discovery attempted voice binding")
+
+    monkeypatch.setattr("kenkui._resolution._execution_bindings", unexpected_binding)
+    discovery = kk.epub(unresolved.source.path).infer_characters("fake/model")
+    characters = discovery.resolve(until="characters")
+    assert isinstance(characters, kk.Pipeline)
+    inspection = characters.inspect()
+    assert inspection.roster is not None
+    assert inspection.casting is None
+    assert len(review_client.calls) == 1
+    assert "List the speaking characters" in review_client.calls[0]
+    assert characters.resolve(until="characters").inspect() is inspection
+    assert len(review_client.calls) == 1
+    assert discovery.inspect().roster is None
+
+
+def test_reviewed_roster_resumes_attribution_and_rendering(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers, tmp_path: Path
+) -> None:
+    """Edited IDs, names, aliases, narrator identity, and genders reach attribution."""
+    discovery = kk.epub(unresolved.source.path).infer_characters("fake/model")
+    checkpoint = discovery.resolve(until="characters")
+    roster = checkpoint.inspect().roster
+    assert roster is not None
+    edited = replace(
+        roster,
+        characters=(
+            replace(
+                roster.characters[0],
+                id="lead",
+                display_name="Alice Example",
+                aliases=("Alice", "Al"),
+                gender="feminine",
+            ),
+            roster.characters[1],
+        ),
+        narrator_id="lead",
+    )
+    reviewed = checkpoint.with_characters(edited)
+    review_client.calls.clear()
+    review_client.first_speaker = "lead"
+    attributed = (
+        reviewed.attribute_quotes("fake/model")
+        .assign_voices(narrator="narrator")
+        .resolve()
+    )
+    assert len(review_client.calls) == 1
+    prompt = review_client.calls[0]
+    assert "List the speaking characters" not in prompt
+    assert "Alice Example" in prompt
+    assert '"Al"' in prompt
+    assert "[narrates this book]" in prompt
+    casting = attributed.inspect().casting
+    assert casting is not None
+    assert dict(casting.assignments) == {"lead": "narrator", "bob": "narrator"}
+    assert next(c for c in casting.characters if c.id == "lead").gender == "feminine"
+    assert checkpoint.inspect().roster == roster
+    assert reviewed.inspect().roster != roster
+    assert attributed.tts().write(tmp_path / "reviewed.m4b", workers=1).output.is_file()
+    assert len(review_client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "invalid", ["duplicate", "narrator", "chapter", "gender", "id", "name", "alias"]
+)
+def test_invalid_roster_edits_fail_without_more_model_work(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers, invalid: str
+) -> None:
+    """Refuse edits that would create ambiguous or unreachable character identities."""
+    checkpoint = unresolved.resolve(until="characters")
+    roster = checkpoint.inspect().roster
+    assert roster is not None
+    first = roster.characters[0]
+    variants = {
+        "duplicate": replace(roster, characters=(first, first)),
+        "narrator": replace(roster, narrator_id="absent"),
+        "chapter": replace(
+            roster, characters=(replace(first, chapter_ids=("absent",)),)
+        ),
+        "gender": replace(roster, characters=(replace(first, gender="invalid"),)),
+        "id": replace(roster, characters=(replace(first, id="Not a stable ID"),)),
+        "name": replace(roster, characters=(replace(first, display_name=" "),)),
+        "alias": replace(roster, characters=(replace(first, aliases=(" ",)),)),
+    }
+    with pytest.raises(kk.ValidationError) as caught:
+        checkpoint.with_characters(variants[invalid])
+    assert caught.value.code is kk.ErrorCode.INVALID_ROSTER
+    assert len(review_client.calls) == 1
+    assert checkpoint.inspect().roster == roster
+
+
+def test_an_empty_reviewed_roster_keeps_all_speech_narrated(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers
+) -> None:
+    """Removing false positives does not discard speech or rerun discovery."""
+    checkpoint = unresolved.resolve(until="characters")
+    reviewed = checkpoint.with_characters(kk.CharacterRoster(()))
+    review_client.calls.clear()
+    casting = reviewed.resolve().inspect().casting
+    assert casting is not None
+    assert casting.assignments == ()
+    assert all(span.character_id is None for span in casting.spans)
+    assert review_client.calls == []
+
+
+def test_review_cannot_silently_follow_a_changed_source(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers
+) -> None:
+    """Changing input requires rediscovery before a reviewed roster can be reused."""
+    checkpoint = unresolved.resolve(until="characters")
+    roster = checkpoint.inspect().roster
+    assert roster is not None
+    reviewed = checkpoint.with_characters(roster)
+    make_epub(
+        unresolved.source.path,
+        chapters={"one": xhtml('<p>"New text," said Alice.</p>')},
+        spine=("one",),
+    )
+    review_client.calls.clear()
+    with pytest.raises(kk.SourceError) as caught:
+        reviewed.resolve()
+    assert caught.value.code is kk.ErrorCode.SOURCE_CHANGED
+    assert review_client.calls == []
+    refreshed = reviewed.resolve(until="characters")
+    assert "New text" in refreshed.inspect().chapters[0].text
+    assert "New text" not in reviewed.inspect().chapters[0].text
+    assert len(review_client.calls) == 1
+
+
+def test_selection_invalidates_the_roster_checkpoint(unresolved: kk.Pipeline) -> None:
+    """A roster's chapter placement must not leak into a different selection."""
+    checkpoint = unresolved.resolve(until="characters")
+    selected = checkpoint.select_chapters(checkpoint.inspect().chapters[0].id)
+    assert selected.inspect().roster is None
+
+
+def test_review_requires_a_character_checkpoint(unresolved: kk.Pipeline) -> None:
+    """A reviewed roster must be tied to a source snapshot."""
+    with pytest.raises(kk.ValidationError) as caught:
+        unresolved.with_characters(kk.CharacterRoster(()))
+    assert caught.value.code is kk.ErrorCode.ROSTER_UNAVAILABLE
+
+
+def test_character_resolution_honours_precancellation(
+    unresolved: kk.Pipeline, review_client: _TwoSpeakers
+) -> None:
+    """A cancelled discovery request incurs no model work."""
+    token = kk.CancellationToken()
+    token.cancel()
+    with pytest.raises(kk.CancelledError):
+        unresolved.resolve(until="characters", cancel=token)
+    assert review_client.calls == []
+
+
+def test_unknown_resolution_stages_fail_at_the_api_boundary(
+    unresolved: kk.Pipeline,
+) -> None:
+    """A misspelled checkpoint must not silently run the full conversion."""
+    with pytest.raises(kk.ValidationError) as caught:
+        unresolved.resolve(until="charactres")  # type: ignore[arg-type]
+    assert caught.value.code is kk.ErrorCode.INVALID_RESOLUTION_STAGE

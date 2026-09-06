@@ -114,6 +114,32 @@ def test_supplied_roster_skips_discovery_and_separates_cached_edits() -> None:
     assert len(client.calls) == _REVIEWED_VERSIONS
 
 
+@pytest.mark.parametrize(
+    ("gender", "expected"), [(None, "masculine"), ("feminine", "feminine")]
+)
+def test_review_preserves_known_genders_and_keeps_unspecified_values_inferable(
+    gender: str | None, expected: str
+) -> None:
+    """Review supersedes confident evidence only where the caller supplied a value."""
+    roster = CharacterRoster((CharacterProfile("javert", "Javert", gender, 0, ()),))
+    inspection = kk.BookInspection(
+        _inspection().metadata,
+        tuple(
+            kk.ChapterInspection(f"ch{index}", index, "One", len(TEXT), TEXT)
+            for index in range(_FIXTURE_QUOTES)
+        ),
+    )
+    record = resolve_attribution(
+        inspection,
+        BOOK,
+        "fake/model",
+        client=ScriptedClient(),
+        roster=roster,
+        reviewed=True,
+    )
+    assert record.characters[0].gender == expected
+
+
 class _AliasFoldClient:
     """Names one woman "Corwi" in chapter one and "Lizbyet Corwi" in chapter two.
 

@@ -272,6 +272,72 @@ if __name__ == "__main__":
     )
 ```
 
+### Review characters before attribution
+
+`resolve(until="characters")` runs character discovery and returns a pipeline
+checkpoint. It needs an `infer_characters()` operation, but no narrator voice,
+quote-attribution operation, or synthesis operation. `inspect().roster` exposes
+an immutable `CharacterRoster`; `inspect().casting` remains `None`.
+
+Use ordinary Python to edit the roster, then pass it to `with_characters()`:
+
+```python
+import os
+from dataclasses import replace
+
+import kenkui as kk
+
+if __name__ == "__main__":
+    model = os.environ["KENKUI_ANALYSIS_MODEL"]
+    discovered = (
+        kk.epub("book.epub").infer_characters(model).resolve(until="characters")
+    )
+    roster = discovered.inspect().roster
+    assert roster is not None
+    print(roster.characters)
+
+    corrected = replace(
+        roster,
+        characters=tuple(
+            replace(character, display_name="Alice Example", aliases=("Alice", "Al"))
+            if character.id == "alice"
+            else character
+            for character in roster.characters
+        ),
+    )
+    reviewed = discovered.with_characters(corrected)
+    cast = reviewed.attribute_quotes(model).assign_voices(narrator="eponine").resolve()
+    print(cast.inspect().casting)
+    cast.tts().write("book.m4b")
+```
+
+`with_characters()` performs no I/O and leaves the discovered checkpoint
+unchanged. The replacement roster can rename, add, or remove characters and
+change aliases, gender, or the first-person narrator's character ID
+(`narrator_id`, independently of the narrator voice). IDs must be unique
+lowercase slugs; reserved attribution markers and pronouns cannot be ordinary
+character IDs. A narrator ID must refer to a roster member, and chapter IDs
+must come from the inspected selection. Invalid edits raise `invalid_roster`.
+
+Speech counts are measured after attribution. Known reviewed genders take
+precedence over inferred dialogue evidence; `None` leaves gender open to later
+inference. An empty `chapter_ids` tuple leaves a character available throughout
+the selection. An empty roster narrates all speech without attribution calls.
+For a nonempty roster, attribution can still discover additional chapter-scoped
+speakers, as described under [Unnamed speakers](#unnamed-speakers).
+
+Continuing to attribution reuses the roster and does not repeat discovery.
+The supplied roster enters the attribution cache key, so corrections cannot
+reuse assignments derived from a different roster. Repeating character
+resolution on unchanged input reuses its checkpoint. Adding attribution,
+casting, series, or rendering intent preserves it; changing chapter selection
+discards it.
+
+These checkpoints live in memory. If source bytes change, continuing with the
+old roster raises `source_changed`. Call `resolve(until="characters")` to
+discover the new source, then review it again; earlier edits remain available
+on the original checkpoint and are not silently applied to different text.
+
 ### Resolve before write
 
 `write()` resolves voices, model attribution, and casting when it needs to.
@@ -319,7 +385,9 @@ metadata may also be applied after it.
 A checkpoint records the source bytes it analyzed. If the EPUB changes,
 `inspect()` still shows that checkpoint and rendering raises `SourceError`
 with code `source_changed` before synthesis. Explicitly call `resolve()` again
-to analyze the changed book and obtain a new checkpoint. This avoids silently
+to analyze the changed book and obtain a new checkpoint. If you stopped at
+character discovery, refresh with `resolve(until="characters")` and review the
+roster again first. This avoids silently
 rendering text with a cast or attribution you reviewed for different text.
 
 ### Narrator and unknown voices

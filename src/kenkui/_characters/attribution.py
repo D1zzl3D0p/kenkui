@@ -56,11 +56,19 @@ def _escaped(text: str) -> str:
 
 
 def _roster_block(
-    characters: Sequence[CharacterProfile], narrator_id: str | None = None
+    characters: Sequence[CharacterProfile],
+    narrator_id: str | None = None,
+    *,
+    include_aliases: bool = False,
 ) -> str:
     return "\n".join(
         f'- {character.id}  (appears as "{character.display_name}")'
         + ("  [narrates this book]" if character.id == narrator_id else "")
+        + (
+            f"  [aliases: {json.dumps(character.aliases, ensure_ascii=False)}]"
+            if include_aliases and character.aliases
+            else ""
+        )
         for character in characters
     )
 
@@ -126,6 +134,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     client: Client | None = None,
     spans: tuple[TextSpan, ...] | None = None,
     narrator_id: str | None = None,
+    include_aliases: bool = False,
 ) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage]:
     """Return one chapter's speaker spans and how its quotes were accounted for.
 
@@ -151,7 +160,9 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         for index, span in enumerate(dialogue)
     ]
     prompt = ATTRIBUTION_PROMPT.format(
-        roster=_escaped(_roster_block(characters, narrator_id)),
+        roster=_escaped(
+            _roster_block(characters, narrator_id, include_aliases=include_aliases)
+        ),
         passage=_escaped(chapter.text),
         quotes=_escaped(json.dumps(quotes, ensure_ascii=False, indent=2)),
     )

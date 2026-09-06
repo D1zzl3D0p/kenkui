@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ._characters.models import CharacterRoster
     from ._domain.casting import CharacterProfile, Collision
     from ._domain.planning import SpeakerSpan
 
@@ -58,3 +59,4 @@ class BookInspection:
     metadata: BookMetadata
     chapters: tuple[ChapterInspection, ...]
     casting: CastingInspection | None = None
+    roster: CharacterRoster | None = None

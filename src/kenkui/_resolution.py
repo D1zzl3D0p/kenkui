@@ -19,7 +19,8 @@ from ._domain.casting import (
 )
 from ._domain.operations import AssignVoices, AttributeQuotes, InferCharacters, Series
 from ._domain.planning import SpeakerSpan  # noqa: TC001 - dataclass field
-from ._source import snapshot_source
+from ._source import snapshot_source, source_digest
+from .errors import ErrorCode, SourceError, ValidationError
 from .inspection import BookInspection, CastingInspection
 from .observability import get_logger, log_event
 
@@ -34,6 +35,15 @@ if TYPE_CHECKING:
     from .voices import Voice
 
 _LOGGER = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RosterCheckpoint:
+    """Character discovery bound to the exact source and selected chapters."""
+
+    inspection: BookInspection
+    source_hash: str
+    reviewed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,19 +94,17 @@ def resolve_inputs(
     # call so the managed cache root can be redirected, as the store is.
 
     casting = next(
-        item for item in pipeline.operations if isinstance(item, AssignVoices)
+        (item for item in pipeline.operations if isinstance(item, AssignVoices)), None
     )
+    if casting is None:
+        raise ValidationError(ErrorCode.VOICE_REQUIRED)
     bindings = _execution_bindings(casting.narrator_voice_id)
     if cancel is not None:
         cancel.raise_if_cancelled()
 
-    with TemporaryDirectory(prefix="kenkui-resolution-") as workspace:
-        snapshot = Path(workspace) / "source.epub"
-        digest = snapshot_source(pipeline.source.path, snapshot, cancel)
-        snapshot_pipeline = replace(
-            pipeline, source=replace(pipeline.source, path=snapshot), _resolved=None
-        )
-        inspection = snapshot_pipeline.inspect()
+    inspection, digest = inspect_source(pipeline, cancel)
+    checkpoint = pipeline._roster  # noqa: SLF001 - checkpoint orchestration
+    inspection = _with_roster_checkpoint(inspection, digest, checkpoint)
 
     attributing = next(
         (item for item in pipeline.operations if isinstance(item, AttributeQuotes)),
@@ -129,6 +137,8 @@ def resolve_inputs(
         roster_model_id=inferring.model_id if inferring is not None else None,
         client=_attribution_client(),
         cancel=cancel,
+        roster=inspection.roster,
+        reviewed=checkpoint is not None and checkpoint.reviewed,
     )
     if cancel is not None:
         cancel.raise_if_cancelled()
@@ -235,6 +245,58 @@ def resolve_inputs(
         ),
         source_hash=digest,
     )
+
+
+def _with_roster_checkpoint(
+    inspection: BookInspection, digest: str, checkpoint: RosterCheckpoint | None
+) -> BookInspection:
+    """Attach reviewed input only to the exact source for which it was prepared."""
+    if checkpoint is None:
+        return inspection
+    if checkpoint.source_hash != digest:
+        raise SourceError(ErrorCode.SOURCE_CHANGED)
+    return replace(inspection, roster=checkpoint.inspection.roster)
+
+
+def inspect_source(
+    pipeline: Pipeline, cancel: CancellationToken | None
+) -> tuple[BookInspection, str]:
+    """Read source information and its identity from the same private copy."""
+    with TemporaryDirectory(prefix="kenkui-resolution-") as workspace:
+        snapshot = Path(workspace) / "source.epub"
+        digest = snapshot_source(pipeline.source.path, snapshot, cancel)
+        snapshot_pipeline = replace(
+            pipeline,
+            source=replace(pipeline.source, path=snapshot),
+            _resolved=None,
+            _roster=None,
+        )
+        return snapshot_pipeline.inspect(), digest
+
+
+def resolve_characters(
+    pipeline: Pipeline, cancel: CancellationToken | None
+) -> RosterCheckpoint:
+    """Stop after character discovery, without binding voices or assigning quotes."""
+    from ._characters import discover_characters  # noqa: PLC0415 - model boundary
+
+    inferring = next(
+        (item for item in pipeline.operations if isinstance(item, InferCharacters)),
+        None,
+    )
+    if inferring is None:
+        raise ValidationError(ErrorCode.ATTRIBUTION_UNAVAILABLE)
+    checkpoint = pipeline._roster  # noqa: SLF001 - checkpoint orchestration
+    if (
+        checkpoint is not None
+        and source_digest(pipeline.source.path) == checkpoint.source_hash
+    ):
+        return checkpoint
+    inspection, digest = inspect_source(pipeline, cancel)
+    roster = discover_characters(
+        inspection, inferring.model_id, client=_attribution_client(), cancel=cancel
+    )
+    return RosterCheckpoint(replace(inspection, roster=roster), digest)
 
 
 def _log_ungendered_cast(

@@ -384,6 +384,7 @@ def test_public_exports_are_intentional() -> None:
         "CastResolved",
         "CastingInspection",
         "CharacterProfile",
+        "CharacterRoster",
         "Collision",
         "SpeakerSpan",
         "book",

@@ -34,6 +34,9 @@ class ErrorCode(StrEnum):
     CAST_UNATTRIBUTED = "cast_unattributed"
     INVALID_SERIES = "invalid_series"
     INVALID_MODEL = "invalid_model"
+    INVALID_ROSTER = "invalid_roster"
+    ROSTER_UNAVAILABLE = "roster_unavailable"
+    INVALID_RESOLUTION_STAGE = "invalid_resolution_stage"
     MODEL_CALL_FAILED = "model_call_failed"
     MODEL_RESPONSE_INVALID = "model_response_invalid"
     SPACY_PACKAGE_MISSING = "spacy_package_missing"
@@ -87,6 +90,9 @@ class ErrorCode(StrEnum):
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.UNSUPPORTED_FORMAT: "The source format is not supported.",
     ErrorCode.SOURCE_NOT_FOUND: "The source does not exist.",
+    ErrorCode.INVALID_ROSTER: "The reviewed character roster is invalid.",
+    ErrorCode.ROSTER_UNAVAILABLE: "Resolve characters before reviewing the roster.",
+    ErrorCode.INVALID_RESOLUTION_STAGE: "The resolution stage is not recognized.",
     ErrorCode.SOURCE_NOT_READABLE: "The source is not readable.",
     ErrorCode.SOURCE_CHANGED: (
         "The source changed after resolution. Resolve it again before rendering."

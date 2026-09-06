@@ -308,7 +308,9 @@ def _chapter_roster(
     if not any(character.chapter_ids for character in characters):
         return tuple(characters)
     keep = {
-        character.id for character in characters if chapter_id in character.chapter_ids
+        character.id
+        for character in characters
+        if not character.chapter_ids or chapter_id in character.chapter_ids
     }
     if narrator_id is not None:
         keep.add(narrator_id)
@@ -421,10 +423,12 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     material, not a cache hit.
 
     A supplied ``roster`` bypasses discovery and enters the attribution cache
-    identity. ``reviewed=True`` preserves its gender values over later inferred
-    dialogue evidence. The automatic path retains its existing cache identity.
+    identity. ``reviewed=True`` preserves known gender values over later inferred
+    dialogue evidence; unspecified values can still be inferred. The automatic
+    path retains its existing cache identity.
     """
     roster_model = roster_model_id or model_id
+    supplied_roster = roster is not None
     if cancel is not None:
         cancel.raise_if_cancelled()
     params: Mapping[str, object] = PARAMS
@@ -483,6 +487,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
                     client=client,
                     spans=extracted[chapter.id],
                     narrator_id=narrator_id,
+                    include_aliases=supplied_roster,
                 ): chapter
                 for chapter in inspection.chapters
             }
@@ -513,7 +518,11 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         spans=tuple(spans),
     )
     if reviewed:
-        genders = {character.id: character.gender for character in roster.characters}
+        genders = {
+            character.id: character.gender
+            for character in roster.characters
+            if character.gender is not None
+        }
         record = replace(
             record,
             characters=tuple(
