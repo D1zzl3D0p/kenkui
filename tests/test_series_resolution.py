@@ -146,6 +146,39 @@ def test_a_returning_character_keeps_their_voice(
     assert first["javert"] == second["javert"]
 
 
+def test_cancellation_during_binding_does_not_commit_a_series(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation after attribution must still preserve existing continuity."""
+    _stub_resolution(monkeypatch, "javert")
+    token = kk.CancellationToken()
+
+    def bind(voice_id: str, *, also: tuple[str, ...] = ()) -> ExecutionBindings:
+        assert voice_id == "eponine"
+        if also:
+            token.cancel()
+        return ExecutionBindings(
+            EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
+        )
+
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", bind)
+    path = make_epub(
+        tmp_path / "book.epub",
+        chapters={"one": xhtml('<p>"Hello," said Javert.</p>')},
+        spine=("one",),
+    )
+    pipeline = (
+        kk.epub(path)
+        .series("cancelled-series")
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+    )
+    with pytest.raises(kk.CancelledError):
+        pipeline.resolve(cancel=token)
+    assert store.read_series("cancelled-series") is None
+
+
 def test_a_newcomer_does_not_take_a_spent_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

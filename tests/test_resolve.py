@@ -49,6 +49,21 @@ def test_assign_voice_is_the_degenerate_cast() -> None:
     assert single.operations == plural.operations
 
 
+def test_cancelled_resolution_never_binds_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already cancelled request must perform no resolution work."""
+
+    def unexpected_binding(_voice_id: str) -> None:
+        pytest.fail("cancelled resolution reached voice binding")
+
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", unexpected_binding)
+    token = kk.CancellationToken()
+    token.cancel()
+    with pytest.raises(kk.CancelledError):
+        kk.epub("book.epub").assign_voice("eponine").resolve(cancel=token)
+
+
 def test_unknown_defaults_to_the_narrator_voice() -> None:
     """A line nobody could place sounds like narration rather than vanishing."""
     casting = kk.epub("book.epub").assign_voices(narrator="eponine").operations[-1]

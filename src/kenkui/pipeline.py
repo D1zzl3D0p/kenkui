@@ -332,17 +332,23 @@ class Pipeline:
             before_tts=True,
         )
 
-    def resolve(self) -> Pipeline:
+    def resolve(self, *, cancel: CancellationToken | None = None) -> Pipeline:
         """Resolve voices, attribution, and casting, returning a new Pipeline.
 
         Optional. ``write()`` resolves internally, so this exists only to pay
         the model cost early and inspect the outcome. It is an effect -- it
         reaches the network and writes the store -- but it is immutable,
         idempotent, and leaves intent untouched.
+
+        Pass a cancellation token to stop between model calls and before
+        committing series changes. A running provider call must return before
+        cooperative cancellation can take effect.
         """
+        if cancel is not None:
+            cancel.raise_if_cancelled()
         if self._resolved is not None:
             return self
-        return Pipeline(self.source, self.operations, _resolve_all(self))
+        return Pipeline(self.source, self.operations, _resolve_all(self, cancel))
 
     def validate(self) -> ValidationResult:
         """Perform inexpensive source and operation validation without parsing."""
@@ -608,6 +614,8 @@ def _resolve_all(
 
     casting = pipeline._casting()  # noqa: SLF001 - same module, private by design
     bindings = _execution_bindings(casting.narrator_voice_id)
+    if cancel is not None:
+        cancel.raise_if_cancelled()
 
     attributing = next(
         (item for item in pipeline.operations if isinstance(item, AttributeQuotes)),
@@ -636,6 +644,8 @@ def _resolve_all(
         client=_attribution_client(),
         cancel=cancel,
     )
+    if cancel is not None:
+        cancel.raise_if_cancelled()
     pool = tuple(
         voice
         for voice in list_voices()
@@ -687,6 +697,8 @@ def _resolve_all(
         casting.narrator_voice_id,
         also=(casting.unknown_voice_id, *sorted(set(outcome.assignments.values()))),
     )
+    if cancel is not None:
+        cancel.raise_if_cancelled()
     if series is not None:
         persisted_assignments = dict(outcome.assignments)
         if pins.dropped_pins and not series.allow_recast:

@@ -142,8 +142,12 @@ assignments.
 
 ## Cancellation and workers
 
-`CancellationToken.cancel()` is thread-safe and idempotent. Pass the token to a
-write and cancel it from another thread or an event callback. Cancellation is
+`CancellationToken.cancel()` is thread-safe and idempotent. Pass the token to
+`resolve(cancel=token)` or `write(..., cancel=token)` and cancel it from another
+thread or an event callback. Resolution checks cancellation between model calls
+and before committing series changes; a running provider call must return first.
+Completed attribution and cast cache entries may remain available for a retry.
+Cancellation is
 cooperative at bounded orchestration points, terminates/then kills children with
 bounded waits when necessary, raises `CancelledError` (`cancelled`), and never
 publishes an artifact.
