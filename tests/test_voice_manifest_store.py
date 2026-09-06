@@ -7,6 +7,8 @@ import json
 import stat
 from pathlib import Path
 
+import pytest
+
 from kenkui._tts import production
 from kenkui.voices.manifest import (
     EngineRecord,
@@ -111,6 +113,7 @@ def test_write_leaves_no_temporary_files(tmp_path: Path) -> None:
     assert sorted(p.name for p in tmp_path.iterdir()) == ["manifest.json"]
 
 
+@pytest.mark.usefixtures("_real_cache_root")
 def test_default_manifest_path_is_under_the_versioned_cache() -> None:
     path = default_manifest_path()
     assert path.name == "manifest.json"

@@ -267,6 +267,9 @@ def test_interrupted_files_concurrent_population_and_pickle_contract(
 def test_database_lock_and_unusable_location_degrade_without_render_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Exercise more failed publications than one orphan scan can cover without
+    # repeating real SQLite lock timeouts for the production-sized scan budget.
+    monkeypatch.setattr(cache_module, "ORPHAN_SCAN_LIMIT", 4)
     pipeline, _, segment, task, audio = _material(tmp_path)
     root = tmp_path / "cache"
     store = CacheStore(root)

@@ -24,6 +24,10 @@ def isolated_cache_root(
     """Redirect the managed cache and manifest away from the real user cache."""
     root = tmp_path_factory.mktemp("kenkui-cache")
     monkeypatch.setattr(production, "default_cache_root", lambda: root)
+    # Provisioning imported default_manifest_path directly. Its function still
+    # resolves this module's cache-root binding, even when the function name
+    # below has been replaced, so redirect both lookup paths.
+    monkeypatch.setattr(manifest_module, "default_cache_root", lambda: root)
     monkeypatch.setattr(
         manifest_module, "default_manifest_path", lambda: root / "manifest.json"
     )
@@ -35,6 +39,7 @@ def isolated_cache_root(
 def _real_cache_root(monkeypatch: pytest.MonkeyPatch) -> None:
     """Undo the autouse redirect for tests of default_cache_root itself."""
     monkeypatch.undo()
+
 
 def log_field(record: logging.LogRecord, name: str) -> object:
     """Read one structured field that log_event attached through ``extra``.

@@ -15,7 +15,6 @@ import pytest
 
 import kenkui as kk
 from kenkui._domain.casting import CharacterProfile, candidates
-from kenkui._tts.production import default_cache_root as _cache_root
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,9 +65,7 @@ def test_built_in_traits_remain_unsourced() -> None:
     Sourced traits come from the voice pack instead, which is why the merged
     catalog does have them and these twenty-six still do not.
     """
-    assert all(
-        entry.perceived_gender is None for entry in BUILT_IN_CATALOG.values()
-    )
+    assert all(entry.perceived_gender is None for entry in BUILT_IN_CATALOG.values())
 
 
 def test_the_merged_catalog_does_carry_sourced_traits() -> None:
@@ -103,7 +100,9 @@ def test_added_voice_round_trips_its_trait(tmp_path: Path) -> None:
     assert listed["house_narrator"].perceived_gender == "masculine"
 
 
-def test_trait_is_optional_so_older_manifests_stay_readable(tmp_path: Path) -> None:
+def test_trait_is_optional_so_older_manifests_stay_readable(
+    tmp_path: Path, isolated_cache_root: Path
+) -> None:
     """Absent means unsourced, not corrupt: no schema bump, no re-provisioning."""
     source = tmp_path / "plain.safetensors"
     source.write_bytes(_EMBEDDING_BYTES)
@@ -117,7 +116,7 @@ def test_trait_is_optional_so_older_manifests_stay_readable(tmp_path: Path) -> N
         commercial_use_allowed=True,
         voice_rights="Cleared for this project.",
     )
-    manifest = json.loads((_cache_root() / "manifest.json").read_text())
+    manifest = json.loads((isolated_cache_root / "manifest.json").read_text())
     assert "perceived_gender" not in manifest["voices"]["plain_voice"]
     listed = {voice.id: voice for voice in kk.list_voices()}
     assert listed["plain_voice"].perceived_gender is None
@@ -241,7 +240,7 @@ def test_a_voice_the_catalog_does_not_know_is_left_alone() -> None:
     """An operator's own voice has no catalog answer to adopt."""
     record = VoiceRecord(
         id="house_voice",
-        variety="safetensors",
+        variety="pre-compiled",
         state="registered",
         name="House",
         enabled=True,

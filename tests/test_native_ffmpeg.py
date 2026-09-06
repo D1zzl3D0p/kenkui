@@ -345,8 +345,8 @@ def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
 
     cold_output = tmp_path / "cold.m4b"
     warm_output = tmp_path / "warm.m4b"
-    cold = pipeline.write_m4b(cold_output, workers=2)
-    warm = pipeline.write_m4b(warm_output, workers=1)
+    cold = pipeline.write_m4b(cold_output, workers=2, keep_audio_cache=True)
+    warm = pipeline.write_m4b(warm_output, workers=1, keep_audio_cache=True)
 
     assert cold.output == cold_output
     assert warm.output == warm_output
