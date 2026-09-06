@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from kenkui._domain.operations import (
@@ -186,6 +187,26 @@ class CastPlan:
     unknown: VoicePlan
     voices: tuple[VoicePlan, ...]
     assignments: Mapping[str, str]  # character id -> voice id
+
+    def __post_init__(self) -> None:
+        """Snapshot assignments so later caller edits cannot change speech."""
+        object.__setattr__(
+            self, "assignments", MappingProxyType(dict(self.assignments))
+        )
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        type[CastPlan],
+        tuple[VoicePlan, VoicePlan, tuple[VoicePlan, ...], dict[str, str]],
+    ]:
+        """Reconstruct the immutable snapshot in spawned render processes."""
+        return type(self), (
+            self.narrator,
+            self.unknown,
+            self.voices,
+            dict(self.assignments),
+        )
 
     @classmethod
     def single(cls, voice: VoicePlan) -> CastPlan:

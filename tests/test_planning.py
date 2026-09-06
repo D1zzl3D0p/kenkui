@@ -108,6 +108,21 @@ def test_plan_is_deterministic_frozen_spawn_safe_and_exact() -> None:
         first.total_speech_characters = 0  # type: ignore[misc]
 
 
+def test_cast_assignments_are_immutable_after_construction_and_pickle() -> None:
+    """Retained caller mappings cannot change speaker voices, even after spawn."""
+    original = _compile().cast
+    assignments = {"alice": original.narrator.id}
+    cast = replace(original, assignments=assignments)
+    assignments["alice"] = "changed"
+    assert cast.assignments["alice"] == original.narrator.id
+    restored = pickle.loads(pickle.dumps(cast))  # noqa: S301
+    assert restored == cast
+    for value in (cast, restored):
+        with pytest.raises(TypeError):
+            value.assignments["alice"] = "changed"  # type: ignore[index]
+        assert value.voice_for("alice") == original.narrator
+
+
 def test_public_local_voice_metadata_supplies_a_deterministic_plan() -> None:
     """A registry voice remains a pure local input to planning."""
     plan = _compile(
