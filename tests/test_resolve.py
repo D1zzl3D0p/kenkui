@@ -111,14 +111,14 @@ def test_resolve_leaves_the_receiver_alone() -> None:
     assert original._resolved is None  # noqa: SLF001
 
 
-def test_appending_drops_resolved_values() -> None:
-    """Changing intent invalidates resolution; re-resolving is a store lookup."""
+def test_changing_selection_drops_resolved_values() -> None:
+    """Changing the text being cast invalidates the resolved checkpoint."""
     resolved = kk.Pipeline(
         kk.epub("book.epub").source,
         _pipeline().operations,
         object(),  # type: ignore[arg-type]
     )
-    assert resolved.tts()._resolved is None  # noqa: SLF001
+    assert resolved.select_chapters("one")._resolved is None  # noqa: SLF001
 
 
 def test_resolved_values_are_not_intent() -> None:

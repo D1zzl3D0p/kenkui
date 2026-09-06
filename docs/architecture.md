@@ -145,11 +145,18 @@ planner as finished values, exactly as voice metadata already is: the planner
 receives a roster, speaker spans, and a cast, and reaches neither a model nor
 a store.
 
-`resolve()` and `write()` are two entry points into one resolution
-implementation, not two paths. A pipeline carrying resolved values renders
-identically to one that resolves during `write()`; appending any operation
-discards them, because changing intent invalidates them and re-resolving
-against a populated store is a lookup.
+`resolve()` and `write()` share one resolution implementation. Resolution
+hashes and parses the same private source snapshot using `_source`, which also
+supplies rendering's bounded snapshot function. The returned pipeline retains
+frozen source and casting inspection values alongside private rendering
+bindings. `inspect()` exposes the values; bindings stay internal.
+
+Synthesis, metadata, pronunciation, and pauses preserve a resolved checkpoint
+because attribution uses canonical text. Other intent changes discard it.
+Before rendering, the coordinator compares its private source snapshot with
+the resolved source hash and rejects mismatches as `source_changed`. An
+explicit `resolve()` refreshes a checkpoint whose source bytes have changed.
+This keeps both the reviewable checkpoint and the render tied to exact input.
 
 All model traffic happens in the parent process, beside the network voice
 provisioning already performs. The render path is unchanged: spawned workers

@@ -245,20 +245,52 @@ if __name__ == "__main__":
 ### Resolve before write
 
 `write()` resolves voices, model attribution, and casting when it needs to.
-Call `resolve()` first when you want to perform that work before rendering:
+Call `resolve()` first to create an inspectable checkpoint before rendering.
+It returns another `Pipeline`, so method chaining continues normally:
 
 ```python
+import os
+
+import kenkui as kk
+
 if __name__ == "__main__":
-    resolved = pipeline.resolve()
-    result = resolved.write("book.m4b", on_event=progress)
+    model = os.environ["KENKUI_ANALYSIS_MODEL"]
+    resolved = (
+        kk.epub("book.epub")
+        .infer_characters(model)
+        .attribute_quotes(model)
+        .assign_voices(narrator="eponine")
+        .resolve()
+    )
+    inspection = resolved.inspect()
+    casting = inspection.casting
+    assert casting is not None
+    print(dict(casting.assignments))
+    print(casting.characters)
+    print(casting.collisions)
+
+    result = resolved.tts().write("book.m4b")
 ```
 
-`resolve()` returns an immutable pipeline with the same intent. It is
-idempotent: a second call reuses the resolved values, and `write()` reuses them
-too. `inspect()` remains source inspection; it does not expose a `casting`
-attribute. Observe the public cast through `CastResolved` during writing.
-Appending an operation invalidates the resolved values. Configure chapter
-selection and casting before `tts()`; metadata may be applied after it.
+Before resolution, `inspect().casting` is `None`. Afterwards it contains a
+frozen `CastingInspection`: narrator and unknown voice IDs, the character
+roster, assignment pairs, attributed speaker spans, and same-chapter voice
+sharing. Span offsets refer to the chapter text in that same inspection.
+A single-voice pipeline has a casting inspection too, with an empty character
+roster and assignments when no attribution was requested. Inspection performs
+no model calls and, for a resolved pipeline, returns the saved snapshot.
+
+For unchanged source bytes, another `resolve()` reuses the checkpoint, as does
+`write()`. Adding synthesis, metadata, pronunciation, or pauses preserves it;
+changing selection, character analysis, casting, or series intent invalidates
+it. Configure selection, pronunciation, pauses, and casting before `tts()`;
+metadata may also be applied after it.
+
+A checkpoint records the source bytes it analyzed. If the EPUB changes,
+`inspect()` still shows that checkpoint and rendering raises `SourceError`
+with code `source_changed` before synthesis. Explicitly call `resolve()` again
+to analyze the changed book and obtain a new checkpoint. This avoids silently
+rendering text with a cast or attribution you reviewed for different text.
 
 ### Narrator and unknown voices
 

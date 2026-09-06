@@ -8,7 +8,9 @@ from ._characters.store import (
     remove_casting,
     remove_series,
 )
+from ._domain.casting import CharacterProfile, Collision
 from ._domain.operations import MetadataIntent
+from ._domain.planning import SpeakerSpan
 from .api import (
     ExecutionStats,
     Result,
@@ -42,7 +44,12 @@ from .events import (
     Started,
     Warning,
 )
-from .inspection import BookInspection, BookMetadata, ChapterInspection
+from .inspection import (
+    BookInspection,
+    BookMetadata,
+    CastingInspection,
+    ChapterInspection,
+)
 from .pipeline import Pipeline, Source
 from .voices import Engine, Voice
 from .voices.provision import (
@@ -61,7 +68,10 @@ __all__ = [
     "CancellationToken",
     "CancelledError",
     "CastResolved",
+    "CastingInspection",
     "ChapterInspection",
+    "CharacterProfile",
+    "Collision",
     "Completed",
     "EncodingError",
     "Engine",
@@ -78,6 +88,7 @@ __all__ = [
     "SeriesRecord",
     "Source",
     "SourceError",
+    "SpeakerSpan",
     "StageCompleted",
     "StageProgress",
     "StageStarted",

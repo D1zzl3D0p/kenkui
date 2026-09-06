@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
@@ -18,11 +19,12 @@ from ._domain.casting import (
 )
 from ._domain.operations import AssignVoices, AttributeQuotes, InferCharacters, Series
 from ._domain.planning import SpeakerSpan  # noqa: TC001 - dataclass field
+from ._source import snapshot_source
+from .inspection import BookInspection, CastingInspection
 from .observability import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from pathlib import Path
 
     from ._characters.llm import Client
     from ._characters.models import SeriesRecord
@@ -32,7 +34,6 @@ if TYPE_CHECKING:
     from .voices import Voice
 
 _LOGGER = get_logger(__name__)
-_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,8 @@ class Resolved:
     spans: tuple[SpeakerSpan, ...]
     collisions: tuple[Collision, ...]
     bindings: ExecutionBindings
+    inspection: BookInspection
+    source_hash: str
 
     def __post_init__(self) -> None:
         """Prevent a retained assignment mapping from changing later renders."""
@@ -87,6 +90,14 @@ def resolve_inputs(
     if cancel is not None:
         cancel.raise_if_cancelled()
 
+    with TemporaryDirectory(prefix="kenkui-resolution-") as workspace:
+        snapshot = Path(workspace) / "source.epub"
+        digest = snapshot_source(pipeline.source.path, snapshot, cancel)
+        snapshot_pipeline = replace(
+            pipeline, source=replace(pipeline.source, path=snapshot), _resolved=None
+        )
+        inspection = snapshot_pipeline.inspect()
+
     attributing = next(
         (item for item in pipeline.operations if isinstance(item, AttributeQuotes)),
         None,
@@ -98,14 +109,19 @@ def resolve_inputs(
             spans=(),
             collisions=(),
             bindings=bindings,
+            inspection=replace(
+                inspection,
+                casting=CastingInspection(
+                    casting.narrator_voice_id, casting.unknown_voice_id
+                ),
+            ),
+            source_hash=digest,
         )
 
     inferring = next(
         (item for item in pipeline.operations if isinstance(item, InferCharacters)),
         None,
     )
-    inspection = pipeline.inspect()
-    digest = _source_digest(pipeline.source.path)
     record = resolve_attribution(
         inspection,
         digest,
@@ -206,20 +222,19 @@ def resolve_inputs(
         spans=record.spans,
         collisions=outcome.collisions,
         bindings=final_bindings,
+        inspection=replace(
+            inspection,
+            casting=CastingInspection(
+                narrator_voice_id=casting.narrator_voice_id,
+                unknown_voice_id=casting.unknown_voice_id,
+                characters=record.characters,
+                assignments=tuple(sorted(outcome.assignments.items())),
+                spans=record.spans,
+                collisions=outcome.collisions,
+            ),
+        ),
+        source_hash=digest,
     )
-
-
-def _source_digest(path: Path) -> str:
-    """Hash the source bytes in bounded chunks.
-
-    The same identity the plan uses, so attribution stored for a book is found
-    again on a later render of that same book and not of an edited copy.
-    """
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _log_ungendered_cast(

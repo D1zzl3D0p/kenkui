@@ -28,6 +28,7 @@ from kenkui._execution.process_pool import (
     render_spawned,
     resolve_workers,
 )
+from kenkui._source import snapshot_source
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ
 from kenkui._tts.protocols import (
     SegmentAudio,
@@ -68,7 +69,6 @@ if TYPE_CHECKING:
 _READ_CHUNK_BYTES = 64 * 1024
 _SHA256_HEX_LENGTH = 64
 _PRIVATE_DIRECTORY_MODE = 0o700
-MAX_COMPRESSED_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_SEGMENT_PCM_BYTES = 64 * 1024 * 1024
 # Rendered PCM is spilled per chapter, so the memory a run needs is bounded by
 # its largest chapter rather than by the whole book. 512 MiB is about three
@@ -203,6 +203,7 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
     assignments: Mapping[str, str] | None = None,
     unknown_voice_id: str | None = None,
     spans: tuple[SpeakerSpan, ...] = (),
+    resolved_source_hash: str | None = None,
 ) -> Result:
     """Execute one immutable plan in order and transactionally publish its artifact."""
     metadata_intent = pipeline.metadata_intent
@@ -223,10 +224,12 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
         emitter.emit_stage_started("planning")
         _check_cancel(cancel)
         snapshot = workspace / "source.epub"
-        source_hash = _snapshot_source(pipeline.source.path, snapshot, cancel)
+        source_hash = snapshot_source(pipeline.source.path, snapshot, cancel)
+        if resolved_source_hash is not None and source_hash != resolved_source_hash:
+            raise SourceError(ErrorCode.SOURCE_CHANGED)
         _check_cancel(cancel)
         snapshot_pipeline = replace(
-            pipeline, source=replace(pipeline.source, path=snapshot)
+            pipeline, source=replace(pipeline.source, path=snapshot), _resolved=None
         )
         inspection = snapshot_pipeline.inspect()
         _check_cancel(cancel)
@@ -835,50 +838,6 @@ def _snapshot_publication(result: AssemblyResult, workspace: Path) -> Path:
             snapshot.unlink(missing_ok=True)
         raise EncodingError(ErrorCode.ASSEMBLY_FAILED) from None
     return snapshot
-
-
-def _snapshot_source(
-    source: Path, snapshot: Path, cancel: CancellationToken | None
-) -> str:
-    digest = hashlib.sha256()
-    failed = False
-    too_large = False
-    changed = False
-    try:
-        with source.open("rb") as source_stream, snapshot.open("xb") as target:
-            before = os.fstat(source_stream.fileno())
-            copied = 0
-            while chunk := source_stream.read(_READ_CHUNK_BYTES):
-                copied += len(chunk)
-                if copied > MAX_COMPRESSED_SOURCE_BYTES:
-                    too_large = True
-                    break
-                target.write(chunk)
-                digest.update(chunk)
-                _check_cancel(cancel)
-            after = os.fstat(source_stream.fileno())
-            changed = (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-                before.st_ctime_ns,
-            ) != (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-                after.st_ctime_ns,
-            )
-    except KenkuiError:
-        raise
-    except OSError:
-        failed = True
-    if too_large:
-        raise SourceError(ErrorCode.ARCHIVE_LIMIT)
-    if failed or changed:
-        raise SourceError(ErrorCode.SOURCE_NOT_READABLE)
-    return digest.hexdigest()
 
 
 def _publish(candidate: Path, output: Path, *, overwrite: bool) -> None:

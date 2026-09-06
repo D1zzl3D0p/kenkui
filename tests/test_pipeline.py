@@ -340,7 +340,7 @@ def test_public_errors_preserve_normal_exception_propagation() -> None:
 
 
 def test_public_exports_are_intentional() -> None:
-    """The facade publishes only the approved WP2 concepts."""
+    """The facade publishes the documented intent, inspection, and result values."""
     expected = {
         "__version__",
         "Engine",
@@ -359,6 +359,10 @@ def test_public_exports_are_intentional() -> None:
         "SeriesCharacter",
         "SeriesRecord",
         "CastResolved",
+        "CastingInspection",
+        "CharacterProfile",
+        "Collision",
+        "SpeakerSpan",
         "book",
         "builtin_lexicon",
         "epub",

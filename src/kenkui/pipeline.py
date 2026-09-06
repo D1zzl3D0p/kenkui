@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -28,6 +28,7 @@ from ._domain.selection import select_chapters, select_range
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
 from ._resolution import log_collisions, resolve_inputs
+from ._source import source_digest
 from .api import Result, ValidationIssue, ValidationResult
 from .errors import (
     EncodingError,
@@ -313,7 +314,10 @@ class Pipeline:
         Optional. ``write()`` resolves internally, so this exists only to pay
         the model cost early and inspect the outcome. It is an effect -- it
         reaches the network and writes the store -- but it is immutable,
-        idempotent, and leaves intent untouched.
+        idempotent for unchanged source bytes, and leaves intent untouched.
+        Inspect the returned pipeline to review its roster and cast. Calling
+        ``resolve()`` again after the source changes creates a new checkpoint;
+        writing the old checkpoint instead raises ``source_changed``.
 
         Pass a cancellation token to stop between model calls and before
         committing series changes. A running provider call must return before
@@ -321,9 +325,13 @@ class Pipeline:
         """
         if cancel is not None:
             cancel.raise_if_cancelled()
-        if self._resolved is not None:
+        if (
+            self._resolved is not None
+            and source_digest(self.source.path) == self._resolved.source_hash
+        ):
             return self
-        return Pipeline(self.source, self.operations, resolve_inputs(self, cancel))
+        unresolved = replace(self, _resolved=None)
+        return replace(unresolved, _resolved=resolve_inputs(unresolved, cancel))
 
     def validate(self) -> ValidationResult:
         """Perform inexpensive source and operation validation without parsing."""
@@ -376,7 +384,13 @@ class Pipeline:
         return ValidationResult(tuple(issues))
 
     def inspect(self) -> BookInspection:
-        """Parse and select immutable normalized source data without synthesis."""
+        """Inspect this checkpoint without synthesis or model calls.
+
+        Before resolution, parse and select current source text. Afterwards,
+        return the frozen source, roster, attribution, and cast snapshot.
+        """
+        if self._resolved is not None:
+            return self._resolved.inspection
         source_error = source_validation_error(self.source.path)
         if source_error is not None:
             raise SourceError(source_error)
@@ -481,18 +495,23 @@ class Pipeline:
             assignments=resolved.cast_assignments,
             unknown_voice_id=resolved.unknown_voice_id,
             spans=resolved.spans,
+            resolved_source_hash=resolved.source_hash,
         )
 
     def _append(self, operation: Operation, *, before_tts: bool = False) -> Pipeline:
         """Create a branch with one pure validated operation append.
 
-        Resolved values are dropped: changing intent invalidates them, and
-        re-resolving against a populated store is a lookup, so the
-        conservative rule costs nothing.
+        Synthesis, metadata, pronunciation, and pauses consume resolved
+        attribution without changing it. Other operations invalidate it.
         """
         return Pipeline(
             self.source,
             append_unique(self.operations, operation, before_tts=before_tts),
+            self._resolved
+            if isinstance(
+                operation, (SynthesizeSpeech, MetadataIntent, SpokenForm, Pauses)
+            )
+            else None,
         )
 
     def _casting(self) -> AssignVoices:

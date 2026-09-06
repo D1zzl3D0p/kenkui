@@ -12,6 +12,7 @@ class ErrorCode(StrEnum):
     UNSUPPORTED_FORMAT = "unsupported_format"
     SOURCE_NOT_FOUND = "source_not_found"
     SOURCE_NOT_READABLE = "source_not_readable"
+    SOURCE_CHANGED = "source_changed"
     DUPLICATE_OPERATION = "duplicate_operation"
     INVALID_OPERATION_ORDER = "invalid_operation_order"
     EMPTY_SELECTION = "empty_selection"
@@ -87,6 +88,9 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.UNSUPPORTED_FORMAT: "The source format is not supported.",
     ErrorCode.SOURCE_NOT_FOUND: "The source does not exist.",
     ErrorCode.SOURCE_NOT_READABLE: "The source is not readable.",
+    ErrorCode.SOURCE_CHANGED: (
+        "The source changed after resolution. Resolve it again before rendering."
+    ),
     ErrorCode.DUPLICATE_OPERATION: "The operation was already requested.",
     ErrorCode.INVALID_OPERATION_ORDER: "The operation is not valid at this point.",
     ErrorCode.EMPTY_SELECTION: "At least one chapter ID is required.",
