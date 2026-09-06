@@ -10,8 +10,11 @@ from typing import Any
 import pytest
 
 from kenkui import ErrorCode, ModelError, RenderError, VoiceError
+from kenkui._execution.cache import CacheStore
 from kenkui._tts import production
 from kenkui.voices import manifest as manifest_module
+
+OWNER_ONLY_DIRECTORY = 0o700
 
 
 def _payload(tmp_path: Path) -> dict[str, Any]:
@@ -181,3 +184,25 @@ def test_env_override_wins_over_default(
         manifest_module, "default_manifest_path", lambda: tmp_path / "other.json"
     )
     assert production.resolve_manifest_path() == override
+
+
+def test_activation_resolves_the_voice_and_attaches_a_private_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success path: schema v2 collapses content_fingerprint into asset_sha256."""
+    cache = tmp_path / "cache"
+    monkeypatch.setenv(
+        "KENKUI_POCKET_MANIFEST", str(_write(tmp_path, _payload(tmp_path)))
+    )
+    monkeypatch.setattr(production, "default_cache_root", lambda: cache)
+    monkeypatch.setattr(production, "preflight_pocket", lambda *_: None)
+
+    bindings = production.production_bindings_from_environment("eponine")
+
+    assert bindings.voice.id == "eponine"
+    assert bindings.voice.content_fingerprint == "b" * 64
+    assert bindings.voice.compatible_model_revisions == ("revision-1",)
+    assert bindings.model_revision == "revision-1"
+    assert bindings.engine_specification.kind == "pocket"
+    assert isinstance(bindings.cache_store, CacheStore)
+    assert cache.stat().st_mode & 0o777 == OWNER_ONLY_DIRECTORY

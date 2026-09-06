@@ -420,6 +420,7 @@ def test_public_exports_are_intentional() -> None:
         "CancelledError",
     }
     assert set(kk.__all__) == expected
+    assert not hasattr(kk, "CacheStore")
 
 
 def test_pronounce_records_intent_without_effects() -> None:

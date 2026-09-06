@@ -17,6 +17,7 @@ from kenkui._audio.m4b import (
     AssemblyResult,
     FakeArtifactAssembler,
 )
+from kenkui._domain.planning import MAX_TTS_SEGMENT_CHARACTERS
 from kenkui._execution.cache import CacheStore
 from kenkui._execution.coordinator import MAX_SEGMENT_PCM_BYTES, ExecutionBindings
 from kenkui._execution.process_pool import (
@@ -136,6 +137,32 @@ def test_serial_and_parallel_public_runs_are_semantically_identical(
     assert serial == parallel
     assert output.read_bytes() == serial_bytes
     assert parallel_events == serial_events
+
+
+def test_a_multisegment_chapter_is_one_chapter_for_events_and_assembly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Many TTS segments must still report and assemble as a single chapter."""
+    speech = "Sentence boundary. " * (MAX_TTS_SEGMENT_CHARACTERS // 4)
+    source = make_epub(
+        tmp_path / "long.epub",
+        chapters={"one": xhtml(f"<h1>One</h1><p>{speech}</p>")},
+        spine=("one",),
+    )
+    pipeline = kk.epub(source).assign_voice("narrator").tts()
+    _bind(monkeypatch, EngineSpecification.fake(), FakeArtifactAssembler())
+    events: list[kk.ExecutionEvent] = []
+
+    result = pipeline.write_m4b(tmp_path / "long.m4b", on_event=events.append)
+
+    assert result.stats.synthesized_segments > 1
+    assert result.stats.rendered_chapters == 1
+    render = [
+        event
+        for event in events
+        if isinstance(event, kk.StageProgress) and event.stage == "render"
+    ]
+    assert [(event.completed, event.total) for event in render] == [(1, 1)]
 
 
 def test_fake_pcm_is_deterministic_and_audio_validation_is_authoritative(
@@ -660,6 +687,7 @@ def test_completed_callback_failure_and_cancellation_cannot_revoke_commit(
     result = pipeline.write_m4b(output, on_event=terminal_failure, cancel=token)
     assert result.output == output
     assert output.is_file()
+    assert not list(tmp_path.glob(".kenkui-*"))
 
 
 def test_fake_engine_preflights_output_budget_before_allocation() -> None:
@@ -680,7 +708,8 @@ def test_execution_logs_structured_safe_boundary_context(
     _bind(monkeypatch, DeterministicFakeEngine(), FakeArtifactAssembler())
     caplog.set_level("INFO", logger="kenkui")
 
-    pipeline.write_m4b(tmp_path / "result.m4b")
+    output = tmp_path / "result.m4b"
+    pipeline.write_m4b(output)
 
     boundaries = {
         log_field(record, "boundary")
@@ -688,7 +717,12 @@ def test_execution_logs_structured_safe_boundary_context(
         if getattr(record, "event", None) == "execution_stage_started"
     }
     assert {"planning", "rendering", "encoding"} <= boundaries
+    assert any(
+        getattr(record, "event", None) == "execution_stage_completed"
+        for record in caplog.records
+    )
     assert str(source) not in caplog.text
+    assert str(output) not in caplog.text
     assert "Exact first." not in caplog.text
 
 

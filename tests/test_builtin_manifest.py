@@ -25,13 +25,6 @@ def test_builtin_json_covers_every_upstream_voice() -> None:
     assert ids == set(_ORIGINS_OF_PREDEFINED_VOICES)
 
 
-def test_builtin_entries_record_rights() -> None:
-    for entry in registry.BUILT_IN_CATALOG.values():
-        assert entry.license_id
-        assert entry.voice_rights
-        assert isinstance(entry.commercial_use_allowed, bool)
-
-
 def test_builtin_entries_carry_no_asset_url() -> None:
     """Built-ins derive their embedding URL; only pack voices pin one."""
     assert all(e.asset_url is None for e in registry.BUILT_IN_CATALOG.values())

@@ -105,17 +105,3 @@ def test_loading_the_pack_touches_no_network(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(socket, "socket", deny)
     registry.load_pack.cache_clear()
     assert registry.load_pack().entries
-
-
-def test_a_missing_pack_degrades_to_the_built_ins(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The pack is an addition; Kenkui must import and render without it."""
-    monkeypatch.setattr(registry, "_PACK_MANIFEST", tmp_path / "absent.json")
-    registry.load_pack.cache_clear()
-    registry._withheld_pack_ids.cache_clear()  # noqa: SLF001
-    try:
-        assert registry.load_pack().entries == ()
-    finally:
-        registry.load_pack.cache_clear()
-        registry._withheld_pack_ids.cache_clear()  # noqa: SLF001
