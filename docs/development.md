@@ -72,8 +72,10 @@ files, auth tokens, model/voice assets, or generated evidence.
 
 Install the built wheel (not the source tree) in a fresh compatible Python 3.11,
 3.12, or 3.13 environment with dependencies, import only `kenkui` public names,
-and exercise constructor/validation/EPUB inspection. The public production write
-is expected to stay fail-closed until the real gate is approved.
+and exercise constructor/validation/EPUB inspection. An isolated installation
+without provisioned model/voice assets must reject production writing with a
+stable resource error. Real Pocket inference is a separate opt-in acceptance
+check; it is not a runtime approval switch.
 
 Publishing itself is intentionally not automated by the CI workflow. Before a
 release, confirm version/changelog policy, exact archive listing, all six

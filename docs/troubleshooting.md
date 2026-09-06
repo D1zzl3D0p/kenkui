@@ -46,7 +46,7 @@ See [security boundaries](security.md) for exact limits.
 
 - `voice_required` and `tts_required`: call `assign_voice(...).tts()` in order.
 - `duplicate_operation` / `invalid_operation_order`: create a new immutable branch
-  with each operation once and place selections/normalization/voice before TTS.
+  with each operation once and place chapter selection and voice assignment before TTS.
 - `invalid_workers`: use `"auto"` or a positive integer (not `True`/`False`).
 - `invalid_output`: use an `.m4b` path whose parent directory already exists.
 - `output_exists`: choose another path or explicitly pass `overwrite=True`.
@@ -99,6 +99,6 @@ KENKUI_RUN_NATIVE=1 uv run pytest --no-cov -m native tests/test_native_ffmpeg.py
 - Pocket model/voice load and inference codes, `synthesis_failed`, and
   `invalid_audio`: provider/worker output failed a sanitized execution boundary.
 
-No approved model/voice ships with this repository. Real Pocket tests must remain
-skipped until the separate gate described on the
-[Pocket adapter page](pocket-tts-adapter.md) is explicitly approved.
+Model and voice assets are provisioned separately. Default tests skip real
+Pocket inference; the [Pocket adapter page](pocket-tts-adapter.md) describes the
+opt-in tier and its asset requirements.

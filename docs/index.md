@@ -11,8 +11,9 @@ assembly, events, cancellation, and stable errors are implemented and tested.
 Writing requires one explicit provisioning call. `kk.load_voice("eponine")`
 downloads and hashes a voice from the built-in catalog; after that the ordinary
 public write path works. Without it, `write()` reports `voice_not_provisioned`
-or `renderer_unavailable`. Kenkui never silently discovers or downloads a model
-or voice, and rendering itself never touches the network.
+or `renderer_unavailable`. Kenkui never silently downloads a model or voice
+during rendering. Character analysis in `resolve()` or `write()` may make
+LiteLLM requests; synthesis workers themselves remain offline.
 
 **Real Pocket inference has not been verified in CI.** The end-to-end test that
 downloads real assets and renders a real M4B is opt-in. See

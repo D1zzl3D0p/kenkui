@@ -31,7 +31,7 @@ The `[pocket]` extra is retained as an empty alias so existing
 
 ## Base and Pocket installs
 
-Install only the base parser/public API dependencies:
+Install the library, including its required synthesis dependencies:
 
 ```console
 python -m pip install kenkui
@@ -45,7 +45,7 @@ deployment is available:
 python -m pip install "kenkui[pocket]"
 ```
 
-The project is not yet published. Build and install locally instead:
+To build and install from this checkout:
 
 ```console
 uv build
@@ -54,8 +54,9 @@ python -m pip install dist/kenkui-0.1.0-py3-none-any.whl
 
 `pocket-tts==2.1.0` is pinned exactly: the adapter depends on the inspected
 upstream API and rejects any other installed version.
-It does **not** include model weights, a voice, accepted upstream terms, or an
-online downloader, and it does not make the fail-closed public renderer active.
+The wheel does not contain model weights or voice recordings. Explicit
+`load_voice()` provisioning downloads the necessary assets and records them in
+the local manifest; rendering verifies that manifest before synthesis.
 See [Pocket-TTS adapter](pocket-tts-adapter.md).
 
 ## FFmpeg prerequisite

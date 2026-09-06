@@ -30,7 +30,7 @@ Activation requires an operator-reviewed, immutable local declaration containing
 - immutable model revision and exact package version `2.1.0`;
 - **every** model-tree file as a safe relative POSIX path, exact positive byte
   size, and lowercase SHA-256 (no extra or missing tree entries);
-- canonical absolute prompt WAV outside the model root and its SHA-256;
+- canonical absolute compiled speaker-embedding path and its SHA-256;
 - voice provenance, license identifier, rights statement, and explicit
   `commercial_use_allowed` boolean;
 - expected sample rate, CPU device, and bounded timeout; and
@@ -41,7 +41,7 @@ No environment variable, cache entry, provider default, language shortcut, URL,
 or Hugging Face identifier can substitute for this declaration. The selected
 YAML must itself be in the manifest. Unsafe roots/files, symlinks, hardlinks,
 permissions, hashes, sizes, remote markers, path forms, extra files, malformed
-WAV, mismatched metadata, missing package, or wrong package version fail closed
+embedding headers, mismatched metadata, missing package, or wrong package version fail closed
 with stable Pocket model/voice errors.
 
 ## Offline worker behavior
@@ -55,8 +55,9 @@ provider downloader with an allow-list that accepts only declared snapshot
 files. The voice is passed as a local `Path`.
 
 Each bounded spawned worker creates one private model snapshot and model instance,
-then reuses them serially for its assigned segment batch. Voice conditioning is
-rebuilt from the verified local prompt for each segment. No model is constructed
+then reuses them serially for its assigned segment batch. Each voice's conditioning
+state is loaded once on first use and reused for that worker's later segments.
+No model is constructed
 in the parent, workers do not share model state, and each worker removes its
 snapshot when it exits. Provider exceptions are sanitized as stable load, voice,
 inference, or invalid-audio errors.
@@ -77,8 +78,9 @@ Wheel/source inspection is not inference acceptance.
 
 ## Provisioning boundary
 
-Provisioning is the only part of Kenkui that reaches the network, and it never
-runs inside a render. `tests/test_import_boundaries.py` statically asserts that
+Provisioning downloads model and voice assets explicitly. Character analysis
+has a separate LiteLLM network boundary, but neither asset downloads nor
+character analysis run in synthesis workers. `tests/test_import_boundaries.py` statically asserts that
 no module under `_tts`, `_execution`, `_audio`, `_domain`, or `_epub` imports
 the provisioning module.
 

@@ -9,6 +9,12 @@ with `_` are implementation details and may change without compatibility notice.
 `epub(path)` records EPUB intent without opening the path. `Pipeline` and its
 operations are frozen values. Every fluent method returns a new branch.
 
+Standalone scripts must call `resolve()`, provisioning, and rendering from an
+`if __name__ == "__main__":` guard or a function invoked by that guard. Kenkui
+uses spawned processes on every supported platform; workers import the script
+again. Keep expensive effects out of module-level initialization. Pure pipeline
+construction can remain at module scope.
+
 ```python
 import kenkui as kk
 
@@ -37,8 +43,9 @@ beside the EPUB and returns the normal `Result`.
 ```python
 import kenkui as kk
 
-single = kk.magic_run("novel.epub", narrator="eponine")
-multi = kk.magic_run("novel.epub", narrator="eponine", multi=True)
+if __name__ == "__main__":
+    single = kk.magic_run("novel.epub", narrator="eponine")
+    # To choose character casting instead, use multi=True with a provisioned pool.
 ```
 
 `multi=True` adds character inference, quote attribution, and automatic casting.
@@ -96,16 +103,17 @@ def progress(event: object) -> None:
         print(event.stage, event.completed, event.total, event.chapter_id)
 
 
-result = selection.write_m4b(
-    "novel.m4b",
-    on_event=progress,
-    cancel=token,
-    workers="auto",
-    overwrite=False,
-    keep_audio_cache=False,
-)
-print(result.output)
-print(result.stats)
+if __name__ == "__main__":
+    result = selection.write_m4b(
+        "novel.m4b",
+        on_event=progress,
+        cancel=token,
+        workers="auto",
+        overwrite=False,
+        keep_audio_cache=False,
+    )
+    print(result.output)
+    print(result.stats)
 ```
 
 The frozen `Result` contains the published `Path` and `ExecutionStats`:
@@ -141,8 +149,10 @@ bounded waits when necessary, raises `CancelledError` (`cancelled`), and never
 publishes an artifact.
 
 `workers` must be `"auto"` or a positive, non-boolean integer. Auto considers
-available CPUs and chapter count. Both automatic and explicit requests are
-bounded by chapter count and the conservative hard cap of two. Rendering uses
+available CPUs, reserving two when possible, and chapter count. Both automatic
+and explicit requests are bounded by chapter count and the hard cap of sixteen.
+The caller must be allowed to create child processes; Python multiprocessing
+daemon processes cannot invoke this renderer. Rendering uses
 only Python **spawned** worker processes, including where `fork` is available.
 Each worker constructs one engine and processes its bounded static segment batch
 serially; workers do not share model state, and the parent never constructs an
@@ -156,14 +166,9 @@ Rendering reads a manifest; it never downloads. Provisioning is explicit, and
 ```python
 import kenkui as kk
 
-kk.load_voice("eponine")
-
-result = (
-    kk.book("book.epub")
-    .assign_voice("eponine")
-    .tts()
-    .write("book.m4b")
-)
+if __name__ == "__main__":
+    kk.load_voice("eponine")
+    result = kk.book("book.epub").assign_voice("eponine").tts().write("book.m4b")
 ```
 
 `load_voice` is idempotent: a voice whose asset is present and hash-verified
@@ -219,33 +224,37 @@ A full cast adds character inference and dialogue attribution, both of which
 name the model to use:
 
 ```python
-result = (
-    kk.epub("book.epub")
-    .infer_characters(model="anthropic/claude-sonnet-5")
-    .attribute_quotes(model="anthropic/claude-sonnet-5")
-    .assign_voices(narrator="eponine", method="gendered")
-    .tts()
-    .write("book.m4b")
-)
+import os
+
+if __name__ == "__main__":
+    model = os.environ["KENKUI_ANALYSIS_MODEL"]
+    result = (
+        kk.epub("book.epub")
+        .infer_characters(model=model)
+        .attribute_quotes(model=model)
+        .assign_voices(narrator="eponine", method="gendered")
+        .tts()
+        .write("book.m4b")
+    )
 ```
 
 ### Resolve before write
 
 `write()` resolves voices, model attribution, and casting when it needs to.
-Call `resolve()` first only when you want to pay for that work early and inspect
-the completed cast before rendering:
+Call `resolve()` first when you want to perform that work before rendering:
 
 ```python
-resolved = pipeline.resolve()
-assert resolved.inspect().casting is not None
-result = resolved.write("book.m4b")
+if __name__ == "__main__":
+    resolved = pipeline.resolve()
+    result = resolved.write("book.m4b", on_event=progress)
 ```
 
 `resolve()` returns an immutable pipeline with the same intent. It is
 idempotent: a second call reuses the resolved values, and `write()` reuses them
-too.
-
-Order does not matter. Only `tts()` must come last.
+too. `inspect()` remains source inspection; it does not expose a `casting`
+attribute. Observe the public cast through `CastResolved` during writing.
+Appending an operation invalidates the resolved values. Configure chapter
+selection and casting before `tts()`; metadata may be applied after it.
 
 ### Narrator and unknown voices
 
@@ -301,7 +310,7 @@ Pinned entries are constraints on the solver, not suggestions.
 
 ### How voices are chosen
 
-Characters who speak in the same chapter never share a voice. Among the voices
+Casting avoids sharing voices within a chapter when the pool permits it. Among the voices
 still free, the solver takes the least-used one, weighted by how much each
 character actually speaks — so a lead does not land on the voice a walk-on
 already holds. Voices spread before they repeat, and repeat only once the pool
@@ -319,7 +328,7 @@ castings of one book costs one model pass.
 
 ```python
 kk.list_castings()
-kk.remove_casting(casting_id)      # free to rebuild
+kk.remove_casting(casting_id)  # free to rebuild
 kk.remove_attribution(attribution_id)  # cascades; costs a fresh model pass
 ```
 

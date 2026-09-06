@@ -1,6 +1,7 @@
 """Explicit, user-initiated voice provisioning.
 
-This is the only module in Kenkui permitted to reach the network. Nothing under
+This module downloads model and voice assets; character analysis has a separate
+LiteLLM network boundary. Nothing under
 `kenkui._execution` or `kenkui._tts` may import it, and it never runs inside a
 render: provisioning downloads and compiles, rendering only reads a manifest.
 """
@@ -158,7 +159,7 @@ def add_voice(  # noqa: PLR0913
 def _fetch(url: str) -> Path:
     """Resolve one remote or local asset reference to a local file.
 
-    The single network seam in Kenkui. Tests monkeypatch this symbol.
+    The asset-download seam. Tests monkeypatch this symbol.
     """
     from pocket_tts.utils.utils import download_if_necessary  # noqa: PLC0415
 

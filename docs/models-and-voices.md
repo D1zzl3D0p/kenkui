@@ -119,8 +119,9 @@ previously seen bytes. A reload is a first use.
 
 ## Provisioning and the render boundary
 
-Provisioning is the only part of Kenkui that reaches the network, and it never
-runs during a render. The renderer sets `HF_HUB_OFFLINE=1`, replaces
+Provisioning downloads model and voice assets explicitly. Character inference
+and attribution may separately call LiteLLM during resolution; synthesis workers
+never perform either kind of network work. The renderer sets `HF_HUB_OFFLINE=1`, replaces
 pocket-tts's downloader with a manifest allowlist, installs a socket audit hook,
 and verifies every declared file by size and SHA-256 before loading anything.
 

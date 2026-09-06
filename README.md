@@ -5,11 +5,13 @@ audiobook production. It exposes an immutable pipeline API for inspection,
 validation, selection, metadata, synthesis intent, progress, cancellation, and
 atomic publication.
 
-> **Production status:** source inspection, planning, spawned execution, caching,
-> and FFmpeg assembly are implemented and tested. The public production renderer
-> remains fail-closed until an approved local Pocket-TTS model manifest and an
-> authorized voice prompt are supplied and the separate real-inference gate passes.
-> No gated model or voice is bundled or downloaded by Kenkui.
+Source inspection, planning, character casting, spawned synthesis, caching, and
+FFmpeg assembly are implemented. Provision a voice explicitly with `load_voice()`
+before rendering; this downloads the voice and its required model assets. The
+wheel contains metadata, not model weights or recordings. Single-voice rendering
+then uses local assets; character analysis may call a configured LiteLLM provider.
+Real Pocket inference is an opt-in acceptance tier, separate from default tests
+and native FFmpeg tests.
 
 ## Requirements and support matrix
 
@@ -28,22 +30,24 @@ CI matrix, not a claim about untested operating systems or architectures.
 
 ## Install
 
-Base installation (EPUB inspection and public API):
+Install the library and its required Pocket-TTS dependencies:
 
 ```console
 python -m pip install kenkui
 ```
 
-Optional, pinned Pocket-TTS adapter dependencies:
+The older extra spelling remains supported as an empty compatibility alias:
 
 ```console
 python -m pip install "kenkui[pocket]"
 ```
 
-The project is not yet published. For a local wheel, use `uv build` and install
-`dist/kenkui-0.1.0-py3-none-any.whl`. The `[pocket]` extra installs only the
-adapter package; it does not activate production, fetch assets, or grant rights
-to a model or voice.
+For a local wheel, use `uv build` and install
+`dist/kenkui-0.1.0-py3-none-any.whl`. Pocket-TTS is required in either spelling;
+its PyTorch dependencies make installation substantial. Installing the package
+does not download model weights or voice assets. See
+[installation](docs/installation.md) for the support matrix and optional spaCy
+character inference.
 
 Install FFmpeg separately:
 
@@ -66,31 +70,24 @@ keep that call under an `if __name__ == "__main__":` guard. See
 [Rendering spawns processes](#rendering-spawns-processes) below.
 
 ```python
-from kenkui import CancellationToken, ErrorCode, KenkuiError, epub, load_voice
-
-load_voice("eponine")  # one-time: downloads and hashes the voice
-
-base = epub("book.epub")
-job = (
-    base.select_chapter_range("chapter-start", "chapter-end")
-    .assign_voice("eponine")
-    .tts()
-    .metadata(title="Example", author="Author", cover="source")
-)
-assert base.operations == ()  # branching did not mutate base
-
-validation = job.validate()
-for issue in validation.issues:
-    print(issue.code, issue.message)
-
-inspection = job.inspect()
-for chapter in inspection.chapters:
-    print(chapter.id, chapter.title, chapter.speech_characters)
+from kenkui import CancellationToken, KenkuiError, epub, load_voice
 
 if __name__ == "__main__":  # required: see "Rendering spawns processes"
+    load_voice("eponine")  # explicit provisioning; reused on later runs
+    base = epub("book.epub")
+    inspection = base.inspect()
+    for chapter in inspection.chapters:
+        print(chapter.id, chapter.title, chapter.speech_characters)
+
+    pipeline = (
+        base.assign_voice("eponine")
+        .tts()
+        .metadata(title="Example", author="Author", cover="source")
+    )
+    assert base.operations == ()  # branching did not mutate base
     token = CancellationToken()
     try:
-        result = job.write_m4b(
+        result = pipeline.write(
             "book.m4b",
             workers="auto",
             overwrite=False,
@@ -99,10 +96,8 @@ if __name__ == "__main__":  # required: see "Rendering spawns processes"
         )
         print(result.output, result.stats.duration_ms)
     except KenkuiError as error:
-        if error.code is ErrorCode.RENDERER_UNAVAILABLE:
-            print("production assets are not approved/activated")
-        else:
-            raise
+        print(error.code.value, str(error))
+        raise
 ```
 
 ### One-call rendering
@@ -114,8 +109,9 @@ output remains protected by the normal atomic publication checks.
 ```python
 from kenkui import magic_run
 
-result = magic_run("book.epub", narrator="eponine")
-cast_result = magic_run("book.epub", narrator="eponine", multi=True)
+if __name__ == "__main__":
+    # Provision the narrator first. The default output is book.m4b.
+    result = magic_run("book.epub", narrator="eponine")
 ```
 
 Single-voice is the default. Multi-voice runs use
@@ -129,23 +125,27 @@ One voice is the degenerate cast. For a full one, add inference and
 attribution, and let the solver assign the rest:
 
 ```python
-from kenkui import epub, list_voices, load_voice
+import os
 
-for voice in list_voices():
-    if voice.perceived_gender is not None:
-        load_voice(voice.id)  # one-time; the pool casting draws from
+from kenkui import epub
 
-result = (
-    epub("book.epub")
-    .infer_characters(model="anthropic/claude-sonnet-5")
-    .attribute_quotes(model="anthropic/claude-sonnet-5")
-    .assign_voices(narrator="eponine", method="gendered")
-    .tts()
-    .write("book.m4b")
-)
+if __name__ == "__main__":
+    # Provision the narrator and a suitable voice pool beforehand.
+    # Set this to your LiteLLM model identifier; configure credentials through
+    # the provider's environment variables, never pipeline arguments.
+    model = os.environ["KENKUI_ANALYSIS_MODEL"]
+    result = (
+        epub("book.epub")
+        .infer_characters(model=model)
+        .attribute_quotes(model=model)
+        .assign_voices(narrator="eponine", method="gendered")
+        .tts()
+        .write("book.m4b")
+    )
 ```
 
-Characters speaking in the same chapter never share a voice. Attribution also
+Casting avoids sharing a voice between characters in the same chapter when the
+configured pool permits it; unavoidable collisions are logged. Attribution also
 casts text-identified unnamed speakers, such as a guard or innkeeper,
 automatically; each is scoped to its chapter. Dialogue that cannot be placed is
 narrated rather than guessed at. Attribution is stored, so re-rendering the
@@ -173,15 +173,17 @@ if __name__ == "__main__":
     epub("book.epub").assign_voice("eponine").tts().write("book.m4b")
 ```
 
-This is not needed when `write_m4b()` is called from inside a function that a
-guarded entry point invokes, which is the usual shape for an application; it
-matters for scripts that render at import time. Linux's default `fork` method
-does not reproduce it, so a script that works there can still fail on macOS.
+Calling rendering from a function invoked by a guarded entry point also works.
+Kenkui explicitly selects `spawn` on every supported platform, so the guard
+applies on Linux as well as macOS. The process invoking Kenkui must also permit
+child processes; a Python multiprocessing daemon cannot render an audiobook.
 
 `write()` is an alias for `write_m4b()`. Output must end in `.m4b` and its parent
 must exist. Existing output is rejected unless `overwrite=True`; publication is
 atomic, and cancellation or failure does not publish a candidate. `workers` is a
-positive integer or `"auto"` and is conservatively capped at two. Callbacks
+positive integer or `"auto"`. Auto reserves two available CPUs when possible;
+both settings are bounded by selected chapter count and a cap of sixteen.
+Callbacks
 receive immutable ordered events (`Started`, stage events, `Warning`, and
 `Completed`). Any callback failure before publication commit becomes stable
 `callback_failed` and publishes nothing. After commit, publication
