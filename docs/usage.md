@@ -58,9 +58,9 @@ pipeline = (
 )
 ```
 
-The same function can be called directly as
-`speech_style(pipeline, paragraph_ms=250)`. No subclass, registration, or
-modification to Kenkui's `Pipeline` class is required.
+The same function can be called directly with an unconfigured pipeline as its
+first argument. No subclass, registration, or modification to Kenkui's
+`Pipeline` class is required.
 
 ## One-call rendering
 
@@ -89,10 +89,12 @@ does not parse the source or prove that a voice can be resolved. It returns a
 frozen `ValidationResult` containing zero or more `ValidationIssue(code,
 message)` values.
 
-`inspect()` securely parses the EPUB and applies chapter selection. It returns a
-frozen `BookInspection`: source metadata and an ordered tuple of
-`ChapterInspection(id, index, title, speech_characters, text)`. Inspection does
-not import a synthesis provider or invoke FFmpeg.
+Before resolution, `inspect()` securely parses the EPUB and applies chapter
+selection. It returns a frozen `BookInspection`: source metadata and an ordered
+tuple of `ChapterInspection(id, index, title, speech_characters, text)` values.
+After resolution, it returns the saved snapshot with its casting information
+(see [Resolve before write](#resolve-before-write)). Inspection never calls a
+model or invokes FFmpeg.
 
 ```python
 validation = selection.validate()

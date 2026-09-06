@@ -17,15 +17,15 @@ are reduced to two. Case and punctuation are preserved. Character counts refer
 to this exact normalized string.
 
 The pure planner consumes an immutable inspection, exact source-bytes SHA-256,
-resolved voice metadata, model revision, and ordered intent. Under frozen
-`tts-chunks-v2`, it splits every selected chapter into non-empty segments of at
-most 1000 characters, ranking break points by how natural the resulting pause
-sounds -- line break, then whitespace beside punctuation, then any whitespace,
-then the dash family -- and taking the best one that still fills most of the
-window, with a hard boundary for long tokens. It additionally caps runs holding
-none of `.!?,;:`, which the engine cannot subdivide, so no run reaches synthesis
-far enough over the engine's own chunk budget to generate past its limit. Concatenating a chapter's segments exactly
-reconstructs its normalized text. It emits schema versions, content hashes, stable segment
+resolved voice metadata, model revision, and ordered intent. Under
+`tts-chunks-v4`, chunks contain at most 1000 characters. Line breaks and
+punctuation boundaries are preferred; plain whitespace and dashes are fallbacks
+when needed to respect that bound. Runs without `.!?,;:` trigger a search for an
+earlier clean boundary after 200 characters. If none exists, the run remains
+intact up to the 1000-character limit, avoiding artificial sentence endings at
+ordinary word boundaries. The chunker partitions each supplied text fragment
+exactly; whitespace-only fragments are not sent to synthesis.
+The planner emits schema versions, content hashes, stable segment
 identities, resolved metadata, and a canonical semantic fingerprint. Canonical
 JSON key ordering and bounded UTF-8 hashing make equivalent semantic inputs
 produce the same plan regardless of output path, callback, worker count, cache
@@ -185,9 +185,10 @@ a more damaging error.
 
 ## Span-then-chunk segmentation
 
-Attribution produces speaker spans that partition a chapter. The frozen
-`tts-chunks-v2` chunker then runs inside each span, so concatenating every
-chunk still reproduces the chapter exactly.
+Attribution produces speaker spans that partition a chapter. Structural pieces
+are clipped to those spans before the `tts-chunks-v4` chunker runs, preserving
+canonical speaker offsets. The chunker preserves each fragment's text; empty
+speech fragments are omitted from synthesis.
 
 A chapter with no attributed dialogue is one span, which is byte-for-byte what
 the chunker saw before attribution existed. Speaker and voice enter a segment's
@@ -211,10 +212,9 @@ length-changing transformation. Exactness therefore holds at three levels:
 chunks join to the spoken form of their piece, pieces join to their span, and
 spans join to the canonical chapter text.
 
-`tts-chunks-v3` is `tts-chunks-v2` restricted rather than replaced: the
-structural split feeds the unmodified v2 chunker one piece at a time, so
-concatenation-exactness is inherited and the tuned break constants are not
-forked. Every field the new stages contribute — the spoken-form schema, the
+`tts-chunks-v5` identifies segments with active structural break tiers. The
+structural split feeds the same chunker one piece at a time, so the tuned
+break policy is shared. Every field the stages contribute — the spoken-form schema, the
 number tier, the lexicon identity, the structure schema, the break tiers —
 enters a segment's identity only when that feature is active, so a pipeline
 requesting neither pronunciation nor pauses produces byte-identical identities

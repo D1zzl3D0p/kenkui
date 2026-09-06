@@ -49,7 +49,7 @@ NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
 PLANNING_SCHEMA_VERSION = "execution-plan-v2"
 RENDER_SCHEMA_VERSION = "m4b-render-v1"
 CHUNKING_SCHEMA_VERSION = "tts-chunks-v4"
-CHUNKING_V3_SCHEMA_VERSION = "tts-chunks-v5"
+STRUCTURAL_CHUNKING_SCHEMA_VERSION = "tts-chunks-v5"
 _NO_PAUSES = Pauses()
 MAX_TTS_SEGMENT_CHARACTERS = 1000
 # Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
@@ -629,7 +629,7 @@ def _separator_free_end(text: str, start: int, stop: int) -> int:
 
 
 def _chunk_span(chapter: ChapterInspection, text: str) -> tuple[str, ...]:
-    """Apply the frozen tts-chunks-v2 chunker to one speaker span.
+    """Apply the current chunking policy to one speaker fragment.
 
     The chapter is still validated as a whole, because speech_characters
     describes the chapter and not the span.
@@ -689,7 +689,7 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
         "chapter_id": _string_identity(chapter.id),
         "chunk_index": chunk_index,
         "chunking_schema": (
-            CHUNKING_V3_SCHEMA_VERSION if tiers else CHUNKING_SCHEMA_VERSION
+            STRUCTURAL_CHUNKING_SCHEMA_VERSION if tiers else CHUNKING_SCHEMA_VERSION
         ),
         "content_hash": content_hash,
         "normalization": NORMALIZATION_SCHEMA_VERSION,
