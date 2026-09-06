@@ -21,7 +21,7 @@ from kenkui._domain.operations import (
     SpokenForm,
     SynthesizeSpeech,
 )
-from kenkui.pipeline import _log_ungendered_cast
+from kenkui._resolution import _log_ungendered_cast
 from kenkui.voices.types import PerceivedGender, Voice
 
 if TYPE_CHECKING:

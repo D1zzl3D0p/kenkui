@@ -141,7 +141,7 @@ def test_fixture_epub_to_single_voice_m4b(
         "fixture-v1",
     )
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
     )
     events: list[kk.ExecutionEvent] = []
 

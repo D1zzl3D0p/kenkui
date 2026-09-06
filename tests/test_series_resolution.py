@@ -15,7 +15,7 @@ from kenkui._characters import store
 from kenkui._domain.operations import Series
 from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import EngineSpecification
-from kenkui.pipeline import _log_series_overrides
+from kenkui._resolution import _log_series_overrides
 from test_epub import make_epub, xhtml
 
 if TYPE_CHECKING:
@@ -99,15 +99,15 @@ def _stub_resolution(monkeypatch: pytest.MonkeyPatch, character_id: str) -> None
     `tests/test_attribution.py`), but `Pipeline` has no public parameter that
     reaches it -- inventing one just for this test would put a model concern
     in front of every caller of the public API. Instead this monkeypatches
-    `kenkui.pipeline._attribution_client`, the private seam added alongside
+    `kenkui._resolution._attribution_client`, the private seam added alongside
     it, the same way existing tests already monkeypatch
-    `kenkui.pipeline._execution_bindings` to skip real engine resolution.
+    `kenkui._resolution._execution_bindings` to skip real engine resolution.
     """
     monkeypatch.setattr(
-        "kenkui.pipeline._attribution_client", lambda: _Roster(character_id)
+        "kenkui._resolution._attribution_client", lambda: _Roster(character_id)
     )
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings",
+        "kenkui._resolution._execution_bindings",
         lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
@@ -190,7 +190,7 @@ def test_cancellation_during_binding_does_not_commit_a_series(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         )
 
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", bind)
+    monkeypatch.setattr("kenkui._resolution._execution_bindings", bind)
     path = make_epub(
         tmp_path / "book.epub",
         chapters={"one": xhtml('<p>"Hello," said Javert.</p>')},
@@ -228,7 +228,7 @@ def test_a_book_outside_a_series_touches_no_series_state(
     here.
     """
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings",
+        "kenkui._resolution._execution_bindings",
         lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
@@ -622,10 +622,10 @@ def test_allow_recast_converges_once_the_dropped_pin_is_replaced(
     # `_stub_resolution`, which would also reset the voice pool back to its
     # default on every call and mask the pool actually being widened below.
     monkeypatch.setattr(
-        "kenkui.pipeline._attribution_client", lambda: _Roster("javert")
+        "kenkui._resolution._attribution_client", lambda: _Roster("javert")
     )
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings",
+        "kenkui._resolution._execution_bindings",
         lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
@@ -811,7 +811,7 @@ def test_a_render_that_fails_at_binding_leaves_the_series_unchanged(
     )
     store.write_series(seed)
     monkeypatch.setattr(
-        "kenkui.pipeline._attribution_client", lambda: _Roster("javert")
+        "kenkui._resolution._attribution_client", lambda: _Roster("javert")
     )
     monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE))
 
@@ -822,7 +822,7 @@ def test_a_render_that_fails_at_binding_leaves_the_series_unchanged(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         )
 
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", _bindings)
+    monkeypatch.setattr("kenkui._resolution._execution_bindings", _bindings)
 
     path = make_epub(
         tmp_path / "volume-2.epub",
@@ -930,9 +930,9 @@ def test_a_minted_role_never_becomes_a_series_character(
     slugs, it was also what made an ordinary first volume grow a new
     canonical on every re-render.
     """
-    monkeypatch.setattr("kenkui.pipeline._attribution_client", _OffRoster)
+    monkeypatch.setattr("kenkui._resolution._attribution_client", _OffRoster)
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings",
+        "kenkui._resolution._execution_bindings",
         lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
@@ -1025,9 +1025,9 @@ def test_re_rendering_a_volume_neither_mints_nor_recasts(
             ),
         )
     )
-    monkeypatch.setattr("kenkui.pipeline._attribution_client", _TwoSpeakers)
+    monkeypatch.setattr("kenkui._resolution._attribution_client", _TwoSpeakers)
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings",
+        "kenkui._resolution._execution_bindings",
         lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),

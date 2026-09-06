@@ -74,7 +74,7 @@ def _bind(
         specification = EngineSpecification.fake(FakeEngineConfig(test_mode=mode))
     bindings = ExecutionBindings(specification, assembler, _voice(), "fake-v1")
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
     )
 
 
@@ -735,7 +735,7 @@ def test_execution_logs_structured_cache_context(
         CacheStore(tmp_path / "cache"),
     )
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
     )
     caplog.set_level("INFO", logger="kenkui._execution.coordinator")
 
@@ -828,7 +828,7 @@ def test_publication_clears_the_books_audio_cache(
     pipeline, _, _ = _pipeline(tmp_path)
     bindings = _bindings_with_cache(tmp_path)
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
     )
     output = tmp_path / "cleared.m4b"
 
@@ -846,7 +846,7 @@ def test_keep_audio_cache_option_preserves_the_entries(
     pipeline, _, _ = _pipeline(tmp_path)
     bindings = _bindings_with_cache(tmp_path)
     monkeypatch.setattr(
-        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
     )
     output = tmp_path / "kept.m4b"
 

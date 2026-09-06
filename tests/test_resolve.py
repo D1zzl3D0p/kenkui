@@ -36,7 +36,7 @@ def test_a_binding_bug_is_not_retried_with_different_casting(
         message = "binding implementation bug"
         raise TypeError(message)
 
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", broken_binding)
+    monkeypatch.setattr("kenkui._resolution._execution_bindings", broken_binding)
     with pytest.raises(TypeError, match="binding implementation bug"):
         kk.epub("book.epub").assign_voice("eponine").resolve()
     assert calls == ["eponine"]
@@ -57,7 +57,7 @@ def test_cancelled_resolution_never_binds_resources(
     def unexpected_binding(_voice_id: str) -> None:
         pytest.fail("cancelled resolution reached voice binding")
 
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", unexpected_binding)
+    monkeypatch.setattr("kenkui._resolution._execution_bindings", unexpected_binding)
     token = kk.CancellationToken()
     token.cancel()
     with pytest.raises(kk.CancelledError):
