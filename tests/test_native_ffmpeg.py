@@ -341,7 +341,9 @@ def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
         "fake-v1",
         cache,
     )
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
 
     cold_output = tmp_path / "cold.m4b"
     warm_output = tmp_path / "warm.m4b"

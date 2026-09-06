@@ -108,7 +108,7 @@ def _stub_resolution(monkeypatch: pytest.MonkeyPatch, character_id: str) -> None
     )
     monkeypatch.setattr(
         "kenkui.pipeline._execution_bindings",
-        lambda: ExecutionBindings(
+        lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
     )
@@ -167,7 +167,7 @@ def test_a_book_outside_a_series_touches_no_series_state(
     """
     monkeypatch.setattr(
         "kenkui.pipeline._execution_bindings",
-        lambda: ExecutionBindings(
+        lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
     )
@@ -564,7 +564,7 @@ def test_allow_recast_converges_once_the_dropped_pin_is_replaced(
     )
     monkeypatch.setattr(
         "kenkui.pipeline._execution_bindings",
-        lambda: ExecutionBindings(
+        lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
     )
@@ -871,7 +871,7 @@ def test_a_minted_role_never_becomes_a_series_character(
     monkeypatch.setattr("kenkui.pipeline._attribution_client", _OffRoster)
     monkeypatch.setattr(
         "kenkui.pipeline._execution_bindings",
-        lambda: ExecutionBindings(
+        lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
     )
@@ -966,7 +966,7 @@ def test_re_rendering_a_volume_neither_mints_nor_recasts(
     monkeypatch.setattr("kenkui.pipeline._attribution_client", _TwoSpeakers)
     monkeypatch.setattr(
         "kenkui.pipeline._execution_bindings",
-        lambda: ExecutionBindings(
+        lambda _voice_id, **_cast: ExecutionBindings(
             EngineSpecification.fake(), FakeArtifactAssembler(), _NARRATOR, "fake-v1"
         ),
     )

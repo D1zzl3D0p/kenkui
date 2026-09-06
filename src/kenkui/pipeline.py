@@ -749,7 +749,7 @@ def _resolve_all(
     # call so the managed cache root can be redirected, as the store is.
 
     casting = pipeline._casting()  # noqa: SLF001 - same module, private by design
-    bindings = _resolved_execution_bindings(casting.narrator_voice_id)
+    bindings = _execution_bindings(casting.narrator_voice_id)
 
     attributing = next(
         (item for item in pipeline.operations if isinstance(item, AttributeQuotes)),
@@ -825,7 +825,7 @@ def _resolve_all(
     # Resolved before the series is written, not after: this is what can
     # fail on an unprovisioned voice, and a doomed render must not persist a
     # cast it never actually produced.
-    final_bindings = _resolved_execution_bindings(
+    final_bindings = _execution_bindings(
         casting.narrator_voice_id,
         also=(casting.unknown_voice_id, *sorted(set(outcome.assignments.values()))),
     )
@@ -987,29 +987,6 @@ def _log_collisions(collisions: tuple[Collision, ...]) -> None:
                 "voice_id": collision.voice_id,
             },
         )
-
-
-def _resolved_execution_bindings(
-    voice_id: str, *, also: Sequence[str] = ()
-) -> ExecutionBindings:
-    """Compatibility seam for private tests that replace the binding factory."""
-    try:
-        return _execution_bindings(voice_id, also=also)
-    except TypeError:
-        # Older test doubles accept fewer arguments. Falling back keeps them
-        # working, and a single-voice run needs nothing more. Logged because a
-        # TypeError raised *inside* resolution looks identical here, and
-        # silently dropping the cast would render the book in one voice.
-        log_event(
-            _LOGGER,
-            "cast_binding_fallback",
-            level=logging.WARNING,
-            context={"boundary": "casting", "cast_size": len(tuple(also))},
-        )
-        try:
-            return _execution_bindings(voice_id)
-        except TypeError:
-            return _execution_bindings()  # type: ignore[call-arg]
 
 
 def _execution_bindings(

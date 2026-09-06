@@ -73,7 +73,9 @@ def _bind(
             mode = WorkerTestMode.INVALID_AUDIO
         specification = EngineSpecification.fake(FakeEngineConfig(test_mode=mode))
     bindings = ExecutionBindings(specification, assembler, _voice(), "fake-v1")
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
 
 
 class RecordingEngine(DeterministicFakeEngine):
@@ -732,7 +734,9 @@ def test_execution_logs_structured_cache_context(
         "fake-v1",
         CacheStore(tmp_path / "cache"),
     )
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
     caplog.set_level("INFO", logger="kenkui._execution.coordinator")
 
     pipeline.write_m4b(tmp_path / "result.m4b")
@@ -823,7 +827,9 @@ def test_publication_clears_the_books_audio_cache(
     """A finished book releases its rendered audio back to disk."""
     pipeline, _, _ = _pipeline(tmp_path)
     bindings = _bindings_with_cache(tmp_path)
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
     output = tmp_path / "cleared.m4b"
 
     pipeline.write_m4b(output)
@@ -839,7 +845,9 @@ def test_keep_audio_cache_option_preserves_the_entries(
     """The opt-out keeps every rendered segment for the next run."""
     pipeline, _, _ = _pipeline(tmp_path)
     bindings = _bindings_with_cache(tmp_path)
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
     output = tmp_path / "kept.m4b"
 
     pipeline.write_m4b(output, keep_audio_cache=True)

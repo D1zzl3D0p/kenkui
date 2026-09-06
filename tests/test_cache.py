@@ -72,7 +72,9 @@ def test_cache_cold_warm_public_equivalence_and_no_warm_spawn(
     bindings = ExecutionBindings(
         EngineSpecification.fake(), FakeArtifactAssembler(), _voice(), "fake-v1", cache
     )
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
     first_events: list[kk.ExecutionEvent] = []
     first = pipeline.write_m4b(
         tmp_path / "cold.m4b",
@@ -296,7 +298,9 @@ def test_database_lock_and_unusable_location_degrade_without_render_failure(
             "fake-v1",
             store,
         )
-        monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+        monkeypatch.setattr(
+            "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+        )
         result = pipeline.write_m4b(tmp_path / "locked.m4b")
         assert result.stats.synthesized_segments == 2
 
@@ -372,7 +376,9 @@ def test_cancellation_with_ordered_hit_then_miss_never_publishes(
     bindings = ExecutionBindings(
         EngineSpecification.fake(), FakeArtifactAssembler(), _voice(), "fake-v1", cache
     )
-    monkeypatch.setattr("kenkui.pipeline._execution_bindings", lambda: bindings)
+    monkeypatch.setattr(
+        "kenkui.pipeline._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
     pipeline.write_m4b(tmp_path / "primed.m4b")
 
     second = plan.segments[1]

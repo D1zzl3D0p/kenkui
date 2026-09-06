@@ -25,6 +25,23 @@ def test_building_a_pipeline_performs_no_work() -> None:
     assert len(pipeline.operations) == _THREE_OPERATIONS
 
 
+def test_a_binding_bug_is_not_retried_with_different_casting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolver TypeError must not silently fall back to another signature."""
+    calls: list[str] = []
+
+    def broken_binding(voice_id: str) -> None:
+        calls.append(voice_id)
+        message = "binding implementation bug"
+        raise TypeError(message)
+
+    monkeypatch.setattr("kenkui.pipeline._execution_bindings", broken_binding)
+    with pytest.raises(TypeError, match="binding implementation bug"):
+        kk.epub("book.epub").assign_voice("eponine").resolve()
+    assert calls == ["eponine"]
+
+
 def test_assign_voice_is_the_degenerate_cast() -> None:
     """One VoicePlan and one renderer serve single and multi voice alike."""
     single = kk.epub("book.epub").assign_voice("eponine")
