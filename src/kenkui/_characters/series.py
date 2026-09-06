@@ -16,7 +16,7 @@ from kenkui._characters.identity import (
     same_person,
 )
 from kenkui._characters.infer import ROLE_PREFIX
-from kenkui._characters.store import SeriesCharacter, SeriesRecord
+from kenkui._characters.models import SeriesCharacter, SeriesRecord
 
 if TYPE_CHECKING:
     from collections.abc import Container, Mapping, Sequence

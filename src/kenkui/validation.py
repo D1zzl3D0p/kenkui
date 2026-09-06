@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from ._characters.store import SeriesRecord
+    from ._characters.models import SeriesRecord
 
 
 def source_validation_error(path: Path) -> ErrorCode | None:

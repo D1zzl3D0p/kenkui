@@ -56,3 +56,18 @@ def test_manifest_is_the_only_voices_module_reaching_into_tts() -> None:
     """voices.manifest imports production for the cache root; provision must not."""
     imported = _imported_modules(_SOURCE / "voices" / "provision.py")
     assert not [name for name in imported if name.startswith("kenkui._tts")]
+
+
+def test_series_decisions_do_not_depend_on_effectful_modules() -> None:
+    """Records and continuity rules must remain usable without shell services."""
+    forbidden = (
+        "kenkui._characters.store",
+        "kenkui._characters.llm",
+        "kenkui.pipeline",
+        "kenkui._tts",
+        "kenkui._execution",
+        "kenkui.voices.provision",
+    )
+    for name in ("models", "series", "continuity"):
+        imported = _imported_modules(_SOURCE / "_characters" / f"{name}.py")
+        assert not {module for module in imported if module.startswith(forbidden)}

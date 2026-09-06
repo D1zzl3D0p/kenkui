@@ -1,8 +1,7 @@
 """Intentional public package interface for Kenkui."""
 
+from ._characters.models import SeriesCharacter, SeriesRecord
 from ._characters.store import (
-    SeriesCharacter,
-    SeriesRecord,
     list_castings,
     list_series,
     remove_attribution,

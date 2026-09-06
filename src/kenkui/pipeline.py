@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from ._characters.continuity import eligible_series_voice_ids, prepare_series_cast
 from ._domain.casting import (
     CastingMethod,
     CastingRequest,
@@ -55,7 +56,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from ._characters.llm import Client
-    from ._characters.store import SeriesRecord
+    from ._characters.models import SeriesRecord
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
     from .inspection import BookInspection
@@ -374,7 +375,7 @@ class Pipeline:
             codes = series_intent_errors(
                 self.operations,
                 stored,
-                _series_pool_ids(
+                eligible_series_voice_ids(
                     tuple(list_voices()),
                     casting.narrator_voice_id,
                     casting.unknown_voice_id,
@@ -384,7 +385,7 @@ class Pipeline:
                 _log_missing_series_voices(
                     series.series_id,
                     stored,
-                    _series_pool_ids(
+                    eligible_series_voice_ids(
                         tuple(list_voices()),
                         casting.narrator_voice_id,
                         casting.unknown_voice_id,
@@ -549,17 +550,6 @@ def _issue(code: ErrorCode) -> ValidationIssue:
     return ValidationIssue(code, str(ValidationError(code)))
 
 
-@dataclass(frozen=True, slots=True)
-class _SeriesPins:
-    """What a series' stored cast contributes to one render's CastingRequest."""
-
-    explicit: dict[str, str]
-    prior_load: dict[str, int]
-    dropped_pins: tuple[str, ...]
-    dropped_voice_ids: Mapping[str, str]
-    overridden_pins: tuple[str, ...]
-
-
 def _log_missing_series_voices(
     series_id: str, stored: SeriesRecord, pool_ids: frozenset[str]
 ) -> None:
@@ -590,138 +580,6 @@ def _log_missing_series_voices(
             "characters": ", ".join(c.display_name for c in affected),
             "voice_ids": ", ".join(sorted({c.voice_id for c in affected})),
         },
-    )
-
-
-def _series_pool_ids(
-    voices: Sequence[Voice], narrator_voice_id: str, unknown_voice_id: str
-) -> frozenset[str]:
-    """Return the voice ids a series pin can actually be honoured by.
-
-    `validate()` and `_resolve_all` have to agree about this exactly. They
-    did not: `validate()` judged every loaded voice while the render casts
-    only from voices matching the narrator's language, minus the reserved
-    ids `_castable` strips. A pin naming a loaded voice of another language,
-    or naming this render's narrator, therefore passed the check, was
-    dropped at render time, and -- correctly, without `allow_recast` -- was
-    not persisted. The character then sounded different in this volume and
-    every later one, with a log line as the only signal.
-
-    Used by `validate()`, which starts from every known voice and has to
-    reproduce what `_resolve_all` gets handed already filtered. The language
-    comes from the narrator because that is what the renderer binds against.
-    A narrator absent from `voices` cannot supply one, and that is a
-    different failure the render reports for itself -- so the language
-    filter is skipped rather than matching nothing and reporting every pin
-    in the series as missing.
-    """
-    reserved = {narrator_voice_id, unknown_voice_id}
-    narrator = next((voice for voice in voices if voice.id == narrator_voice_id), None)
-    return frozenset(
-        voice.id
-        for voice in voices
-        if voice.state == "loaded"
-        and (narrator is None or voice.language == narrator.language)
-        and voice.id not in reserved
-    )
-
-
-def _series_pins(
-    stored: SeriesRecord | None,
-    characters: tuple[CharacterProfile, ...],
-    casting: AssignVoices,
-    pool: tuple[Voice, ...],
-    book_digest: str,
-) -> _SeriesPins:
-    """Fold a series' stored cast into pins, prior load, and what gave way.
-
-    Split out of `_resolve_all` on its own merits, not only for complexity:
-    this is a self-contained fold over `stored.characters` that needs
-    nothing `_resolve_all` computes afterwards, and nothing after it needs
-    to know how a pin was decided, only what was decided.
-    """
-    from ._characters.series import match_roster  # noqa: PLC0415 - see below
-
-    explicit = dict(casting.cast)
-    prior_load: dict[str, int] = {}
-    if stored is None:
-        return _SeriesPins(explicit, prior_load, (), {}, ())
-
-    dropped_pins: list[str] = []
-    dropped_voice_ids: dict[str, str] = {}
-    overridden_pins: list[str] = []
-    # `pool` is already the loaded, language-matched set this render casts
-    # from, so only the reserved ids remain to drop -- the same ones
-    # `_castable` strips, because a pin equal to the narrator is not a pin,
-    # it is a character quietly wearing the narrator's voice.
-    pool_ids = frozenset(voice.id for voice in pool) - {
-        casting.narrator_voice_id,
-        casting.unknown_voice_id,
-    }
-    by_canonical = {c.canonical_id: c for c in stored.characters}
-    character_genders = {c.id: c.gender for c in characters}
-    voice_genders = {voice.id: voice.perceived_gender for voice in pool}
-    for book_id, canonical in match_roster(stored, characters).items():
-        known = by_canonical[canonical]
-        if book_id in explicit:
-            # This render's caller named a voice for this character directly
-            # (``explicit`` starts as exactly that mapping), which is more
-            # specific than a series default and the only way to correct a
-            # series pin without discarding the whole series. Left as the
-            # caller set it; the series adopts it in `_resolve_all`.
-            if explicit[book_id] != known.voice_id:
-                overridden_pins.append(book_id)
-            continue
-        # A pin the pool cannot honour reaches here under allow_recast
-        # through write() (validate() refuses it otherwise), but also
-        # through resolve(), which never validates at all, and through a
-        # mismatch validate()'s own pool cannot see -- a voice loaded but of
-        # a different language than this render's narrator, which `pool`
-        # excludes and validate()'s check does not. Dropping it lets the
-        # solver choose afresh either way; whether that choice gets written
-        # back to the series depends on `allow_recast`, decided by the
-        # caller once the solver's outcome exists.
-        # A pin is a continuity device, not evidence about a person. Where it
-        # contradicts a gender this volume actually inferred, the gender wins.
-        #
-        # This is how a man keeps a woman's voice across a whole series: he
-        # walks on in an early volume with one line, too little evidence to
-        # gender him, so `candidates` offers the whole pool and he draws
-        # whatever is least loaded. That arbitrary pick is pinned, and every
-        # later volume honours it -- including the ones where he speaks
-        # thousands of characters and is confidently gendered. Measured on one
-        # series: pinned from a 28-character walk-on, still wrong six volumes
-        # later at 3,545 characters.
-        #
-        # Only a real contradiction breaks continuity. An unsourced gender or
-        # an untraited voice leaves the pin alone, and so does a random cast,
-        # which never consulted gender in the first place.
-        contradicts = (
-            casting.method == "gendered"
-            and character_genders.get(book_id) is not None
-            and voice_genders.get(known.voice_id) is not None
-            and character_genders[book_id] != voice_genders[known.voice_id]
-        )
-        if known.voice_id in pool_ids and not contradicts:
-            explicit[book_id] = known.voice_id
-        else:
-            dropped_pins.append(book_id)
-            dropped_voice_ids[book_id] = known.voice_id
-    for known in stored.characters:
-        # This volume's own contribution is not "prior". Counting it made a
-        # re-render solve against an inflated load, so unpinned characters
-        # could land on a different voice -- which changes the segment
-        # identity and re-synthesizes a book that had not changed.
-        already = dict(known.contributions).get(book_digest, 0)
-        prior_load[known.voice_id] = (
-            prior_load.get(known.voice_id, 0) + known.spoken_characters - already
-        )
-    return _SeriesPins(
-        explicit,
-        prior_load,
-        tuple(dropped_pins),
-        dropped_voice_ids,
-        tuple(overridden_pins),
     )
 
 
@@ -797,7 +655,7 @@ def _resolve_all(
     # Minted roles are chapter-scoped by construction and are not people a
     # series remembers; see `series_members`.
     members = series_members(record.characters)
-    pins = _series_pins(stored, members, casting, pool, digest)
+    pins = prepare_series_cast(stored, members, casting, pool, digest)
     if series is not None:
         _log_series_overrides(
             series,
@@ -815,11 +673,11 @@ def _resolve_all(
         CastingRequest(
             characters=record.characters,
             pool=pool,
-            explicit=pins.explicit,
+            explicit=dict(pins.explicit),
             narrator_voice_id=casting.narrator_voice_id,
             unknown_voice_id=casting.unknown_voice_id,
             method=cast("CastingMethod", casting.method),
-            prior_load=pins.prior_load,
+            prior_load=dict(pins.prior_load),
         ),
     )
     # Resolved before the series is written, not after: this is what can

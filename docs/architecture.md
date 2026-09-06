@@ -130,6 +130,13 @@ voice/model paths, and provider diagnostics are excluded.
 
 ## Attribution as a resolved input
 
+Character and series records live in `_characters.models`, independently of
+SQLite. `_characters.series` handles identity matching and merging;
+`_characters.continuity` derives series pins, prior voice usage, and diagnostics
+from supplied records. These functions perform no I/O and return frozen values.
+The pipeline owns reading records, resolving resources, reporting decisions,
+and persisting the resulting series through `_characters.store`.
+
 Character inference and dialogue attribution call a language model, which the
 pure planner must not do. They are resolved in the shell and handed to the
 planner as finished values, exactly as voice metadata already is: the planner

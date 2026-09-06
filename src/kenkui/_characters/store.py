@@ -19,9 +19,14 @@ import hashlib
 import json
 import sqlite3
 from contextlib import closing, contextmanager, suppress
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from kenkui._characters.models import (
+    AttributionRecord,
+    CastRecord,
+    SeriesCharacter,
+    SeriesRecord,
+)
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
 from kenkui._tts import production
@@ -29,6 +34,27 @@ from kenkui._tts import production
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from pathlib import Path
+
+__all__ = [
+    "AttributionRecord",
+    "CastRecord",
+    "SeriesCharacter",
+    "SeriesRecord",
+    "attribution_key",
+    "cast_key",
+    "default_store_path",
+    "list_castings",
+    "list_series",
+    "read_attribution",
+    "read_cast",
+    "read_series",
+    "remove_attribution",
+    "remove_casting",
+    "remove_series",
+    "write_attribution",
+    "write_cast",
+    "write_series",
+]
 
 STORE_NAME = "casting.sqlite3"
 
@@ -123,61 +149,6 @@ CREATE TABLE IF NOT EXISTS series_contributions(
 """
     + _SERIES_ALIASES_DDL
 )
-
-
-@dataclass(frozen=True, slots=True)
-class AttributionRecord:
-    """One book's roster and speaker spans, as derived by one model."""
-
-    attribution_id: str
-    book_id: str
-    model_id: str
-    prompt_version: str
-    params: Mapping[str, Any]
-    characters: tuple[CharacterProfile, ...]
-    spans: tuple[SpeakerSpan, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CastRecord:
-    """One resolved cast. ``assignments`` is (character, voice, pinned)."""
-
-    cast_id: str
-    attribution_id: str
-    method: str
-    narrator_voice_id: str
-    unknown_voice_id: str
-    assignments: tuple[tuple[str, str, bool], ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SeriesCharacter:
-    """One person across a series, and the voice they keep."""
-
-    canonical_id: str
-    display_name: str
-    gender: str | None
-    voice_id: str
-    spoken_characters: int
-    aliases: tuple[str, ...]
-    # Per-volume ledger behind `spoken_characters`, keyed by book digest.
-    # Empty for a character no merge has ever named a volume for; see
-    # `_characters.series.merged_series`. Never read outside that module --
-    # everything else wants the total, not the breakdown.
-    contributions: tuple[tuple[str, int], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class SeriesRecord:
-    """A series' cast, ordered by accumulated speech.
-
-    Keyed on the series and the character, never on an attribution: a volume
-    re-read by a different model must not re-cast the series.
-    """
-
-    series_id: str
-    narrator_voice_id: str
-    characters: tuple[SeriesCharacter, ...]
 
 
 def default_store_path() -> Path:
