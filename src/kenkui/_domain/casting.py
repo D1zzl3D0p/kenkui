@@ -71,6 +71,11 @@ class CastingRequest:
     # it; empty is exactly today's behaviour.
     prior_load: Mapping[str, int] = MappingProxyType({})
 
+    def __post_init__(self) -> None:
+        """Snapshot caller mappings so later mutation cannot change the request."""
+        object.__setattr__(self, "explicit", MappingProxyType(dict(self.explicit)))
+        object.__setattr__(self, "prior_load", MappingProxyType(dict(self.prior_load)))
+
 
 @dataclass(frozen=True, slots=True)
 class CastingOutcome:
@@ -78,6 +83,12 @@ class CastingOutcome:
 
     assignments: Mapping[str, str]
     collisions: tuple[Collision, ...]
+
+    def __post_init__(self) -> None:
+        """Keep the resolved cast independent of the solver's working mapping."""
+        object.__setattr__(
+            self, "assignments", MappingProxyType(dict(self.assignments))
+        )
 
 
 def validate_method(method: str) -> CastingMethod:

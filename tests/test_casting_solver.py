@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from kenkui._domain.casting import (
+    CastingOutcome,
     CastingRequest,
     CharacterProfile,
     Collision,
@@ -83,6 +84,36 @@ def test_gendered_candidates_filter_by_trait() -> None:
         "paul",
         "marius",
     }
+
+
+def test_casting_request_snapshots_caller_constraints() -> None:
+    """Reusing caller dictionaries must not change an already recorded cast."""
+    explicit = {"darcy": "paul"}
+    prior_load = {"charles": 1000}
+    request = _request(
+        (
+            _character("darcy", "masculine", 100, ("ch1",)),
+            _character("bingley", "masculine", 100, ("ch2",)),
+        ),
+        explicit=explicit,
+        prior_load=prior_load,
+    )
+    expected = solve(request)
+    explicit["darcy"] = "charles"
+    prior_load.clear()
+    assert solve(request) == expected
+    assert request.explicit == {"darcy": "paul"}
+    assert request.prior_load == {"charles": 1000}
+
+
+def test_casting_outcome_cannot_be_changed_through_a_retained_mapping() -> None:
+    """Both direct mutation and changes through a caller alias are rejected."""
+    assignments = {"darcy": "paul"}
+    outcome = CastingOutcome(assignments, ())
+    assignments["darcy"] = "charles"
+    assert outcome.assignments == {"darcy": "paul"}
+    with pytest.raises(TypeError):
+        outcome.assignments["darcy"] = "charles"  # type: ignore[index]
 
 
 def test_unknown_gender_character_falls_back_to_the_whole_pool() -> None:

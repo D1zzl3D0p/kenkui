@@ -6,6 +6,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, cast
 
 from ._characters.continuity import eligible_series_voice_ids, prepare_series_cast
@@ -89,6 +90,12 @@ class Resolved:
     spans: tuple[SpeakerSpan, ...]
     collisions: tuple[Collision, ...]
     bindings: ExecutionBindings
+
+    def __post_init__(self) -> None:
+        """Prevent a retained assignment mapping from changing later renders."""
+        object.__setattr__(
+            self, "cast_assignments", MappingProxyType(dict(self.cast_assignments))
+        )
 
 
 @dataclass(frozen=True, slots=True)
