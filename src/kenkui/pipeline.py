@@ -659,6 +659,8 @@ def _series_pins(
         casting.unknown_voice_id,
     }
     by_canonical = {c.canonical_id: c for c in stored.characters}
+    character_genders = {c.id: c.gender for c in characters}
+    voice_genders = {voice.id: voice.perceived_gender for voice in pool}
     for book_id, canonical in match_roster(stored, characters).items():
         known = by_canonical[canonical]
         if book_id in explicit:
@@ -679,7 +681,28 @@ def _series_pins(
         # solver choose afresh either way; whether that choice gets written
         # back to the series depends on `allow_recast`, decided by the
         # caller once the solver's outcome exists.
-        if known.voice_id in pool_ids:
+        # A pin is a continuity device, not evidence about a person. Where it
+        # contradicts a gender this volume actually inferred, the gender wins.
+        #
+        # This is how a man keeps a woman's voice across a whole series: he
+        # walks on in an early volume with one line, too little evidence to
+        # gender him, so `candidates` offers the whole pool and he draws
+        # whatever is least loaded. That arbitrary pick is pinned, and every
+        # later volume honours it -- including the ones where he speaks
+        # thousands of characters and is confidently gendered. Measured on one
+        # series: pinned from a 28-character walk-on, still wrong six volumes
+        # later at 3,545 characters.
+        #
+        # Only a real contradiction breaks continuity. An unsourced gender or
+        # an untraited voice leaves the pin alone, and so does a random cast,
+        # which never consulted gender in the first place.
+        contradicts = (
+            casting.method == "gendered"
+            and character_genders.get(book_id) is not None
+            and voice_genders.get(known.voice_id) is not None
+            and character_genders[book_id] != voice_genders[known.voice_id]
+        )
+        if known.voice_id in pool_ids and not contradicts:
             explicit[book_id] = known.voice_id
         else:
             dropped_pins.append(book_id)

@@ -377,6 +377,148 @@ def test_a_pin_for_a_different_language_voice_is_dropped_and_logged(
     assert "series_override" in caplog.text
 
 
+def test_a_pin_contradicting_this_volumes_gender_is_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A voice pinned before the character's gender was known must not stick.
+
+    This is how a man ends up with a woman's voice for five volumes. He walks
+    on in volume one with a line or two, too little evidence to gender him, so
+    `candidates` offers the whole pool and he draws whatever is least loaded.
+    That arbitrary pick becomes the series pin, and every later volume honours
+    it -- including the ones where he speaks thousands of characters and is
+    confidently gendered.
+
+    A pin is a continuity device, not evidence about a person. Where it
+    contradicts a gender this volume actually inferred, the gender wins and the
+    solver casts afresh.
+    """
+    masculine = kk.Voice(
+        id="brutus",
+        name="Brutus",
+        enabled=True,
+        provenance="fixture",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en",
+        state="loaded",
+        perceived_gender="masculine",
+    )
+    feminine = kk.Voice(
+        id="delia",
+        name="Delia",
+        enabled=True,
+        provenance="fixture",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en",
+        state="loaded",
+        perceived_gender="feminine",
+    )
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="javert",
+                    display_name="Javert",
+                    gender=None,  # nothing was known when the pin was minted
+                    voice_id="brutus",
+                    spoken_characters=28,
+                    aliases=("Javert",),
+                ),
+            ),
+        )
+    )
+    _stub_resolution(monkeypatch, "javert")  # this volume genders javert feminine
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (masculine, feminine, _NARRATOR)
+    )
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        resolved = (
+            kk.epub(path)
+            .series("s", book=2)
+            .infer_characters("fake/model")
+            .attribute_quotes("fake/model")
+            .assign_voices(narrator="eponine")
+            .resolve()
+        )
+
+    assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
+    assert assignments["javert"] == "delia"
+
+
+def test_a_pin_agreeing_with_this_volumes_gender_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Continuity is the point of a pin; only a contradiction breaks it."""
+    feminine = kk.Voice(
+        id="delia",
+        name="Delia",
+        enabled=True,
+        provenance="fixture",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en",
+        state="loaded",
+        perceived_gender="feminine",
+    )
+    other = kk.Voice(
+        id="agnes",
+        name="Agnes",
+        enabled=True,
+        provenance="fixture",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en",
+        state="loaded",
+        perceived_gender="feminine",
+    )
+    store.write_series(
+        store.SeriesRecord(
+            "s",
+            "eponine",
+            (
+                store.SeriesCharacter(
+                    canonical_id="javert",
+                    display_name="Javert",
+                    gender="feminine",
+                    voice_id="delia",
+                    spoken_characters=100,
+                    aliases=("Javert",),
+                ),
+            ),
+        )
+    )
+    _stub_resolution(monkeypatch, "javert")
+    monkeypatch.setattr(
+        "kenkui.voices.provision.list_voices", lambda: (other, feminine, _NARRATOR)
+    )
+    path = make_epub(
+        tmp_path / "volume-2.epub",
+        chapters={"one": xhtml('<h1>One</h1><p>"Hello," said javert.</p>')},
+        spine=("one",),
+    )
+
+    resolved = (
+        kk.epub(path)
+        .series("s", book=2)
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+        .resolve()
+    )
+
+    assert dict(resolved._resolved.cast_assignments)["javert"] == "delia"  # noqa: SLF001
+
+
 def test_allow_recast_converges_once_the_dropped_pin_is_replaced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

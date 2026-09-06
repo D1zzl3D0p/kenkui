@@ -108,7 +108,13 @@ def test_explicit_run_keeps_cover_and_uses_spacy(
     assert (
         "write",
         (tmp_path / "Book.m4b",),
-        {"on_event": example.report_progress},
+        {
+            "on_event": example.report_progress,
+            # Pinned to the performance-core count rather than left on "auto";
+            # overwrite because every book in the list already has an M4B.
+            "workers": example.WORKERS,
+            "overwrite": True,
+        },
     ) in pipeline.calls
 
 
