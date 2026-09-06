@@ -13,6 +13,19 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
+class CharacterRoster:
+    """Discovered or reviewed characters before quote attribution.
+
+    Chapter IDs describe where a name was found, when known. Speech counts
+    are measured later, after attribution. ``narrator_id`` identifies a
+    first-person narrating character, independently of the narrator voice.
+    """
+
+    characters: tuple[CharacterProfile, ...]
+    narrator_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AttributionRecord:
     """One book's roster and speaker spans, as derived by one model."""
 

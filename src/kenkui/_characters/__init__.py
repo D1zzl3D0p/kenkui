@@ -4,18 +4,19 @@ The only part of Kenkui that calls a language model. Everything here runs in
 the parent process during resolution, never inside a spawned render worker, so
 the render path's offline posture is untouched: workers deny sockets outright.
 
-`resolve_attribution` is the single entry point. It returns a stored result
-when one exists and derives one otherwise, exactly as voice resolution returns
-a provisioned asset or fetches it. The pure planner receives the finished
-value and never reaches a model or the store itself.
+`discover_characters` stops at the roster. `resolve_attribution` accepts that
+roster or discovers one itself, reusing stored attribution when its inputs
+match. The pure planner receives finished values and never reaches a model or
+the store itself.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import TYPE_CHECKING
 
 from kenkui._characters import dialogue_tags, spacy_roster, store
@@ -30,6 +31,7 @@ from kenkui._characters.infer import (
     slugify,
 )
 from kenkui._characters.llm import complete_json
+from kenkui._characters.models import CharacterRoster
 from kenkui._characters.narration import is_first_person
 from kenkui._characters.prompts import (
     PROMPT_VERSION,
@@ -404,6 +406,8 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     roster_model_id: str | None = None,
     client: Client | None = None,
     cancel: CancellationToken | None = None,
+    roster: CharacterRoster | None = None,
+    reviewed: bool = False,
 ) -> AttributionRecord:
     """Return stored attribution for this book and model, else derive it.
 
@@ -415,20 +419,39 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     caller may choose independently of the one that attributes quotes. It
     keys the record too: a roster derived by a different model is different
     material, not a cache hit.
+
+    A supplied ``roster`` bypasses discovery and enters the attribution cache
+    identity. ``reviewed=True`` preserves its gender values over later inferred
+    dialogue evidence. The automatic path retains its existing cache identity.
     """
     roster_model = roster_model_id or model_id
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+    params: Mapping[str, object] = PARAMS
+    if roster is not None:
+        # Reviewed input is part of attribution's identity, never an update to
+        # an automatic record whose spans may describe different characters.
+        params = {
+            **PARAMS,
+            "roster": json.loads(json.dumps(asdict(roster))),
+            "roster_reviewed": reviewed,
+        }
     key = store.attribution_key(
         source_hash,
         model_id,
         PROMPT_VERSION,
-        PARAMS,
+        params,
         tuple(chapter.id for chapter in inspection.chapters),
         (PARSER_SCHEMA_VERSION, NORMALIZATION_SCHEMA_VERSION),
         roster_model_id=roster_model,
     )
     cached = store.read_attribution(key)
     if cached is not None:
-        return _with_current_roster(cached, inspection, roster_model)
+        return (
+            cached
+            if roster is not None
+            else _with_current_roster(cached, inspection, roster_model)
+        )
 
     # Extracted once and reused: both passes below need the same partition,
     # and scanning a 600k-character book twice for it is pure waste.
@@ -437,19 +460,9 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         for chapter in inspection.chapters
     }
 
-    spacy_pipeline = spacy_roster.pipeline_for(roster_model)
-    if spacy_pipeline is not None:
-        # One offline pass over the whole book, replacing the per-chapter model
-        # roster entirely. Nothing below this branch reaches a model, and the
-        # attribution pass that follows is untouched: it still receives a
-        # roster of the same shape and answers against it the same way.
-        characters, narrator_id = spacy_roster.infer_roster(
-            inspection.chapters, extracted, pipeline=spacy_pipeline
-        )
-    else:
-        characters, narrator_id = _model_roster(
-            inspection, extracted, roster_model, client, cancel
-        )
+    if roster is None:
+        roster = _discover_roster(inspection, extracted, roster_model, client, cancel)
+    characters, narrator_id = roster.characters, roster.narrator_id
 
     # Chapters are independent calls, so they run concurrently and are
     # re-ordered below: the record's spans must stay in chapter order.
@@ -489,7 +502,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         book_id=source_hash,
         model_id=model_id,
         prompt_version=PROMPT_VERSION,
-        params=PARAMS,
+        params=params,
         # Attribution has just decided who speaks each quote, so `"..." she
         # said` now genders a character we can name. Applied here rather than
         # in the roster because the roster runs before any speaker is known.
@@ -499,5 +512,52 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         ),
         spans=tuple(spans),
     )
+    if reviewed:
+        genders = {character.id: character.gender for character in roster.characters}
+        record = replace(
+            record,
+            characters=tuple(
+                replace(character, gender=genders.get(character.id, character.gender))
+                for character in record.characters
+            ),
+        )
     store.write_attribution(record)
     return record
+
+
+def discover_characters(
+    inspection: BookInspection,
+    model_id: str,
+    *,
+    client: Client | None = None,
+    cancel: CancellationToken | None = None,
+) -> CharacterRoster:
+    """Discover characters without attributing quotes or writing attribution."""
+    extracted = {
+        chapter.id: extract_spans(chapter.id, chapter.text)
+        for chapter in inspection.chapters
+    }
+    return _discover_roster(inspection, extracted, model_id, client, cancel)
+
+
+def _discover_roster(
+    inspection: BookInspection,
+    extracted: Mapping[str, tuple[TextSpan, ...]],
+    model_id: str,
+    client: Client | None,
+    cancel: CancellationToken | None,
+) -> CharacterRoster:
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+    spacy_pipeline = spacy_roster.pipeline_for(model_id)
+    if spacy_pipeline is not None:
+        characters, narrator_id = spacy_roster.infer_roster(
+            inspection.chapters, extracted, pipeline=spacy_pipeline
+        )
+    else:
+        characters, narrator_id = _model_roster(
+            inspection, extracted, model_id, client, cancel
+        )
+    if cancel is not None:
+        cancel.raise_if_cancelled()
+    return CharacterRoster(characters, narrator_id)

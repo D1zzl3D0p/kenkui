@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import replace
 
 import pytest
 
 import kenkui as kk
-from kenkui._characters import resolve_attribution, store
+from kenkui._characters import discover_characters, resolve_attribution, store
 from kenkui._characters.attribution import attribute_chapter
 from kenkui._characters.infer import normalise_roster, slugify
+from kenkui._characters.models import CharacterRoster
 from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
 from kenkui.cancellation import CancellationToken
@@ -19,6 +21,7 @@ from kenkui.errors import CancelledError
 
 # The coverage fixture below carries exactly this many quoted runs.
 _FIXTURE_QUOTES = 3
+_REVIEWED_VERSIONS = 2
 
 NARRATION_A = "The inspector waited by the door. "
 QUOTED = '"You are late again,"'
@@ -59,6 +62,56 @@ def _inspection(text: str = TEXT) -> kk.BookInspection:
     chapter = kk.ChapterInspection("ch1", 0, "One", len(text), text)
     metadata = kk.BookMetadata("T", "A", cover_available=False)
     return kk.BookInspection(metadata, (chapter,))
+
+
+def test_discovery_can_stop_before_attribution() -> None:
+    """Discovering a roster performs no quote attribution or attribution writes."""
+    client = ScriptedClient()
+    roster = discover_characters(_inspection(), "fake/model", client=client)
+    assert tuple(character.id for character in roster.characters) == ("javert",)
+    assert len(client.calls) == 1
+    assert "List the speaking characters" in client.calls[0]
+    assert store.list_castings() == ()
+
+
+def test_supplied_roster_skips_discovery_and_separates_cached_edits() -> None:
+    """A corrected roster cannot hit attribution cached for the original input."""
+    automatic = resolve_attribution(
+        _inspection(), BOOK, "fake/model", client=ScriptedClient()
+    )
+    client = ScriptedClient()
+    roster = CharacterRoster(
+        (CharacterProfile("javert", "Inspector Javert", "feminine", 0, ()),)
+    )
+    reviewed = resolve_attribution(
+        _inspection(), BOOK, "fake/model", client=client, roster=roster, reviewed=True
+    )
+    assert len(client.calls) == 1
+    assert "List the speaking characters" not in client.calls[0]
+    assert "Inspector Javert" in client.calls[0]
+    # Explicit review takes precedence over the contradictory "he said" tag.
+    assert reviewed.characters[0].gender == "feminine"
+    assert reviewed.attribution_id != automatic.attribution_id
+    assert (
+        resolve_attribution(
+            _inspection(),
+            BOOK,
+            "fake/model",
+            client=client,
+            roster=roster,
+            reviewed=True,
+        )
+        == reviewed
+    )
+    assert len(client.calls) == 1
+    changed = replace(
+        roster, characters=(replace(roster.characters[0], display_name="Javert"),)
+    )
+    revised = resolve_attribution(
+        _inspection(), BOOK, "fake/model", client=client, roster=changed, reviewed=True
+    )
+    assert revised.attribution_id != reviewed.attribution_id
+    assert len(client.calls) == _REVIEWED_VERSIONS
 
 
 class _AliasFoldClient:
