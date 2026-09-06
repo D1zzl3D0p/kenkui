@@ -17,6 +17,14 @@ LIBRARY = Path("/Users/dizzler/Projects/Calibre Library")
 NARRATOR = "ivy"
 UNKNOWN = "michael"
 ATTRIBUTION_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+# Matched to this machine's performance cores, not its core count. The
+# scheduler hands each worker a contiguous static partition sized by task
+# count, so on an 8P+4E CPU the efficiency-core workers get an equal share of
+# the work at a fraction of the speed and the render waits on them. Measured
+# over a fixed 48-segment workload: 8 workers 13.0s, 10 workers 13.9s (and the
+# spread between fastest and slowest worker widens from 0.4s to 1.9s), 12
+# workers 14.5s. `auto` reserves 2 of 12 and so picks 10, which is 7% slower.
+WORKERS = 8
 
 LEXICONS = {
     "dune": {
@@ -98,7 +106,15 @@ def explicit_run(
     )
     if series:
         pipeline = pipeline.series(series, book=volume)
-    return pipeline.tts().write(epub.with_suffix(".m4b"), on_event=report_progress)
+    # Replaces the previous render rather than refusing to run beside it.
+    # Publication is the last step, so a book that fails anywhere earlier
+    # leaves its existing M4B untouched.
+    return pipeline.tts().write(
+        epub.with_suffix(".m4b"),
+        on_event=report_progress,
+        workers=WORKERS,
+        overwrite=True,
+    )
 
 
 def magic_run(epub: Path) -> kk.Result:
