@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Concatenate, Literal, ParamSpec, TypeVar
 
 from ._characters.continuity import eligible_series_voice_ids
 from ._domain.casting import validate_method
@@ -57,6 +57,8 @@ if TYPE_CHECKING:
 _LOGGER = get_logger(__name__)
 _NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
 _MAX_PAUSE_MS = 60_000
+_PipeArgs = ParamSpec("_PipeArgs")
+_PipeResult = TypeVar("_PipeResult")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,21 @@ class Pipeline:
     # Not intent, and never part of the plan or its fingerprint: resolve()
     # parks finished values here so write() can skip re-deriving them.
     _resolved: Resolved | None = None
+
+    def pipe(
+        self,
+        function: Callable[Concatenate[Pipeline, _PipeArgs], _PipeResult],
+        /,
+        *args: _PipeArgs.args,
+        **kwargs: _PipeArgs.kwargs,
+    ) -> _PipeResult:
+        """Pass this pipeline to an ordinary function and return its result.
+
+        The function runs immediately with this pipeline as its first argument.
+        Return a pipeline to continue chaining, or a report to leave the chain.
+        Any effects and exceptions belong to the supplied function.
+        """
+        return function(self, *args, **kwargs)
 
     @property
     def metadata_intent(self) -> MetadataIntent | None:

@@ -7,7 +7,7 @@ with `_` are implementation details and may change without compatibility notice.
 
 `book(path)` dispatches a supported suffix and currently accepts `.epub` only;
 `epub(path)` records EPUB intent without opening the path. `Pipeline` and its
-operations are frozen values. Every fluent method returns a new branch.
+operations are frozen values. Intent-building methods return new branches.
 
 Standalone scripts must call `resolve()`, provisioning, and rendering from an
 `if __name__ == "__main__":` guard or a function invoked by that guard. Kenkui
@@ -33,6 +33,34 @@ Use either `select_chapters(*ids)` or the inclusive
 `select_chapter_range(start_id, end_id)`, before `tts()`. Chapter IDs come from
 `inspect()` and are stable functions of canonical EPUB member/fragment identity
 and occurrence. Duplicate operations and invalid ordering fail immediately.
+
+## Compose ordinary functions
+
+Use `pipe(function, *args, **kwargs)` to keep reusable operations in ordinary
+functions. The pipeline becomes the function's first argument; its return
+value becomes the result of the call. A function returning a `Pipeline` keeps
+the chain going, while a function returning a report ends it with that report.
+The function runs immediately, so any I/O it performs happens at that point.
+
+```python
+import kenkui as kk
+
+
+def speech_style(pipeline: kk.Pipeline, *, paragraph_ms: int) -> kk.Pipeline:
+    return pipeline.pronounce().pauses(paragraph_ms=paragraph_ms)
+
+
+pipeline = (
+    kk.epub("book.epub")
+    .assign_voice("eponine")
+    .pipe(speech_style, paragraph_ms=250)
+    .tts()
+)
+```
+
+The same function can be called directly as
+`speech_style(pipeline, paragraph_ms=250)`. No subclass, registration, or
+modification to Kenkui's `Pipeline` class is required.
 
 ## One-call rendering
 

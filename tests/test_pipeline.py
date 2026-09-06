@@ -6,7 +6,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import TYPE_CHECKING, cast, get_args
+from typing import TYPE_CHECKING, assert_type, cast, get_args
 
 import pytest
 
@@ -33,6 +33,29 @@ IO_ERROR_MESSAGE = "pipeline construction performed I/O"
 PAUSE_CHAPTER_MS = 1500
 PAUSE_HEADING_MS = 600
 PAUSE_PARAGRAPH_MS = 250
+
+
+def test_ordinary_functions_compose_with_fluent_methods() -> None:
+    """Function arguments and return types survive the pipeline boundary."""
+
+    def configure(
+        pipeline: kk.Pipeline, narrator: str, *, paragraph_ms: int
+    ) -> kk.Pipeline:
+        return pipeline.assign_voice(narrator).pauses(paragraph_ms=paragraph_ms)
+
+    def describe(pipeline: kk.Pipeline, *, prefix: str) -> str:
+        return prefix + pipeline.source.path.name
+
+    original = kk.epub("book.epub")
+    configured = original.pipe(configure, "narrator", paragraph_ms=250).tts()
+    assert_type(configured, kk.Pipeline)
+    assert configured.operations == (
+        original.assign_voice("narrator").pauses(paragraph_ms=250).tts().operations
+    )
+    assert original.operations == ()
+    report = configured.pipe(describe, prefix="Selected: ")
+    assert_type(report, str)
+    assert report == "Selected: book.epub"
 
 
 def test_construction_is_lazy_and_book_dispatches_without_reading(
