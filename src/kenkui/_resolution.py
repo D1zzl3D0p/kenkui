@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
-from ._characters.continuity import prepare_series_cast
+from ._characters.continuity import eligible_series_voice_ids, prepare_series_cast
 from ._domain.casting import (
     CastingMethod,
     CastingRequest,
@@ -23,18 +23,21 @@ from ._source import snapshot_source, source_digest
 from .errors import ErrorCode, SourceError, ValidationError
 from .inspection import BookInspection, CastingInspection
 from .observability import get_logger, log_event
+from .validation import series_intent_errors
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from ._characters.llm import Client
-    from ._characters.models import SeriesRecord
+    from ._characters.models import AttributionRecord, SeriesRecord
+    from ._domain.casting import CastingOutcome
     from ._execution.coordinator import ExecutionBindings
     from .cancellation import CancellationToken
     from .pipeline import Pipeline
     from .voices import Voice
 
 _LOGGER = get_logger(__name__)
+_MAX_SERIES_ATTEMPTS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +74,10 @@ class Resolved:
 
 
 def resolve_inputs(
-    pipeline: Pipeline, cancel: CancellationToken | None = None
+    pipeline: Pipeline,
+    cancel: CancellationToken | None = None,
+    *,
+    validate_series: bool = False,
 ) -> Resolved:
     """Resolve voices, attribution, and casting for one pipeline.
 
@@ -83,12 +89,6 @@ def resolve_inputs(
     """
     from ._characters import (  # noqa: PLC0415 - see below
         resolve_attribution,
-        resolve_cast,
-        store,
-    )
-    from ._characters.series import (  # noqa: PLC0415
-        merged_series,
-        series_members,
     )
     from .voices.provision import list_voices  # noqa: PLC0415 - resolved per
     # call so the managed cache root can be redirected, as the store is.
@@ -149,81 +149,12 @@ def resolve_inputs(
     )
     _log_ungendered_cast(casting.method, record.characters, pool)
 
-    # A book carrying no .series() call touches none of this: `series` is
-    # None, `stored` stays None, and `explicit`/`prior_load` end up exactly
-    # what they always were. That is load-bearing, not incidental -- a
-    # regression here would silently re-cast every book anyone has already
-    # rendered.
     series = next(
         (item for item in pipeline.operations if isinstance(item, Series)), None
     )
-    stored = store.read_series(series.series_id) if series is not None else None
-    # Minted roles are chapter-scoped by construction and are not people a
-    # series remembers; see `series_members`.
-    members = series_members(record.characters)
-    pins = prepare_series_cast(stored, members, casting, pool, digest)
-    if series is not None:
-        _log_series_overrides(
-            series,
-            stored,
-            pins.dropped_pins,
-            pins.overridden_pins,
-            casting.narrator_voice_id,
-        )
-
-    # Stored, not just solved: the cast is what list_castings names and what
-    # remove_casting discards, and neither can see a cast that only ever
-    # existed for the duration of one render.
-    outcome = resolve_cast(
-        record,
-        CastingRequest(
-            characters=record.characters,
-            pool=pool,
-            explicit=dict(pins.explicit),
-            narrator_voice_id=casting.narrator_voice_id,
-            unknown_voice_id=casting.unknown_voice_id,
-            method=cast("CastingMethod", casting.method),
-            prior_load=dict(pins.prior_load),
-        ),
+    outcome, final_bindings = _resolve_cast_inputs(
+        record, casting, pool, digest, series, cancel, validate_series=validate_series
     )
-    # Resolved before the series is written, not after: this is what can
-    # fail on an unprovisioned voice, and a doomed render must not persist a
-    # cast it never actually produced.
-    final_bindings = _execution_bindings(
-        casting.narrator_voice_id,
-        also=(casting.unknown_voice_id, *sorted(set(outcome.assignments.values()))),
-    )
-    if cancel is not None:
-        cancel.raise_if_cancelled()
-    if series is not None:
-        persisted_assignments = dict(outcome.assignments)
-        if pins.dropped_pins and not series.allow_recast:
-            # Reached only through resolve(), which never validates -- write()
-            # would have refused this render before here. The render still
-            # has to use whatever the solver chose (the speech cannot just
-            # vanish), but persisting that choice would erase the operator's
-            # only signal that a voice went missing: the next validate()
-            # would no longer report it. It would also be wrong for a pin
-            # dropped only because it is the wrong language for *this*
-            # volume -- that voice is still correct for others. Either way
-            # the series keeps what it already had.
-            persisted_assignments.update(pins.dropped_voice_ids)
-        # book_digest makes a re-render of this exact volume replace its own
-        # contribution rather than add to it -- see merged_series.
-        store.write_series(
-            merged_series(
-                stored,
-                members,
-                persisted_assignments,
-                (
-                    casting.narrator_voice_id
-                    if stored is None or series.allow_narrator_change
-                    else stored.narrator_voice_id
-                ),
-                series.series_id,
-                book_digest=digest,
-            )
-        )
     # Re-resolve with the whole cast so every assigned voice's asset reaches
     # the engine config; one worker then holds one model and N states.
     return Resolved(
@@ -245,6 +176,111 @@ def resolve_inputs(
         ),
         source_hash=digest,
     )
+
+
+def _resolve_cast_inputs(  # noqa: PLR0913, PLR0917 - resolved values, no provider work.
+    record: AttributionRecord,
+    casting: AssignVoices,
+    pool: tuple[Voice, ...],
+    digest: str,
+    series: Series | None,
+    cancel: CancellationToken | None,
+    *,
+    validate_series: bool = False,
+) -> tuple[CastingOutcome, ExecutionBindings]:
+    """Retry casting if another volume changed its continuity inputs.
+
+    Attribution happens once before this boundary. Only cheap casting and
+    asset binding repeat, outside a database transaction. The conditional
+    commit ensures that accepted casts see all previously committed volumes.
+    """
+    from ._characters import resolve_cast, store  # noqa: PLC0415
+    from ._characters.series import merged_series, series_members  # noqa: PLC0415
+
+    for _attempt in range(_MAX_SERIES_ATTEMPTS):
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        stored = store.read_series(series.series_id) if series is not None else None
+        if validate_series and series is not None:
+            errors = series_intent_errors(
+                (series, casting),
+                stored,
+                eligible_series_voice_ids(
+                    pool, casting.narrator_voice_id, casting.unknown_voice_id
+                ),
+            )
+            if errors:
+                raise ValidationError(errors[0])
+        # Minted roles are chapter-scoped by construction and are not people a
+        # series remembers; see `series_members`.
+        members = series_members(record.characters)
+        pins = prepare_series_cast(stored, members, casting, pool, digest)
+
+        # Stored, not just solved: the cast is what list_castings names and what
+        # remove_casting discards, and neither can see a cast that only ever
+        # existed for the duration of one render.
+        outcome = resolve_cast(
+            record,
+            CastingRequest(
+                characters=record.characters,
+                pool=pool,
+                explicit=dict(pins.explicit),
+                narrator_voice_id=casting.narrator_voice_id,
+                unknown_voice_id=casting.unknown_voice_id,
+                method=cast("CastingMethod", casting.method),
+                prior_load=dict(pins.prior_load),
+            ),
+        )
+        # Resolved before the series is written, not after: this is what can
+        # fail on an unprovisioned voice, and a doomed render must not persist a
+        # cast it never actually produced.
+        final_bindings = _execution_bindings(
+            casting.narrator_voice_id,
+            also=(casting.unknown_voice_id, *sorted(set(outcome.assignments.values()))),
+        )
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        if series is not None:
+            persisted_assignments = dict(outcome.assignments)
+            if pins.dropped_pins and not series.allow_recast:
+                # Reached only through resolve(), which never validates -- write()
+                # would have refused this render before here. The render still
+                # has to use whatever the solver chose (the speech cannot just
+                # vanish), but persisting that choice would erase the operator's
+                # only signal that a voice went missing: the next validate()
+                # would no longer report it. It would also be wrong for a pin
+                # dropped only because it is the wrong language for *this*
+                # volume -- that voice is still correct for others. Either way
+                # the series keeps what it already had.
+                persisted_assignments.update(pins.dropped_voice_ids)
+            # book_digest makes a re-render of this exact volume replace its own
+            # contribution rather than add to it -- see merged_series.
+            replacement = merged_series(
+                stored,
+                members,
+                persisted_assignments,
+                (
+                    casting.narrator_voice_id
+                    if stored is None or series.allow_narrator_change
+                    else stored.narrator_voice_id
+                ),
+                series.series_id,
+                book_digest=digest,
+            )
+            if not store.compare_and_write_series(stored, replacement):
+                continue
+        if series is not None:
+            _log_series_overrides(
+                series,
+                stored,
+                pins.dropped_pins,
+                pins.overridden_pins,
+                casting.narrator_voice_id,
+            )
+
+        return outcome, final_bindings
+    message = "series changed repeatedly during resolution; retry the operation"
+    raise OSError(message)
 
 
 def _with_roster_checkpoint(

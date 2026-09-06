@@ -540,7 +540,7 @@ class Pipeline:
         resolved = (
             self._resolved
             if self._resolved is not None
-            else resolve_inputs(self, cancel)
+            else resolve_inputs(self, cancel, validate_series=True)
         )
         log_collisions(resolved.collisions)
         return execute_sequential(

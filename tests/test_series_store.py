@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -234,3 +235,61 @@ def test_two_characters_sharing_an_alias_round_trip(tmp_path: Path) -> None:
     record = store.SeriesRecord("s", "eponine", (bennet, gardiner))
     store.write_series(record, path)
     assert store.read_series("s", path) == record
+
+
+def test_conditional_update_rejects_stale_series(tmp_path: Path) -> None:
+    """A stale volume cannot overwrite the winner's complete continuity data."""
+    path = tmp_path / "s.sqlite3"
+    first = store.SeriesRecord("s", "eponine", (_character("a", "alf"),))
+    second = store.SeriesRecord("s", "eponine", (_character("b", "aoife"),))
+    assert store.compare_and_write_series(None, first, path)
+    assert not store.compare_and_write_series(None, second, path)
+    assert store.read_series("s", path) == first
+
+    replacement = store.SeriesRecord(
+        "s", "eponine", first.characters + second.characters
+    )
+    assert store.compare_and_write_series(first, replacement, path)
+    assert not store.compare_and_write_series(first, second, path)
+    assert store.read_series("s", path) == replacement
+
+
+def test_conditional_update_does_not_recreate_a_removed_series(tmp_path: Path) -> None:
+    """Deleting a series invalidates every cast based on its old snapshot."""
+    path = tmp_path / "s.sqlite3"
+    record = store.SeriesRecord("s", "eponine", (_character("a", "alf"),))
+    store.write_series(record, path)
+    store.remove_series("s", path)
+    assert not store.compare_and_write_series(record, record, path)
+    assert store.read_series("s", path) is None
+
+
+def test_conditional_update_rejects_mismatched_series_ids(tmp_path: Path) -> None:
+    """Continuity for one series cannot authorize a write to another."""
+    first = store.SeriesRecord("one", "eponine", ())
+    other = store.SeriesRecord("two", "eponine", ())
+    with pytest.raises(ValueError, match="same ID"):
+        store.compare_and_write_series(first, other, tmp_path / "s.sqlite3")
+
+
+def test_conditional_update_fails_loud_on_corrupt_store(tmp_path: Path) -> None:
+    """A corrupt store cannot be mistaken for an empty series during commit."""
+    path = tmp_path / "s.sqlite3"
+    path.write_bytes(b"not a database")
+    with pytest.raises(OSError, match="could not update series"):
+        store.compare_and_write_series(
+            None, store.SeriesRecord("s", "eponine", ()), path
+        )
+
+
+def test_conditional_update_rolls_back_a_partial_replacement(tmp_path: Path) -> None:
+    """A failed child insert preserves the original parent and every child row."""
+    path = tmp_path / "s.sqlite3"
+    original = store.SeriesRecord("s", "eponine", (_character("a", "alf"),))
+    store.write_series(original, path)
+    invalid = store.SeriesRecord(
+        "s", "aoife", (replace(_character("b", "aoife"), aliases=("B", "B")),)
+    )
+    with pytest.raises(OSError, match="could not update series"):
+        store.compare_and_write_series(original, invalid, path)
+    assert store.read_series("s", path) == original

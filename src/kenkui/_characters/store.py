@@ -42,6 +42,7 @@ __all__ = [
     "SeriesRecord",
     "attribution_key",
     "cast_key",
+    "compare_and_write_series",
     "default_store_path",
     "list_castings",
     "list_series",
@@ -533,50 +534,82 @@ def write_series(record: SeriesRecord, path: Path | None = None) -> None:
     """
     try:
         with _connect(path) as connection, connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO series(series_id,narrator_voice_id) "
-                "VALUES(?,?)",
-                (record.series_id, record.narrator_voice_id),
-            )
-            connection.execute(
-                "DELETE FROM series_characters WHERE series_id=?",
-                (record.series_id,),
-            )
-            connection.execute(
-                "DELETE FROM series_aliases WHERE series_id=?", (record.series_id,)
-            )
-            connection.execute(
-                "DELETE FROM series_contributions WHERE series_id=?",
-                (record.series_id,),
-            )
-            for character in record.characters:
-                connection.execute(
-                    "INSERT INTO series_characters(series_id,canonical_id,"
-                    "display_name,gender,voice_id,spoken_characters) "
-                    "VALUES(?,?,?,?,?,?)",
-                    (
-                        record.series_id,
-                        character.canonical_id,
-                        character.display_name,
-                        character.gender,
-                        character.voice_id,
-                        character.spoken_characters,
-                    ),
-                )
-                for alias in character.aliases:
-                    connection.execute(
-                        "INSERT INTO series_aliases(series_id,alias,"
-                        "canonical_id) VALUES(?,?,?)",
-                        (record.series_id, alias, character.canonical_id),
-                    )
-                for book_digest, spoken in character.contributions:
-                    connection.execute(
-                        "INSERT INTO series_contributions(series_id,canonical_id,"
-                        "book_digest,spoken_characters) VALUES(?,?,?,?)",
-                        (record.series_id, character.canonical_id, book_digest, spoken),
-                    )
+            _write_series(connection, record)
     except sqlite3.Error as error:
         message = f"could not write series to {path or default_store_path()}"
+        raise OSError(message) from error
+
+
+def _write_series(connection: sqlite3.Connection, record: SeriesRecord) -> None:
+    """Replace the rows using the caller's transaction."""
+    connection.execute(
+        "INSERT OR REPLACE INTO series(series_id,narrator_voice_id) VALUES(?,?)",
+        (record.series_id, record.narrator_voice_id),
+    )
+    connection.execute(
+        "DELETE FROM series_characters WHERE series_id=?",
+        (record.series_id,),
+    )
+    connection.execute(
+        "DELETE FROM series_aliases WHERE series_id=?", (record.series_id,)
+    )
+    connection.execute(
+        "DELETE FROM series_contributions WHERE series_id=?",
+        (record.series_id,),
+    )
+    for character in record.characters:
+        connection.execute(
+            "INSERT INTO series_characters(series_id,canonical_id,"
+            "display_name,gender,voice_id,spoken_characters) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                record.series_id,
+                character.canonical_id,
+                character.display_name,
+                character.gender,
+                character.voice_id,
+                character.spoken_characters,
+            ),
+        )
+        for alias in character.aliases:
+            connection.execute(
+                "INSERT INTO series_aliases(series_id,alias,"
+                "canonical_id) VALUES(?,?,?)",
+                (record.series_id, alias, character.canonical_id),
+            )
+        for book_digest, spoken in character.contributions:
+            connection.execute(
+                "INSERT INTO series_contributions(series_id,canonical_id,"
+                "book_digest,spoken_characters) VALUES(?,?,?,?)",
+                (record.series_id, character.canonical_id, book_digest, spoken),
+            )
+
+
+def compare_and_write_series(
+    expected: SeriesRecord | None,
+    record: SeriesRecord,
+    path: Path | None = None,
+) -> bool:
+    """Commit a cast only if its continuity inputs are still current.
+
+    Reading and replacing happen under one short SQLite write transaction,
+    across threads and processes. A conflicting caller retries its pure cast
+    against fresh state; model calls and asset loading stay outside the lock.
+    Unlike a cache lookup, an unreadable store must fail instead of appearing
+    to be an empty series that can safely be replaced.
+    """
+    if expected is not None and expected.series_id != record.series_id:
+        message = "expected and replacement series must have the same ID"
+        raise ValueError(message)
+    try:
+        with _connect(path) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if _read_series(connection, record.series_id) != expected:
+                return False
+            _write_series(connection, record)
+            return True
+    except sqlite3.Error as error:
+        message = f"could not update series in {path or default_store_path()}"
         raise OSError(message) from error
 
 
@@ -620,16 +653,22 @@ def _series_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> Series
     )
 
 
+def _read_series(connection: sqlite3.Connection, series_id: str) -> SeriesRecord | None:
+    """Read all continuity rows from the caller's consistent snapshot."""
+    row = connection.execute(
+        "SELECT * FROM series WHERE series_id=?", (series_id,)
+    ).fetchone()
+    return None if row is None else _series_from_row(connection, row)
+
+
 def read_series(series_id: str, path: Path | None = None) -> SeriesRecord | None:
     """Return one stored series, or None on a miss or unusable store."""
     with _reading(path) as connection:
         if connection is None:
             return None
         try:
-            row = connection.execute(
-                "SELECT * FROM series WHERE series_id=?", (series_id,)
-            ).fetchone()
-            return None if row is None else _series_from_row(connection, row)
+            connection.execute("BEGIN")
+            return _read_series(connection, series_id)
         except sqlite3.Error:
             return None
 
@@ -640,6 +679,7 @@ def list_series(path: Path | None = None) -> tuple[SeriesRecord, ...]:
         if connection is None:
             return ()
         try:
+            connection.execute("BEGIN")
             rows = connection.execute(
                 "SELECT * FROM series ORDER BY series_id"
             ).fetchall()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from typing import TYPE_CHECKING
 
 import pytest
@@ -1209,3 +1211,158 @@ def test_validate_reports_a_series_without_voices_instead_of_raising(
     result = kk.epub(path).series("s", book=1).validate()
     assert isinstance(result, kk.ValidationResult)
     assert kk.ErrorCode.VOICE_REQUIRED in {issue.code for issue in result.issues}
+
+
+def test_overlapping_volumes_preserve_both_casts_without_repeating_model_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both volumes read an empty series; the loser re-solves against the winner."""
+    _stub_resolution(monkeypatch, "javert")
+    calls: list[str] = []
+
+    class Client:
+        def complete(self, model: str, prompt: str) -> str:
+            character = "cosette" if "cosette" in prompt.lower() else "javert"
+            calls.append(character)
+            return _Roster(character).complete(model, prompt)
+
+    monkeypatch.setattr("kenkui._resolution._attribution_client", Client)
+    pipelines = tuple(
+        kk.epub(
+            make_epub(
+                tmp_path / f"{character}.epub",
+                chapters={"one": xhtml(f'<p>"Hello," said {character.title()}.</p>')},
+                spine=("one",),
+            )
+        )
+        .series("overlapping")
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+        for character in ("javert", "cosette")
+    )
+    both_ready = Barrier(2, timeout=15)
+    commit = store.compare_and_write_series
+    attempts: list[bool] = []
+
+    def overlapping_commit(
+        expected: store.SeriesRecord | None,
+        replacement: store.SeriesRecord,
+        path: Path | None = None,
+    ) -> bool:
+        if expected is None:
+            both_ready.wait()
+        accepted = commit(expected, replacement, path)
+        attempts.append(accepted)
+        return accepted
+
+    monkeypatch.setattr(store, "compare_and_write_series", overlapping_commit)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(pipeline.resolve) for pipeline in pipelines]
+        checkpoints = [future.result(timeout=30) for future in futures]
+
+    stored = store.read_series("overlapping")
+    assert stored is not None
+    assert {character.canonical_id for character in stored.characters} == {
+        "javert",
+        "cosette",
+    }
+    # The retry includes the winner's voice load, so newcomers spread their cast.
+    assert {character.voice_id for character in stored.characters} == {"alf", "aoife"}
+    for checkpoint in checkpoints:
+        casting = checkpoint.inspect().casting
+        assert casting is not None
+        for character_id, voice_id in casting.assignments:
+            assert (
+                next(
+                    item.voice_id
+                    for item in stored.characters
+                    if item.canonical_id == character_id
+                )
+                == voice_id
+            )
+    assert sorted(attempts) == [False, True, True]
+    assert sorted(calls) == ["cosette", "cosette", "javert", "javert"]
+
+
+def test_series_retry_honors_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conflict cannot restart casting after the caller cancels."""
+    _stub_resolution(monkeypatch, "javert")
+    token = kk.CancellationToken()
+
+    def conflict(
+        _expected: store.SeriesRecord | None, _replacement: store.SeriesRecord
+    ) -> bool:
+        token.cancel()
+        return False
+
+    monkeypatch.setattr(store, "compare_and_write_series", conflict)
+    path = make_epub(
+        tmp_path / "cancel-retry.epub",
+        chapters={"one": xhtml('<p>"Hello," said Javert.</p>')},
+        spine=("one",),
+    )
+    pipeline = (
+        kk.epub(path)
+        .series("cancel-retry")
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+    )
+    with pytest.raises(kk.CancelledError):
+        pipeline.resolve(cancel=token)
+    assert store.read_series("cancel-retry") is None
+
+
+def test_series_retry_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sustained contention fails visibly instead of retrying forever."""
+    _stub_resolution(monkeypatch, "javert")
+    monkeypatch.setattr("kenkui._resolution._MAX_SERIES_ATTEMPTS", 2)
+    monkeypatch.setattr(store, "compare_and_write_series", lambda *_args: False)
+    with pytest.raises(OSError, match="series changed repeatedly"):
+        _render_volume(tmp_path, monkeypatch, "javert", book=1)
+    assert store.read_series("s") is None
+
+
+def test_write_revalidates_series_after_a_concurrent_narrator_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write cannot silently waive its narrator rule after preflight passes."""
+    _stub_resolution(monkeypatch, "javert")
+    attempts: list[store.SeriesRecord] = []
+
+    def competing_volume(
+        expected: store.SeriesRecord | None, replacement: store.SeriesRecord
+    ) -> bool:
+        assert expected is None
+        attempts.append(replacement)
+        store.write_series(store.SeriesRecord(replacement.series_id, "aoife", ()))
+        return False
+
+    monkeypatch.setattr(store, "compare_and_write_series", competing_volume)
+    path = make_epub(
+        tmp_path / "narrator-race.epub",
+        chapters={"one": xhtml('<p>"Hello," said Javert.</p>')},
+        spine=("one",),
+    )
+    pipeline = (
+        kk.epub(path)
+        .series("narrator-race")
+        .infer_characters("fake/model")
+        .attribute_quotes("fake/model")
+        .assign_voices(narrator="eponine")
+        .tts()
+    )
+    output = tmp_path / "narrator-race.m4b"
+    with pytest.raises(kk.ValidationError) as caught:
+        pipeline.write(output, workers=1)
+    assert caught.value.code is kk.ErrorCode.SERIES_NARRATOR_CHANGED
+    assert len(attempts) == 1
+    assert store.read_series("narrator-race") == store.SeriesRecord(
+        "narrator-race", "aoife", ()
+    )
+    assert not output.exists()
