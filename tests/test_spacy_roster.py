@@ -22,7 +22,11 @@ from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
+    from types import ModuleType
+
+    from kenkui._characters.store import AttributionRecord
 
 spacy = pytest.importorskip("spacy", reason="the spacy extra is not installed")
 
@@ -52,7 +56,9 @@ Egwene thought of her mother. She missed her.
 """
 
 
-def roster_of(text: str, *, pipeline: str = "en_core_web_lg") -> tuple:
+def roster_of(
+    text: str, *, pipeline: str = "en_core_web_lg"
+) -> tuple[tuple[CharacterProfile, ...], str | None]:
     """Run inference over a single synthetic chapter."""
     chapter = kk.ChapterInspection(
         id="ch-1", index=0, title="One", speech_characters=len(text), text=text
@@ -144,7 +150,7 @@ Tam al'Thor took his horse. Egwene gathered her basket.
         assert by_id["tam-al-thor"].gender == "masculine"
 
     def test_a_gendered_honorific_outranks_nearby_pronouns(self) -> None:
-        """"Aunt" states the answer; the pronouns nearby are about someone else."""
+        """The honorific Aunt outranks nearby pronouns about someone else."""
         text = (
             "Aunt Vera set down the tray. He had left the door open again.\n"
             "Aunt Vera frowned at him. He said nothing at all.\n"
@@ -233,10 +239,16 @@ class TestFailureModes:
         """An uninstalled optional dependency is a stable public failure."""
         real_import = builtins.__import__
 
-        def _refuse(name: str, *args: object, **kwargs: object) -> object:
+        def _refuse(
+            name: str,
+            globals: Mapping[str, object] | None = None,  # noqa: A002
+            locals: Mapping[str, object] | None = None,  # noqa: A002
+            fromlist: Sequence[str] = (),
+            level: int = 0,
+        ) -> ModuleType:
             if name == "spacy" or name.startswith("spacy."):
                 raise ModuleNotFoundError(name)
-            return real_import(name, *args, **kwargs)
+            return real_import(name, globals, locals, fromlist, level)
 
         monkeypatch.delitem(sys.modules, "spacy", raising=False)
         monkeypatch.setattr(builtins, "__import__", _refuse)
@@ -364,7 +376,6 @@ class TestChapterRoster:
         kept = _chapter_roster(roster, "ch-1", None)
         assert {character.id for character in kept} == {"darrow"}
 
-
     def test_the_narrator_survives(self) -> None:
         """The narrator is marked in the prompt block and must be in it."""
         roster = (
@@ -405,16 +416,14 @@ class TestStaleRosterRefresh:
             (kk.ChapterInspection("ch-1", 0, "One", len(text), text),),
         )
 
-    def _record(self, text: str, gender: str | None) -> object:
+    def _record(self, text: str, gender: str | None) -> AttributionRecord:
         return _characters.store.AttributionRecord(
             attribution_id="a" * 64,
             book_id="b" * 64,
             model_id="spacy",
             prompt_version="characters-v5",
             params={},
-            characters=(
-                CharacterProfile("egwene", "Egwene", gender, 40, ("ch-1",)),
-            ),
+            characters=(CharacterProfile("egwene", "Egwene", gender, 40, ("ch-1",)),),
             spans=(SpeakerSpan("ch-1", 0, len(text), "egwene"),),
         )
 

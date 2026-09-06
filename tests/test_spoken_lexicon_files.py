@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import kenkui as kk
+from kenkui._domain.operations import SpokenForm
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -69,4 +70,6 @@ def test_a_read_lexicon_feeds_pronounce(tmp_path: Path) -> None:
     path = tmp_path / "mine.json"
     path.write_text(json.dumps({"Cthulhu": "kuh-THOO-loo"}))
     pipeline = kk.epub("book.epub").pronounce(kk.read_lexicon(path))
-    assert pipeline.operations[-1].lexicon == (("Cthulhu", "kuh-THOO-loo"),)
+    operation = pipeline.operations[-1]
+    assert isinstance(operation, SpokenForm)
+    assert operation.lexicon == (("Cthulhu", "kuh-THOO-loo"),)

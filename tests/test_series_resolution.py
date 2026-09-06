@@ -133,6 +133,7 @@ def _render_volume(
         .assign_voices(narrator="eponine")
         .resolve()
     )
+    assert resolved._resolved is not None  # noqa: SLF001
     return dict(resolved._resolved.cast_assignments)  # noqa: SLF001
 
 
@@ -265,8 +266,6 @@ def test_an_honoured_series_logs_nothing(
     assert "series_override" not in caplog.text
 
 
-
-
 def test_a_pin_cannot_land_a_character_on_the_narrators_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -314,6 +313,7 @@ def test_a_pin_cannot_land_a_character_on_the_narrators_voice(
             .assign_voices(narrator="eponine")
             .resolve()
         )
+    assert resolved._resolved is not None  # noqa: SLF001
     assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
     assert assignments["javert"] != "eponine"
     assert "series_override" in caplog.text
@@ -372,6 +372,7 @@ def test_a_pin_for_a_different_language_voice_is_dropped_and_logged(
             .assign_voices(narrator="eponine")
             .resolve()
         )
+    assert resolved._resolved is not None  # noqa: SLF001
     assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
     assert assignments["javert"] != "foreign"
     assert "series_override" in caplog.text
@@ -451,6 +452,7 @@ def test_a_pin_contradicting_this_volumes_gender_is_dropped(
             .resolve()
         )
 
+    assert resolved._resolved is not None  # noqa: SLF001
     assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
     assert assignments["javert"] == "delia"
 
@@ -516,6 +518,7 @@ def test_a_pin_agreeing_with_this_volumes_gender_is_kept(
         .resolve()
     )
 
+    assert resolved._resolved is not None  # noqa: SLF001
     assert dict(resolved._resolved.cast_assignments)["javert"] == "delia"  # noqa: SLF001
 
 
@@ -575,6 +578,7 @@ def test_allow_recast_converges_once_the_dropped_pin_is_replaced(
             .assign_voices(narrator="eponine")
             .resolve()
         )
+        assert resolved._resolved is not None  # noqa: SLF001
         return dict(resolved._resolved.cast_assignments)["javert"]  # noqa: SLF001
 
     monkeypatch.setattr("kenkui.voices.provision.list_voices", lambda: (_ALF, _AOIFE))
@@ -617,6 +621,7 @@ def test_an_explicit_cast_overrides_a_series_pin(
             .assign_voices(narrator="eponine", cast={"javert": "aoife"})
             .resolve()
         )
+    assert resolved._resolved is not None  # noqa: SLF001
     assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
     assert assignments["javert"] == "aoife"
     assert "series_override" in caplog.text
@@ -814,6 +819,7 @@ def test_an_unauthorised_drop_renders_but_leaves_the_series_unchanged(
         .assign_voices(narrator="eponine")
     )
     resolved = pipeline.resolve()
+    assert resolved._resolved is not None  # noqa: SLF001
     assignments = dict(resolved._resolved.cast_assignments)  # noqa: SLF001
     assert assignments["javert"] != "ghost"  # the render still had to choose
 
@@ -848,9 +854,7 @@ class _OffRoster:
                     ]
                 }
             )
-        return json.dumps(
-            {"attributions": [{"quote_id": 0, "speaker": "officer"}]}
-        )
+        return json.dumps({"attributions": [{"quote_id": 0, "speaker": "officer"}]})
 
 
 def test_a_minted_role_never_becomes_a_series_character(
@@ -890,6 +894,7 @@ def test_a_minted_role_never_becomes_a_series_character(
             .assign_voices(narrator="eponine")
             .resolve()
         )
+        assert resolved._resolved is not None  # noqa: SLF001
         return dict(resolved._resolved.cast_assignments)  # noqa: SLF001
 
     first = _render()
@@ -992,6 +997,7 @@ def test_re_rendering_a_volume_neither_mints_nor_recasts(
             .assign_voices(narrator="eponine")
             .resolve()
         )
+        assert resolved._resolved is not None  # noqa: SLF001
         return dict(resolved._resolved.cast_assignments)  # noqa: SLF001
 
     first = _render()

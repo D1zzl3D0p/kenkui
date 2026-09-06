@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import TYPE_CHECKING
 
 import kenkui as kk
 from kenkui._characters import dialogue_tags
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _chapter(text: str) -> kk.ChapterInspection:
@@ -108,7 +112,7 @@ class TestPrecedence:
         assert applied.chapter_ids == ("ch-1", "ch-2")
         assert applied.aliases == ("Ellie", "El")
 
-    def test_a_conflict_is_logged(self, caplog) -> None:  # noqa: ANN001 - pytest fixture
+    def test_a_conflict_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
         """A tag disagreeing with the roster means a quote went to the wrong mouth."""
         characters = (CharacterProfile("ellie", "Ellie", "masculine", 100, ("ch-1",)),)
 

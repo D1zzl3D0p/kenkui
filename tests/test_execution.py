@@ -829,6 +829,7 @@ def test_publication_clears_the_books_audio_cache(
     pipeline.write_m4b(output)
 
     assert output.exists()
+    assert bindings.cache_store is not None
     assert _segment_cache_rows(bindings.cache_store) == 0
 
 
@@ -844,4 +845,5 @@ def test_keep_audio_cache_option_preserves_the_entries(
     pipeline.write_m4b(output, keep_audio_cache=True)
 
     assert output.exists()
+    assert bindings.cache_store is not None
     assert _segment_cache_rows(bindings.cache_store) == 2

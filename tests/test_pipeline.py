@@ -17,6 +17,7 @@ from kenkui._domain.operations import (
     AttributeQuotes,
     InferCharacters,
     Pauses,
+    Series,
     SpokenForm,
     SynthesizeSpeech,
 )
@@ -528,6 +529,7 @@ def test_series_records_intent_without_reading_anything() -> None:
     """Membership is declared, never derived: no EPUB carries it."""
     pipeline = kk.epub("book.epub").series("stormlight", book=3)
     recorded = pipeline.operations[-1]
+    assert isinstance(recorded, Series)
     assert recorded.series_id == "stormlight"
     assert recorded.book == 3  # noqa: PLR2004 - the book number passed in above
     assert recorded.allow_recast is False

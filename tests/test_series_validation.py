@@ -20,20 +20,24 @@ def _record() -> store.SeriesRecord:
     )
 
 
-def _operations(**overrides: object) -> tuple[object, ...]:
-    # Popped before the dict feeds Series(**series): update() would otherwise
-    # copy "narrator" along with it, and Series has no such field.
-    narrator = overrides.pop("narrator", "eponine")
-    series: dict[str, object] = {"series_id": "s"}
-    series.update(overrides)
+def _operations(
+    *,
+    narrator: str = "eponine",
+    allow_recast: bool = False,
+    allow_narrator_change: bool = False,
+) -> tuple[AssignVoices, Series]:
     return (
         AssignVoices(
-            narrator_voice_id=narrator,  # type: ignore[arg-type]
+            narrator_voice_id=narrator,
             unknown_voice_id="eponine",
             cast=(),
             method="gendered",
         ),
-        Series(**series),  # type: ignore[arg-type]
+        Series(
+            series_id="s",
+            allow_recast=allow_recast,
+            allow_narrator_change=allow_narrator_change,
+        ),
     )
 
 
@@ -78,8 +82,10 @@ def test_a_pipeline_without_a_series_is_unaffected() -> None:
     """Every existing pipeline keeps validating exactly as it did."""
     only_voices = (
         AssignVoices(
-            narrator_voice_id="eponine", unknown_voice_id="eponine",
-            cast=(), method="gendered",
+            narrator_voice_id="eponine",
+            unknown_voice_id="eponine",
+            cast=(),
+            method="gendered",
         ),
     )
     assert series_intent_errors(only_voices, _record(), frozenset()) == ()
