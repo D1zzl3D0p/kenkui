@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from kenkui.errors import ErrorCode, ValidationError
 
@@ -26,6 +26,29 @@ class Path:
     sentence: int | None = None
     phrase: int | None = None
 
+    def __post_init__(self) -> None:
+        """Validate types, positive coordinates, and prefix hierarchy."""
+        if self.chapter is not None and not isinstance(self.chapter, str):
+            raise _invalid_path()
+        values = (self.paragraph, self.line, self.sentence, self.phrase)
+        for value in values:
+            if value is None:
+                continue
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value <= 0
+            ):
+                raise _invalid_path()
+        if self.chapter is None and any(value is not None for value in values):
+            raise _invalid_path()
+        if self.paragraph is None and any(
+            value is not None for value in (self.line, self.sentence, self.phrase)
+        ):
+            raise _invalid_path()
+        if self.sentence is None and self.phrase is not None:
+            raise _invalid_path()
+
 
 def _invalid_path() -> ValidationError:
     return ValidationError(ErrorCode.INVALID_PATH)
@@ -37,18 +60,13 @@ def parse_path(mapping: Mapping[str, object]) -> Path:
         raise _invalid_path()
     values: dict[str, object | None] = dict.fromkeys(LEVELS)
     values.update(mapping)
-    chapter = values["chapter"]
-    if chapter is not None and not isinstance(chapter, str):
-        raise _invalid_path()
-    indices: dict[str, int | None] = {}
-    for level in LEVELS[1:]:
-        value = values[level]
-        if value is not None and (
-            not isinstance(value, int) or isinstance(value, bool) or value <= 0
-        ):
-            raise _invalid_path()
-        indices[level] = value  # type: ignore[assignment]
-    return Path(chapter=chapter, **indices)  # type: ignore[arg-type]
+    return Path(
+        chapter=cast("str | None", values["chapter"]),
+        paragraph=cast("int | None", values["paragraph"]),
+        line=cast("int | None", values["line"]),
+        sentence=cast("int | None", values["sentence"]),
+        phrase=cast("int | None", values["phrase"]),
+    )
 
 
 def path_of(unit: Unit) -> Path:

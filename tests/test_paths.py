@@ -15,10 +15,14 @@ def test_empty_mapping_is_the_whole_book() -> None:
     assert parse_path({}).chapter is None
 
 
-def test_holes_are_allowed_and_mean_any_of_that_level() -> None:
-    parsed = parse_path({"chapter": "ch08", "sentence": 2})
-    assert parsed.paragraph is None
-    assert parsed.sentence == 2
+def test_hierarchical_holes_are_refused() -> None:
+    with pytest.raises(ValidationError):
+        parse_path({"chapter": "ch08", "sentence": 2})
+
+
+def test_direct_path_construction_refuses_hierarchical_holes() -> None:
+    with pytest.raises(ValidationError):
+        Path("ch08", None, None, 2, None)
 
 
 def test_unknown_level_is_refused() -> None:
@@ -29,6 +33,17 @@ def test_unknown_level_is_refused() -> None:
 def test_zero_and_negative_indices_are_refused_in_paths() -> None:
     with pytest.raises(ValidationError):
         parse_path({"chapter": "ch08", "paragraph": 0})
+
+
+@pytest.mark.parametrize("value", [True, False, "1", 1.5, 0, -1])
+def test_invalid_coordinate_types_are_refused(value: object) -> None:
+    with pytest.raises(ValidationError):
+        Path("ch08", value, None, None, None)  # type: ignore[arg-type]
+
+
+def test_non_string_chapter_is_refused() -> None:
+    with pytest.raises(ValidationError):
+        Path(8, None, None, None, None)  # type: ignore[arg-type]
 
 
 def test_subtree_containment() -> None:

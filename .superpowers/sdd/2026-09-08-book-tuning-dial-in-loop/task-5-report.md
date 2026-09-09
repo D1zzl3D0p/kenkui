@@ -43,3 +43,15 @@
 - The ordinary isolated pytest command cannot satisfy this repository's global
   coverage threshold; use `--no-cov` for focused evidence or run the full suite
   with coverage when coverage accounting is required.
+
+## Review fix round 1
+
+- Corrected the earlier hole test: a path may not skip paragraph before a
+  sentence/line/phrase. Line remains optionally omitted because the required
+  full-path example deliberately omits it; phrase still requires sentence.
+- Added `Path.__post_init__` validation so direct construction enforces valid
+  chapter/type/positive coordinate values and the same hierarchy invariants as
+  parsing. `contains` consequently operates only on valid prefix paths.
+- Evidence: `uv run pytest tests/test_paths.py tests/test_grid.py --no-cov -q`
+  => **25 passed**; `uv run pytest -q` => **passed**; Ruff => **All checks
+  passed**; `uv run mypy src/kenkui/_domain/paths.py` => **Success**.
