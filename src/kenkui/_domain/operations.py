@@ -3,12 +3,50 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, TypeAlias, TypeVar
 
 from kenkui.errors import ErrorCode, ValidationError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
+
+    from kenkui._domain.tuning import Rule
+
+
+@dataclass(frozen=True, slots=True)
+class Attributions:
+    """Ordered human speaker-attribution rules."""
+
+    rules: tuple[Rule, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Silences:
+    """Ordered rules replacing the silence after matched book positions."""
+
+    rules: tuple[Rule, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Pronunciations:
+    """Ordered scoped lexicons, stored as immutable sorted entry pairs."""
+
+    rules: tuple[Rule, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Annotations:
+    """One loaded annotation file and its immutable content snapshot."""
+
+    path: Path
+    digest: str
+    loaded: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        """Detach loaded annotations from mutable caller-owned data."""
+        object.__setattr__(self, "loaded", MappingProxyType(dict(self.loaded)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +167,10 @@ Operation: TypeAlias = (
     | SynthesizeSpeech
     | MetadataIntent
     | Series
+    | Attributions
+    | Silences
+    | Pronunciations
+    | Annotations
 )
 _OperationT = TypeVar("_OperationT", bound=Operation)
 
@@ -150,3 +192,24 @@ def append_unique(
 def has_operation(operations: tuple[Operation, ...], kind: type[Operation]) -> bool:
     """Return whether an operation chain contains an exact operation family."""
     return any(isinstance(item, kind) for item in operations)
+
+
+def replace_or_append(
+    operations: tuple[Operation, ...],
+    operation: _OperationT,
+    *,
+    before_tts: bool = True,
+) -> tuple[Operation, ...]:
+    """Replace this operation family in place, or append it if absent.
+
+    Tuning callers supply an extended rule tuple; style and identity callers
+    supply a replacement setting. Existing settings remain editable after TTS.
+    Metadata may also be newly appended after TTS with ``before_tts=False``.
+    """
+    if any(type(item) is type(operation) for item in operations):
+        return tuple(
+            operation if type(item) is type(operation) else item for item in operations
+        )
+    if before_tts and any(isinstance(item, SynthesizeSpeech) for item in operations):
+        raise ValidationError(ErrorCode.INVALID_OPERATION_ORDER)
+    return (*operations, operation)

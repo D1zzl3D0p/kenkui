@@ -3,29 +3,37 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Concatenate, Literal, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Concatenate, Literal, ParamSpec, TypeAlias, TypeVar
 
 from ._characters.continuity import eligible_series_voice_ids
 from ._characters.review import validate_roster
 from ._domain.casting import validate_method
 from ._domain.operations import (
+    Annotations,
     AssignVoices,
     AttributeQuotes,
+    Attributions,
     InferCharacters,
     MetadataIntent,
     Operation,
     Pauses,
+    Pronunciations,
     SelectChapterRange,
     SelectChapters,
     Series,
+    Silences,
     SpokenForm,
     SynthesizeSpeech,
     append_unique,
     has_operation,
+    replace_or_append,
 )
+from ._domain.paths import Pattern, parse_pattern
 from ._domain.selection import select_chapters, select_range
+from ._domain.tuning import Rule
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
 from ._progress import EventEmitter
@@ -48,7 +56,7 @@ from .voices import Voice
 
 if TYPE_CHECKING:
     import os
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from ._characters.models import CharacterRoster, SeriesRecord
     from ._resolution import Resolved, RosterCheckpoint
@@ -61,6 +69,8 @@ _NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
 _MAX_PAUSE_MS = 60_000
 _PipeArgs = ParamSpec("_PipeArgs")
 _PipeResult = TypeVar("_PipeResult")
+_RuleOperationT = TypeVar("_RuleOperationT", Attributions, Silences, Pronunciations)
+WhereArg: TypeAlias = Pattern | Mapping[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +140,7 @@ class Pipeline:
         self,
         lexicon: Mapping[str, str] | None = None,
         *,
+        where: WhereArg = None,
         numbers: str = "conservative",
         builtin: bool = True,
         **features: bool,
@@ -163,6 +174,10 @@ class Pipeline:
         leaves a general one free to match inside it: ``currency=False``
         alone reads "£5" as "£five", because the integer rule still applies.
         Decline ``integers`` too to leave the digits alone.
+
+        Lexicons accumulate as scoped tuning rules selected by ``where``.
+        Later rules break ties at equal specificity. Number presets, built-in
+        pronunciation, and feature switches remain global last-call settings.
         """
         from ._domain.spoken.lexicon import validate_entries  # noqa: PLC0415
         from ._domain.spoken.numbers import FEATURES  # noqa: PLC0415
@@ -175,15 +190,41 @@ class Pipeline:
         for name, value in features.items():
             if name not in FEATURES or not isinstance(value, bool):
                 raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
-        return self._append(
+        pattern = _where_pattern(where)
+        entries = validate_entries(lexicon if lexicon is not None else {})
+        branch = self._replace(
             SpokenForm(
                 numbers=numbers,
                 builtin_lexicon=builtin,
-                lexicon=validate_entries(lexicon or {}),
                 features=tuple(sorted(features.items())),
             ),
-            before_tts=True,
         )
+        if lexicon is not None:
+            return branch._add_rule(Pronunciations, entries, pattern)  # noqa: SLF001
+        return branch
+
+    def attribute(self, character_id: str, *, where: WhereArg = None) -> Pipeline:
+        """Return a branch attributing matched units to one character.
+
+        Calls accumulate ordered rules. Narrower match sets take precedence;
+        later declarations break ties between equal or incomparable match sets.
+        """
+        return self._add_rule(Attributions, character_id, where)
+
+    def silence(self, duration_ms: int, *, where: WhereArg = None) -> Pipeline:
+        """Return a branch replacing the silence after matched positions.
+
+        Zero removes a derived pause. A subtree anchors to its final leaf;
+        declaration records that intent without reading or resolving the book.
+        """
+        if (
+            isinstance(duration_ms, bool)
+            or not isinstance(duration_ms, int)
+            or duration_ms < 0
+            or duration_ms > _MAX_PAUSE_MS
+        ):
+            raise ValidationError(ErrorCode.INVALID_PAUSE)
+        return self._add_rule(Silences, duration_ms, where)
 
     def pauses(
         self,
@@ -215,15 +256,15 @@ class Pipeline:
                 or duration > _MAX_PAUSE_MS
             ):
                 raise ValidationError(ErrorCode.INVALID_PAUSE)
-        return self._append(Pauses(*requested), before_tts=True)
+        return self._replace(Pauses(*requested))
 
     def infer_characters(self, model: str) -> Pipeline:
         """Return a branch that will derive a character roster."""
-        return self._append(InferCharacters(_model_id(model)), before_tts=True)
+        return self._replace(InferCharacters(_model_id(model)))
 
     def attribute_quotes(self, model: str) -> Pipeline:
         """Return a branch that will assign a speaker to each quoted run."""
-        return self._append(AttributeQuotes(_model_id(model)), before_tts=True)
+        return self._replace(AttributeQuotes(_model_id(model)))
 
     def assign_voice(self, voice: str | Voice) -> Pipeline:
         """Return a branch assigning one stable voice ID to all speech.
@@ -251,7 +292,7 @@ class Pipeline:
         # the caller writes it, not silently render single-voice because no
         # character ever reached a method.
         validate_method(method)
-        return self._append(
+        return self._replace(
             AssignVoices(
                 narrator_voice_id=narrator_id,
                 unknown_voice_id=_voice_id(unknown) if unknown else narrator_id,
@@ -263,14 +304,13 @@ class Pipeline:
                 ),
                 method=method,
             ),
-            before_tts=True,
         )
 
     def tts(self) -> Pipeline:
         """Return a branch with explicit synthesis intent."""
         if not has_operation(self.operations, AssignVoices):
             raise ValidationError(ErrorCode.VOICE_REQUIRED)
-        return self._append(SynthesizeSpeech())
+        return self._replace(SynthesizeSpeech())
 
     def metadata(
         self,
@@ -292,7 +332,7 @@ class Pipeline:
             raise ValidationError(ErrorCode.INVALID_METADATA)
         if author is not None and not author.strip():
             raise ValidationError(ErrorCode.INVALID_METADATA)
-        return self._append(MetadataIntent(title, author, cover))
+        return self._replace(MetadataIntent(title, author, cover), before_tts=False)
 
     def series(
         self,
@@ -318,14 +358,13 @@ class Pipeline:
         name = series_id.strip()
         if not name or (book is not None and book < 1):
             raise ValidationError(ErrorCode.INVALID_SERIES)
-        return self._append(
+        return self._replace(
             Series(
                 series_id=name,
                 book=book,
                 allow_recast=allow_recast,
                 allow_narrator_change=allow_narrator_change,
             ),
-            before_tts=True,
         )
 
     def resolve(
@@ -583,17 +622,53 @@ class Pipeline:
         )
 
     def _append(self, operation: Operation, *, before_tts: bool = False) -> Pipeline:
-        """Create a branch with one pure validated operation append.
+        """Append a selection that must not coexist with a prior selection."""
+        return self._branch(
+            append_unique(self.operations, operation, before_tts=before_tts), operation
+        )
 
-        Synthesis, metadata, pronunciation, and pauses consume resolved
+    def _replace(self, operation: Operation, *, before_tts: bool = True) -> Pipeline:
+        """Replace an existing setting, or validate the order of a new one."""
+        return self._branch(
+            replace_or_append(self.operations, operation, before_tts=before_tts),
+            operation,
+        )
+
+    def _add_rule(
+        self, kind: type[_RuleOperationT], value: object, where: WhereArg
+    ) -> Pipeline:
+        """Append a declaration within one tuning family, preserving precedence."""
+        pattern = _where_pattern(where)
+        existing: tuple[Rule, ...] = next(
+            (item.rules for item in self.operations if isinstance(item, kind)), ()
+        )
+        rule = Rule(pattern, value, len(existing))
+        return self._replace(kind(rules=(*existing, rule)))
+
+    def _branch(
+        self, operations: tuple[Operation, ...], operation: Operation
+    ) -> Pipeline:
+        """Branch intent while retaining only still-valid resolution checkpoints.
+
+        Tuning, synthesis, metadata, pronunciation, and pauses consume resolved
         attribution without changing it. Other operations invalidate it.
         """
         return Pipeline(
             self.source,
-            append_unique(self.operations, operation, before_tts=before_tts),
+            operations,
             self._resolved
             if isinstance(
-                operation, (SynthesizeSpeech, MetadataIntent, SpokenForm, Pauses)
+                operation,
+                (
+                    SynthesizeSpeech,
+                    MetadataIntent,
+                    SpokenForm,
+                    Pauses,
+                    Attributions,
+                    Silences,
+                    Pronunciations,
+                    Annotations,
+                ),
             )
             else None,
             self._roster
@@ -608,6 +683,13 @@ class Pipeline:
 
     def _assigned_voice_id(self) -> str:
         return self._casting().narrator_voice_id
+
+
+def _where_pattern(where: WhereArg) -> Pattern:
+    """Normalize optional sparse coordinates without materializing the source."""
+    if isinstance(where, Pattern):
+        return where
+    return parse_pattern({} if where is None else where)
 
 
 def _voice_id(voice: str | Voice) -> str:

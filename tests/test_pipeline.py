@@ -17,6 +17,7 @@ from kenkui._domain.operations import (
     AttributeQuotes,
     InferCharacters,
     Pauses,
+    Pronunciations,
     Series,
     SpokenForm,
     SynthesizeSpeech,
@@ -178,7 +179,7 @@ def test_pipeline_is_frozen_branchable_and_operations_are_values() -> None:
 def test_duplicate_and_contradictory_operations_have_stable_codes() -> None:
     """Invalid semantic chains fail deterministically at their cheapest boundary."""
     with pytest.raises(kk.ValidationError) as duplicate:
-        kk.epub("book.epub").pronounce().pronounce()
+        kk.epub("book.epub").select_chapters("a").select_chapters("b")
     assert duplicate.value.code == kk.ErrorCode.DUPLICATE_OPERATION
 
     with pytest.raises(kk.ValidationError) as missing_voice:
@@ -430,7 +431,11 @@ def test_pronounce_records_intent_without_effects() -> None:
     assert isinstance(recorded, SpokenForm)
     assert recorded.numbers == "conservative"
     assert recorded.builtin_lexicon is True
-    assert recorded.lexicon == (("Cthulhu", "kuh-THOO-loo"),)
+    assert recorded.lexicon == ()
+    tuning = pipeline.operations[1]
+    assert isinstance(tuning, Pronunciations)
+    assert tuning.rules[0].value == (("Cthulhu", "kuh-THOO-loo"),)
+    assert tuning.rules[0].where.is_whole_book()
 
 
 def test_pronounce_is_branchable_and_absent_by_default() -> None:
@@ -455,11 +460,10 @@ def test_pronounce_rejects_a_malformed_entry() -> None:
     assert error.value.code is kk.ErrorCode.INVALID_PRONUNCIATION
 
 
-def test_pronounce_cannot_be_requested_twice() -> None:
-    """Duplicate operations are refused by the existing append rule."""
-    with pytest.raises(kk.ValidationError) as error:
-        kk.epub("book.epub").pronounce().pronounce()
-    assert error.value.code is kk.ErrorCode.DUPLICATE_OPERATION
+def test_pronounce_style_can_be_replaced() -> None:
+    """Repeated pronunciation calls replace the global spoken-form settings."""
+    pipeline = kk.epub("book.epub").pronounce().pronounce(numbers="off")
+    assert pipeline.operations == (SpokenForm(numbers="off"),)
 
 
 def test_pauses_records_five_independent_durations() -> None:
@@ -579,8 +583,7 @@ def test_a_negative_book_number_is_refused() -> None:
     assert error.value.code == kk.ErrorCode.INVALID_SERIES
 
 
-def test_two_series_declarations_are_refused() -> None:
-    """A book belongs to one series."""
-    with pytest.raises(kk.ValidationError) as error:
-        kk.epub("book.epub").series("a").series("b")
-    assert error.value.code == kk.ErrorCode.DUPLICATE_OPERATION
+def test_two_series_declarations_replace_membership() -> None:
+    """A book belongs to the most recently declared series."""
+    pipeline = kk.epub("book.epub").series("a").series("b")
+    assert pipeline.operations == (Series("b"),)
