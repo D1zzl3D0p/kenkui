@@ -16,6 +16,7 @@ import pytest
 import kenkui as kk
 from helpers import make_epub, xhtml
 from kenkui._audio.m4b import FakeArtifactAssembler
+from kenkui._domain.grid import Unit
 from kenkui._domain.planning import SpeakerSpan
 from kenkui._epub.identifiers import chapter_id
 from kenkui._execution.coordinator import ExecutionBindings
@@ -101,6 +102,18 @@ def machine_spans(chapter_ch08: ChapterInspection) -> tuple[SpeakerSpan, ...]:
 def siblings() -> dict[tuple[str, ...], int]:
     """Empty sibling counts, standing in for ``SiblingCounts``."""
     return {}
+
+
+@pytest.fixture
+def unit_ch08_p3_s2() -> Unit:
+    """Return a representative unit in chapter eight, paragraph three."""
+    return Unit("ch08", 3, 1, 2, 1, 0, 10, is_dialogue=False, is_emphasised=False)
+
+
+@pytest.fixture
+def unit_ch08_p1_s1() -> Unit:
+    """Return a representative unit in chapter eight, paragraph one."""
+    return Unit("ch08", 1, 1, 1, 1, 0, 10, is_dialogue=False, is_emphasised=False)
 
 
 @pytest.fixture
