@@ -15,14 +15,14 @@ def test_empty_mapping_is_the_whole_book() -> None:
     assert parse_path({}).chapter is None
 
 
-def test_hierarchical_holes_are_refused() -> None:
-    with pytest.raises(ValidationError):
-        parse_path({"chapter": "ch08", "sentence": 2})
+def test_holes_are_allowed_and_mean_any_of_that_level() -> None:
+    parsed = parse_path({"chapter": "ch08", "sentence": 2})
+    assert parsed.paragraph is None
+    assert parsed.sentence == 2
 
 
-def test_direct_path_construction_refuses_hierarchical_holes() -> None:
-    with pytest.raises(ValidationError):
-        Path("ch08", None, None, 2, None)
+def test_direct_path_construction_allows_holes() -> None:
+    assert Path("ch08", None, None, 2, None).sentence == 2
 
 
 def test_unknown_level_is_refused() -> None:

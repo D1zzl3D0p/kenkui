@@ -46,12 +46,19 @@
 
 ## Review fix round 1
 
-- Corrected the earlier hole test: a path may not skip paragraph before a
-  sentence/line/phrase. Line remains optionally omitted because the required
-  full-path example deliberately omits it; phrase still requires sentence.
+- (Superseded by controller ruling in review round 2.) The temporary hierarchy
+  restriction was incorrect: the brief explicitly permits independent sparse
+  components, including chapter plus sentence without paragraph or line.
 - Added `Path.__post_init__` validation so direct construction enforces valid
-  chapter/type/positive coordinate values and the same hierarchy invariants as
-  parsing. `contains` consequently operates only on valid prefix paths.
+  chapter/type/positive coordinate values while permitting arbitrary omitted
+  coordinates. `contains` retains independent component wildcard matching.
 - Evidence: `uv run pytest tests/test_paths.py tests/test_grid.py --no-cov -q`
   => **25 passed**; `uv run pytest -q` => **passed**; Ruff => **All checks
   passed**; `uv run mypy src/kenkui/_domain/paths.py` => **Success**.
+
+## Review fix round 2
+
+- Restored sparse-hole parsing and direct construction behavior required by the
+  brief, while retaining direct field validation.
+- Updated the round-1 record and tests to keep this report internally
+  consistent with the controller ruling.

@@ -27,7 +27,7 @@ class Path:
     phrase: int | None = None
 
     def __post_init__(self) -> None:
-        """Validate types, positive coordinates, and prefix hierarchy."""
+        """Validate field types and positive coordinates."""
         if self.chapter is not None and not isinstance(self.chapter, str):
             raise _invalid_path()
         values = (self.paragraph, self.line, self.sentence, self.phrase)
@@ -40,14 +40,6 @@ class Path:
                 or value <= 0
             ):
                 raise _invalid_path()
-        if self.chapter is None and any(value is not None for value in values):
-            raise _invalid_path()
-        if self.paragraph is None and any(
-            value is not None for value in (self.line, self.sentence, self.phrase)
-        ):
-            raise _invalid_path()
-        if self.sentence is None and self.phrase is not None:
-            raise _invalid_path()
 
 
 def _invalid_path() -> ValidationError:
