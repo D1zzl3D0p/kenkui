@@ -89,6 +89,8 @@ class ErrorCode(StrEnum):
     INVALID_PATTERN = "invalid_pattern"
     INVALID_SIDECAR = "invalid_sidecar"
     RULE_OVERLAP = "rule_overlap"
+    ANCHOR_DIGEST_MISMATCH = "anchor_digest_mismatch"
+    PATTERN_MATCH_COUNT_DRIFT = "pattern_match_count_drift"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -196,6 +198,10 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.RULE_OVERLAP: (
         "Two rules overlap without one containing the other; "
         "declaration order breaks the tie."
+    ),
+    ErrorCode.ANCHOR_DIGEST_MISMATCH: "An annotation's anchor digest has changed.",
+    ErrorCode.PATTERN_MATCH_COUNT_DRIFT: (
+        "An annotation's pattern match count has changed."
     ),
 }
 

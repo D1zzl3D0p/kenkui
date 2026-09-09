@@ -51,6 +51,7 @@ from .inspection import (
     ChapterInspection,
 )
 from .pipeline import Pipeline, Source
+from .script import Script, ScriptRow
 from .voices import Engine, Voice
 from .voices.provision import (
     add_voice,
@@ -85,6 +86,8 @@ __all__ = [
     "Pipeline",
     "RenderError",
     "Result",
+    "Script",
+    "ScriptRow",
     "SeriesCharacter",
     "SeriesRecord",
     "Source",

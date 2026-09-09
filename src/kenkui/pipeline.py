@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
     from .inspection import BookInspection
+    from .script import Script
 
 _LOGGER = get_logger(__name__)
 _NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
@@ -595,6 +596,12 @@ class Pipeline:
                 for _pair in overlap_warnings(operation.rules)
             )
         return ValidationResult(tuple(issues))
+
+    def script(self) -> Script:
+        """Inspect canonical review rows lazily, without resolution or model calls."""
+        from .script import Script  # noqa: PLC0415 - read-model construction boundary
+
+        return Script(self)
 
     def inspect(self) -> BookInspection:
         """Inspect this checkpoint without synthesis or model calls.

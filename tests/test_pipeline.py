@@ -402,6 +402,8 @@ def test_public_exports_are_intentional() -> None:
         "ValidationResult",
         "ExecutionStats",
         "Result",
+        "Script",
+        "ScriptRow",
         "CancellationToken",
         "ExecutionEvent",
         "Started",
