@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .errors import ErrorCode, SourceError
 
@@ -79,6 +79,7 @@ class ValidationIssue:
 
     code: ErrorCode
     message: str
+    severity: Literal["error", "warning"] = "error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,9 +89,19 @@ class ValidationResult:
     issues: tuple[ValidationIssue, ...] = ()
 
     @property
+    def errors(self) -> tuple[ValidationIssue, ...]:
+        """Issues severe enough to block rendering."""
+        return tuple(issue for issue in self.issues if issue.severity == "error")
+
+    @property
+    def warnings(self) -> tuple[ValidationIssue, ...]:
+        """Issues worth surfacing but not severe enough to block rendering."""
+        return tuple(issue for issue in self.issues if issue.severity == "warning")
+
+    @property
     def is_valid(self) -> bool:
-        """Whether validation found no issues."""
-        return not self.issues
+        """Whether validation found no errors."""
+        return not self.errors
 
 
 @dataclass(frozen=True, slots=True)

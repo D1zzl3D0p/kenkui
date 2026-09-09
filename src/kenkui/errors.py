@@ -88,6 +88,7 @@ class ErrorCode(StrEnum):
     INVALID_PATH = "invalid_path"
     INVALID_PATTERN = "invalid_pattern"
     INVALID_SIDECAR = "invalid_sidecar"
+    RULE_OVERLAP = "rule_overlap"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -192,6 +193,10 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_PATH: "The path is invalid.",
     ErrorCode.INVALID_PATTERN: "The path pattern is invalid.",
     ErrorCode.INVALID_SIDECAR: "The annotation sidecar is invalid or inaccessible.",
+    ErrorCode.RULE_OVERLAP: (
+        "Two rules overlap without one containing the other; "
+        "declaration order breaks the tie."
+    ),
 }
 
 

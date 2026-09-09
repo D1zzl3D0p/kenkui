@@ -42,7 +42,7 @@ from ._domain.sidecar import (
     sidecar_path,
     write_sidecar,
 )
-from ._domain.tuning import Rule
+from ._domain.tuning import Rule, overlap_warnings
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
 from ._progress import EventEmitter
@@ -584,6 +584,16 @@ class Pipeline:
                     ),
                 )
             issues.extend(_issue(code) for code in codes)
+        for kind in (Attributions, Silences, Pronunciations):
+            operation = next(
+                (item for item in self.operations if isinstance(item, kind)), None
+            )
+            if operation is None:
+                continue
+            issues.extend(
+                _issue(ErrorCode.RULE_OVERLAP, severity="warning")
+                for _pair in overlap_warnings(operation.rules)
+            )
         return ValidationResult(tuple(issues))
 
     def inspect(self) -> BookInspection:
@@ -658,7 +668,7 @@ class Pipeline:
         """Validate controls and execute using privately bound rendering resources."""
         validation = self.validate()
         if not validation.is_valid:
-            issue = validation.issues[0]
+            issue = validation.errors[0]
             if issue.code in (
                 ErrorCode.SOURCE_NOT_FOUND,
                 ErrorCode.SOURCE_NOT_READABLE,
@@ -812,9 +822,11 @@ def _model_id(model: str) -> str:
     return model_id
 
 
-def _issue(code: ErrorCode) -> ValidationIssue:
+def _issue(
+    code: ErrorCode, *, severity: Literal["error", "warning"] = "error"
+) -> ValidationIssue:
     """Build a validation issue from the matching sanitized public error text."""
-    return ValidationIssue(code, str(ValidationError(code)))
+    return ValidationIssue(code, str(ValidationError(code)), severity)
 
 
 def _log_missing_series_voices(
