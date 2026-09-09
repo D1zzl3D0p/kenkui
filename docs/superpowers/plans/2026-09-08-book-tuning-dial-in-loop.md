@@ -303,9 +303,19 @@ _EMPHASIS_ELEMENTS = frozenset({"em", "i", "cite", "dfn", "var"})
 ```
 
 `open_emphasis` increments a depth counter and records the start offset when
-depth goes 0 → 1; `close_emphasis` decrements and appends `(start, current)`
-when depth returns to 0. Nesting therefore flattens to one range, and a range
-that is empty after normalization is discarded.
+depth goes 0 -> 1; `close_emphasis` decrements and records the raw range when
+depth returns to 0. Nesting therefore flattens to one range, and a range that
+is empty after normalization is discarded.
+
+**Raw offsets are not canonical offsets.** `_chapter_text` applies
+`normalize_text` after emission, which strips leading whitespace and collapses
+runs -- so a block boundary's two leading newlines shift every raw offset. A
+running length counter alone yields `(13, 28)` where this task's own test
+requires `(11, 26)`. Recorded ranges must therefore be resolved against the
+*canonical* text before being stored: anchor each raw range by normalizing the
+prefix before it, then locate the normalized snippet from that anchor, keeping
+a monotonic cursor so repeated phrases stay sorted and non-overlapping. Reuse
+`normalize_text` for this rather than reimplementing its rules.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
