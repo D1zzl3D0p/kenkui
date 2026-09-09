@@ -30,9 +30,13 @@ from kenkui._domain.paths import (
 
 # Share the planner's machine lookup and normalized gaps, and the sidecar's
 # subtree hash definition. Review must describe those exact interpretations.
-from kenkui._domain.planning import _gaps_over, _machine_lookup, _structural_pieces
+from kenkui._domain.planning import (
+    _apply_gap,
+    _gaps_over,
+    _machine_lookup,
+    _structural_pieces,
+)
 from kenkui._domain.sidecar import _anchor
-from kenkui._domain.structure import gap_ms
 from kenkui._domain.tuning import Provenance, resolve_rules
 from kenkui.api import ValidationIssue
 from kenkui.errors import ErrorCode
@@ -49,7 +53,11 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class ScriptRow:
-    """One canonical unit and the effective speaker and following silence."""
+    """One canonical unit and the effective speaker and following silence.
+
+    Whitespace-only units retain their text and path but carry zero silence;
+    their gaps settle onto the preceding speech-bearing row, as in planning.
+    """
 
     path: Path
     text: str
@@ -187,28 +195,36 @@ class Script:
         operations = self._pipeline.operations
         pauses = next((op for op in operations if isinstance(op, Pauses)), Pauses())
         derived = {
-            end: gap_ms(reasons, pauses)
-            for _start, end, reasons in _structural_pieces(chapter, pauses)
+            end: reasons for _start, end, reasons in _structural_pieces(chapter, pauses)
         }
-        gaps = {index: derived.get(unit.end, 0) for index, unit in enumerate(units)}
         rules = tuple(
             rule
             for operation in operations
             if isinstance(operation, Silences)
             for rule in operation.rules
         )
-        if rules:
-            gaps.update(_gaps_over(units, rules))
-        if units:
-            last = len(units) - 1
+        manual = _gaps_over(units, rules) if rules else {}
+        indices: list[int] = []
+        silence: list[int] = []
+        for index, unit in enumerate(units):
+            if unit_text(unit, chapter.text).strip():
+                indices.append(index)
+                silence.append(0)
+            # Planning emits no segment for whitespace-only fragments. Their
+            # gaps settle on the last spoken segment, so a later manual zero
+            # must also be able to remove the preceding row's effective pause.
+            _apply_gap(
+                silence, derived.get(unit.end, frozenset()), pauses, manual.get(index)
+            )
+        if silence:
             # Match planning: inter-chapter silence is a floor; the book's
             # trailing silence is always zero, including manual declarations.
-            gaps[last] = (
+            silence[-1] = (
                 0
                 if chapter.id == self._inspection.chapters[-1].id
-                else max(gaps[last], pauses.chapter_ms)
+                else max(silence[-1], pauses.chapter_ms)
             )
-        return gaps
+        return dict(zip(indices, silence, strict=True))
 
     def _update_warnings(self) -> None:
         rules = tuple(

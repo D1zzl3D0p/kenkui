@@ -109,3 +109,47 @@ Commit message: `feat(script): add the per-unit read model with provenance`.
 Only Task 12 implementation, tests, and this report are staged. The report is
 force-added because `.superpowers/` is ignored, consistent with existing tracked
 task reports. The final commit hash is returned to the parent agent.
+
+## Review fix round 1: whitespace gap normalization
+
+Review found that whitespace-only leaves could display pauses different from
+the compiled plan. For canonical `"Alpha." "Beta."`, a 900 ms pause on the first
+quote and a 300 ms pause on the intervening whitespace appeared as
+`[900, 300, 0]` in Script. Planning emits no speech segment for that whitespace
+and applies its later manual duration to the preceding spoken segment instead.
+An explicit zero exposed the same defect: Script kept 900 ms while planning
+removed it.
+
+Changed Script to accumulate silence only for speech-bearing leaves and pass
+every unit boundary through the planner's existing `_apply_gap`. Manual durations
+therefore replace the previous effective duration, including zero; derived
+durations continue to take their maximum. Whitespace retains its canonical row
+and path with `silence_after_ms == 0`. Chapter and final-book normalization now
+targets the last speech-bearing leaf. Documented this behavior on `ScriptRow`.
+
+The regression uses a real parsed EPUB and `compile_execution_plan`, comparing
+Script's spoken texts and effective spoken gaps with the resulting plan. It
+covers a 300 ms whitespace replacement, an explicit zero, and no whitespace
+override (which preserves the original 900 ms pause).
+
+Verification commands and results:
+
+- `rtk uv run pytest tests/test_script.py -k whitespace_gaps -v --no-cov`
+  — red phase: **2 failed, 1 passed, 24 deselected** in 0.06s. The two failures
+  reproduce the 300 ms and explicit-zero divergences.
+- `rtk uv run ruff format src/kenkui/script.py tests/test_script.py && rtk uv run ruff check . && rtk uv run mypy && rtk uv run pytest tests/test_script.py tests/test_tuning_merge.py tests/test_package.py -v --no-cov`
+  — **PASS**: Ruff clean; mypy clean for 146 source files; **44 passed** in 0.35s.
+- `rtk uv run ruff format --check . && rtk uv run ruff check . && rtk uv run mypy && rtk uv run pytest`
+  — **PASS**: 180 files already formatted; Ruff clean; mypy clean for 146 source
+  files; **1,447 passed, 45 skipped, 7 deselected, 1 warning** in **84.53s**.
+  Overall coverage **91.56%**, `src/kenkui/script.py` **99%**. The warning is the
+  existing duplicate-ZIP-member fixture warning in `test_epub.py`.
+- `rtk git diff --check` — passed.
+
+Self-review: all grid leaves remain visible and immutable, existing laziness
+checks still pass, and no extra grid is built. Reusing `_apply_gap` adds no
+circular dependency and changes no rendering/planning behavior. Partial path
+lookup without a chapter remains deferred as requested. No new concerns beyond
+the previously recorded private-helper dependency and conservative drift scope.
+
+Fix commit message: `fix(script): fold whitespace gaps onto the preceding spoken row`.

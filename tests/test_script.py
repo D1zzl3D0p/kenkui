@@ -13,7 +13,12 @@ from helpers import make_epub, xhtml
 from kenkui._domain.grid import build_grid
 from kenkui._domain.operations import Attributions, Pronunciations, Silences
 from kenkui._domain.paths import Path, parse_pattern, path_of
-from kenkui._domain.planning import SpeakerSpan, effective_spans, manual_gaps
+from kenkui._domain.planning import (
+    SpeakerSpan,
+    compile_execution_plan,
+    effective_spans,
+    manual_gaps,
+)
 from kenkui._domain.sidecar import authoring_snapshot
 from kenkui._domain.tuning import Rule
 
@@ -407,3 +412,56 @@ def test_stale_digest_does_not_relocate_the_declared_rule(
         if row.character == "irulan"
     )
     assert len(script.warnings) == 1
+
+
+@pytest.mark.parametrize("whitespace_ms", [300, 0, None])
+def test_whitespace_gaps_match_compiled_spoken_gaps(
+    tmp_path: FilePath, whitespace_ms: int | None
+) -> None:
+    """Whitespace keeps its row but settles its gap onto the previous spoken row."""
+    source = make_epub(
+        tmp_path / "quotes.epub",
+        chapters={"one": xhtml('<p>"Alpha." "Beta."</p>')},
+        spine=["one"],
+    )
+    book = (
+        kk.book(source)
+        .assign_voice("ivy")
+        .silence(900, where={"sentence": 1, "phrase": 1})
+    )
+    if whitespace_ms is not None:
+        book = book.silence(whitespace_ms, where={"sentence": 1, "phrase": 2})
+    inspection = book.inspect()
+    script = book.script()
+    rows = list(script)
+    voice = kk.Voice(
+        id="ivy",
+        name="Ivy",
+        enabled=True,
+        provenance="fixture",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en",
+        state="loaded",
+        content_fingerprint="a" * 64,
+        compatible_model_revisions=("fake-v1",),
+    )
+    plan = compile_execution_plan(
+        book.tts(),
+        inspection,
+        source_bytes_hash="b" * 64,
+        resolved_voice=voice,
+        model_revision="fake-v1",
+    )
+    assert [row.text for row in rows] == ['"Alpha."', " ", '"Beta."']
+    assert rows[1].silence_after_ms == 0
+    assert [row.text.strip() for row in rows if row.text.strip()] == [
+        segment.text.strip() for segment in plan.segments
+    ]
+    assert tuple(row.silence_after_ms for row in rows if row.text.strip()) == (
+        plan.trailing_silence_ms
+    )
+    assert plan.trailing_silence_ms == (
+        900 if whitespace_ms is None else whitespace_ms,
+        0,
+    )
