@@ -33,12 +33,15 @@ def test_closing_quote_stays_with_its_sentence() -> None:
 
 def test_closing_curly_quote_stays_with_its_sentence() -> None:
     """Closing curly quotes should stay attached to their sentence."""
-    assert split_sentences('"Go." He left.') == ('"Go." ', "He left.")
+    text = "\u201cGo.\u201d He left."
+    assert ord(text[0]) == ord("\u201c")
+    assert ord(text[4]) == ord("\u201d")
+    assert split_sentences(text) == ("\u201cGo.\u201d ", "He left.")
 
 
 def test_closing_curly_quote_exactness() -> None:
     """Curly quotes must preserve exact reconstruction invariant."""
-    text = '"Go." He left.'
+    text = "\u201cGo.\u201d He left."
     assert "".join(split_sentences(text)) == text
 
 
@@ -64,16 +67,21 @@ def test_phrase_split_is_exact() -> None:
 
 def test_phrase_split_with_curly_quotes() -> None:
     """Phrases should split correctly with curly punctuation."""
-    assert split_phrases("Yes, he said; then left.") == (
-        "Yes, ",
-        "he said; ",
-        "then left.",
+    text = "\u201cYes,\u201d \u201cNo;\u201d done."
+    assert ord(text[0]) == ord("\u201c")
+    assert ord(text[5]) == ord("\u201d")
+    assert ord(text[7]) == ord("\u201c")
+    assert ord(text[11]) == ord("\u201d")
+    assert split_phrases(text) == (
+        "\u201cYes,\u201d ",
+        "\u201cNo;\u201d ",
+        "done.",
     )
 
 
 def test_phrase_split_curly_exactness() -> None:
     """Phrase splits with curly quotes must preserve exactness invariant."""
-    text = "Yes, he said; then left."
+    text = "\u201cYes,\u201d \u201cNo;\u201d done."
     assert "".join(split_phrases(text)) == text
 
 
@@ -92,7 +100,7 @@ def test_empty_text_yields_no_parts() -> None:
         "A.B.C. Corp. filed.",
         "...",
         "  ",
-        '"Go." He left.',
+        "\u201cGo.\u201d He left.",
     ],
 )
 def test_splitters_are_exact_over_awkward_input(text: str) -> None:
