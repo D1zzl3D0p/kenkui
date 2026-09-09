@@ -73,3 +73,15 @@
   `uv run mypy src/kenkui/_domain/paths.py` => **Success**;
   `pytest tests/test_paths.py --no-cov` => **17 passed**; full `pytest -q`
   completed successfully.
+
+## Integration hygiene fix 2
+
+- Added concise module and test docstrings to `tests/test_paths.py`, matching
+  the repository's test style.
+- Replaced direct magic-number comparisons with the named
+  `SENTENCE_NUMBER` constant; test semantics are unchanged.
+- Evidence: `uv run ruff format --check .` => **174 files already formatted**;
+  `uv run ruff check .` => **All checks passed**;
+  `uv run mypy src/kenkui/_domain/paths.py` => **Success**;
+  focused paths tests => **17 passed**; full `pytest -q` completed
+  successfully.
