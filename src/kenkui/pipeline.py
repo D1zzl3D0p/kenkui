@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -33,6 +35,13 @@ from ._domain.operations import (
 )
 from ._domain.paths import Pattern, parse_pattern
 from ._domain.selection import select_chapters, select_range
+from ._domain.sidecar import (
+    authoring_snapshot,
+    deserialize,
+    serialize,
+    sidecar_path,
+    write_sidecar,
+)
 from ._domain.tuning import Rule
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
@@ -214,6 +223,65 @@ class Pipeline:
         A tuple of patterns or mappings adds one rule per selector in order.
         """
         return self._add_rule(Attributions, character_id, where)
+
+    def annotations(self, path: str | os.PathLike[str] | None = None) -> Pipeline:
+        """Load one immutable tuning snapshot, extending prior declarations.
+
+        Reads only the sidecar. The digest identifies exactly the bytes parsed;
+        later edits to that file cannot change this pipeline branch.
+        """
+        if has_operation(self.operations, Annotations):
+            raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
+        target = sidecar_path(self.source.path) if path is None else Path(path)
+        try:
+            content = target.read_bytes()
+            loaded = deserialize(json.loads(content.decode("utf-8")))
+        except (OSError, ValueError):
+            raise ValidationError(ErrorCode.INVALID_SIDECAR) from None
+        counts = {"attributions": 0, "silences": 0, "pronunciations": 0}
+        branch = self
+        for operation in loaded:
+            if isinstance(operation, (Attributions, Silences, Pronunciations)):
+                kind = type(operation)
+                counts[kind.__name__.lower()] = len(operation.rules)
+                existing = next(
+                    (
+                        item.rules
+                        for item in branch.operations
+                        if isinstance(item, kind)
+                    ),
+                    (),
+                )
+                rules = tuple(
+                    replace(rule, index=index)
+                    for index, rule in enumerate(operation.rules, start=len(existing))
+                )
+                branch = branch._replace(kind((*existing, *rules)))
+        return branch._append(  # noqa: SLF001
+            Annotations(target, hashlib.sha256(content).hexdigest(), counts)
+        )
+
+    def write_annotations(self, path: str | os.PathLike[str] | None = None) -> Path:
+        """Save tuning with current text anchors, without changing this branch.
+
+        Annotation scope is the source book, independent of render selection.
+        Writing explicitly inspects that book and builds only touched grids.
+        """
+        target = sidecar_path(self.source.path) if path is None else Path(path)
+        try:
+            if target.resolve() == self.source.path.resolve() or (
+                target.exists()
+                and self.source.path.exists()
+                and target.samefile(self.source.path)
+            ):
+                raise ValidationError(ErrorCode.INVALID_SIDECAR)
+        except OSError:
+            raise ValidationError(ErrorCode.INVALID_SIDECAR) from None
+        tuning = deserialize(serialize(self.operations))
+        chapters = inspect_epub(self.source.path).chapters if tuning else ()
+        payload = serialize(authoring_snapshot(tuning, chapters))
+        write_sidecar(target, payload)
+        return target
 
     def silence(self, duration_ms: int, *, where: WhereArg = None) -> Pipeline:
         """Return a branch replacing the silence after matched positions.

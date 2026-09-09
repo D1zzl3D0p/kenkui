@@ -87,6 +87,7 @@ class ErrorCode(StrEnum):
     SERIES_NARRATOR_CHANGED = "series_narrator_changed"
     INVALID_PATH = "invalid_path"
     INVALID_PATTERN = "invalid_pattern"
+    INVALID_SIDECAR = "invalid_sidecar"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -190,6 +191,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.INVALID_PATH: "The path is invalid.",
     ErrorCode.INVALID_PATTERN: "The path pattern is invalid.",
+    ErrorCode.INVALID_SIDECAR: "The annotation sidecar is invalid or inaccessible.",
 }
 
 

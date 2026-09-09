@@ -32,6 +32,7 @@ class Rule:
     value: object
     index: int
     digest: str | None = None
+    matched: int | None = None
 
 
 Provenance: TypeAlias = Literal["default", "unresolved", "machine", "rule"]
