@@ -62,3 +62,14 @@
   brief, while retaining direct field validation.
 - Updated the round-1 record and tests to keep this report internally
   consistent with the controller ruling.
+
+## Integration hygiene fix
+
+- Ran the repository-wide formatter check; Ruff identified one unformatted
+  Task 5-owned module, `src/kenkui/_domain/paths.py`.
+- Applied only Ruff's mechanical formatting to that module; no behavior was
+  changed.
+- Evidence: `uv run ruff format --check .` => **171 files already formatted**;
+  `uv run mypy src/kenkui/_domain/paths.py` => **Success**;
+  `pytest tests/test_paths.py --no-cov` => **17 passed**; full `pytest -q`
+  completed successfully.

@@ -36,11 +36,7 @@ class Path:
         for value in values:
             if value is None:
                 continue
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value <= 0
-            ):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise _invalid_path()
 
 
@@ -284,9 +280,7 @@ def parse_pattern(mapping: Mapping[str, object]) -> Pattern:  # noqa: C901, PLR0
             selector = Exact(value)
         elif isinstance(value, list):
             if not value or any(
-                not isinstance(item, int)
-                or isinstance(item, bool)
-                or item <= 0
+                not isinstance(item, int) or isinstance(item, bool) or item <= 0
                 for item in value
             ):
                 raise _invalid_pattern()
