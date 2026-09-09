@@ -37,3 +37,6 @@ site/
 
 # Local evaluation harness: scratch, not shipped.
 evals/
+
+# Subagent-driven development scratch: ledger, briefs, review packages.
+.superpowers/
