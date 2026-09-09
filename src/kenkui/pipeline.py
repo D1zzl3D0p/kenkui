@@ -225,10 +225,12 @@ class Pipeline:
         return self._add_rule(Attributions, character_id, where)
 
     def annotations(self, path: str | os.PathLike[str] | None = None) -> Pipeline:
-        """Load one immutable tuning snapshot, extending prior declarations.
+        """Load one immutable tuning baseline beneath inline declarations.
 
         Reads only the sidecar. The digest identifies exactly the bytes parsed;
         later edits to that file cannot change this pipeline branch.
+        Exact duplicates across the file/code boundary retain their loaded
+        copy and anchor metadata. Other inline rules follow the loaded prefix.
         """
         if has_operation(self.operations, Annotations):
             raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
@@ -252,11 +254,23 @@ class Pipeline:
                     ),
                     (),
                 )
+                # Code may repeat a shared lexicon or correction already saved
+                # in this book. Keep the loaded copy so its count still marks
+                # the loaded/unsaved boundary, preserving repetitions within
+                # either source because their declaration order is meaningful.
+                additions = tuple(
+                    rule
+                    for rule in existing
+                    if not any(
+                        rule.where == saved.where and rule.value == saved.value
+                        for saved in operation.rules
+                    )
+                )
                 rules = tuple(
                     replace(rule, index=index)
-                    for index, rule in enumerate(operation.rules, start=len(existing))
+                    for index, rule in enumerate((*operation.rules, *additions))
                 )
-                branch = branch._replace(kind((*existing, *rules)))
+                branch = branch._replace(kind(rules))
         return branch._append(  # noqa: SLF001
             Annotations(target, hashlib.sha256(content).hexdigest(), counts)
         )

@@ -51,3 +51,23 @@ Focused tests use `--no-cov` because the configured coverage threshold applies t
 - Later drift code must use the same full-subtree hash and leaf-count interpretation. `authoring_snapshot` centralizes the current calculations for reuse; care is needed to compare old metadata before replacing it with current metadata.
 - Loading an absent sidecar is a sanitized `INVALID_SIDECAR` error; version-only sidecars are valid. Optional anchor fields support hand authoring. Saving recalculates current anchors, including replacing a missing exact anchor with count zero.
 - Existing destination directories are required. Atomic replacement prevents partial files; this task does not introduce file locking or concurrent-editor conflict detection.
+
+## Review fix round 1: Inline precedence and shared-rule deduplication
+
+Review identified two important errors in the initial loader: it put loaded rules after existing inline declarations, and it duplicated shared rules each time code was reapplied before loading a saved sidecar. The ordering described in the initial implementation/self-review above is superseded by this fix.
+
+`annotations()` now retains loaded rules as the prefix of each operation family, appends nonduplicate existing inline rules in their original order, and reindexes the entire merged sequence contiguously. Equal-specificity inline rules therefore win regardless of whether code declared them before or after the load call.
+
+Deduplication compares only the exact `(Pattern, value)` pair across the loaded/inline boundary, ignoring `Rule.index`, `Rule.digest`, and `Rule.matched`. A duplicate keeps the loaded copy and its authoring metadata. `Annotations.loaded` consequently remains the exact prefix length, and unsaved code additions occupy only the suffix. The coordinating agent explicitly confirmed that repetitions within either source must remain intact to preserve that source's declaration semantics; this fix does not globally deduplicate or reorder them. Different patterns and different payloads remain distinct.
+
+Validation:
+
+- Red: `rtk uv run pytest tests/test_sidecar.py -k 'loading_extends or equal_specificity or repeated_save_load or deduplication' -q --no-cov` reproduced both findings: **4 failed, 54 deselected in 0.29s**.
+- Green: `rtk uv run pytest tests/test_sidecar.py tests/test_tuning_operations.py tests/test_precedence.py tests/test_pipeline.py -q --no-cov` passed **141 tests in 0.26s**.
+- `rtk uv run mypy`: **success, no issues in 142 source files**.
+- `rtk uv run ruff check src/kenkui/pipeline.py tests/test_sidecar.py`: **all checks passed**.
+- `rtk uv run ruff format --check src/kenkui/pipeline.py tests/test_sidecar.py`: **2 files already formatted**.
+- `rtk git diff --check`: passed.
+- Full suite: `rtk uv run pytest -q` passed **1400 tests, 45 skipped, 7 deselected, 1 warning in 83.42s**; **91.21% total coverage**, satisfying the 90% gate. The warning remains the deliberate duplicate-ZIP-member fixture.
+
+Self-review verified equal-specificity precedence through `resolve_rules`, contiguous indices, unchanged pipeline checkpoints, immutable input branches, distinct pattern/value retention, intentional repetitions within both sources, and an exact loaded/unsaved boundary. The repeated save/load regression exercises all three tuning families across three cycles and asserts byte-for-byte file stability. Its shared inline rules have different indices and lack the stored anchor metadata, confirming neither affects duplicate detection. Only the loader, sidecar regressions, and this report changed; no subagents or stashes were used. There are no new downstream concerns beyond the original planned drift/renderer integration.

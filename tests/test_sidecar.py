@@ -23,7 +23,7 @@ from kenkui._domain.operations import (
 )
 from kenkui._domain.paths import parse_pattern
 from kenkui._domain.sidecar import SIDECAR_VERSION, deserialize, serialize, sidecar_path
-from kenkui._domain.tuning import Rule
+from kenkui._domain.tuning import Rule, resolve_rules
 from kenkui.errors import ErrorCode, ValidationError
 
 if TYPE_CHECKING:
@@ -172,7 +172,7 @@ def test_patterns_record_counts_and_last_resolves(epub_path: Path) -> None:
 def test_loading_extends_rules_and_keeps_checkpoints(
     resolved_book: kk.Pipeline, tmp_path: Path
 ) -> None:
-    """Loaded rules take later precedence; branches and resolved data survive."""
+    """Loaded rules form a baseline; inline rules and checkpoints survive."""
     source = (
         kk.book(resolved_book.source.path)
         .attribute("loaded", where=({}, {"paragraph": 1}))
@@ -184,9 +184,9 @@ def test_loading_extends_rules_and_keeps_checkpoints(
     loaded = base.annotations(str(written)).attribute("later")
     operation = next(op for op in loaded.operations if isinstance(op, Attributions))
     assert [rule.value for rule in operation.rules] == [
+        "loaded",
+        "loaded",
         "inline",
-        "loaded",
-        "loaded",
         "later",
     ]
     assert [rule.index for rule in operation.rules] == list(range(4))
@@ -199,6 +199,104 @@ def test_loading_extends_rules_and_keeps_checkpoints(
     assert loaded._roster is base._roster  # noqa: SLF001
     with pytest.raises(TypeError):
         annotation.loaded["attributions"] = 9  # type: ignore[index]
+
+
+def test_inline_rules_win_equal_specificity_after_loading(epub_path: Path) -> None:
+    """Inline overrides win equal patterns even when declared before loading."""
+    written = kk.book(epub_path).attribute("from-file").write_annotations()
+    book = kk.book(epub_path).attribute("inline-first").attribute("inline-last")
+    loaded = book.annotations(written)
+    rules = next(op.rules for op in loaded.operations if isinstance(op, Attributions))
+    unit = build_grid(book.inspect().chapters[0])[0]
+    decision = resolve_rules(unit, None, rules, {})
+    assert decision.value == "inline-last"
+    assert decision.rule_index == rules[-1].index
+    assert [rule.value for rule in rules] == [
+        "from-file",
+        "inline-first",
+        "inline-last",
+    ]
+    assert [rule.index for rule in rules] == list(range(len(rules)))
+
+
+def _shared_tuning(book: kk.Pipeline) -> kk.Pipeline:
+    """Apply shared code declarations that may already be saved in a sidecar."""
+    where = {"chapter": CH08_ID, "paragraph": 1}
+    return (
+        book.attribute("shared", where=where)
+        .silence(250, where=where)
+        .pronounce({"Paul": "Pawl"}, where=where)
+    )
+
+
+def test_repeated_save_load_deduplicates_shared_tuning(epub_path: Path) -> None:
+    """All tuning kinds remain stable despite inline indices/metadata differing."""
+    saved = _shared_tuning(
+        kk.book(epub_path)
+        .attribute("book", where={"paragraph": 2})
+        .silence(900, where={"paragraph": 2})
+        .pronounce({"Chani": "Chah-nee"}, where={"paragraph": 2})
+    )
+    written = saved.write_annotations()
+    original = written.read_bytes()
+    for _cycle in range(3):
+        inline = _shared_tuning(kk.book(epub_path))
+        loaded = inline.annotations(written)
+        counts = next(
+            op.loaded for op in loaded.operations if isinstance(op, Annotations)
+        )
+        for kind in (Attributions, Silences, Pronunciations):
+            rules = next(op.rules for op in loaded.operations if isinstance(op, kind))
+            code_rules = next(
+                op.rules for op in inline.operations if isinstance(op, kind)
+            )
+            assert len(rules) == counts[kind.__name__.lower()]
+            assert [rule.index for rule in rules] == [0, 1]
+            assert rules[-1].digest is not None
+            assert code_rules[0].index == 0
+            assert code_rules[0].digest is None
+        loaded.write_annotations(written)
+        assert written.read_bytes() == original
+
+
+def test_deduplication_retains_distinct_rules_and_source_repetitions(
+    epub_path: Path,
+) -> None:
+    """Only exact cross-source duplicates disappear; meaningful order is retained."""
+    written = (
+        kk.book(epub_path)
+        .attribute("shared")
+        .attribute("file-middle")
+        .attribute("shared")
+        .write_annotations()
+    )
+    inline = (
+        kk.book(epub_path)
+        .attribute("shared")
+        .attribute("shared", where={"paragraph": 1})
+        .attribute("inline")
+        .attribute("inline-middle")
+        .attribute("inline")
+    )
+    loaded = inline.annotations(written)
+    rules = next(op.rules for op in loaded.operations if isinstance(op, Attributions))
+    assert [rule.value for rule in rules] == [
+        "shared",
+        "file-middle",
+        "shared",
+        "shared",
+        "inline",
+        "inline-middle",
+        "inline",
+    ]
+    assert [rule.index for rule in rules] == list(range(len(rules)))
+    counts = next(op.loaded for op in loaded.operations if isinstance(op, Annotations))
+    assert counts["attributions"] == len(
+        json.loads(written.read_text())["attributions"]
+    )
+    assert all(rule.matched is not None for rule in rules[: counts["attributions"]])
+    assert all(rule.matched is None for rule in rules[counts["attributions"] :])
+    assert rules[counts["attributions"]].where == parse_pattern({"paragraph": 1})
 
 
 def test_codec_preserves_array_order_and_detaches_payload() -> None:
