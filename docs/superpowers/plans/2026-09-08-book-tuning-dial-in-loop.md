@@ -97,6 +97,8 @@ them once here keeps every later task's tests short and consistent.
 - Consumes: nothing.
 - Produces, all importable from `tests/helpers.py` or available as fixtures:
   - `make_epub(path, *, chapters, spine, hrefs=None, title=..., author=..., cover=False)`
+    (imported as `from helpers import ...` — `tests/` is not a package, and pytest
+    puts the test directory on `sys.path`; verified empirically)
     and `xhtml(body, *, title=...)` — both moved verbatim from `test_epub.py`
   - `epub_path` — a two-chapter EPUB on disk, chapter IDs `ch08` and `ch09`
   - `chapter_ch08` — a `ChapterInspection` with known text
@@ -129,7 +131,7 @@ Expected: PASS, with the same test count as before the move.
 # tests/conftest.py
 from kenkui._domain.planning import SpeakerSpan
 from kenkui.inspection import ChapterInspection
-from tests.helpers import make_epub, xhtml
+from helpers import make_epub, xhtml
 
 CH08_TEXT = 'Alpha one. Alpha two.\n\n"Beta," she said. "Gamma," he answered.'
 CH08_BODY = '<p>Alpha one. Alpha two.</p><p>"Beta," she said. "Gamma," he answered.</p>'
@@ -238,7 +240,7 @@ This task records where emphasis was, without changing canonical text.
 from pathlib import Path
 
 from kenkui._epub.parser import inspect_epub
-from tests.helpers import make_epub, xhtml
+from helpers import make_epub, xhtml
 
 
 def only_chapter(tmp_path: Path, body: str):
@@ -1002,7 +1004,9 @@ git commit -m "feat(paths): add set-valued patterns with partial subset ordering
 **Interfaces:**
 - Consumes: `Unit`, `Pattern`, `subset`, `matches`.
 - Produces:
-  - `Rule` — frozen dataclass: `where: Pattern`, `value: object`, `index: int`
+  - `Rule` — frozen dataclass: `where: Pattern`, `value: object`, `index: int`,
+    `digest: str | None = None` (the anchor hash for fully concrete patterns;
+    Task 12 checks it, Task 9 persists it)
   - `Provenance` — `Literal["default", "unresolved", "machine", "rule"]`.
     There is no separate override rank: a fully concrete pattern is a subset
     of everything matching it, so exact overrides already win on specificity.
@@ -1476,7 +1480,12 @@ Expected: FAIL — `Pipeline` has no attribute `write_annotations`.
 
 `"where": {}` is the whole book. A rule whose pattern is fully concrete
 carries `digest`; a rule containing any set-valued component carries
-`matched`, the count of units it matched at authoring time. `deserialize`
+`matched`, the count of units it matched at authoring time.
+
+`write_annotations()` computes both by building the grid for the chapters the
+rules touch. Saving is an explicit, infrequent action, so paying a parse here
+is right — and it is what makes Task 12's drift warning able to fire at all.
+Use `build_grid` from Task 4 and `unit_digest` for concrete anchors. `deserialize`
 refuses a payload that is not an object, whose `kenkui_sidecar` is not
 `SIDECAR_VERSION`, or whose rules fail `parse_pattern`, raising
 `ValidationError(ErrorCode.INVALID_SIDECAR)`.
@@ -1824,8 +1833,7 @@ Imports for this module: `from dataclasses import replace`,
 `from kenkui._domain.paths import parse_pattern`,
 `from kenkui._domain.tuning import Rule`.
 
-`Rule` gains an optional `digest: str | None = None` field in Task 7 for
-exactly this check; add it there if it is not already present.
+`Rule` carries `digest` from Task 7.
 
 - [ ] **Step 2: Run test to verify it fails**
 
