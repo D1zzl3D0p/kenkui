@@ -161,6 +161,7 @@ addopts = [
   "-m=not native",
 ]
 markers = [
+  "corpus: opt-in property test over the local Calibre library",
   "native: opt-in tests that execute host FFmpeg/ffprobe (requires KENKUI_RUN_NATIVE=1)",
   "pocket_real: opt-in strictly local Pocket-TTS test",
 ]
