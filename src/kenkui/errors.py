@@ -85,6 +85,7 @@ class ErrorCode(StrEnum):
     CANCELLED = "cancelled"
     SERIES_VOICE_MISSING = "series_voice_missing"
     SERIES_NARRATOR_CHANGED = "series_narrator_changed"
+    INVALID_PATH = "invalid_path"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -186,6 +187,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.SERIES_NARRATOR_CHANGED: (
         "This series was recorded with a different narrator voice."
     ),
+    ErrorCode.INVALID_PATH: "The path is invalid.",
 }
 
 
