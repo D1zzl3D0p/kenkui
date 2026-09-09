@@ -5,19 +5,24 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from bisect import bisect_right
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
+from kenkui._domain.grid import build_grid, sibling_counts
 from kenkui._domain.operations import (
     AssignVoices,
+    Attributions,
     MetadataIntent,
     Operation,
     Pauses,
+    Silences,
     SpokenForm,
     SynthesizeSpeech,
 )
+from kenkui._domain.paths import LEVELS, matches
 from kenkui._domain.spoken import (
     SPOKEN_FORM_VERSION,
     spoken_identity,
@@ -31,6 +36,7 @@ from kenkui._domain.structure import (
     split_structural,
 )
 from kenkui._domain.text import NORMALIZATION_VERSION
+from kenkui._domain.tuning import resolve_rules
 from kenkui.errors import (
     ErrorCode,
     ModelError,
@@ -39,9 +45,12 @@ from kenkui.errors import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
+    from kenkui._domain.grid import Unit
+    from kenkui._domain.paths import Pattern, SiblingCounts
     from kenkui._domain.spoken.numbers import NumberTier
+    from kenkui._domain.tuning import Rule
     from kenkui.inspection import BookInspection, ChapterInspection
     from kenkui.voices import Voice
 
@@ -112,6 +121,7 @@ _SEGMENT_ID_VERSION = "v2"
 _UTF8_HASH_CHUNK_CHARACTERS = 64 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _OperationT = TypeVar("_OperationT", bound=Operation)
+_RuleOperationT = TypeVar("_RuleOperationT", Attributions, Silences)
 
 
 class _HashDigest(Protocol):
@@ -350,7 +360,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
 
     pauses = _one_operation(pipeline.operations, Pauses) or _NO_PAUSES
     segments, trailing_silence = _compile_segments(
-        inspection.chapters, spans, cast, spoken, pauses
+        inspection.chapters, spans, cast, spoken, pauses, operations=pipeline.operations
     )
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
@@ -396,10 +406,10 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
 def _one_operation(
     operations: tuple[Operation, ...], kind: type[_OperationT]
 ) -> _OperationT | None:
-    matches = tuple(item for item in operations if isinstance(item, kind))
-    if len(matches) > 1:
+    found = tuple(item for item in operations if isinstance(item, kind))
+    if len(found) > 1:
         raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
-    return matches[0] if matches else None
+    return found[0] if found else None
 
 
 def _validated_hash(value: str) -> str:
@@ -452,12 +462,155 @@ def _resolve_voice(
     )
 
 
-def _compile_segments(
+def effective_spans(
+    chapter: ChapterInspection,
+    machine_spans: tuple[SpeakerSpan, ...],
+    operations: tuple[Operation, ...],
+) -> tuple[SpeakerSpan, ...]:
+    """Merge machine attribution with tuning rules into the spans planning compiles.
+
+    Deliberately here and not in resolution. Resolution produces the machine
+    layer only, which is what lets a correction preserve a resolved pipeline
+    and cost no model calls, no store read, and no re-resolution -- just a
+    re-plan and the two or three segments whose identity actually changed.
+
+    With no attribution rules the machine spans are returned untouched, so
+    every book rendered before this stage existed still plans byte for byte
+    the same way.
+    """
+    rules = _rules_of(operations, Attributions)
+    if not rules:
+        return machine_spans
+    grid = build_grid(chapter)
+    siblings = sibling_counts(grid)
+    speaker = _machine_lookup(chapter.id, machine_spans)
+    decided = [
+        resolve_rules(unit, speaker(unit), rules, siblings).value for unit in grid
+    ]
+    return _coalesce(chapter.id, grid, decided)
+
+
+def manual_gaps(
+    chapter: ChapterInspection, operations: tuple[Operation, ...]
+) -> Mapping[int, int]:
+    """Return each declared silence as a grid unit index and a forced duration.
+
+    A silence anchored to a subtree normalizes to that subtree's last leaf, so
+    ``{paragraph: 3}`` and ``{paragraph: 3, sentence: -1}`` name one physical
+    gap and produce one key. The duration replaces whatever the derived tier
+    model computed there, which is what makes zero an instruction.
+    """
+    rules = _rules_of(operations, Silences)
+    if not rules:
+        return {}
+    return _gaps_over(build_grid(chapter), rules)
+
+
+def _rules_of(
+    operations: tuple[Operation, ...], kind: type[_RuleOperationT]
+) -> tuple[Rule, ...]:
+    """Return one tuning family's ordered rules, or none when it is absent."""
+    operation = _one_operation(operations, kind)
+    return () if operation is None else operation.rules
+
+
+def _machine_lookup(
+    chapter_id: str, spans: tuple[SpeakerSpan, ...]
+) -> Callable[[Unit], object | None]:
+    """Return the machine speaker covering a unit, by its starting offset.
+
+    Grid units are cut at quote edges and machine spans begin at them, so a
+    unit never straddles two machine speakers.
+    """
+    owned = sorted(
+        (span for span in spans if span.chapter_id == chapter_id),
+        key=lambda span: span.start,
+    )
+    starts = [span.start for span in owned]
+
+    def speaker(unit: Unit) -> object | None:
+        index = bisect_right(starts, unit.start) - 1
+        if index < 0 or unit.start >= owned[index].end:
+            return None
+        return owned[index].character_id
+
+    return speaker
+
+
+def _coalesce(
+    chapter_id: str, grid: tuple[Unit, ...], decided: list[object | None]
+) -> tuple[SpeakerSpan, ...]:
+    """Join adjacent units sharing a speaker, so one rule is not one span each.
+
+    Segment count follows span count, so emitting a span per grid unit would
+    multiply synthesis overhead across a book for no audible difference.
+    """
+    spans: list[SpeakerSpan] = []
+    for unit, value in zip(grid, decided, strict=True):
+        character = cast("str | None", value)
+        if (
+            spans
+            and spans[-1].character_id == character
+            and spans[-1].end == unit.start
+        ):
+            spans[-1] = replace(spans[-1], end=unit.end)
+        else:
+            spans.append(SpeakerSpan(chapter_id, unit.start, unit.end, character))
+    return tuple(spans)
+
+
+def _gaps_over(grid: tuple[Unit, ...], rules: tuple[Rule, ...]) -> dict[int, int]:
+    """Resolve every rule's anchors, then settle collisions by precedence."""
+    siblings = sibling_counts(grid)
+    anchors: set[int] = set()
+    for rule in rules:
+        anchors.update(_last_leaves(rule.where, grid, siblings))
+    gaps: dict[int, int] = {}
+    for index in sorted(anchors):
+        value = resolve_rules(grid[index], None, rules, siblings).value
+        if isinstance(value, int) and not isinstance(value, bool):
+            gaps[index] = value
+    return gaps
+
+
+def _last_leaves(
+    pattern: Pattern, grid: tuple[Unit, ...], siblings: SiblingCounts
+) -> Iterable[int]:
+    """Return the index of the final leaf of each subtree a pattern matches."""
+    depth = max((LEVELS.index(level) + 1 for level in pattern), default=0)
+    last: dict[tuple[str | int, ...], int] = {}
+    for index, unit in enumerate(grid):
+        if matches(pattern, unit, siblings):
+            last[_subtree(unit, depth)] = index
+    return last.values()
+
+
+def _subtree(unit: Unit, depth: int) -> tuple[str | int, ...]:
+    """Return the path prefix identifying the subtree a unit sits in."""
+    return (unit.chapter_id, unit.paragraph, unit.line, unit.sentence, unit.phrase)[
+        :depth
+    ]
+
+
+def _manual_offsets(
+    chapter: ChapterInspection, operations: tuple[Operation, ...]
+) -> Mapping[int, int]:
+    """Return declared silences keyed by the text offset they follow."""
+    rules = _rules_of(operations, Silences)
+    if not rules:
+        return {}
+    grid = build_grid(chapter)
+    return {grid[index].end: value for index, value in _gaps_over(grid, rules).items()}
+
+
+def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     chapters: tuple[ChapterInspection, ...],
     spans: tuple[SpeakerSpan, ...],
     cast_plan: CastPlan,
     spoken: SpokenForm | None = None,
     pauses: Pauses = _NO_PAUSES,
+    *,
+    operations: tuple[Operation, ...] = (),
 ) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
     """Split each speaker span while assigning one global plan-order ordinal.
 
@@ -478,11 +631,12 @@ def _compile_segments(
     for chapter_index, chapter in enumerate(chapters):
         _append_chapter(
             chapter,
-            _spans_for(chapter, spans),
+            _spans_for(chapter, effective_spans(chapter, spans, operations)),
             cast_plan,
             spoken=spoken,
             pauses=pauses,
             tiers=tiers,
+            gaps=_manual_offsets(chapter, operations),
             result=result,
             silence=silence,
         )
@@ -518,19 +672,29 @@ def _structural_pieces(
 
 
 def _fragments(
-    pieces: tuple[tuple[int, int, frozenset[str]], ...], span: SpeakerSpan
-) -> tuple[tuple[int, int, frozenset[str]], ...]:
+    pieces: tuple[tuple[int, int, frozenset[str]], ...],
+    span: SpeakerSpan,
+    gaps: Mapping[int, int],
+) -> tuple[tuple[int, int, frozenset[str], int | None], ...]:
     """Clip chapter pieces to one span, keeping a gap only where a piece ends.
 
     A fragment that stops early stops because the speaker changed, which is
-    not a structural boundary and carries no silence of its own.
+    not a structural boundary and carries no silence of its own. A declared
+    silence is such a boundary: cutting the fragment there is what gives the
+    gap a segment to land on.
     """
-    out: list[tuple[int, int, frozenset[str]]] = []
+    out: list[tuple[int, int, frozenset[str], int | None]] = []
     for start, end, reasons in pieces:
         lower, upper = max(start, span.start), min(end, span.end)
         if lower >= upper:
             continue
-        out.append((lower, upper, reasons if upper == end else frozenset()))
+        position = lower
+        for cut in [offset for offset in sorted(gaps) if lower < offset < upper]:
+            out.append((position, cut, frozenset(), gaps[cut]))
+            position = cut
+        out.append(
+            (position, upper, reasons if upper == end else frozenset(), gaps.get(upper))
+        )
     return tuple(out)
 
 
@@ -542,6 +706,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     spoken: SpokenForm | None,
     pauses: Pauses,
     tiers: tuple[str, ...],
+    gaps: Mapping[int, int],
     result: list[SpeechSegment],
     silence: list[int],
 ) -> None:
@@ -550,7 +715,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     carried = ""
     for span in spans:
         voice = cast_plan.voice_for(span.character_id)
-        for start, end, reasons in _fragments(pieces, span):
+        for start, end, reasons, manual in _fragments(pieces, span, gaps):
             text = chapter.text[start:end]
             if spoken is not None:
                 text = to_spoken(
@@ -566,8 +731,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                 # Nothing to say. Hold the characters for the next fragment
                 # and let this fragment's gap land on the last real segment.
                 carried = text
-                if silence:
-                    silence[-1] = max(silence[-1], gap_ms(reasons, pauses))
+                _apply_gap(silence, reasons, pauses, manual)
                 continue
             for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
                 if not chunk.strip():
@@ -589,8 +753,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                     )
                 )
                 silence.append(0)
-            if silence:
-                silence[-1] = max(silence[-1], gap_ms(reasons, pauses))
+            _apply_gap(silence, reasons, pauses, manual)
     if carried.strip():
         # Normalized text is not expected to end a chapter in whitespace, but
         # spoken-form transforms can leave one (epigraph pages). A whitespace
@@ -602,6 +765,25 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
             _segment(chapter, len(result), 0, carried, spoken=spoken, tiers=tiers)
         )
         silence.append(0)
+
+
+def _apply_gap(
+    silence: list[int],
+    reasons: frozenset[str],
+    pauses: Pauses,
+    manual: int | None,
+) -> None:
+    """Settle one gap onto the segment before it.
+
+    Derived reasons take the maximum among themselves, never the sum. A
+    declared silence replaces that result outright rather than adding to it,
+    which is the only way zero can remove a pause.
+    """
+    if not silence:
+        return
+    silence[-1] = (
+        manual if manual is not None else max(silence[-1], gap_ms(reasons, pauses))
+    )
 
 
 def _spans_for(

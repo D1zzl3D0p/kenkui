@@ -97,6 +97,22 @@ def unit_digest(unit: Unit, chapter_text: str) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()[:16]}"
 
 
+def sibling_counts(units: Iterable[Unit]) -> dict[tuple[str, ...], int]:
+    """Return how many children each addressed parent has, keyed by its path.
+
+    ``Last()`` is the only selector whose meaning depends on context, and this
+    is that context. Keys are string coordinates so they compare equal to the
+    parent path ``matches`` builds while walking a unit.
+    """
+    counts: dict[tuple[str, ...], int] = {}
+    for unit in units:
+        parent: tuple[str, ...] = (unit.chapter_id,)
+        for coordinate in (unit.paragraph, unit.line, unit.sentence, unit.phrase):
+            counts[parent] = max(counts.get(parent, 0), coordinate)
+            parent = (*parent, str(coordinate))
+    return counts
+
+
 def _cut_points(text: str, offset: int, edges: frozenset[int]) -> list[int]:
     """Return offsets where a phrase must be broken by a quote edge."""
     return sorted(edge for edge in edges if offset < edge < offset + len(text))

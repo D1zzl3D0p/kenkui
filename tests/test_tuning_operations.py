@@ -271,3 +271,10 @@ def test_annotations_defensively_freeze_loaded_data() -> None:
     assert operation.loaded == {"chapter": 10}
     with pytest.raises(TypeError):
         operation.loaded["chapter"] = 30  # type: ignore[index]
+
+
+def test_correction_preserves_resolution(resolved_book: kk.Pipeline) -> None:
+    """A correction must not cost a re-resolve; it layers over the machine result."""
+    corrected = resolved_book.attribute("jessica", where={"chapter": "ch08"})
+    assert resolved_book._resolved is not None  # noqa: SLF001 - not vacuous
+    assert corrected._resolved is resolved_book._resolved  # noqa: SLF001

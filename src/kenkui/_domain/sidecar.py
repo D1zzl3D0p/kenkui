@@ -11,7 +11,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, cast
 
-from kenkui._domain.grid import build_grid, unit_digest
+from kenkui._domain.grid import build_grid, sibling_counts, unit_digest
 from kenkui._domain.operations import (
     Annotations,
     Attributions,
@@ -204,7 +204,7 @@ def authoring_snapshot(
     )
     units = tuple(unit for chapter in selected for unit in build_grid(chapter))
     texts = {chapter.id: chapter.text for chapter in selected}
-    siblings = _sibling_counts(units)
+    siblings = sibling_counts(units)
     snapshots: dict[Pattern, tuple[str | None, int | None]] = {}
     for rule in rules:
         if rule.where not in snapshots:
@@ -226,16 +226,6 @@ def authoring_snapshot(
         )
         for operation in tuning
     )
-
-
-def _sibling_counts(units: tuple[Unit, ...]) -> dict[tuple[str, ...], int]:
-    counts: dict[tuple[str, ...], int] = {}
-    for unit in units:
-        parent: tuple[str, ...] = (unit.chapter_id,)
-        for coordinate in (unit.paragraph, unit.line, unit.sentence, unit.phrase):
-            counts[parent] = max(counts.get(parent, 0), coordinate)
-            parent = (*parent, str(coordinate))
-    return counts
 
 
 def _anchor(
