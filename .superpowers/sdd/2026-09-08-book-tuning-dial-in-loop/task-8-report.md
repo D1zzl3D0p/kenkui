@@ -53,3 +53,21 @@ The focused commands use `--no-cov` because a small subset cannot satisfy the re
 - This is the operation/API layer only. New tuning records still require planned downstream inspection, serialization, gap normalization, and rendering consumption. In particular, Pipeline-provided lexicons are now in `Pronunciations`; old planning code reads only `SpokenForm.lexicon`. Downstream integration must consume the new rules before the overall plan is complete.
 - Annotation loading methods are not part of this task; only the immutable operation record and tier/checkpoint classification were added.
 - No subagents were spawned, no files were stashed, and only Task 8 implementation, regression tests, and this report are included in the commit.
+
+## Review fix round 1: Tuple selectors
+
+The review identified a missing design section 5 contract: `where` must accept a tuple of mappings and/or `Pattern` values, in addition to a single selector and the whole-book default. This fix expands `WhereArg` accordingly and replaces `_where_pattern` with `_where_patterns`, which eagerly parses every raw mapping into an immutable pattern and returns a tuple. `_add_rule` records one rule per pattern, using contiguous indices beginning at the existing rule count. Tuple order is preserved across consecutive public calls. All three method docstrings now describe the tuple behavior.
+
+Six new parametrized regressions exercise `attribute`, `silence`, and `pronounce`. Each method receives a mixed mapping/Pattern tuple followed by a mapping-only tuple, then verifies the accumulated values, patterns, contiguous indices, and unchanged original branch. Inputs are mutated after declaration, including a nested sentence-index list, confirming the rules retain copied data. The same tests verify `_resolved` and `_roster` identity and idempotent `resolve()`. Invalid later tuple members are rejected eagerly with `INVALID_PATTERN` before any new branch is returned.
+
+Fix validation:
+
+- Red: `rtk uv run pytest tests/test_tuning_operations.py -k 'tuple' -v --no-cov`: **3 failed, 3 passed, 31 deselected in 0.36s**. The three valid-tuple cases reproduced the missing contract for all three methods.
+- Green: `rtk uv run pytest tests/test_tuning_operations.py tests/test_tiers.py tests/test_pipeline.py tests/test_resolution_inspection.py -v --no-cov`: **100 passed in 3.24s**.
+- `rtk uv run mypy`: **success, no issues in 140 source files**. An initial generic-inference error was resolved with an explicit `tuple[Rule, ...]` local annotation.
+- `rtk uv run ruff check src/kenkui/pipeline.py tests/test_tuning_operations.py`: **all checks passed**.
+- `rtk uv run ruff format --check src/kenkui/pipeline.py tests/test_tuning_operations.py`: **2 files already formatted**.
+- `rtk git diff --check`: passed.
+- Final full suite: `rtk uv run pytest -v`: **1342 passed, 45 skipped, 7 deselected, 1 warning in 84.58s**, with **91.07% coverage**, exceeding the configured 90% gate.
+
+Self-review confirmed eager validation of all selectors, defensive parsing of nested mapping values, contiguous indices after existing rules, and unchanged replacement/checkpoint paths. This fix changes only `pipeline.py`, its tuning contract tests, and this report. It introduces no new downstream concerns; the rendering handoff and pre-existing repository-wide lint findings described above still apply.

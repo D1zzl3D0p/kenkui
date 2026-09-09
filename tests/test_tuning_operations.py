@@ -24,6 +24,8 @@ from kenkui._domain.paths import parse_pattern
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from kenkui.pipeline import WhereArg
+
 
 def test_attribute_accumulates_in_declaration_order(epub_path: Path) -> None:
     """One operation holds ordered rules while branches remain independent."""
@@ -53,6 +55,70 @@ def test_tuning_accepts_patterns_and_freezes_where(epub_path: Path) -> None:
     assert all(rule.where == expected for rule in operation.rules)
     with pytest.raises(FrozenInstanceError):
         operation.rules = ()  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("tune", "kind", "value"),
+    [
+        (lambda b, w: b.attribute("paul", where=w), Attributions, "paul"),
+        (lambda b, w: b.silence(900, where=w), Silences, 900),
+        (
+            lambda b, w: b.pronounce({"Paul": "Pawl"}, where=w),
+            Pronunciations,
+            (("Paul", "Pawl"),),
+        ),
+    ],
+)
+def test_tuple_selectors_accumulate_in_order_and_freeze_inputs(
+    resolved_book: kk.Pipeline,
+    tune: Callable[[kk.Pipeline, WhereArg], kk.Pipeline],
+    kind: type[Attributions | Silences | Pronunciations],
+    value: object,
+) -> None:
+    """Mixed tuples and mapping tuples add consecutive immutable declarations."""
+    sentences = [1, 3]
+    first: dict[str, object] = {"sentence": sentences}
+    second = parse_pattern({"chapter": "ch08"})
+    third: dict[str, object] = {"paragraph": 2}
+    fourth: dict[str, object] = {"phrase": 1}
+    expected = [parse_pattern({}), parse_pattern(first), second]
+    expected.extend([parse_pattern(third), parse_pattern(fourth)])
+
+    base = tune(resolved_book, None)
+    branch = tune(tune(base, (first, second)), (third, fourth))
+    sentences.append(5)
+    first["chapter"] = "changed"
+    third["paragraph"] = 7
+    fourth.clear()
+
+    operations = [op for op in branch.operations if isinstance(op, kind)]
+    assert len(operations) == 1
+    assert [rule.where for rule in operations[0].rules] == expected
+    assert [rule.index for rule in operations[0].rules] == list(range(len(expected)))
+    assert [rule.value for rule in operations[0].rules] == [value] * len(expected)
+    assert len(next(op.rules for op in base.operations if isinstance(op, kind))) == 1
+    assert branch._resolved is resolved_book._resolved  # noqa: SLF001
+    assert branch._roster is resolved_book._roster  # noqa: SLF001
+    assert branch.resolve() is branch
+
+
+@pytest.mark.parametrize(
+    "tune",
+    [
+        lambda b, w: b.attribute("paul", where=w),
+        lambda b, w: b.silence(900, where=w),
+        lambda b, w: b.pronounce({"Paul": "Pawl"}, where=w),
+    ],
+)
+def test_invalid_tuple_member_is_rejected_eagerly(
+    epub_path: Path, tune: Callable[[kk.Pipeline, WhereArg], kk.Pipeline]
+) -> None:
+    """Every tuple entry is validated before a public call returns a branch."""
+    base = kk.book(epub_path)
+    with pytest.raises(kk.ValidationError) as error:
+        tune(base, ({"chapter": "ch08"}, {"sentence": 0}))
+    assert error.value.code == kk.ErrorCode.INVALID_PATTERN
+    assert base.operations == ()
 
 
 def test_silence_accumulates_and_zero_is_allowed(epub_path: Path) -> None:

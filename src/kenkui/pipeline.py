@@ -70,7 +70,9 @@ _MAX_PAUSE_MS = 60_000
 _PipeArgs = ParamSpec("_PipeArgs")
 _PipeResult = TypeVar("_PipeResult")
 _RuleOperationT = TypeVar("_RuleOperationT", Attributions, Silences, Pronunciations)
-WhereArg: TypeAlias = Pattern | Mapping[str, object] | None
+WhereArg: TypeAlias = (
+    Pattern | Mapping[str, object] | tuple[Pattern | Mapping[str, object], ...] | None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +178,7 @@ class Pipeline:
         Decline ``integers`` too to leave the digits alone.
 
         Lexicons accumulate as scoped tuning rules selected by ``where``.
+        A tuple of patterns or mappings adds one rule per selector in order.
         Later rules break ties at equal specificity. Number presets, built-in
         pronunciation, and feature switches remain global last-call settings.
         """
@@ -190,7 +193,7 @@ class Pipeline:
         for name, value in features.items():
             if name not in FEATURES or not isinstance(value, bool):
                 raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
-        pattern = _where_pattern(where)
+        patterns = _where_patterns(where)
         entries = validate_entries(lexicon if lexicon is not None else {})
         branch = self._replace(
             SpokenForm(
@@ -200,7 +203,7 @@ class Pipeline:
             ),
         )
         if lexicon is not None:
-            return branch._add_rule(Pronunciations, entries, pattern)  # noqa: SLF001
+            return branch._add_rule(Pronunciations, entries, patterns)  # noqa: SLF001
         return branch
 
     def attribute(self, character_id: str, *, where: WhereArg = None) -> Pipeline:
@@ -208,6 +211,7 @@ class Pipeline:
 
         Calls accumulate ordered rules. Narrower match sets take precedence;
         later declarations break ties between equal or incomparable match sets.
+        A tuple of patterns or mappings adds one rule per selector in order.
         """
         return self._add_rule(Attributions, character_id, where)
 
@@ -216,6 +220,7 @@ class Pipeline:
 
         Zero removes a derived pause. A subtree anchors to its final leaf;
         declaration records that intent without reading or resolving the book.
+        A tuple of patterns or mappings adds one rule per selector in order.
         """
         if (
             isinstance(duration_ms, bool)
@@ -637,13 +642,16 @@ class Pipeline:
     def _add_rule(
         self, kind: type[_RuleOperationT], value: object, where: WhereArg
     ) -> Pipeline:
-        """Append a declaration within one tuning family, preserving precedence."""
-        pattern = _where_pattern(where)
+        """Append one rule per selector in order within one tuning family."""
+        patterns = _where_patterns(where)
         existing: tuple[Rule, ...] = next(
             (item.rules for item in self.operations if isinstance(item, kind)), ()
         )
-        rule = Rule(pattern, value, len(existing))
-        return self._replace(kind(rules=(*existing, rule)))
+        rules: tuple[Rule, ...] = tuple(
+            Rule(pattern, value, index)
+            for index, pattern in enumerate(patterns, start=len(existing))
+        )
+        return self._replace(kind(rules=(*existing, *rules)))
 
     def _branch(
         self, operations: tuple[Operation, ...], operation: Operation
@@ -685,11 +693,15 @@ class Pipeline:
         return self._casting().narrator_voice_id
 
 
-def _where_pattern(where: WhereArg) -> Pattern:
-    """Normalize optional sparse coordinates without materializing the source."""
-    if isinstance(where, Pattern):
-        return where
-    return parse_pattern({} if where is None else where)
+def _where_patterns(where: WhereArg) -> tuple[Pattern, ...]:
+    """Eagerly freeze one selector or a tuple, preserving declaration order."""
+    if where is None:
+        return (Pattern(),)
+    selectors = where if isinstance(where, tuple) else (where,)
+    return tuple(
+        selector if isinstance(selector, Pattern) else parse_pattern(selector)
+        for selector in selectors
+    )
 
 
 def _voice_id(voice: str | Voice) -> str:
