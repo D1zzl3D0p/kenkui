@@ -33,6 +33,10 @@ class ChapterInspection:
     # rather than character offsets: normalization collapses whitespace
     # across the whole chapter, so raw offsets do not survive it.
     headings: tuple[str, ...] = ()
+    # Canonical (start, end) offsets of emphasised runs, in document order.
+    # Recorded rather than marked inline: emphasis must not alter canonical
+    # text, which billing, attribution offsets, and segment identity all use.
+    emphasis: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
