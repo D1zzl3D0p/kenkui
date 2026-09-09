@@ -19,8 +19,9 @@ from kenkui._characters.identity import PREFIX_TITLES
 
 # A terminator, any closing brackets or quotes, then whitespace. The lookahead
 # keeps the whitespace with the preceding part so joining stays exact.
-_SENTENCE: re.Pattern[str] = re.compile(r"[.!?…]+[\"''\)\]]*\s+")
-_PHRASE: re.Pattern[str] = re.compile(r"[,;:][\"''\)\]]*\s+")
+# Includes both ASCII and typographic (curly) quotes: " ' " ' " « » « »
+_SENTENCE: re.Pattern[str] = re.compile('[.!?…]+["\'\'""\\)\\]]*\\s+')
+_PHRASE: re.Pattern[str] = re.compile('[,;:]["\'\'""\\)\\]]*\\s+')
 
 # A single capital before the period is an initial ("J. R. Smith"), not a
 # sentence end.

@@ -31,6 +31,17 @@ def test_closing_quote_stays_with_its_sentence() -> None:
     assert split_sentences('"Go." He left.') == ('"Go." ', "He left.")
 
 
+def test_closing_curly_quote_stays_with_its_sentence() -> None:
+    """Closing curly quotes should stay attached to their sentence."""
+    assert split_sentences('"Go." He left.') == ('"Go." ', "He left.")
+
+
+def test_closing_curly_quote_exactness() -> None:
+    """Curly quotes must preserve exact reconstruction invariant."""
+    text = '"Go." He left.'
+    assert "".join(split_sentences(text)) == text
+
+
 def test_ellipsis_splits_once() -> None:
     """Ellipsis should split only once."""
     assert split_sentences("Wait... Then go.") == ("Wait... ", "Then go.")
@@ -51,6 +62,21 @@ def test_phrase_split_is_exact() -> None:
     assert "".join(split_phrases(text)) == text
 
 
+def test_phrase_split_with_curly_quotes() -> None:
+    """Phrases should split correctly with curly punctuation."""
+    assert split_phrases("Yes, he said; then left.") == (
+        "Yes, ",
+        "he said; ",
+        "then left.",
+    )
+
+
+def test_phrase_split_curly_exactness() -> None:
+    """Phrase splits with curly quotes must preserve exactness invariant."""
+    text = "Yes, he said; then left."
+    assert "".join(split_phrases(text)) == text
+
+
 def test_empty_text_yields_no_parts() -> None:
     """Empty text should yield empty tuple."""
     assert split_sentences("") == ()
@@ -66,6 +92,7 @@ def test_empty_text_yields_no_parts() -> None:
         "A.B.C. Corp. filed.",
         "...",
         "  ",
+        '"Go." He left.',
     ],
 )
 def test_splitters_are_exact_over_awkward_input(text: str) -> None:
