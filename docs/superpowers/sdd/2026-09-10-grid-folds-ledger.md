@@ -269,3 +269,12 @@ pre-flight full-gate spaCy and aggregate-coverage failures remain unchanged.
 
 No behavioral ruling was required and no Task 3 finding was deferred. The
 pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
+
+#### Task 3 review gate
+
+- Independent task-scoped review found one Important defect: when paragraph
+  coordinates changed while child sentence coordinates reset to one, the gap
+  omitted `GapReason.SENTENCE` even though the nested sentence range closed.
+- Resolved by treating a paragraph change as closing the nested sentence range
+  and adding the `One.\n\nTwo.` regression fixture.
+- No other Critical, Important, or Minor findings were reported.

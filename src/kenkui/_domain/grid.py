@@ -279,7 +279,11 @@ def _gap_reasons(units: tuple[Unit, ...]) -> tuple[GapReason, ...]:
             )
         else:
             following = units[index + 1]
-            if following.sentence != unit.sentence or following.line != unit.line:
+            if (
+                following.sentence != unit.sentence
+                or following.line != unit.line
+                or following.paragraph != unit.paragraph
+            ):
                 reasons |= GapReason.SENTENCE
             if following.line != unit.line or following.paragraph != unit.paragraph:
                 reasons |= GapReason.LINE

@@ -136,6 +136,15 @@ def test_gap_metadata_combines_every_reason_that_closes() -> None:
     )
 
 
+def test_paragraph_boundary_closes_reset_sentence_coordinate() -> None:
+    """Parent changes close child ranges even when child coordinates both equal one."""
+    units = build_grid(chapter("One.\n\nTwo."))
+
+    assert build_structure_index(units).gaps[0] == (
+        GapReason.PHRASE | GapReason.SENTENCE | GapReason.LINE | GapReason.PARAGRAPH
+    )
+
+
 def test_index_is_immutable_deterministic_and_owns_no_canonical_data() -> None:
     """Equality uses only paths, leaf indices, and compact gap reasons."""
     units = (
