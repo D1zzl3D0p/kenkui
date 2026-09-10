@@ -8,6 +8,12 @@ pacing, casting) is the single reusable ``house_style`` function passed
 through ``.pipe()``. Change your taste in one place and every book picks it
 up; change one book's tuning and no other book moves.
 
+``main()`` is the batch render: it walks the whole driver table and writes
+real M4Bs, which is not something to run by accident. ``dial_in()`` is the
+other way to use this module -- call it by hand against one book to read
+its script, correct a line, probe the fix, and save it, without rendering
+anything. It is not wired into ``main()`` on purpose.
+
 uv run python spikes/examples/example.py
 """
 
@@ -137,9 +143,11 @@ def explicit_run(
     lexicon = LEXICONS.get(series or "", {})
     if lexicon:
         pipeline = pipeline.pronounce(lexicon)
-    sidecar = epub.with_suffix(".kenkui.json")
-    if sidecar.exists():
-        pipeline = pipeline.annotations()
+    # A book that has never been dialed in has no sidecar yet: annotations()
+    # loads an empty baseline for it rather than raising, so this call needs
+    # no existence check. A sidecar that exists but is damaged still raises
+    # INVALID_SIDECAR, which is the failure worth stopping for.
+    pipeline = pipeline.annotations()
 
     # Style: the studio's taste, unrelated to which book this is.
     pipeline = pipeline.pipe(house_style)
@@ -158,6 +166,78 @@ def explicit_run(
 def magic_run(epub: Path) -> kk.Result:
     """Use the compact alternative without cover or series configuration."""
     return kk.magic_run(epub, narrator=NARRATOR, multi=True, model=ATTRIBUTION_MODEL)
+
+
+def dial_in(epub: Path) -> None:
+    """Walk one script -> correct -> preview -> save session, on Dune.
+
+    Call this by hand while tuning one book. It is deliberately not part of
+    ``main()``'s batch loop: that loop renders whole M4Bs and has no human
+    watching between books, while this loop exists precisely so a human can
+    look at one correction before committing to it.
+
+    Each step buys information the next one spends. ``script()`` shows what
+    would be said, and *why*, before anything is corrected -- catching a bad
+    guess costs nothing here, unlike after a render. ``select().preview()``
+    proves a correction sounds right for the price of a few seconds of
+    audio, not a chapter, because a sub-chapter selection reuses the same
+    segment identities a full render would produce. ``write_annotations()``
+    is what makes that proof outlive this process: without it, both
+    corrections below vanish the moment this function returns, and the next
+    ``explicit_run()`` -- which loads the sidecar unconditionally now --
+    would never see them.
+    """
+    book = (
+        kk.book(epub)
+        .metadata(title="Dune", author="Frank Herbert")
+        .series("dune", book=1)
+        .pronounce(LEXICONS["dune"])
+        .pipe(house_style)
+        .annotations()
+        .resolve()
+    )
+
+    # The three tiers, side by side. Printing them is the point: they are
+    # properties rather than methods precisely so a REPL session can
+    # eyeball the effective settings for free, before spending a model call
+    # or a GPU-second on anything.
+    print(book.identity)
+    print(book.style)
+    print(book.tuning)
+
+    # Every Dune chapter opens with an epigraph from one of Princess
+    # Irulan's in-universe books -- paragraph 1 of every chapter. script()
+    # names who speaks it, and why, before anyone decides it is wrong:
+    # "machine" means the attribution model looked at this paragraph and
+    # still called it narration, because unquoted prose gives it nothing to
+    # attribute to a character.
+    where = {"chapter": "*", "paragraph": 1}
+    for row in book.script().at(where):
+        print(
+            row.path, row.character, row.provenance, row.silence_after_ms, row.text[:60]
+        )
+
+    # Correct: every one of those epigraphs is Irulan, not the narrator, and
+    # the pause after one should sit half a second longer than the house
+    # style's paragraph gap so it reads as a discrete unit rather than
+    # running into the chapter body.
+    book = book.attribute("irulan", where=where).silence(900, where=where)
+
+    # Probe: select() narrows the pipeline to just the corrected paragraphs;
+    # preview() renders only that selection to a disposable WAV instead of
+    # a whole M4B. This is cheap for a specific reason, not just because
+    # it is smaller -- the selection's interior segments are byte-identical
+    # to what a full render produces, so this probe warms the exact cache
+    # entries the eventual real render reuses. Nothing here is thrown away.
+    probe = epub.with_name(f"{epub.stem}.dial-in-probe.wav")
+    book.select(where).preview(probe, overwrite=True)
+
+    # Save: write_annotations() persists both corrections to the sidecar
+    # beside the EPUB, anchored to the text they matched rather than to raw
+    # offsets, so a later edit elsewhere in the book cannot silently move
+    # them onto the wrong paragraph.
+    sidecar = book.write_annotations()
+    print(f"saved corrections to {sidecar}")
 
 
 def main() -> None:
