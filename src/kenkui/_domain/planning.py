@@ -9,7 +9,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeVar, cast
 
 from kenkui._domain.grid import build_grid, sibling_counts
 from kenkui._domain.operations import (
@@ -18,6 +18,7 @@ from kenkui._domain.operations import (
     MetadataIntent,
     Operation,
     Pauses,
+    Pronunciations,
     Silences,
     SpokenForm,
     SynthesizeSpeech,
@@ -37,7 +38,7 @@ from kenkui._domain.structure import (
     split_structural,
 )
 from kenkui._domain.text import NORMALIZATION_VERSION
-from kenkui._domain.tuning import resolve_rules
+from kenkui._domain.tuning import layered_rules, resolve_rules
 from kenkui.errors import (
     ErrorCode,
     ModelError,
@@ -122,7 +123,12 @@ _SEGMENT_ID_VERSION = "v2"
 _UTF8_HASH_CHUNK_CHARACTERS = 64 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _OperationT = TypeVar("_OperationT", bound=Operation)
-_RuleOperationT = TypeVar("_RuleOperationT", Attributions, Silences)
+_RuleOperationT = TypeVar("_RuleOperationT", Attributions, Silences, Pronunciations)
+_Entries: TypeAlias = tuple[tuple[str, str], ...]
+# One canonical run of a chapter and the lexicon that speaks it: (start, end,
+# entries). Empty means no scoped lexicon exists and the whole chapter speaks
+# under ``SpokenForm.lexicon``, which is the pre-tuning path exactly.
+_LexiconRegions: TypeAlias = tuple[tuple[int, int, _Entries], ...]
 
 
 class _HashDigest(Protocol):
@@ -365,7 +371,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     )
     voice = narrator
 
-    spoken = _one_operation(pipeline.operations, SpokenForm)
+    spoken = effective_spoken_form(pipeline.operations)
     if spoken is not None and not narrator.language.lower().startswith("en"):
         # The number words and lexicon are English. Mangling a French book is
         # worse than leaving it, so the stage disables itself rather than
@@ -520,6 +526,13 @@ def effective_spans(
     With no attribution rules the machine spans are returned untouched, so
     every book rendered before this stage existed still plans byte for byte
     the same way.
+
+    Once any rule exists the chapter is re-tiled from grid units, and a rule
+    matching nothing must still return the machine spans byte for byte. That
+    holds on an unstated property of ``extract_spans``: it emits a narration
+    span between any two quote runs, so no two machine spans ever share a
+    speaker across a boundary and ``_coalesce`` has nothing to merge that
+    attribution left separate. ``test_tuning_merge`` pins it.
     """
     rules = _rules_of(operations, Attributions)
     if not rules:
@@ -531,6 +544,136 @@ def effective_spans(
         resolve_rules(unit, speaker(unit), rules, siblings).value for unit in grid
     ]
     return _coalesce(chapter.id, grid, decided)
+
+
+def effective_spoken_form(operations: tuple[Operation, ...]) -> SpokenForm | None:
+    """Return the spoken-form settings planning actually speaks under.
+
+    Folds unscoped pronunciation rules into the declared style settings.
+
+    A rule whose pattern matches every unit needs no grid to place, so folding
+    it here keeps the whole-book lexicon on one code path -- and keeps its
+    segment identity byte-identical whether the entries were written inline or
+    reloaded from the sidecar.
+    """
+    spoken = _one_operation(operations, SpokenForm)
+    rules = _rules_of(operations, Pronunciations)
+    if not rules:
+        return spoken
+    if spoken is None:
+        # A sidecar can carry pronunciations into a pipeline that never called
+        # pronounce(). Honour exactly those: turning on number reading or the
+        # built-in table would speak words nobody asked about.
+        spoken = SpokenForm(numbers="off", builtin_lexicon=False)
+    whole = tuple(rule for rule in rules if rule.where.is_whole_book())
+    if not whole:
+        return spoken
+    return replace(spoken, lexicon=_merged_entries(spoken.lexicon, whole))
+
+
+def _merged_entries(base: _Entries, rules: tuple[Rule, ...]) -> _Entries:
+    """Layer ordered rule payloads over a base table, later entries winning.
+
+    Keyed by the folded form because matching is case-insensitive: two rules
+    writing ``Lead`` and ``lead`` name one position, and keeping both would
+    leave which of them speaks to dictionary order rather than to precedence.
+    """
+    merged = {key.casefold(): (key, value) for key, value in base}
+    for rule in rules:
+        for key, value in cast("_Entries", rule.value):
+            merged[key.casefold()] = (key, value)
+    return tuple(sorted(merged.values()))
+
+
+def _lexicon_regions(
+    chapter: ChapterInspection,
+    operations: tuple[Operation, ...],
+    spoken: SpokenForm | None,
+) -> _LexiconRegions:
+    """Return each canonical run of a chapter beside the lexicon speaking it.
+
+    Empty whenever no pronunciation rule is scoped to part of the book, so a
+    whole-book table -- the only shape that existed before tuning -- still
+    reaches ``to_spoken`` as one call over one fragment and cannot lose a
+    multi-word entry to a unit boundary.
+    """
+    if spoken is None:
+        return ()
+    scoped = tuple(
+        rule
+        for rule in _rules_of(operations, Pronunciations)
+        if not rule.where.is_whole_book()
+    )
+    if not scoped:
+        return ()
+    grid = build_grid(chapter)
+    siblings = sibling_counts(grid)
+    regions: list[tuple[int, int, _Entries]] = []
+    for unit in grid:
+        entries = _merged_entries(spoken.lexicon, layered_rules(unit, scoped, siblings))
+        if regions and regions[-1][2] == entries and regions[-1][1] == unit.start:
+            regions[-1] = (regions[-1][0], unit.end, entries)
+        else:
+            regions.append((unit.start, unit.end, entries))
+    return tuple(regions)
+
+
+def _speak(
+    text: str,
+    start: int,
+    spoken: SpokenForm,
+    regions: _LexiconRegions,
+    offsets: list[tuple[int, int, int, int]] | None = None,
+) -> str:
+    """Apply spoken form to one canonical run, honouring scoped lexicons.
+
+    ``start`` is the run's offset in the chapter, which is what locates it
+    among the regions. Each region is transformed separately, so a scoped
+    entry can never reach text outside its scope; ``offsets`` is rebased onto
+    the whole run so selection clipping still sees one edit list.
+    """
+    numbers = cast("NumberTier", spoken.numbers)
+    features = dict(spoken.features)
+    if not regions:
+        return to_spoken(
+            text,
+            numbers=numbers,
+            lexicon=spoken.lexicon,
+            builtin=spoken.builtin_lexicon,
+            features=features,
+            offsets=offsets,
+        )
+    pieces: list[str] = []
+    produced = 0
+    for lower, upper, entries in regions:
+        first, last = max(lower, start), min(upper, start + len(text))
+        if first >= last:
+            continue
+        edits: list[tuple[int, int, int, int]] | None = (
+            [] if offsets is not None else None
+        )
+        piece = to_spoken(
+            text[first - start : last - start],
+            numbers=numbers,
+            lexicon=entries,
+            builtin=spoken.builtin_lexicon,
+            features=features,
+            offsets=edits,
+        )
+        if offsets is not None:
+            offsets.extend(
+                (
+                    source_start + first - start,
+                    source_end + first - start,
+                    rendered_start + produced,
+                    rendered_end + produced,
+                )
+                for source_start, source_end, rendered_start, rendered_end in edits
+                or ()
+            )
+        pieces.append(piece)
+        produced += len(piece)
+    return "".join(pieces)
 
 
 def manual_gaps(
@@ -681,6 +824,7 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
             pauses=pauses,
             tiers=tiers,
             gaps=_manual_offsets(chapter, operations),
+            regions=_lexicon_regions(chapter, operations, spoken),
             result=result,
             silence=silence,
             origins=origins,
@@ -752,6 +896,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     pauses: Pauses,
     tiers: tuple[str, ...],
     gaps: Mapping[int, int],
+    regions: _LexiconRegions,
     result: list[SpeechSegment],
     silence: list[int],
     origins: list[_SegmentSource] | None = None,
@@ -771,14 +916,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                 [] if origins is not None and spoken is not None else None
             )
             if spoken is not None:
-                text = to_spoken(
-                    text,
-                    numbers=cast("NumberTier", spoken.numbers),
-                    lexicon=spoken.lexicon,
-                    builtin=spoken.builtin_lexicon,
-                    features=dict(spoken.features),
-                    offsets=offsets,
-                )
+                text = _speak(text, start, spoken, regions, offsets)
             text = f"{carried}{text}"
             carried = ""
             if not text.strip():
@@ -906,7 +1044,11 @@ def _translated_offset(
 
 
 def _selected_text(
-    origin: _SegmentSource, first: int, last: int, spoken: SpokenForm | None
+    origin: _SegmentSource,
+    first: int,
+    last: int,
+    spoken: SpokenForm | None,
+    regions: _LexiconRegions = (),
 ) -> tuple[int, int, str]:
     """Clip at exact edit boundaries, re-speaking only partial replacement edges."""
     start = max(origin.chunk_start, _translated_offset(origin.offsets, first))
@@ -922,13 +1064,17 @@ def _selected_text(
             continue
         pieces.append(origin.rendered[position : max(position, rendered_start)])
         if start <= rendered_start < end and spoken is not None:
+            # An edit never straddles two regions -- each was transformed on
+            # its own -- so re-speaking its surviving part under the region
+            # holding its left edge reproduces exactly the scoped lexicon
+            # that produced it.
+            edge = max(first, lower)
             pieces.append(
-                to_spoken(
-                    origin.canonical[max(first, lower) : min(last, upper)],
-                    numbers=cast("NumberTier", spoken.numbers),
-                    lexicon=spoken.lexicon,
-                    builtin=spoken.builtin_lexicon,
-                    features=dict(spoken.features),
+                _speak(
+                    origin.canonical[edge : min(last, upper)],
+                    origin.start + edge,
+                    spoken,
+                    regions,
                 )
             )
         position = min(end, rendered_end)
@@ -948,6 +1094,10 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
     patterns = selected_patterns(operations)
     by_id = {chapter.id: chapter for chapter in chapters}
     ranges = {chapter.id: selected_ranges(chapter, patterns) for chapter in chapters}
+    regions = {
+        chapter.id: _lexicon_regions(chapter, operations, spoken)
+        for chapter in chapters
+    }
     result: list[SpeechSegment] = []
     starts: dict[str, list[int]] = {}
     positions: dict[str, list[int]] = {}
@@ -957,7 +1107,9 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
             last = min(len(origin.canonical), upper - origin.start)
             if first >= last:
                 continue
-            start, end, text = _selected_text(origin, first, last, spoken)
+            start, end, text = _selected_text(
+                origin, first, last, spoken, regions[segment.chapter_id]
+            )
             if not text.strip():
                 continue
             source_start = origin.start + _translated_offset(

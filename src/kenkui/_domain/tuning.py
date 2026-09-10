@@ -78,6 +78,34 @@ def resolve_rules(
     return Decision(winner.value, "rule", winner.index)
 
 
+def layered_rules(
+    unit: Unit, rules: tuple[Rule, ...], siblings: SiblingCounts
+) -> tuple[Rule, ...]:
+    """Order every rule matching one unit from broadest to narrowest.
+
+    ``resolve_rules`` picks a single winner because a speaker or a duration is
+    a single value. A lexicon is not: a whole-book table and a chapter-scoped
+    homograph correction both speak in that chapter, and precedence decides
+    only the keys they share. Layering therefore keeps every match, ordered by
+    the same law the winner is chosen under -- a strict subset outranks its
+    superset, declaration order breaks incomparable ties -- so merging in this
+    order leaves the narrower, later rule holding a contested key.
+    """
+    candidates = [rule for rule in rules if matches(rule.where, unit, siblings)]
+    return tuple(
+        sorted(candidates, key=lambda rule: (-_breadth(rule, candidates), rule.index))
+    )
+
+
+def _breadth(rule: Rule, candidates: list[Rule]) -> int:
+    """Count how many co-matching rules this one strictly contains."""
+    return sum(
+        1
+        for other in candidates
+        if other is not rule and _strict_subset(other.where, rule.where)
+    )
+
+
 def _strict_subset(left: Pattern, right: Pattern) -> bool:
     """Return whether ``left`` is a known proper subset of ``right``."""
     return subset(left, right) is True and subset(right, left) is False

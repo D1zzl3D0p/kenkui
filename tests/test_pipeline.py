@@ -22,6 +22,7 @@ from kenkui._domain.operations import (
     SpokenForm,
     SynthesizeSpeech,
 )
+from kenkui._domain.planning import effective_spoken_form
 from kenkui._resolution import _log_ungendered_cast
 from kenkui.voices.types import PerceivedGender, Voice
 
@@ -433,11 +434,17 @@ def test_pronounce_records_intent_without_effects() -> None:
     assert isinstance(recorded, SpokenForm)
     assert recorded.numbers == "conservative"
     assert recorded.builtin_lexicon is True
+    # Entries are tuning and live on the rule; the style record holds only
+    # what a caller passed there directly. Planning folds the two back
+    # together, and that -- not the empty field -- is what has to be pinned.
     assert recorded.lexicon == ()
     tuning = pipeline.operations[1]
     assert isinstance(tuning, Pronunciations)
     assert tuning.rules[0].value == (("Cthulhu", "kuh-THOO-loo"),)
     assert tuning.rules[0].where.is_whole_book()
+    effective = effective_spoken_form(pipeline.operations)
+    assert effective is not None
+    assert effective.lexicon == (("Cthulhu", "kuh-THOO-loo"),)
 
 
 def test_pronounce_is_branchable_and_absent_by_default() -> None:

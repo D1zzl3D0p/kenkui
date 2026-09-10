@@ -202,8 +202,8 @@ class Pipeline:
         lexicon: Mapping[str, str] | None = None,
         *,
         where: WhereArg = None,
-        numbers: str = "conservative",
-        builtin: bool = True,
+        numbers: str | None = None,
+        builtin: bool | None = None,
         **features: bool,
     ) -> Pipeline:
         """Return a branch shaping what the engine says, not what it counts.
@@ -220,7 +220,8 @@ class Pipeline:
         * replaces entries from ``lexicon``, then a small built-in
           pronunciation table unless ``builtin=False``;
         * reads numbers aloud, at the depth ``numbers`` selects --
-          ``"off"``, ``"conservative"``, ``"standard"`` or ``"aggressive"``.
+          ``"off"``, ``"conservative"`` (the default), ``"standard"`` or
+          ``"aggressive"``.
 
         ``numbers`` is a preset over individually switchable features, each
         of which may be overridden by keyword: ``currency``, ``percent``,
@@ -238,13 +239,20 @@ class Pipeline:
 
         Lexicons accumulate as scoped tuning rules selected by ``where``.
         A tuple of patterns or mappings adds one rule per selector in order.
-        Later rules break ties at equal specificity. Number presets, built-in
-        pronunciation, and feature switches remain global last-call settings.
+        A whole-book rule applies everywhere; a scoped one overrides it inside
+        its own region and shares the keys it does not mention.
+
+        Number presets, built-in pronunciation, and feature switches are
+        global settings rather than rules, and each keeps its last stated
+        value. Adding a pronunciation therefore leaves the style a house
+        function already chose alone -- only naming a setting changes it.
         """
         from ._domain.spoken.lexicon import validate_entries  # noqa: PLC0415
         from ._domain.spoken.numbers import FEATURES  # noqa: PLC0415
 
-        if numbers not in _NUMBER_TIERS:
+        if numbers is not None and numbers not in _NUMBER_TIERS:
+            raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
+        if builtin is not None and not isinstance(builtin, bool):
             raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
         # Rejected here rather than at render time: a misspelled feature is a
         # caller's typo, and silently ignoring it renders a book that does
@@ -254,16 +262,38 @@ class Pipeline:
                 raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
         patterns = _where_patterns(where)
         entries = validate_entries(lexicon if lexicon is not None else {})
-        branch = self._replace(
-            SpokenForm(
-                numbers=numbers,
-                builtin_lexicon=builtin,
-                features=tuple(sorted(features.items())),
-            ),
-        )
+        branch = self._spoken_style(numbers, features, builtin=builtin)
         if lexicon is not None:
             return branch._add_rule(Pronunciations, entries, patterns)  # noqa: SLF001
         return branch
+
+    def _spoken_style(
+        self,
+        numbers: str | None,
+        features: Mapping[str, bool],
+        *,
+        builtin: bool | None,
+    ) -> Pipeline:
+        """Update only the spoken-form settings this call actually named.
+
+        The first call still turns the stage on with its documented defaults.
+        Afterwards an unnamed setting keeps the value it already had, so a
+        later lexicon-only call cannot silently undo a house style.
+        """
+        current = next(
+            (item for item in self.operations if isinstance(item, SpokenForm)), None
+        )
+        if current is not None and numbers is None and builtin is None and not features:
+            return self
+        base = current if current is not None else SpokenForm()
+        return self._replace(
+            SpokenForm(
+                numbers=base.numbers if numbers is None else numbers,
+                builtin_lexicon=base.builtin_lexicon if builtin is None else builtin,
+                lexicon=base.lexicon,
+                features=tuple(sorted({**dict(base.features), **features}.items())),
+            )
+        )
 
     def attribute(self, character_id: str, *, where: WhereArg = None) -> Pipeline:
         """Return a branch attributing matched units to one character.
@@ -641,8 +671,8 @@ class Pipeline:
             if operation is None:
                 continue
             issues.extend(
-                _issue(ErrorCode.RULE_OVERLAP, severity="warning")
-                for _pair in overlap_warnings(operation.rules)
+                _overlap_issue(kind.__name__, left, right)
+                for left, right in overlap_warnings(operation.rules)
             )
         return ValidationResult(tuple(issues))
 
@@ -958,6 +988,22 @@ def _issue(
 ) -> ValidationIssue:
     """Build a validation issue from the matching sanitized public error text."""
     return ValidationIssue(code, str(ValidationError(code)), severity)
+
+
+def _overlap_issue(kind: str, left: int, right: int) -> ValidationIssue:
+    """Name both rules an overlap warning is about.
+
+    The remedy for incomparable overlap is to move one of the two lines, so a
+    warning that does not say which lines they are cannot be acted on. The
+    location reads the way ``script.py`` writes anchor drift, because a reader
+    correlating the two is reading one rule list.
+    """
+    return ValidationIssue(
+        ErrorCode.RULE_OVERLAP,
+        f"{kind} rule[{left}] and rule[{right}]: "
+        f"{ValidationError(ErrorCode.RULE_OVERLAP)}",
+        "warning",
+    )
 
 
 def _log_missing_series_voices(

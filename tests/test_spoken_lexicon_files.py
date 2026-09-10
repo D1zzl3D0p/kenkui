@@ -9,6 +9,7 @@ import pytest
 
 import kenkui as kk
 from kenkui._domain.operations import Pronunciations
+from kenkui._domain.planning import effective_spoken_form
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -74,3 +75,8 @@ def test_a_read_lexicon_feeds_pronounce(tmp_path: Path) -> None:
     assert isinstance(operation, Pronunciations)
     assert operation.rules[0].value == (("Cthulhu", "kuh-THOO-loo"),)
     assert operation.rules[0].where.is_whole_book()
+    # Recording the rule is only half of it: the entries have to arrive at
+    # the spoken form planning speaks under, or the file changes nothing.
+    effective = effective_spoken_form(pipeline.operations)
+    assert effective is not None
+    assert effective.lexicon == (("Cthulhu", "kuh-THOO-loo"),)

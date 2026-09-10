@@ -30,11 +30,28 @@ calls, and save casting/series records. `write()` and `write_m4b()` validate and
 publish an M4B using spawned synthesis processes. Call effectful workflows from a
 guarded script entry point.
 
+`attribute()`, `silence()`, and the scoped form of `pronounce()` declare per-book
+tuning rules addressed with `where=`; `annotations()` and `write_annotations()` load
+and save them as a JSON sidecar. `select()` and `preview()` narrow a render to part of
+a book for a quick probe. `identity`, `tuning`, and `style` summarize a pipeline's
+declared intent by tier. See [tuning a book and the dial-in
+loop](usage.md#tuning-a-book-and-the-dial-in-loop) for the full workflow.
+
 ::: kenkui.Source
 
 ::: kenkui.Pipeline
 
 ::: kenkui.MetadataIntent
+
+## The tuning read model
+
+`Pipeline.script()` returns a `Script`: one `ScriptRow` per grid unit, carrying the
+effective speaker, its provenance, and the silence that follows it, without
+resolving voices or calling a model.
+
+::: kenkui.Script
+
+::: kenkui.ScriptRow
 
 ## Inspection and character review
 

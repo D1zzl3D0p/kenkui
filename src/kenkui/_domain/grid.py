@@ -36,13 +36,15 @@ _PHRASE: re.Pattern[str] = re.compile(r"""[,;:]["'’”)\x5d]*\s+""")  # noqa: 
 # A single capital before the period is an initial ("J. R. Smith"), not a
 # sentence end.
 _INITIAL: re.Pattern[str] = re.compile(r"(?:^|\s)[A-Z]\.$")
+# The word a candidate terminator ends, which decides whether it is a title.
+_TRAILING_WORD: re.Pattern[str] = re.compile(r"([A-Za-z]+)\.$")
 
 
 def _is_abbreviation(prefix: str) -> bool:
     """Whether a candidate sentence end is really an abbreviation."""
     if _INITIAL.search(prefix):
         return True
-    trailing = re.search(r"([A-Za-z]+)\.$", prefix)
+    trailing = _TRAILING_WORD.search(prefix)
     return trailing is not None and trailing.group(1).casefold() in PREFIX_TITLES
 
 

@@ -651,6 +651,25 @@ A small built-in lexicon applies by default once you call `pronounce()`; pass
 words case-insensitively, and take the source's capitalization shape, so one
 entry covers `cello`, `Cello`, and `CELLO`.
 
+A lexicon is also tuning: `where=` scopes entries to part of the book the
+same way [`attribute()` and `silence()`](#tuning-a-book-and-the-dial-in-loop)
+do. A whole-book table stays in effect everywhere; a scoped call overrides
+only the keys it names, inside its own region, which is what lets one entry
+read *lead* as "leed" in one chapter and "led" in another:
+
+```python
+pipeline = (
+    kk.epub("book.epub")
+    .pronounce({"lead": "leed"})  # whole book, unless overridden below
+    .pronounce({"lead": "led"}, where={"chapter": "xhtml/ch12", "paragraph": 3})
+)
+```
+
+Repeated calls to `pronounce()` compose rather than replace: `numbers`,
+`builtin`, and any feature keyword each keep the value a previous call gave
+them until a later call names that same setting again, so adding a
+correction never silently resets a house style already chosen.
+
 Keep a larger table in a file rather than a literal, and read it with
 `read_lexicon()`. It accepts a plain object of word to replacement, or the
 shape the shipped table uses, and validates exactly as an inline dict does.
@@ -715,3 +734,107 @@ JPEG or PNG. A supplied image that cannot be read or is not one of those two
 formats fails the render rather than quietly falling back to the book's own
 art. The plan records the image's content, not its location, so moving the file
 does not change the output.
+
+## Tuning a book and the dial-in loop
+
+A pipeline's intent lives in three tiers, each mirrored by a read-only
+property:
+
+* `identity` — the source and its selection: what makes this render *this*
+  book.
+* `style` — reusable taste that travels across books: number tiers, the
+  built-in lexicon switch, feature overrides, pause durations.
+* `tuning` — corrections anchored to one book's text: attribution, silence,
+  and pronunciation rules declared with `where=`.
+
+```python
+pipeline.identity  # Source, selection
+pipeline.style  # SpokenForm settings, Pauses
+pipeline.tuning  # Attributions, Silences, Pronunciations rules, grouped
+```
+
+All three are cheap tuple scans over declared operations — no parse, no I/O.
+`repr` renders a truncated summary; iterate a property for every declared
+operation or rule.
+
+### Addressing a position
+
+A rule's `where=` names a path through the grid Kenkui splits every chapter
+into: `chapter`, `paragraph`, `line`, `sentence`, `phrase`. Each level below
+`chapter` accepts a positive index, the wildcard `"*"`, `-1` for the last
+child, a list of indices, or an inclusive `"lo..hi"` string range. Omitting a
+level matches every value at it; omitting `chapter` reaches every chapter.
+Passing a tuple of patterns adds one rule per pattern, in declaration order.
+
+```python
+book.attribute("irulan", where={"chapter": "*", "paragraph": 1})
+book.attribute(
+    "jessica", where={"chapter": "xhtml/ch08", "paragraph": 3, "sentence": 2}
+)
+book.silence(900, where={"chapter": "xhtml/ch08", "paragraph": 3})
+```
+
+`attribute()` and `silence()` accumulate rules the same way a scoped
+`pronounce()` lexicon does: a strict subset outranks the broader pattern it
+sits inside; a later declaration breaks a tie between equal or incomparable
+patterns. `validate()` warns, rather than fails, when two rules overlap
+without one containing the other — the warning names both rule indices so
+you know which line to move.
+
+### Reading the result: `script()`
+
+`script()` returns one row per grid unit, without resolving voices or calling
+a model:
+
+```python
+for row in book.script().at({"chapter": "xhtml/ch08"}):
+    print(row.path, row.character, row.provenance, row.silence_after_ms, row.text)
+```
+
+`row.provenance` is `"default"`, `"machine"`, `"rule"`, or — before
+`resolve()` has run — `"unresolved"`, naming exactly which layer decided that
+row; `row.rule_index` points at the winning declaration when it is a rule.
+`Script` behaves like a mapping (`script[path]`, `script.at(pattern)`,
+iteration over the whole book) and materializes a chapter's rows only on
+first access, so checking a pattern against a long book does not build every
+unit in it.
+
+### Previewing a correction
+
+`select(*patterns)` generalizes chapter selection to a union of grid
+subtrees at any level, so a probe can be a single paragraph. `preview(path)`
+renders that selection to a `.wav` file, skipping the metadata and
+chaptering a full `write()` would pay for:
+
+```python
+book.select({"chapter": "xhtml/ch08", "paragraph": 3}).preview("probe.wav")
+```
+
+### Saving corrections: the sidecar
+
+`write_annotations(path=None)` saves every attribution, silence, and
+pronunciation rule to a JSON file beside the EPUB — an `.epub` suffix becomes
+`.kenkui.json` — anchored with a content digest so a rule keeps its meaning
+even if a later edit shifts the surrounding text. `annotations(path=None)`
+loads that file back as the pipeline's tuning baseline; rules declared inline
+afterward are appended, never replacing what was saved.
+
+The full loop:
+
+```python
+book = kk.book("dune.epub").annotations()  # load prior corrections, if any
+
+for row in book.script().at({"chapter": "xhtml/ch08"}):
+    print(row.path, row.character, row.text[:60])
+
+book = book.attribute(
+    "jessica", where={"chapter": "xhtml/ch08", "paragraph": 3, "sentence": 2}
+).silence(900, where={"chapter": "xhtml/ch08", "paragraph": 3})
+
+book.select({"chapter": "xhtml/ch08", "paragraph": 3}).preview("probe.wav")
+book.write_annotations()
+book.tts().write("dune.m4b", overwrite=True)
+```
+
+A rule scoped elsewhere never moves a segment identity, so retuning one line
+does not re-render a library.

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import kenkui as kk
-from kenkui._domain.operations import Attributions, Silences
+from kenkui._characters.quotes import extract_spans
+from kenkui._domain.operations import Attributions, Silences, SpokenForm
 from kenkui._domain.paths import parse_pattern
 from kenkui._domain.planning import (
     ExecutionPlan,
+    SpeakerSpan,
     compile_execution_plan,
     effective_spans,
     manual_gaps,
@@ -17,8 +20,8 @@ from kenkui._domain.tuning import Rule
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
-    from kenkui._domain.planning import SpeakerSpan
     from kenkui.inspection import ChapterInspection
 
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
@@ -36,6 +39,11 @@ GAP_TEXT = "He woke. He rose. He dressed.\n\nShe slept on."
 # makes the paragraph break a real structural piece boundary.
 SENTENCE_ONE_END = 9
 GAP_PARAGRAPH_END = 31
+
+LEAD_CHAPTER_ID = "ch-v1-lead"
+# One homograph in two paragraphs: the only shape that can tell a scoped
+# lexicon apart from a whole-book one.
+LEAD_TEXT = "He took the lead.\n\nThe lead pipe burst."
 
 
 def attributions(*pairs: tuple[str, dict[str, object]]) -> tuple[Attributions]:
@@ -113,6 +121,72 @@ def test_a_later_narrower_rule_wins_inside_a_wider_one(
     )
     spans = effective_spans(chapter_ch08, machine_spans, book)
     assert [span.character_id for span in spans] == ["jessica", "paul"]
+
+
+def attributed_spans(chapter: ChapterInspection) -> tuple[SpeakerSpan, ...]:
+    """Build machine spans the shape real attribution emits: one per quote run.
+
+    ``extract_spans`` always places a narration run between two quoted ones,
+    so no two spans built this way share a speaker across a boundary. That
+    unstated property is what ``effective_spans`` leans on once any rule
+    exists and it re-tiles the chapter from grid units: without it,
+    ``_coalesce`` could join two spans attribution deliberately kept apart,
+    and a rule matching nothing would still move the plan.
+    """
+    speakers = ("jessica", "paul")
+    quoted = 0
+    spans: list[SpeakerSpan] = []
+    for span in extract_spans(chapter.id, chapter.text):
+        character = None
+        if span.is_dialogue:
+            character = speakers[quoted % len(speakers)]
+            quoted += 1
+        spans.append(SpeakerSpan(chapter.id, span.start, span.end, character))
+    return tuple(spans)
+
+
+def test_a_rule_matching_nothing_preserves_multi_span_attribution(
+    chapter_ch08: ChapterInspection,
+) -> None:
+    """The cache-invalidation guarantee, against realistic machine spans.
+
+    Every attribution rule makes ``effective_spans`` rebuild the chapter from
+    grid units. A rule scoped elsewhere must leave that rebuild byte-identical
+    to what attribution produced, or every book in the library re-renders the
+    first time anyone corrects one line of a different chapter.
+    """
+    machine = attributed_spans(chapter_ch08)
+    assert len(machine) > 1
+    assert {span.character_id for span in machine} == {None, "jessica", "paul"}
+    book = attributions(("irulan", {"chapter": "ch-v1-elsewhere"}))
+    assert effective_spans(chapter_ch08, machine, book) == machine
+
+
+def test_a_rule_replaces_one_genuinely_attributed_character(
+    chapter_ch08: ChapterInspection,
+) -> None:
+    """Correcting a machine-attributed quote moves that span and nothing else."""
+    machine = attributed_spans(chapter_ch08)
+    corrected = next(span for span in machine if span.character_id == "jessica")
+    book = attributions(
+        (
+            "irulan",
+            {"chapter": chapter_ch08.id, "paragraph": 2, "sentence": 1, "phrase": 1},
+        )
+    )
+    spans = effective_spans(chapter_ch08, machine, book)
+    assert spans == tuple(
+        SpeakerSpan(
+            span.chapter_id,
+            span.start,
+            span.end,
+            "irulan" if span is corrected else span.character_id,
+        )
+        for span in machine
+    )
+    assert "".join(chapter_ch08.text[s.start : s.end] for s in spans) == (
+        chapter_ch08.text
+    )
 
 
 def test_silence_normalizes_to_the_last_leaf(chapter_ch08: ChapterInspection) -> None:
@@ -290,3 +364,149 @@ def test_a_manual_silence_cuts_strictly_inside_a_structural_piece() -> None:
     ]
     assert "".join(segment.text for segment in tuned.segments) == GAP_TEXT
     assert tuned.trailing_silence_ms == (250, 500, 0)
+
+
+def spoken(pipeline: kk.Pipeline, text: str = LEAD_TEXT) -> str:
+    """Compile a one-chapter plan and return exactly what the engine hears."""
+    return "".join(
+        segment.text
+        for segment in plan(pipeline, chapter_id=LEAD_CHAPTER_ID, text=text).segments
+    )
+
+
+def test_a_whole_book_lexicon_reaches_the_segment_text() -> None:
+    """The point of pronounce(): entries must change what is synthesized.
+
+    Recording the rule is not the feature. Nothing else in the suite follows a
+    lexicon from the public method all the way to a compiled segment, which is
+    how it once stopped arriving without a single test failing.
+    """
+    plain = spoken(kk.epub("book.epub").pronounce(numbers="off", builtin=False))
+    tuned = spoken(
+        kk.epub("book.epub").pronounce({"lead": "leed"}, numbers="off", builtin=False)
+    )
+    assert plain == LEAD_TEXT
+    assert tuned == "He took the leed.\n\nThe leed pipe burst."
+
+
+def test_a_scoped_lexicon_speaks_only_inside_its_scope() -> None:
+    """Anchoring to a region is what makes a homograph expressible at all."""
+    tuned = spoken(
+        kk.epub("book.epub").pronounce(
+            {"lead": "led"},
+            where={"chapter": LEAD_CHAPTER_ID, "paragraph": 2},
+            numbers="off",
+            builtin=False,
+        )
+    )
+    assert tuned == "He took the lead.\n\nThe led pipe burst."
+
+
+def test_a_scoped_lexicon_layers_over_the_whole_book_one() -> None:
+    """Both tables speak in the scope; only a shared key goes to the narrower."""
+    tuned = spoken(
+        kk.epub("book.epub")
+        .pronounce({"lead": "leed", "pipe": "pyp"}, numbers="off", builtin=False)
+        .pronounce({"lead": "led"}, where={"chapter": LEAD_CHAPTER_ID, "paragraph": 2})
+    )
+    assert tuned == "He took the leed.\n\nThe led pyp burst."
+
+
+def test_a_scoped_lexicon_is_clipped_to_each_speaker_span() -> None:
+    """An attribution rule cuts the chapter into fragments the regions outlive."""
+    tuned = spoken(
+        kk.epub("book.epub")
+        .pronounce(
+            {"lead": "led"},
+            where={"chapter": LEAD_CHAPTER_ID, "paragraph": 2},
+            numbers="off",
+            builtin=False,
+        )
+        .attribute("jessica", where={"chapter": LEAD_CHAPTER_ID, "paragraph": 1})
+    )
+    assert tuned == "He took the lead.\n\nThe led pipe burst."
+
+
+def test_a_scoped_lexicon_survives_selection_clipping() -> None:
+    """Previewing one paragraph must speak it the way a full render would."""
+    tuned = plan(
+        kk.epub("book.epub")
+        .pronounce(
+            {"lead": "led", "burst": "birst"},
+            where={"chapter": LEAD_CHAPTER_ID, "paragraph": 2},
+            numbers="off",
+            builtin=False,
+        )
+        .select({"chapter": LEAD_CHAPTER_ID, "paragraph": 2}),
+        chapter_id=LEAD_CHAPTER_ID,
+        text=LEAD_TEXT,
+    )
+    assert "".join(segment.text for segment in tuned.segments) == "The led pipe birst."
+
+
+def test_a_whole_book_lexicon_keeps_its_pre_tuning_segment_identity() -> None:
+    """Routing entries through a rule must not re-render an existing library."""
+    entries = (("lead", "leed"),)
+    before = plan(
+        replace(
+            kk.epub("book.epub"),
+            operations=(
+                SpokenForm(numbers="off", builtin_lexicon=False, lexicon=entries),
+            ),
+        ),
+        chapter_id=LEAD_CHAPTER_ID,
+        text=LEAD_TEXT,
+    )
+    after = plan(
+        kk.epub("book.epub").pronounce({"lead": "leed"}, numbers="off", builtin=False),
+        chapter_id=LEAD_CHAPTER_ID,
+        text=LEAD_TEXT,
+    )
+    assert before.semantic_fingerprint == after.semantic_fingerprint
+    assert [segment.id for segment in before.segments] == [
+        segment.id for segment in after.segments
+    ]
+
+
+def test_a_lexicon_scoped_elsewhere_leaves_the_plan_identical() -> None:
+    """A rule matching nothing must not move a segment identity here either."""
+    plain = plan(
+        kk.epub("book.epub").pronounce(numbers="off", builtin=False),
+        chapter_id=LEAD_CHAPTER_ID,
+        text=LEAD_TEXT,
+    )
+    scoped = plan(
+        kk.epub("book.epub")
+        .pronounce(numbers="off", builtin=False)
+        .pronounce({"lead": "led"}, where={"chapter": "ch-v1-elsewhere"}),
+        chapter_id=LEAD_CHAPTER_ID,
+        text=LEAD_TEXT,
+    )
+    assert plain.semantic_fingerprint == scoped.semantic_fingerprint
+
+
+def test_a_later_lexicon_keeps_the_spoken_style_already_chosen() -> None:
+    """The dial-in loop adds pronunciations under a house style, not over it."""
+    styled = kk.epub("book.epub").pronounce(numbers="off", builtin=False, roman=False)
+    tuned = styled.pronounce({"lead": "leed"})
+    settings = next(op for op in tuned.operations if isinstance(op, SpokenForm))
+    assert settings.numbers == "off"
+    assert settings.builtin_lexicon is False
+    assert settings.features == (("roman", False),)
+    assert spoken(tuned) == "He took the leed.\n\nThe leed pipe burst."
+
+
+def test_reloaded_pronunciations_speak_without_a_pronounce_call(
+    epub_path: Path, tmp_path: Path
+) -> None:
+    """A sidecar's lexicon must reach the engine, not wait for a style call."""
+    saved = (
+        kk.book(epub_path)
+        .pronounce({"lead": "leed"})
+        .write_annotations(tmp_path / "book.kenkui.json")
+    )
+    reloaded = kk.book(epub_path).annotations(saved)
+    assert not any(isinstance(op, SpokenForm) for op in reloaded.operations)
+    # Numbers stay off and the built-in table stays out: only what was asked
+    # for is honoured, so "1837" is still read as digits.
+    assert spoken(reloaded, "The lead in 1837.") == "The leed in 1837."

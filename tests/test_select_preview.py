@@ -283,8 +283,10 @@ def test_selection_does_not_guess_inside_cross_unit_pronunciation(
     renderable_book: kk.Pipeline,
 ) -> None:
     """A rule spanning sentence edges cannot leak excluded words into a probe."""
-    # Existing global spoken-form intent is the actual transformation entry;
-    # scoped Pronunciations rules are a later task and are deliberately absent.
+    # A directly-constructed SpokenForm is the narrowest way to place a
+    # cross-unit entry: it is exactly one whole-book lexicon and no grid.
+    # Scoped Pronunciations rules have their own coverage in
+    # test_tuning_merge.py, which pins that they never reach outside a scope.
     spoken = SpokenForm(
         numbers="off",
         builtin_lexicon=False,

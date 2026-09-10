@@ -16,10 +16,18 @@ _IDENTITY_OPERATION_COUNT = 2
 
 
 def test_tuning_lists_rules_in_declaration_order(epub_path: Path) -> None:
-    """Later declarations must render after earlier ones, never sorted."""
-    book = kk.book(epub_path).attribute("a").attribute("b")
+    """Later declarations must render after earlier ones, never sorted.
+
+    Declaration order is the precedence tiebreaker, so a display that sorts
+    misreports which rule wins. Character IDs that appear nowhere else in the
+    rendering -- not in the group header, not in a path -- are what make the
+    two positions unambiguous.
+    """
+    book = kk.book(epub_path).attribute("zeta").attribute("kappa")
     rendered = repr(book.tuning)
-    assert rendered.index("a") < rendered.index("b")
+    assert rendered.count("zeta") == 1
+    assert rendered.count("kappa") == 1
+    assert rendered.index("zeta") < rendered.index("kappa")
 
 
 def test_tuning_marks_unsaved_rules(epub_path: Path, tmp_path: Path) -> None:
