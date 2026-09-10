@@ -16,8 +16,23 @@ if TYPE_CHECKING:
 
 from kenkui._domain.spoken.lexicon import LEXICON_VERSION, lexicon_rules
 from kenkui._domain.spoken.numbers import NumberTier, Rule, number_rules
+from kenkui._domain.spoken.vocalise import VOCALISE_FEATURES, vocalise_rules
 
 SPOKEN_FORM_VERSION = "spoken-form-v1"
+
+
+def _routed(
+    features: Mapping[str, bool] | None,
+) -> tuple[dict[str, bool], dict[str, bool]]:
+    """Split overrides into the family that owns each name.
+
+    Each family rejects a name it does not recognize, so neither may be handed
+    the other's overrides.
+    """
+    items = dict(features or {})
+    vocal = {k: v for k, v in items.items() if k in VOCALISE_FEATURES}
+    numeric = {k: v for k, v in items.items() if k not in VOCALISE_FEATURES}
+    return numeric, vocal
 
 
 def _rules(
@@ -27,10 +42,17 @@ def _rules(
     builtin: bool,
     features: Mapping[str, bool] | None = None,
 ) -> tuple[Rule, ...]:
-    """Rank caller entries, then built-in entries, then number rules."""
+    """Rank caller entries, then built-in entries, then vocalise, then numbers.
+
+    Vocalise sits below both lexicons so a caller's own entry for a token still
+    wins, and above the number rules, which its letters-only pattern cannot
+    overlap anyway.
+    """
+    numeric, vocal = _routed(features)
     return (
         *lexicon_rules(lexicon, builtin=builtin),
-        *number_rules(numbers, features),
+        *vocalise_rules(vocal),
+        *number_rules(numbers, numeric),
     )
 
 
@@ -99,6 +121,7 @@ def spoken_identity(
     rendered under one configuration can never collide with another in the
     cache.
     """
+    numeric, vocal = _routed(features)
     payload = json.dumps(
         {"builtin": builtin, "entries": [list(pair) for pair in lexicon]},
         ensure_ascii=True,
@@ -114,8 +137,15 @@ def spoken_identity(
     # Absent when nothing was overridden, so a caller who never touched a
     # feature keeps the identity -- and therefore the cached audio -- they
     # had before features existed.
-    if features:
+    if numeric:
         identity["number_features"] = ",".join(
-            f"{name}={int(value)}" for name, value in sorted(features.items())
+            f"{name}={int(value)}" for name, value in sorted(numeric.items())
         )
+    # Recorded unconditionally, unlike the number features: these default on,
+    # so a segment cached before they existed has different audio for the same
+    # inputs and must not be served for one of these renders.
+    identity["vocalise"] = ",".join(
+        f"{name}={int(vocal.get(name, default))}"
+        for name, default in sorted(VOCALISE_FEATURES.items())
+    )
     return identity

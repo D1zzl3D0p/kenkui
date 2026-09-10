@@ -221,7 +221,12 @@ class Pipeline:
           pronunciation table unless ``builtin=False``;
         * reads numbers aloud, at the depth ``numbers`` selects --
           ``"off"``, ``"conservative"`` (the default), ``"standard"`` or
-          ``"aggressive"``.
+          ``"aggressive"``;
+        * collapses hyphenated vocal gestures the engine would otherwise read
+          out as letter names -- an elongation ("Ah-h-h" becomes "Ahhh") and a
+          stammer ("S-s-sorry" becomes "Sssorry"). Both are on, and each is
+          declined by name: ``elongation``, ``stammer``. Ordinary hyphenation
+          is untouched, including reduplication such as "drip-drip-drip".
 
         ``numbers`` is a preset over individually switchable features, each
         of which may be overridden by keyword: ``currency``, ``percent``,
@@ -249,6 +254,9 @@ class Pipeline:
         """
         from ._domain.spoken.lexicon import validate_entries  # noqa: PLC0415
         from ._domain.spoken.numbers import FEATURES  # noqa: PLC0415
+        from ._domain.spoken.vocalise import VOCALISE_FEATURES  # noqa: PLC0415
+
+        known = FEATURES.keys() | VOCALISE_FEATURES.keys()
 
         if numbers is not None and numbers not in _NUMBER_TIERS:
             raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
@@ -258,7 +266,7 @@ class Pipeline:
         # caller's typo, and silently ignoring it renders a book that does
         # not sound like what was asked for.
         for name, value in features.items():
-            if name not in FEATURES or not isinstance(value, bool):
+            if name not in known or not isinstance(value, bool):
                 raise ValidationError(ErrorCode.INVALID_PRONUNCIATION)
         patterns = _where_patterns(where)
         entries = validate_entries(lexicon if lexicon is not None else {})
