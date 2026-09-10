@@ -326,3 +326,28 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
 
 No behavioral ruling was required and no Task 4 finding was deferred. The
 pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
+
+#### Task 4 review gate
+
+- Independent task-scoped review found one Important defect:
+  `dialogue_ranges` merged distinct adjacent source quotations such as
+  `"a""b"` and `“a”“b”`, erasing their shared mandatory quote edge and making
+  two speakers inseparable.
+- Resolved by recording a one-based `dialogue_run` identity on every
+  dialogue-marked grid leaf. It is immutable metadata derived during the one
+  quote scan already performed by grid construction; the flat `Unit` tuple
+  remains the sole text partition. `dialogue_ranges` now coalesces structural
+  leaves only when their source quotation identity matches.
+- Added straight- and smart-quote oracle differentials proving both adjacent
+  quotation ranges exactly match Task 1's scanner output, plus attribution
+  tests proving both quote ids reach the model input and can receive different
+  speakers.
+- Focused grid/oracle/attribution run -> `55 passed in 3.75s`; structural-index,
+  import-boundary, and scanner regression run -> `58 passed in 0.23s`.
+- Full character/attribution-focused rerun -> `276 passed, 1 skipped in 5.60s`;
+  the skip remains the absent optional spaCy dependency.
+- Real-library differential rerun -> `39 passed, 1 skipped in 32.59s`, with the
+  same pre-existing `Dark One - Brandon Sanderson` parse failure.
+- Changed-file strict mypy passed across 3 source files, and full Ruff passed.
+
+No behavioral ruling was required and no review finding remains deferred.

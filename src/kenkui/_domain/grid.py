@@ -89,6 +89,10 @@ class Unit:
     end: int
     is_dialogue: bool
     is_emphasised: bool
+    # One-based identity of the source quotation covering this leaf. Adjacent
+    # quotations can share an edge, so the dialogue flag alone cannot preserve
+    # their mandatory attribution boundary.
+    dialogue_run: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,13 +312,16 @@ def build_structure_index(units: Iterable[Unit]) -> StructuralIndex:
 
 
 def dialogue_ranges(units: Iterable[Unit]) -> tuple[DialogueRange, ...]:
-    """Coalesce contiguous dialogue-marked leaves into canonical ranges."""
+    """Coalesce dialogue leaves only within the same source quotation."""
     ranges: list[DialogueRange] = []
+    previous_run: int | None = None
     for unit in units:
         if not unit.is_dialogue:
             continue
         if (
             ranges
+            and unit.dialogue_run is not None
+            and unit.dialogue_run == previous_run
             and ranges[-1].chapter_id == unit.chapter_id
             and ranges[-1].end == unit.start
         ):
@@ -322,6 +329,7 @@ def dialogue_ranges(units: Iterable[Unit]) -> tuple[DialogueRange, ...]:
             ranges[-1] = DialogueRange(previous.chapter_id, previous.start, unit.end)
         else:
             ranges.append(DialogueRange(unit.chapter_id, unit.start, unit.end))
+        previous_run = unit.dialogue_run
     return tuple(ranges)
 
 
@@ -372,6 +380,21 @@ def _covers(start: int, length: int, ranges: Iterable[tuple[int, int]]) -> bool:
     return any(range_start <= midpoint < range_end for range_start, range_end in ranges)
 
 
+def _covering_run(
+    start: int, length: int, ranges: Iterable[tuple[int, int]]
+) -> int | None:
+    """Return the one-based source-range identity covering a leaf midpoint."""
+    midpoint = start + length / 2
+    return next(
+        (
+            index
+            for index, (range_start, range_end) in enumerate(ranges, start=1)
+            if range_start <= midpoint < range_end
+        ),
+        None,
+    )
+
+
 def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
     """Partition one chapter into addressable units.
 
@@ -394,6 +417,7 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
                 for phrase in split_phrases(sentence):
                     for piece in _apply_cuts(phrase, offset, edges):
                         ph_index += 1
+                        dialogue_run = _covering_run(offset, len(piece), dialogue)
                         units.append(
                             Unit(
                                 chapter.id,
@@ -403,10 +427,11 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
                                 ph_index,
                                 offset,
                                 offset + len(piece),
-                                is_dialogue=_covers(offset, len(piece), dialogue),
+                                is_dialogue=dialogue_run is not None,
                                 is_emphasised=_covers(
                                     offset, len(piece), chapter.emphasis
                                 ),
+                                dialogue_run=dialogue_run,
                             )
                         )
                         offset += len(piece)

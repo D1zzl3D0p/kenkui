@@ -68,8 +68,22 @@ class PauseFixture:
             "“She said ‘go now’ twice.”",
             (QuoteObservation(0, 26, dialogue=True),),
         ),
+        (
+            '"a""b"',
+            (
+                QuoteObservation(0, 3, dialogue=True),
+                QuoteObservation(3, 6, dialogue=True),
+            ),
+        ),
+        (
+            "“a”“b”",
+            (
+                QuoteObservation(0, 3, dialogue=True),
+                QuoteObservation(3, 6, dialogue=True),
+            ),
+        ),
     ],
-    ids=("straight", "smart", "nested"),
+    ids=("straight", "smart", "nested", "adjacent-straight", "adjacent-smart"),
 )
 def test_legacy_quote_oracle_freezes_exact_ranges(
     text: str, expected: tuple[QuoteObservation, ...]

@@ -221,6 +221,37 @@ def test_spans_still_partition_the_chapter() -> None:
     assert "".join(TEXT[s.start : s.end] for s in record.spans) == TEXT
 
 
+@pytest.mark.parametrize("text", ['"a""b"', "“a”“b”"])
+def test_adjacent_quotes_remain_separate_attribution_inputs(text: str) -> None:
+    """A shared quote edge must not collapse two independently voiced lines."""
+
+    class AdjacentClient:
+        def complete(self, model: str, prompt: str) -> str:
+            assert model
+            assert '"quote_id": 0' in prompt
+            assert '"quote_id": 1' in prompt
+            return json.dumps(
+                {
+                    "attributions": [
+                        {"quote_id": 0, "speaker": "javert"},
+                        {"quote_id": 1, "speaker": "unknown"},
+                    ]
+                }
+            )
+
+    chapter = _inspection(text).chapters[0]
+    resolved, coverage = attribute_chapter(
+        chapter,
+        (CharacterProfile("javert", "Javert", None, 0, ()),),
+        "fake/model",
+        client=AdjacentClient(),
+    )
+    expected_ranges = [(0, 3), (3, 6)]
+    assert coverage.quotes == len(expected_ranges)
+    assert [(span.start, span.end) for span in resolved] == expected_ranges
+    assert [span.character_id for span in resolved] == ["javert", None]
+
+
 def test_long_chapter_grid_is_built_once_for_both_attribution_stages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
