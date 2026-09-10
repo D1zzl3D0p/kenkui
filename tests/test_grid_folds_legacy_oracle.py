@@ -1,0 +1,272 @@
+"""Meaningful fixtures frozen before quote, structure, and chunking move."""
+# ruff: noqa: RUF001 - typographic punctuation is fixture data.
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import pytest
+
+import kenkui as kk
+from kenkui._domain.grid import build_grid, split_sentences, unit_text
+from kenkui._domain.planning import MAX_TTS_SEGMENT_CHARACTERS, SpeakerSpan
+from kenkui._domain.structure import HEADING_AFTER, HEADING_BEFORE, LINE, PARAGRAPH
+from legacy_grid_folds_oracle import (
+    BreakQualityObservation,
+    QuoteObservation,
+    StructureObservation,
+    legacy_break_quality,
+    legacy_chunks,
+    legacy_quote_partition,
+    legacy_structure_partition,
+    observe_legacy_plan,
+)
+
+CHAPTER_ID = "ch-v1-oracle"
+SOURCE_HASH = "1" * 64
+MODEL_REVISION = "pocket-tts/model@oracle"
+
+
+@dataclass(frozen=True, slots=True)
+class PauseFixture:
+    """Complete legacy pause specification for structural observations."""
+
+    chapter_ms: int = 0
+    heading_before_ms: int = 0
+    heading_after_ms: int = 0
+    paragraph_ms: int = 0
+    line_ms: int = 0
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            'He said, "Go now." Then left.',
+            (
+                QuoteObservation(0, 9, dialogue=False),
+                QuoteObservation(9, 18, dialogue=True),
+                QuoteObservation(18, 29, dialogue=False),
+            ),
+        ),
+        (
+            "Before “Go now.” After.",
+            (
+                QuoteObservation(0, 7, dialogue=False),
+                QuoteObservation(7, 16, dialogue=True),
+                QuoteObservation(16, 23, dialogue=False),
+            ),
+        ),
+        (
+            "“She said ‘go now’ twice.”",
+            (QuoteObservation(0, 26, dialogue=True),),
+        ),
+    ],
+    ids=("straight", "smart", "nested"),
+)
+def test_legacy_quote_oracle_freezes_exact_ranges(
+    text: str, expected: tuple[QuoteObservation, ...]
+) -> None:
+    """Straight, smart, and nested quote ranges retain their exact flags."""
+    assert legacy_quote_partition(CHAPTER_ID, text) == expected
+    assert "".join(text[item.start : item.end] for item in expected) == text
+
+
+def test_legacy_sentence_oracle_guards_titles_and_initials() -> None:
+    """Titles and initials do not masquerade as sentence endings."""
+    assert split_sentences("Dr. Ada met J. R. Smith. Then left.") == (
+        "Dr. Ada met J. R. Smith. ",
+        "Then left.",
+    )
+
+
+def test_legacy_structure_oracle_freezes_headings_blank_blocks_and_lines() -> None:
+    """Separators stay exact while heading, paragraph, and line reasons survive."""
+    text = "Chapter One\n\n\n\nLine one\nLine two\n\nTail."
+    observed = legacy_structure_partition(
+        text,
+        frozenset({"Chapter One", "Tail."}),
+        PauseFixture(
+            heading_before_ms=400,
+            heading_after_ms=500,
+            paragraph_ms=300,
+            line_ms=100,
+        ),
+    )
+    assert observed == (
+        StructureObservation("Chapter One\n\n\n\n", (HEADING_AFTER, PARAGRAPH)),
+        StructureObservation("Line one\n", (LINE,)),
+        StructureObservation("Line two\n\n", (HEADING_BEFORE, PARAGRAPH)),
+        StructureObservation("Tail.", ()),
+    )
+    assert "".join(item.text for item in observed) == text
+
+
+def test_legacy_grid_oracle_freezes_emphasis_and_dialogue_edges() -> None:
+    """Emphasis flags and quote edges remain addressable at exact offsets."""
+    text = 'He thought "Go." Now.'
+    chapter = kk.ChapterInspection(
+        CHAPTER_ID,
+        0,
+        "Fixture",
+        len(text),
+        text,
+        emphasis=((3, 10),),
+    )
+    units = build_grid(chapter)
+    assert [
+        (
+            unit.start,
+            unit.end,
+            unit.is_dialogue,
+            unit.is_emphasised,
+            unit_text(unit, text),
+        )
+        for unit in units
+    ] == [
+        (0, 11, False, True, "He thought "),
+        (11, 16, True, False, '"Go."'),
+        (16, 17, False, False, " "),
+        (17, 21, False, False, "Now."),
+    ]
+
+
+def test_legacy_chunk_oracle_freezes_separator_free_prose_and_long_tokens() -> None:
+    """The old whitespace fallback and indivisible-token cut stay observable."""
+    prose = "and then " * 120
+    prose_chunks = legacy_chunks(CHAPTER_ID, prose)
+    assert [len(chunk) for chunk in prose_chunks] == [999, 81]
+    assert prose_chunks[0].endswith(" ")
+    assert "".join(prose_chunks) == prose
+
+    token = "x" * (MAX_TTS_SEGMENT_CHARACTERS + 1)
+    token_chunks = legacy_chunks(CHAPTER_ID, token)
+    assert [len(chunk) for chunk in token_chunks] == [1000, 1]
+    assert "".join(token_chunks) == token
+
+
+def _voice(voice_id: str, fingerprint: str) -> kk.Voice:
+    """Build a deterministic loaded voice for planning observations."""
+    return kk.Voice(
+        id=voice_id,
+        name=voice_id.title(),
+        enabled=True,
+        provenance="Project-owned recording by Test Speaker",
+        license_id="CC0-1.0",
+        commercial_use_allowed=True,
+        language="en-US",
+        content_fingerprint=fingerprint,
+        compatible_model_revisions=(MODEL_REVISION,),
+        state="loaded",
+    )
+
+
+def test_legacy_planning_observation_freezes_semantic_sequence_and_ranges() -> None:
+    """Spoken expansion preserves speakers, voices, source ranges, and gaps."""
+    text = 'Chapter IV\n\nHe paid 21%.\n"Wait," Mira said.\n\nTail.'
+    dialogue_start = text.index('"Wait,"')
+    dialogue_end = dialogue_start + len('"Wait,"')
+    spans = (
+        SpeakerSpan(CHAPTER_ID, 0, dialogue_start, None),
+        SpeakerSpan(CHAPTER_ID, dialogue_start, dialogue_end, "mira"),
+        SpeakerSpan(CHAPTER_ID, dialogue_end, len(text), None),
+    )
+    chapter = kk.ChapterInspection(
+        CHAPTER_ID,
+        0,
+        "Fixture",
+        len(text),
+        text,
+        headings=("Chapter IV",),
+    )
+    narrator = _voice("narrator", "2" * 64)
+    mira = _voice("mira-voice", "3" * 64)
+    pipeline = (
+        kk.epub("oracle.epub")
+        .pronounce(numbers="standard", builtin=False)
+        .pauses(heading_after_ms=500, paragraph_ms=300, line_ms=100)
+        .assign_voice("narrator")
+        .tts()
+    )
+
+    observed = observe_legacy_plan(
+        pipeline,
+        kk.BookInspection(kk.BookMetadata("Oracle", "Fixture"), (chapter,)),
+        source_bytes_hash=SOURCE_HASH,
+        resolved_voice=narrator,
+        model_revision=MODEL_REVISION,
+        cast_voices=(mira,),
+        assignments={"mira": "mira-voice"},
+        spans=spans,
+    )
+
+    assert observed.spoken_text == (
+        'Chapter Four\n\nHe paid twenty-one percent.\n"Wait," Mira said.\n\nTail.'
+    )
+    assert observed.segment_texts == (
+        "Chapter Four\n\n",
+        "He paid twenty-one percent.\n",
+        '"Wait,"',
+        " Mira said.\n\n",
+        "Tail.",
+    )
+    assert observed.speakers == (None, None, "mira", None, None)
+    assert observed.voices == (
+        "narrator",
+        "narrator",
+        "mira-voice",
+        "narrator",
+        "narrator",
+    )
+    assert observed.canonical_ranges == (
+        (0, 12),
+        (12, dialogue_start),
+        (dialogue_start, dialogue_end),
+        (dialogue_end, len(text) - len("Tail.")),
+        (len(text) - len("Tail."), len(text)),
+    )
+    assert observed.spoken_ranges == ((0, 14), (14, 42), (42, 49), (49, 62), (62, 67))
+    assert observed.effective_silences_ms == (500, 100, 0, 300, 0)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Sentence boundary. " * 90,
+            BreakQualityObservation(
+                characters=1710,
+                chunks=2,
+                internal_boundaries=(988,),
+                structural_or_clause_grid_edges=(("sentence", 1),),
+                emergency_within_leaf=(),
+            ),
+        ),
+        (
+            "and then " * 120,
+            BreakQualityObservation(
+                characters=1080,
+                chunks=2,
+                internal_boundaries=(999,),
+                structural_or_clause_grid_edges=(),
+                emergency_within_leaf=(("whitespace", 1),),
+            ),
+        ),
+        (
+            "x" * 1001,
+            BreakQualityObservation(
+                characters=1001,
+                chunks=2,
+                internal_boundaries=(1000,),
+                structural_or_clause_grid_edges=(),
+                emergency_within_leaf=(("hard_token", 1),),
+            ),
+        ),
+    ],
+    ids=("normal-grid-edge", "emergency-whitespace", "emergency-hard-token"),
+)
+def test_break_quality_report_classifies_boundaries_without_a_percentage_target(
+    text: str, expected: BreakQualityObservation
+) -> None:
+    """The metric preserves counts and characterizations, not an old ratio target."""
+    assert legacy_break_quality(CHAPTER_ID, text) == expected
