@@ -23,6 +23,7 @@ from ._domain.operations import (
     Operation,
     Pauses,
     Pronunciations,
+    Select,
     SelectChapterRange,
     SelectChapters,
     Series,
@@ -34,7 +35,7 @@ from ._domain.operations import (
     replace_or_append,
 )
 from ._domain.paths import Pattern, parse_pattern
-from ._domain.selection import select_chapters, select_range
+from ._domain.selection import select_chapters, select_range, selected_ranges
 from ._domain.sidecar import (
     authoring_snapshot,
     deserialize,
@@ -134,7 +135,7 @@ class Pipeline:
             raise ValidationError(ErrorCode.EMPTY_SELECTION)
         if len(set(normalized)) != len(normalized):
             raise ValidationError(ErrorCode.DUPLICATE_CHAPTER_ID)
-        if has_operation(self.operations, SelectChapterRange):
+        if any(isinstance(op, (Select, SelectChapterRange)) for op in self.operations):
             raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
         return self._append(SelectChapters(normalized), before_tts=True)
 
@@ -144,9 +145,26 @@ class Pipeline:
         end = end_id.strip()
         if not start or not end:
             raise ValidationError(ErrorCode.EMPTY_SELECTION)
-        if has_operation(self.operations, SelectChapters):
+        if any(isinstance(op, (Select, SelectChapters)) for op in self.operations):
             raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
         return self._append(SelectChapterRange(start, end), before_tts=True)
+
+    def select(self, *patterns: Pattern | Mapping[str, object]) -> Pipeline:
+        """Select a union of grid subtrees while retaining source paths and casting.
+
+        Patterns use the original book's coordinates and sibling counts. They
+        combine in source order without duplication. Full-render chunks wholly
+        inside each selected interval retain their cache identities; chunks at
+        either edge are clipped to the requested text.
+        """
+        if not patterns:
+            raise ValidationError(ErrorCode.EMPTY_SELECTION)
+        if any(
+            isinstance(op, (SelectChapters, SelectChapterRange))
+            for op in self.operations
+        ):
+            raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
+        return self._append(Select(_where_patterns(patterns)), before_tts=True)
 
     def pronounce(
         self,
@@ -610,13 +628,28 @@ class Pipeline:
         return the frozen source, roster, attribution, and cast snapshot.
         """
         if self._resolved is not None:
-            return self._resolved.inspection
-        if self._roster is not None:
-            return self._roster.inspection
-        source_error = source_validation_error(self.source.path)
-        if source_error is not None:
-            raise SourceError(source_error)
-        inspection = inspect_epub(self.source.path)
+            inspection = self._resolved.inspection
+        elif self._roster is not None:
+            inspection = self._roster.inspection
+        else:
+            source_error = source_validation_error(self.source.path)
+            if source_error is not None:
+                raise SourceError(source_error)
+            inspection = inspect_epub(self.source.path)
+        selection = next((op for op in self.operations if isinstance(op, Select)), None)
+        if selection is not None:
+            chapters = tuple(
+                chapter
+                for chapter in inspection.chapters
+                if selected_ranges(chapter, selection.patterns)
+            )
+            if not chapters:
+                raise ValidationError(ErrorCode.EMPTY_SELECTION)
+            return replace(
+                inspection, chapters=chapters, _planning_chapters=inspection.chapters
+            )
+        if self._resolved is not None or self._roster is not None:
+            return inspection
         explicit = next(
             (item for item in self.operations if isinstance(item, SelectChapters)), None
         )
@@ -673,6 +706,55 @@ class Pipeline:
         keep_audio_cache: bool = False,
     ) -> Result:
         """Validate controls and execute using privately bound rendering resources."""
+        return self._write_audio(
+            output,
+            on_event=on_event,
+            cancel=cancel,
+            workers=workers,
+            overwrite=overwrite,
+            keep_audio_cache=keep_audio_cache,
+            preview=False,
+        )
+
+    def preview(
+        self,
+        output: str | os.PathLike[str],
+        *,
+        on_event: Callable[[ExecutionEvent], None] | None = None,
+        workers: int | Literal["auto"] = "auto",
+        overwrite: bool = False,
+    ) -> Result:
+        """Write a PCM WAV probe and retain synthesized segments for later reuse.
+
+        Requires assigned voices and adds TTS intent on a temporary branch
+        when needed. The original pipeline is unchanged. The destination must end in
+        ``.wav``. Bibliographic metadata, cover art, and chapter markers are
+        omitted from the artifact; normal execution events still report work.
+        """
+        branch = (
+            self if has_operation(self.operations, SynthesizeSpeech) else self.tts()
+        )
+        return branch._write_audio(  # noqa: SLF001 - ephemeral synthesis branch.
+            output,
+            on_event=on_event,
+            cancel=None,
+            workers=workers,
+            overwrite=overwrite,
+            keep_audio_cache=True,
+            preview=True,
+        )
+
+    def _write_audio(  # noqa: PLR0913 - shared validation/execution boundary.
+        self,
+        output: str | os.PathLike[str],
+        *,
+        on_event: Callable[[ExecutionEvent], None] | None,
+        cancel: CancellationToken | None,
+        workers: int | Literal["auto"],
+        overwrite: bool,
+        keep_audio_cache: bool,
+        preview: bool,
+    ) -> Result:
         validation = self.validate()
         if not validation.is_valid:
             issue = validation.errors[0]
@@ -687,10 +769,14 @@ class Pipeline:
         ):
             raise ValidationError(ErrorCode.INVALID_WORKERS)
         output_path = Path(output)
-        if output_path.suffix.lower() != ".m4b" or not output_path.parent.is_dir():
-            raise ValidationError(ErrorCode.INVALID_OUTPUT)
+        suffix = ".wav" if preview else ".m4b"
+        output_message = (
+            f"The output must be a {suffix[1:].upper()} path." if preview else None
+        )
+        if output_path.suffix.lower() != suffix or not output_path.parent.is_dir():
+            raise ValidationError(ErrorCode.INVALID_OUTPUT, output_message)
         if output_path.exists() and not output_path.is_file():
-            raise ValidationError(ErrorCode.INVALID_OUTPUT)
+            raise ValidationError(ErrorCode.INVALID_OUTPUT, output_message)
         if output_path.exists() and not overwrite:
             raise EncodingError(ErrorCode.OUTPUT_EXISTS)
         if cancel is not None:
@@ -709,10 +795,15 @@ class Pipeline:
             else resolve_inputs(self, cancel, emitter, validate_series=True)
         )
         log_collisions(resolved.collisions)
+        bindings = resolved.bindings
+        if preview:
+            from ._audio.wav import WavArtifactAssembler  # noqa: PLC0415
+
+            bindings = replace(bindings, assembler=WavArtifactAssembler())
         return execute_sequential(
             self,
             output_path,
-            bindings=resolved.bindings,
+            bindings=bindings,
             on_event=on_event,
             cancel=cancel,
             workers=workers,
@@ -723,6 +814,7 @@ class Pipeline:
             spans=resolved.spans,
             resolved_source_hash=resolved.source_hash,
             emitter=emitter,
+            preview=preview,
         )
 
     def _append(self, operation: Operation, *, before_tts: bool = False) -> Pipeline:
@@ -775,6 +867,7 @@ class Pipeline:
                     Silences,
                     Pronunciations,
                     Annotations,
+                    Select,
                 ),
             )
             else None,

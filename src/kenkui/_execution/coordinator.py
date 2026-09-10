@@ -103,15 +103,21 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
     spans: tuple[SpeakerSpan, ...] = (),
     resolved_source_hash: str | None = None,
     emitter: EventEmitter | None = None,
+    preview: bool = False,
 ) -> Result:
     """Execute one immutable plan in order and transactionally publish its artifact."""
     metadata_intent = pipeline.metadata_intent
-    cover_file, cover_content_hash = _resolve_cover(metadata_intent)
+    cover_file, cover_content_hash = (
+        (None, None) if preview else _resolve_cover(metadata_intent)
+    )
     _preflight_assembler(
         bindings.assembler,
-        expect_cover=metadata_intent is None
-        or metadata_intent.cover == "source"
-        or cover_file is not None,
+        expect_cover=not preview
+        and (
+            metadata_intent is None
+            or metadata_intent.cover == "source"
+            or cover_file is not None
+        ),
     )
     owns_emitter = emitter is None
     emitter = emitter if emitter is not None else EventEmitter(on_event)

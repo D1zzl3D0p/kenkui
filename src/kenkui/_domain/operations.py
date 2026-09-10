@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+    from kenkui._domain.paths import Pattern
     from kenkui._domain.tuning import Rule
 
 
@@ -47,6 +48,13 @@ class Annotations:
     def __post_init__(self) -> None:
         """Detach loaded annotations from mutable caller-owned data."""
         object.__setattr__(self, "loaded", MappingProxyType(dict(self.loaded)))
+
+
+@dataclass(frozen=True, slots=True)
+class Select:
+    """Select the union of immutable canonical grid patterns in source order."""
+
+    patterns: tuple[Pattern, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +165,8 @@ class Series:
 
 
 Operation: TypeAlias = (
-    SelectChapters
+    Select
+    | SelectChapters
     | SelectChapterRange
     | SpokenForm
     | Pauses

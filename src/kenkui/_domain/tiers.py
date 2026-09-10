@@ -8,6 +8,7 @@ Tier: TypeAlias = Literal["identity", "tuning", "style"]
 
 _TIERS: dict[type[ops.Operation], Tier] = {
     ops.SelectChapters: "identity",
+    ops.Select: "identity",
     ops.SelectChapterRange: "identity",
     ops.MetadataIntent: "identity",
     ops.Series: "identity",

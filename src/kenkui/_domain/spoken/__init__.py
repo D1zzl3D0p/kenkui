@@ -34,25 +34,30 @@ def _rules(
     )
 
 
-def to_spoken(
+def to_spoken(  # noqa: PLR0913 - optional source-coordinate observation.
     text: str,
     *,
     numbers: NumberTier,
     lexicon: tuple[tuple[str, str], ...],
     builtin: bool,
     features: Mapping[str, bool] | None = None,
+    offsets: list[tuple[int, int, int, int]] | None = None,
 ) -> str:
     """Return the string the engine should speak for this canonical text.
 
     One left-to-right pass. At each position the first accepting rule wins and
     its output is emitted verbatim; emitted output is never re-examined, so
     rules can neither cascade nor loop.
+
+    When supplied, ``offsets`` records each replacement's source and output
+    interval for exact selection clipping. It never influences the output.
     """
     rules = _rules(numbers, lexicon, builtin=builtin, features=features)
     if not rules:
         return text
     out: list[str] = []
     position = 0
+    output_position = 0
     while position < len(text):
         for pattern, handler in rules:
             match = pattern.match(text, position)
@@ -62,11 +67,22 @@ def to_spoken(
             if replacement is None:
                 continue
             out.append(replacement)
+            if offsets is not None:
+                offsets.append(
+                    (
+                        position,
+                        match.end(),
+                        output_position,
+                        output_position + len(replacement),
+                    )
+                )
+            output_position += len(replacement)
             position = match.end()
             break
         else:
             out.append(text[position])
             position += 1
+            output_position += 1
     return "".join(out)
 
 

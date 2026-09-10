@@ -17,7 +17,12 @@ from ._domain.casting import (
     Collision,
     ungendered_pool_characters,
 )
-from ._domain.operations import AssignVoices, AttributeQuotes, InferCharacters, Series
+from ._domain.operations import (
+    AssignVoices,
+    AttributeQuotes,
+    InferCharacters,
+    Series,
+)
 from ._domain.planning import SpeakerSpan  # noqa: TC001 - dataclass field
 from ._source import snapshot_source, source_digest
 from .errors import ErrorCode, SourceError, ValidationError
@@ -310,7 +315,17 @@ def inspect_source(
             _resolved=None,
             _roster=None,
         )
-        return snapshot_pipeline.inspect(), digest
+        inspection = snapshot_pipeline.inspect()
+        # Validate the selected view before provider work, then resolve against
+        # the full immutable source basis that the eventual render will use.
+        # The private planning field belongs only to narrowed public views.
+        if inspection._planning_chapters:  # noqa: SLF001
+            inspection = replace(
+                inspection,
+                chapters=inspection._planning_chapters,  # noqa: SLF001
+                _planning_chapters=(),
+            )
+        return inspection, digest
 
 
 def resolve_characters(

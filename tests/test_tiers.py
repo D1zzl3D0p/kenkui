@@ -35,6 +35,7 @@ def test_style_and_identity_are_separated() -> None:
     assert tier_of(ops.MetadataIntent) == "identity"
     assert tier_of(ops.Series) == "identity"
     assert tier_of(ops.SelectChapters) == "identity"
+    assert tier_of(ops.Select) == "identity"
     assert tier_of(ops.SelectChapterRange) == "identity"
 
 

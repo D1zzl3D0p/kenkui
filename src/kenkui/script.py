@@ -11,6 +11,7 @@ from kenkui._domain.operations import (
     Attributions,
     Pauses,
     Pronunciations,
+    Select,
     SelectChapterRange,
     SelectChapters,
     Silences,
@@ -31,11 +32,10 @@ from kenkui._domain.paths import (
 # Share the planner's machine lookup and normalized gaps, and the sidecar's
 # subtree hash definition. Review must describe those exact interpretations.
 from kenkui._domain.planning import (
-    _apply_gap,
-    _gaps_over,
     _machine_lookup,
-    _structural_pieces,
+    grid_silences,
 )
+from kenkui._domain.selection import selected_patterns, selected_unit
 from kenkui._domain.sidecar import _anchor
 from kenkui._domain.tuning import Provenance, resolve_rules
 from kenkui.api import ValidationIssue
@@ -124,7 +124,7 @@ class Script:
             if chapter.id == key.chapter:
                 rows = tuple(
                     row
-                    for row in self._materialize(chapter).rows
+                    for row in self.at({"chapter": chapter.id})
                     if contains(key, row.path)
                 )
                 if len(rows) == 1:
@@ -140,7 +140,11 @@ class Script:
             if chapter_selector.covers(chapter.id, None):
                 cached = self._materialize(chapter)
                 for unit, row in zip(cached.units, cached.rows, strict=True):
-                    if matches(where, unit, cached.siblings):
+                    if matches(where, unit, cached.siblings) and selected_unit(
+                        unit,
+                        selected_patterns(self._pipeline.operations),
+                        cached.siblings,
+                    ):
                         yield row
         self._update_warnings()
 
@@ -194,37 +198,17 @@ class Script:
     ) -> dict[int, int]:
         operations = self._pipeline.operations
         pauses = next((op for op in operations if isinstance(op, Pauses)), Pauses())
-        derived = {
-            end: reasons for _start, end, reasons in _structural_pieces(chapter, pauses)
-        }
-        rules = tuple(
-            rule
-            for operation in operations
-            if isinstance(operation, Silences)
-            for rule in operation.rules
-        )
-        manual = _gaps_over(units, rules) if rules else {}
-        indices: list[int] = []
-        silence: list[int] = []
-        for index, unit in enumerate(units):
-            if unit_text(unit, chapter.text).strip():
-                indices.append(index)
-                silence.append(0)
-            # Planning emits no segment for whitespace-only fragments. Their
-            # gaps settle on the last spoken segment, so a later manual zero
-            # must also be able to remove the preceding row's effective pause.
-            _apply_gap(
-                silence, derived.get(unit.end, frozenset()), pauses, manual.get(index)
-            )
+        silence = grid_silences(chapter, units, operations)
         if silence:
             # Match planning: inter-chapter silence is a floor; the book's
             # trailing silence is always zero, including manual declarations.
-            silence[-1] = (
+            last = next(reversed(silence))
+            silence[last] = (
                 0
                 if chapter.id == self._inspection.chapters[-1].id
-                else max(silence[-1], pauses.chapter_ms)
+                else max(silence[last], pauses.chapter_ms)
             )
-        return dict(zip(indices, silence, strict=True))
+        return silence
 
     def _update_warnings(self) -> None:
         rules = tuple(
@@ -234,7 +218,7 @@ class Script:
             for rule in operation.rules
         )
         narrowed = any(
-            isinstance(op, (SelectChapters, SelectChapterRange))
+            isinstance(op, (Select, SelectChapters, SelectChapterRange))
             for op in self._pipeline.operations
         )
         for ordinal, (kind, rule) in enumerate(rules):

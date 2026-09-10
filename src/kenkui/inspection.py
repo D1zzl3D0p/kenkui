@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -64,3 +64,9 @@ class BookInspection:
     chapters: tuple[ChapterInspection, ...]
     casting: CastingInspection | None = None
     roster: CharacterRoster | None = None
+    # Selection changes the public chapters, not the source ordinal basis.
+    # Only planning consumes this snapshot; repr/equality and output metadata
+    # deliberately describe the selected view.
+    _planning_chapters: tuple[ChapterInspection, ...] = field(
+        default=(), repr=False, compare=False
+    )
