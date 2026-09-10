@@ -278,3 +278,51 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
 - Resolved by treating a paragraph change as closing the nested sentence range
   and adding the `One.\n\nTwo.` regression fixture.
 - No other Critical, Important, or Minor findings were reported.
+- Scoped re-review of fix commit `34a6240` approved the resolution with no new
+  findings; focused verification reported 15 passed and 40 opt-in skips.
+
+### Task 4 — Fold quote attribution into the grid — 2026-09-10
+
+- Added immutable `DialogueRange` values and `dialogue_ranges`, a grid query
+  that coalesces contiguous dialogue-marked leaves into canonical half-open
+  ranges without retaining text or independently scanning quote punctuation.
+- Replaced every production `_characters` use of `extract_spans` with ranges
+  derived from `build_grid`. Model roster discovery, spaCy roster inference,
+  first-person narration detection, and chapter attribution now consume only
+  grid-provided dialogue ranges; `extract_spans` remains a production detail
+  only of grid construction while the Task 1 oracle still exists.
+- Attribution reconstructs the same complete narration/dialogue `SpeakerSpan`
+  tiling around those dialogue ranges, preserving stored span offsets,
+  coverage accounting, quote ids, prompt text, and unknown-speaker behavior.
+- Centralized per-book range materialization in `_dialogue_by_chapter`.
+  Resolution builds each chapter grid once and reuses its ranges for roster
+  discovery and concurrent attribution. A 600,000-character regression spies
+  on both possible build sites and proves exactly one grid build for the
+  chapter while retaining exact output tiling.
+- Representative differential coverage compares straight, smart, and nested
+  quote inputs against `legacy_quote_partition`; a focused grid test proves
+  sentence/phrase leaves inside one quotation coalesce to one attribution
+  range.
+- Real-library differential property:
+  `rtk env KENKUI_RUN_CORPUS=1 .venv/bin/pytest tests/test_grid_exactness.py -q -ra --no-cov`
+  -> `39 passed, 1 skipped in 33.02s`. Every grid-derived dialogue range
+  matched the Task 1 legacy oracle for every chapter in all 39 parseable EPUBs;
+  the sole skip remains the pre-existing `Dark One - Brandon Sanderson`
+  empty-visible-text parse failure.
+- Full character/attribution-focused regression run:
+  `rtk .venv/bin/pytest tests/test_attribution.py tests/test_casting_solver.py tests/test_casting_store.py tests/test_character_llm.py tests/test_dialogue_tags.py tests/test_identity.py tests/test_identity_stability.py tests/test_narration.py tests/test_series_identity.py tests/test_series_resolution.py tests/test_series_store.py tests/test_series_validation.py tests/test_spacy_roster.py tests/test_tuning_merge.py -q --no-cov`
+  -> `274 passed, 1 skipped in 5.72s`; the skip is the absent optional spaCy
+  dependency.
+- Quote/grid/import/oracle regression run:
+  `rtk .venv/bin/pytest tests/test_quote_extraction.py tests/test_import_boundaries.py tests/test_grid.py tests/test_grid_folds_legacy_oracle.py -q --no-cov`
+  -> `63 passed in 0.23s`.
+- Full formatting and lint checks passed: `193 files already formatted` and
+  `All checks passed!`.
+- Strict typing across all 11 changed production and test modules passed when
+  disabling only the pre-flight `import-not-found` diagnostic for optional
+  spaCy. The unmodified full strict check still reports exactly the documented
+  `src/kenkui/_characters/spacy_roster.py:482` missing-spaCy error across 156
+  source files.
+
+No behavioral ruling was required and no Task 4 finding was deferred. The
+pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.

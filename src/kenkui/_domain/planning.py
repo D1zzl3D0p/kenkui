@@ -529,10 +529,10 @@ def effective_spans(
 
     Once any rule exists the chapter is re-tiled from grid units, and a rule
     matching nothing must still return the machine spans byte for byte. That
-    holds on an unstated property of ``extract_spans``: it emits a narration
-    span between any two quote runs, so no two machine spans ever share a
-    speaker across a boundary and ``_coalesce`` has nothing to merge that
-    attribution left separate. ``test_tuning_merge`` pins it.
+    holds on an attribution invariant: it emits a narration span between any
+    two quote runs, so no two machine spans ever share a speaker across a
+    boundary and ``_coalesce`` has nothing to merge that attribution left
+    separate. ``test_tuning_merge`` pins it.
     """
     rules = _rules_of(operations, Attributions)
     if not rules:

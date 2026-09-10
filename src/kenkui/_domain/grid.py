@@ -92,6 +92,15 @@ class Unit:
 
 
 @dataclass(frozen=True, slots=True)
+class DialogueRange:
+    """One contiguous canonical range covered by dialogue-marked leaves."""
+
+    chapter_id: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True, slots=True)
 class LeafRange:
     """One contiguous half-open range of leaf indices."""
 
@@ -296,6 +305,24 @@ def _gap_reasons(units: tuple[Unit, ...]) -> tuple[GapReason, ...]:
 def build_structure_index(units: Iterable[Unit]) -> StructuralIndex:
     """Build immutable tree-like traversal metadata from ordered leaves."""
     return StructuralIndex(units)
+
+
+def dialogue_ranges(units: Iterable[Unit]) -> tuple[DialogueRange, ...]:
+    """Coalesce contiguous dialogue-marked leaves into canonical ranges."""
+    ranges: list[DialogueRange] = []
+    for unit in units:
+        if not unit.is_dialogue:
+            continue
+        if (
+            ranges
+            and ranges[-1].chapter_id == unit.chapter_id
+            and ranges[-1].end == unit.start
+        ):
+            previous = ranges[-1]
+            ranges[-1] = DialogueRange(previous.chapter_id, previous.start, unit.end)
+        else:
+            ranges.append(DialogueRange(unit.chapter_id, unit.start, unit.end))
+    return tuple(ranges)
 
 
 def unit_text(unit: Unit, chapter_text: str) -> str:

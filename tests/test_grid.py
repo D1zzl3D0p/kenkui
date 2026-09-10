@@ -1,6 +1,12 @@
 """Addressable-grid unit tests."""
 
-from kenkui._domain.grid import build_grid, unit_digest, unit_text
+from kenkui._domain.grid import (
+    DialogueRange,
+    build_grid,
+    dialogue_ranges,
+    unit_digest,
+    unit_text,
+)
 from kenkui.inspection import ChapterInspection
 
 
@@ -40,6 +46,16 @@ def test_quote_edges_force_boundaries() -> None:
     spoken = [unit_text(u, text) for u in units if u.is_dialogue]
     assert '"Yes,"' in "".join(spoken)
     assert '"No,"' in "".join(spoken)
+
+
+def test_dialogue_ranges_coalesce_structural_splits_inside_one_quote() -> None:
+    """Attribution sees one quote even when sentence and phrase leaves split it."""
+    text = 'Before. "One, two. Three," she said. After.'
+    units = build_grid(chapter(text))
+    start = text.index('"')
+    end = text.index('"', start + 1) + 1
+    assert sum(unit.is_dialogue for unit in units) > 1
+    assert dialogue_ranges(units) == (DialogueRange("ch01", start, end),)
 
 
 def test_two_speakers_are_never_trapped_in_one_unit() -> None:

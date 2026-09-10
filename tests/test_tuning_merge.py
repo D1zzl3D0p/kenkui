@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import kenkui as kk
+from kenkui._domain.grid import build_grid, dialogue_ranges
 from kenkui._domain.operations import Attributions, Silences, SpokenForm
 from kenkui._domain.paths import parse_pattern
 from kenkui._domain.planning import (
@@ -15,7 +16,6 @@ from kenkui._domain.planning import (
     effective_spans,
     manual_gaps,
 )
-from kenkui._domain.quotes import extract_spans
 from kenkui._domain.tuning import Rule
 
 if TYPE_CHECKING:
@@ -126,7 +126,7 @@ def test_a_later_narrower_rule_wins_inside_a_wider_one(
 def attributed_spans(chapter: ChapterInspection) -> tuple[SpeakerSpan, ...]:
     """Build machine spans the shape real attribution emits: one per quote run.
 
-    ``extract_spans`` always places a narration run between two quoted ones,
+    Grid dialogue ranges always leave a narration run between two quoted ones,
     so no two spans built this way share a speaker across a boundary. That
     unstated property is what ``effective_spans`` leans on once any rule
     exists and it re-tiles the chapter from grid units: without it,
@@ -134,14 +134,16 @@ def attributed_spans(chapter: ChapterInspection) -> tuple[SpeakerSpan, ...]:
     and a rule matching nothing would still move the plan.
     """
     speakers = ("jessica", "paul")
-    quoted = 0
     spans: list[SpeakerSpan] = []
-    for span in extract_spans(chapter.id, chapter.text):
-        character = None
-        if span.is_dialogue:
-            character = speakers[quoted % len(speakers)]
-            quoted += 1
+    cursor = 0
+    for quoted, span in enumerate(dialogue_ranges(build_grid(chapter))):
+        if span.start > cursor:
+            spans.append(SpeakerSpan(chapter.id, cursor, span.start, None))
+        character = speakers[quoted % len(speakers)]
         spans.append(SpeakerSpan(chapter.id, span.start, span.end, character))
+        cursor = span.end
+    if cursor < len(chapter.text):
+        spans.append(SpeakerSpan(chapter.id, cursor, len(chapter.text), None))
     return tuple(spans)
 
 

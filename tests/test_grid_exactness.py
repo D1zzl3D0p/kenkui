@@ -12,10 +12,16 @@ from pathlib import Path as FilePath
 
 import pytest
 
-from kenkui._domain.grid import build_grid, build_structure_index, unit_text
+from kenkui._domain.grid import (
+    build_grid,
+    build_structure_index,
+    dialogue_ranges,
+    unit_text,
+)
 from kenkui._domain.paths import Path as GridPath
 from kenkui.api import book
 from kenkui.errors import SourceError
+from legacy_grid_folds_oracle import legacy_quote_partition
 
 LIBRARY = FilePath("/Users/dizzler/Projects/Calibre Library")
 
@@ -41,6 +47,13 @@ def test_grid_partitions_every_chapter_exactly(epub: FilePath) -> None:
         units = build_grid(chapter)
         rebuilt = "".join(unit_text(unit, chapter.text) for unit in units)
         assert rebuilt == chapter.text, f"{epub.stem} / {chapter.id}"
+        assert tuple(
+            (span.start, span.end) for span in dialogue_ranges(units)
+        ) == tuple(
+            (span.start, span.end)
+            for span in legacy_quote_partition(chapter.id, chapter.text)
+            if span.dialogue
+        ), f"{epub.stem} / {chapter.id}"
         index = build_structure_index(units)
         assert index == build_structure_index(tuple(units))
         assert len(index.gaps) == len(units)

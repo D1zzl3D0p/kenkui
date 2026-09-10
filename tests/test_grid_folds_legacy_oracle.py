@@ -9,7 +9,13 @@ from itertools import pairwise
 import pytest
 
 import kenkui as kk
-from kenkui._domain.grid import build_grid, split_sentences, unit_text
+from kenkui._domain.grid import (
+    DialogueRange,
+    build_grid,
+    dialogue_ranges,
+    split_sentences,
+    unit_text,
+)
 from kenkui._domain.planning import MAX_TTS_SEGMENT_CHARACTERS, SpeakerSpan
 from kenkui._domain.structure import HEADING_AFTER, HEADING_BEFORE, LINE, PARAGRAPH
 from legacy_grid_folds_oracle import (
@@ -71,6 +77,12 @@ def test_legacy_quote_oracle_freezes_exact_ranges(
     """Straight, smart, and nested quote ranges retain their exact flags."""
     assert legacy_quote_partition(CHAPTER_ID, text) == expected
     assert "".join(text[item.start : item.end] for item in expected) == text
+    chapter = kk.ChapterInspection(CHAPTER_ID, 0, "Fixture", len(text), text)
+    assert dialogue_ranges(build_grid(chapter)) == tuple(
+        DialogueRange(CHAPTER_ID, item.start, item.end)
+        for item in expected
+        if item.dialogue
+    )
 
 
 def test_legacy_sentence_oracle_guards_titles_and_initials() -> None:

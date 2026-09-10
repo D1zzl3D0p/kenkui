@@ -46,11 +46,11 @@ from kenkui._domain.casting import (
     CharacterProfile,
     solve,
 )
+from kenkui._domain.grid import DialogueRange, build_grid, dialogue_ranges
 from kenkui._domain.planning import (
     NORMALIZATION_SCHEMA_VERSION,
     PARSER_SCHEMA_VERSION,
 )
-from kenkui._domain.quotes import TextSpan, extract_spans
 from kenkui.errors import ModelError
 from kenkui.observability import get_logger, log_event
 
@@ -257,7 +257,7 @@ def resolve_cast(record: AttributionRecord, request: CastingRequest) -> CastingO
 
 def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
     inspection: BookInspection,
-    extracted: Mapping[str, tuple[TextSpan, ...]],
+    extracted: Mapping[str, tuple[DialogueRange, ...]],
     roster_model: str,
     client: Client | None,
     cancel: CancellationToken | None,
@@ -280,10 +280,10 @@ def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
         # roster is never consulted. Front matter and purely descriptive
         # chapters are common enough that asking about them is real spend.
         spans_here = extracted[chapter.id]
-        if not any(span.is_dialogue for span in spans_here):
+        if not spans_here:
             _progress(on_progress, cancel, "characters", completed, total, chapter.id)
             continue
-        ends = [span.end for span in spans_here if span.is_dialogue]
+        ends = [span.end for span in spans_here]
         roster, narrator = _roster_for(
             chapter.text,
             roster_model,
@@ -372,10 +372,7 @@ def _with_current_roster(
     pipeline = spacy_roster.pipeline_for(roster_model)
     if pipeline is None:
         return record
-    extracted = {
-        chapter.id: extract_spans(chapter.id, chapter.text)
-        for chapter in inspection.chapters
-    }
+    extracted = _dialogue_by_chapter(inspection.chapters)
     fresh, _ = spacy_roster.infer_roster(
         inspection.chapters, extracted, pipeline=pipeline
     )
@@ -488,12 +485,9 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
             _progress(on_progress, cancel, "attribution", total, total)
         return result
 
-    # Extracted once and reused: both passes below need the same partition,
-    # and scanning a 600k-character book twice for it is pure waste.
-    extracted = {
-        chapter.id: extract_spans(chapter.id, chapter.text)
-        for chapter in inspection.chapters
-    }
+    # Built once per chapter and reused: both passes below need the same
+    # dialogue ranges, and scanning a 600k-character chapter twice is waste.
+    extracted = _dialogue_by_chapter(inspection.chapters)
 
     if roster is None:
         roster = _discover_roster(
@@ -553,7 +547,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
 
 def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
     inspection: BookInspection,
-    extracted: Mapping[str, tuple[TextSpan, ...]],
+    extracted: Mapping[str, tuple[DialogueRange, ...]],
     characters: Sequence[CharacterProfile],
     narrator_id: str | None,
     model_id: str,
@@ -583,7 +577,7 @@ def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
             _chapter_roster(characters, chapter.id, narrator_id),
             model_id,
             client=client,
-            spans=extracted[chapter.id],
+            dialogue=extracted[chapter.id],
             narrator_id=narrator_id,
             include_aliases=include_aliases,
             cancel=cancel,
@@ -636,10 +630,7 @@ def discover_characters(
     on_progress: Callable[[str, int, int, str | None], None] | None = None,
 ) -> CharacterRoster:
     """Discover characters without attributing quotes or writing attribution."""
-    extracted = {
-        chapter.id: extract_spans(chapter.id, chapter.text)
-        for chapter in inspection.chapters
-    }
+    extracted = _dialogue_by_chapter(inspection.chapters)
     return _discover_roster(
         inspection, extracted, model_id, client, cancel, on_progress=on_progress
     )
@@ -647,7 +638,7 @@ def discover_characters(
 
 def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
     inspection: BookInspection,
-    extracted: Mapping[str, tuple[TextSpan, ...]],
+    extracted: Mapping[str, tuple[DialogueRange, ...]],
     model_id: str,
     client: Client | None,
     cancel: CancellationToken | None,
@@ -670,3 +661,10 @@ def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
     if cancel is not None:
         cancel.raise_if_cancelled()
     return CharacterRoster(characters, narrator_id)
+
+
+def _dialogue_by_chapter(
+    chapters: Sequence[ChapterInspection],
+) -> dict[str, tuple[DialogueRange, ...]]:
+    """Build each chapter grid once and retain only its dialogue ranges."""
+    return {chapter.id: dialogue_ranges(build_grid(chapter)) for chapter in chapters}

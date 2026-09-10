@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING
 from kenkui._characters.infer import PRONOUNS, ROLE_PREFIX, UNKNOWN, slugify
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import ATTRIBUTION_PROMPT
+from kenkui._domain.grid import DialogueRange, build_grid, dialogue_ranges
 from kenkui._domain.planning import SpeakerSpan
-from kenkui._domain.quotes import TextSpan, extract_spans
 from kenkui.errors import ModelError
 
 if TYPE_CHECKING:
@@ -133,7 +133,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     model_id: str,
     *,
     client: Client | None = None,
-    spans: tuple[TextSpan, ...] | None = None,
+    dialogue: tuple[DialogueRange, ...] | None = None,
     narrator_id: str | None = None,
     include_aliases: bool = False,
     cancel: CancellationToken | None = None,
@@ -143,17 +143,17 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     Chapters are independent: nothing is carried between them, so they can be
     attributed concurrently.
 
-    ``spans`` accepts an already-extracted partition, so a caller that had to
-    look for dialogue before deciding to call does not pay for a second scan.
-    Extraction is pure, so supplying it changes nothing but the cost.
+    ``dialogue`` accepts ranges derived from an already-built grid, so a caller
+    that had to look for dialogue before deciding to call does not build the
+    chapter grid twice. Grid construction is pure, so supplying the ranges
+    changes nothing but the cost.
     """
-    if spans is None:
-        spans = extract_spans(chapter.id, chapter.text)
-    dialogue = [span for span in spans if span.is_dialogue]
+    if dialogue is None:
+        dialogue = dialogue_ranges(build_grid(chapter))
     if not dialogue or not characters:
         # Nothing to attribute, so nothing is worth a model call.
         return (
-            _all_narrated(spans),
+            _speaker_spans(chapter, dialogue, (None,) * len(dialogue)),
             AttributionCoverage(len(dialogue), 0, 0, 0),
         )
 
@@ -194,23 +194,30 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     )
     by_start = dict(zip((span.start for span in dialogue), speakers, strict=True))
 
-    resolved = tuple(
-        SpeakerSpan(
-            span.chapter_id,
-            span.start,
-            span.end,
-            by_start.get(span.start) if span.is_dialogue else None,
-        )
-        for span in spans
+    resolved = _speaker_spans(
+        chapter,
+        dialogue,
+        tuple(by_start.get(span.start) for span in dialogue),
     )
     return resolved, coverage
 
 
-def _all_narrated(spans: Sequence[TextSpan]) -> tuple[SpeakerSpan, ...]:
-    """Carry every span through as narration, speaker unassigned."""
-    return tuple(
-        SpeakerSpan(span.chapter_id, span.start, span.end, None) for span in spans
-    )
+def _speaker_spans(
+    chapter: ChapterInspection,
+    dialogue: Sequence[DialogueRange],
+    speakers: Sequence[str | None],
+) -> tuple[SpeakerSpan, ...]:
+    """Tile a chapter with narration around the grid's dialogue ranges."""
+    spans: list[SpeakerSpan] = []
+    cursor = 0
+    for quoted, speaker in zip(dialogue, speakers, strict=True):
+        if quoted.start > cursor:
+            spans.append(SpeakerSpan(chapter.id, cursor, quoted.start, None))
+        spans.append(SpeakerSpan(chapter.id, quoted.start, quoted.end, speaker))
+        cursor = quoted.end
+    if cursor < len(chapter.text):
+        spans.append(SpeakerSpan(chapter.id, cursor, len(chapter.text), None))
+    return tuple(spans)
 
 
 def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
