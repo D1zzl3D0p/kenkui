@@ -218,3 +218,54 @@ pre-flight full-gate spaCy and aggregate-coverage failures remain unchanged.
 
 No behavioral ruling was required and no Task 2 finding was deferred. The
 pre-flight full-gate spaCy and aggregate-coverage failures remain unchanged.
+
+#### Task 2 review gate
+
+- Independent task-scoped review of `6664170` approved the task with no
+  Critical, Important, or Minor findings.
+- Review confirmed byte-identical scanner relocation, complete consumer
+  migration, no compatibility shim, robust absolute/relative import-boundary
+  enforcement, and full legacy fixture equality for coordinates, flags, and
+  exact tiling.
+
+### Task 3 — Add the derived structural range index — 2026-09-10
+
+- Added immutable `StructuralIndex`, an ordered `Mapping[Path, LeafRange]` that
+  derives chapter, paragraph, line, sentence, and phrase prefix ranges from an
+  ordered leaf sequence. Every value is a half-open range of leaf indices; the
+  index stores neither canonical text nor canonical offsets and retains no
+  copy of the input leaf tuple.
+- Added `GapReason`, a compact `IntFlag` bit set with phrase, sentence, line,
+  paragraph, and chapter closure reasons. One immutable value after each leaf
+  records all coincident structural closures, including the complete set at
+  the final chapter leaf.
+- Index construction validates a non-empty stable chapter ID, positive
+  one-based hierarchy coordinates, a `(1, 1, 1, 1)` first path, non-empty
+  monotonic contiguous canonical ranges beginning at zero, unique leaf paths,
+  gapless sibling increments, and child-coordinate resets. These transition
+  rules prove prefix contiguity and nesting before index construction.
+- Unit coverage proves exact ranges at every prefix depth, parent/child
+  nesting, sibling exclusion, multi-reason gaps, malformed-grid rejection,
+  empty-grid behavior, deterministic equality/hash behavior, and independence
+  from canonical offsets, dialogue flags, and emphasis flags.
+- Extended the opt-in real-library exactness property to build the index twice
+  for every chapter, assert deterministic equality and one gap value per leaf,
+  and prove that every leaf belongs to all five of its indexed prefixes while
+  retaining exact canonical reconstruction.
+- Focused and affected regression run:
+  `rtk .venv/bin/pytest tests/test_grid_index.py tests/test_grid.py tests/test_paths.py tests/test_select_preview.py tests/test_sidecar.py tests/test_planning.py tests/test_import_boundaries.py -q --no-cov`
+  -> `187 passed in 5.55s`.
+- Real-library property:
+  `rtk env KENKUI_RUN_CORPUS=1 .venv/bin/pytest tests/test_grid_exactness.py -q -ra --no-cov`
+  -> `39 passed, 1 skipped in 31.75s`; the sole skip remains the pre-existing
+  `Dark One - Brandon Sanderson` empty-visible-text parse failure.
+- Full formatting and lint checks:
+  `rtk .venv/bin/ruff format --check .` -> `193 files already formatted`; and
+  `rtk .venv/bin/ruff check .` -> `All checks passed!`.
+- Strict typing of the changed production/test files passed across 3 source
+  files. Full mypy still reports only the pre-flight optional-dependency
+  failure at `src/kenkui/_characters/spacy_roster.py:482` for absent `spacy`,
+  now across 156 checked source files.
+
+No behavioral ruling was required and no Task 3 finding was deferred. The
+pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
