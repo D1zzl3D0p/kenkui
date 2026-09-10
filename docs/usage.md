@@ -688,10 +688,43 @@ general one free to match inside it: `currency=False` alone reads `£5` as
 leave the digits alone.
 
 An override changes segment identity, so a book already rendered without one
-re-synthesizes. Passing none leaves identities byte-identical.
+re-synthesizes.
 
 `St.`, `Dr.`, and `Mrs.` are never expanded at any tier. English only: a
 non-English narrator voice disables the stage rather than mangling the text.
+
+### Vocal gestures
+
+Prose spells a held or restarted sound with hyphens, and the engine reads the
+orphaned letter as the letter's name: `Ah-h` comes out "ah-aitch". `pronounce()`
+collapses two such gestures into a single pronounceable word.
+
+| feature | gesture | example |
+|---|---|---|
+| `elongation` | a sound held across hyphens | `Ah-h-h` → `Ahhh`, `Wel-l-l-l` → `Wellll` |
+| `stammer` | single letters restarting a word | `S-s-sorry` → `Sssorry`, `f-father` → `ffather` |
+
+Both are on once you call `pronounce()`, and either is declined by name:
+
+```python
+pipeline.pronounce(stammer=False)
+```
+
+A hyphen is only touched when what follows it is not a word. Compounds, proper
+nouns, and reduplication are left exactly as written — `al-Gaib`, `na-Baron`,
+`blue-within-blue`, `great-great-grandmother`, `co-conspirator`, and
+`drip-drip-drip` all survive the stage untouched. Where a gesture runs into a
+new one, each becomes its own word rather than one long blur:
+`Um-m-m-m-ah-hm-m-m` reads `Ummmm ah hmmm`.
+
+`stammer` is the less certain of the two. A capitalised single letter before a
+word starting with the same letter is genuinely ambiguous — `D-day` and
+`S-shaped` have the same shape as `M-my` — so decline it for a text where that
+spelling is vocabulary rather than speech.
+
+Unlike the number features, these are always recorded in segment identity. They
+default on, so a book already rendered through `pronounce()` re-synthesizes once
+on upgrade; a pipeline that never calls `pronounce()` is unaffected.
 
 ### Pauses
 
