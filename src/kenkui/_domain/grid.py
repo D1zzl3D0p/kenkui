@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from kenkui._domain.paths import Path
 from kenkui._domain.quotes import extract_spans
-from kenkui._domain.structure import _blocks, _lines
+from kenkui._domain.structure import block_ranges, line_ranges
 from kenkui._domain.titles import PREFIX_TITLES
 
 if TYPE_CHECKING:
@@ -93,6 +93,9 @@ class Unit:
     # quotations can share an edge, so the dialogue flag alone cannot preserve
     # their mandatory attribution boundary.
     dialogue_run: int | None = None
+    # Parser-provided heading identity is structural input, like emphasis. It
+    # lets the derived gaps carry heading reasons without rescanning text.
+    is_heading: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +123,8 @@ class GapReason(IntFlag):
     SENTENCE = auto()
     LINE = auto()
     PARAGRAPH = auto()
+    HEADING_BEFORE = auto()
+    HEADING_AFTER = auto()
     CHAPTER = auto()
 
 
@@ -302,6 +307,10 @@ def _gap_reasons(units: tuple[Unit, ...]) -> tuple[GapReason, ...]:
                 reasons |= GapReason.LINE
             if following.paragraph != unit.paragraph:
                 reasons |= GapReason.PARAGRAPH
+                if unit.is_heading:
+                    reasons |= GapReason.HEADING_AFTER
+                if following.is_heading:
+                    reasons |= GapReason.HEADING_BEFORE
         gaps.append(reasons)
     return tuple(gaps)
 
@@ -410,8 +419,11 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
     dialogue = tuple((span.start, span.end) for span in spans if span.is_dialogue)
     units: list[Unit] = []
     offset = 0
-    for p_index, (body, chunk) in enumerate(_blocks(text), start=1):
-        for l_index, line in enumerate(_lines(chunk, body), start=1):
+    headings = frozenset(chapter.headings)
+    for p_index, block in enumerate(block_ranges(text), start=1):
+        is_heading = text[block.start : block.body_end] in headings
+        for l_index, line_range in enumerate(line_ranges(text, block), start=1):
+            line = text[line_range.start : line_range.end]
             for s_index, sentence in enumerate(split_sentences(line), start=1):
                 ph_index = 0
                 for phrase in split_phrases(sentence):
@@ -432,6 +444,7 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
                                     offset, len(piece), chapter.emphasis
                                 ),
                                 dialogue_run=dialogue_run,
+                                is_heading=is_heading,
                             )
                         )
                         offset += len(piece)

@@ -7,6 +7,7 @@ it.  The migration deletes it after the differential checks are complete.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -16,7 +17,6 @@ from kenkui._domain.grid import Unit, build_grid
 from kenkui._domain.operations import Operation, Pauses
 from kenkui._domain.planning import SpeakerSpan, compile_execution_plan
 from kenkui._domain.quotes import extract_spans
-from kenkui._domain.structure import PauseSpec, split_structural
 from kenkui.inspection import BookInspection, ChapterInspection
 
 if TYPE_CHECKING:
@@ -32,6 +32,113 @@ class PipelineIntent(Protocol):
     def operations(self) -> tuple[Operation, ...]:
         """Return the pipeline's immutable semantic operations."""
         ...
+
+
+class PauseSpec(Protocol):
+    """Legacy pause-policy shape used only by the frozen structure oracle."""
+
+    @property
+    def chapter_ms(self) -> int:
+        """Legacy chapter duration."""
+        ...
+
+    @property
+    def heading_before_ms(self) -> int:
+        """Legacy pre-heading duration."""
+        ...
+
+    @property
+    def heading_after_ms(self) -> int:
+        """Legacy post-heading duration."""
+        ...
+
+    @property
+    def paragraph_ms(self) -> int:
+        """Legacy paragraph duration."""
+        ...
+
+    @property
+    def line_ms(self) -> int:
+        """Legacy line duration."""
+        ...
+
+
+HEADING_BEFORE = "heading_before"
+HEADING_AFTER = "heading_after"
+PARAGRAPH = "paragraph"
+LINE = "line"
+_BLOCK = re.compile(r"\n{2,}")
+
+
+@dataclass(frozen=True, slots=True)
+class _LegacyPiece:
+    text: str
+    reasons: frozenset[str]
+
+
+def _legacy_break_tiers(pauses: PauseSpec) -> tuple[str, ...]:
+    tiers: list[str] = []
+    if pauses.heading_before_ms or pauses.heading_after_ms:
+        tiers.append("heading")
+    if pauses.paragraph_ms:
+        tiers.append(PARAGRAPH)
+    if pauses.line_ms:
+        tiers.append(LINE)
+    return tuple(sorted(tiers))
+
+
+def _legacy_blocks(text: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    position = 0
+    for match in _BLOCK.finditer(text):
+        out.append((text[position : match.start()], text[position : match.end()]))
+        position = match.end()
+    if position < len(text) or not out:
+        out.append((text[position:], text[position:]))
+    return out
+
+
+def _legacy_lines(chunk: str, body: str) -> list[str]:
+    separator = chunk[len(body) :]
+    parts: list[str] = []
+    position = 0
+    for match in re.finditer(r"\n", body):
+        parts.append(body[position : match.end()])
+        position = match.end()
+    parts.append(body[position:])
+    parts = [part for part in parts if part] or [""]
+    parts[-1] = f"{parts[-1]}{separator}"
+    return parts
+
+
+def _legacy_split_structural(
+    text: str, headings: frozenset[str], pauses: PauseSpec
+) -> tuple[_LegacyPiece, ...]:
+    if not _legacy_break_tiers(pauses) or not text:
+        return (_LegacyPiece(text, frozenset()),)
+    blocks = _legacy_blocks(text)
+    pieces: list[_LegacyPiece] = []
+    for index, (body, chunk) in enumerate(blocks):
+        last = index + 1 == len(blocks)
+        reasons: set[str] = set()
+        if pauses.paragraph_ms and not last:
+            reasons.add(PARAGRAPH)
+        if pauses.heading_after_ms and body in headings and not last:
+            reasons.add(HEADING_AFTER)
+        if pauses.heading_before_ms and not last and blocks[index + 1][0] in headings:
+            reasons.add(HEADING_BEFORE)
+        if pauses.line_ms:
+            parts = _legacy_lines(chunk, body)
+            for order, part in enumerate(parts):
+                tail = order + 1 == len(parts)
+                pieces.append(
+                    _LegacyPiece(
+                        part, frozenset(reasons) if tail else frozenset({LINE})
+                    )
+                )
+        else:
+            pieces.append(_LegacyPiece(chunk, frozenset(reasons)))
+    return tuple(piece for piece in pieces if piece.text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +196,7 @@ def legacy_structure_partition(
     """Return the current structural split without exposing production records."""
     return tuple(
         StructureObservation(piece.text, tuple(sorted(piece.reasons)))
-        for piece in split_structural(text, headings, pauses)
+        for piece in _legacy_split_structural(text, headings, pauses)
     )
 
 

@@ -96,3 +96,13 @@ def test_domain_never_imports_characters() -> None:
         for path in domain_root.rglob("*.py")
     }
     assert not {key: value for key, value in offenders.items() if value}
+
+
+def test_planning_never_imports_structural_discovery() -> None:
+    """Planning consumes grid gaps and cannot rescan canonical block/line text."""
+    imported = _imported_modules(_SOURCE / "_domain" / "planning.py")
+    forbidden = {
+        "kenkui._domain.structure.block_ranges",
+        "kenkui._domain.structure.line_ranges",
+    }
+    assert imported.isdisjoint(forbidden)

@@ -11,14 +11,24 @@ import pytest
 import kenkui as kk
 from kenkui._domain.grid import (
     DialogueRange,
+    GapReason,
     build_grid,
+    build_structure_index,
     dialogue_ranges,
     split_sentences,
     unit_text,
 )
-from kenkui._domain.planning import MAX_TTS_SEGMENT_CHARACTERS, SpeakerSpan
-from kenkui._domain.structure import HEADING_AFTER, HEADING_BEFORE, LINE, PARAGRAPH
+from kenkui._domain.operations import Pauses
+from kenkui._domain.planning import (
+    MAX_TTS_SEGMENT_CHARACTERS,
+    SpeakerSpan,
+    _gap_ms,
+)
 from legacy_grid_folds_oracle import (
+    HEADING_AFTER,
+    HEADING_BEFORE,
+    LINE,
+    PARAGRAPH,
     BreakQualityObservation,
     QuoteObservation,
     StructureObservation,
@@ -127,6 +137,74 @@ def test_legacy_structure_oracle_freezes_headings_blank_blocks_and_lines() -> No
         StructureObservation("Tail.", ()),
     )
     assert "".join(item.text for item in observed) == text
+
+
+def test_grid_gap_durations_match_legacy_on_the_same_canonical_edges() -> None:
+    """Pure grid reasons preserve every legacy effective internal silence."""
+    text = "Chapter One\n\n\n\nLine one\nLine two\n\nTail."
+    pauses = Pauses(
+        heading_before_ms=400,
+        heading_after_ms=500,
+        paragraph_ms=300,
+        line_ms=100,
+    )
+    chapter = kk.ChapterInspection(
+        CHAPTER_ID,
+        0,
+        "Fixture",
+        len(text),
+        text,
+        headings=("Chapter One", "Tail."),
+    )
+    units = build_grid(chapter)
+    index = build_structure_index(units)
+    actual = {
+        unit.end: _gap_ms(reasons, pauses)
+        for unit, reasons in zip(units, index.gaps, strict=True)
+        if unit.end < len(text) and _gap_ms(reasons, pauses)
+    }
+
+    observed = legacy_structure_partition(text, frozenset(chapter.headings), pauses)
+    position = 0
+    expected: dict[int, int] = {}
+    durations = {
+        HEADING_BEFORE: pauses.heading_before_ms,
+        HEADING_AFTER: pauses.heading_after_ms,
+        PARAGRAPH: pauses.paragraph_ms,
+        LINE: pauses.line_ms,
+    }
+    for piece in observed:
+        position += len(piece.text)
+        duration = max((durations[reason] for reason in piece.reasons), default=0)
+        if duration:
+            expected[position] = duration
+
+    assert actual == expected == {15: 500, 24: 100, 34: 400}
+
+
+def test_coincident_grid_reasons_translate_to_the_maximum_duration() -> None:
+    """Adjacent headings and a paragraph edge form one gap, not stacked pauses."""
+    text = "Heading A\n\nHeading B\n\nBody."
+    chapter = kk.ChapterInspection(
+        CHAPTER_ID,
+        0,
+        "Fixture",
+        len(text),
+        text,
+        headings=("Heading A", "Heading B"),
+    )
+    units = build_grid(chapter)
+    reasons = build_structure_index(units).gaps[0]
+    pauses = Pauses(
+        heading_before_ms=400,
+        heading_after_ms=500,
+        paragraph_ms=300,
+    )
+
+    assert GapReason.HEADING_BEFORE in reasons
+    assert GapReason.HEADING_AFTER in reasons
+    assert GapReason.PARAGRAPH in reasons
+    assert _gap_ms(reasons, pauses) == pauses.heading_after_ms
 
 
 def test_legacy_grid_oracle_freezes_emphasis_and_dialogue_edges() -> None:

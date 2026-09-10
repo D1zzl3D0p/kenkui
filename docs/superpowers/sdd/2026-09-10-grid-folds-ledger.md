@@ -351,3 +351,49 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
 - Changed-file strict mypy passed across 3 source files, and full Ruff passed.
 
 No behavioral ruling was required and no review finding remains deferred.
+
+- Scoped re-review of fix commit `f3795ba` approved Task 4 with no new
+  findings. It confirmed adjacent quote-run separation, within-quote leaf
+  coalescing, immutable leaf-owned metadata, and corpus oracle equality.
+
+### Task 5 — Fold structural gaps into the grid — 2026-09-10
+
+- Replaced pause-dependent structural text pieces with immutable canonical
+  `BlockRange` and `LineRange` discovery. `_domain.structure` no longer accepts
+  `Pauses`, chooses enabled tiers, carries durations, or owns text pieces.
+- Added parser-derived `is_heading` metadata to grid leaves and extended
+  `GapReason` with heading-before and heading-after. `StructuralIndex.gaps` now
+  records line, paragraph, chapter, and coincident heading closures without
+  consulting pause settings.
+- Planning builds one grid and structural index per chapter, reuses that grid
+  for attribution tuning, scoped pronunciation, and manual-gap resolution,
+  and consumes canonical grid gaps rather than calling a structural scanner.
+  A static import-boundary test rejects planning imports of block/line
+  discovery.
+- Pause policy now translates grid reasons after legacy packing. Coincident
+  paragraph and heading reasons retain max-not-sum semantics. While the legacy
+  chunker remains until Tasks 6–9, an enabled derived gap is treated as a
+  semantic mandatory cut without using its numeric duration to choose the
+  boundary; changing an enabled value therefore leaves canonical boundaries
+  unchanged.
+- Manual silence still replaces derived silence rather than adding to it.
+  Added coverage for explicit zero at both paragraph and inter-chapter gaps;
+  the latter now correctly suppresses `chapter_ms` instead of being raised
+  again by the inter-chapter maximum.
+- Moved the deleted legacy structure implementation into the Task 1 test-only
+  oracle. Differential fixtures prove pure grid reasons translate to the same
+  effective values on the same canonical heading/line/paragraph gaps, and
+  adjacent coincident heading reasons choose the maximum duration.
+- Final focused/affected regression run:
+  `rtk .venv/bin/pytest tests/test_structure.py tests/test_grid.py tests/test_grid_index.py tests/test_grid_folds_legacy_oracle.py tests/test_import_boundaries.py tests/test_planning.py tests/test_planning_multi_voice.py tests/test_identity_stability.py tests/test_tuning_merge.py tests/test_select_preview.py tests/test_script.py tests/test_sidecar.py -q --no-cov`
+  -> `299 passed in 5.76s`.
+- Full project regression before the final explicit-zero assertion:
+  `rtk .venv/bin/pytest -q --no-cov` -> `1551 passed, 46 skipped, 7 deselected,
+  1 warning in 78.36s`; the affected suite above passed after that assertion.
+- Full Ruff format/check passed across 193 files. Strict mypy passed across all
+  10 changed production/test modules. Full mypy still reports only the
+  pre-flight missing optional `spacy` import at
+  `src/kenkui/_characters/spacy_roster.py:482` across 156 source files.
+
+No behavioral ruling was required and no Task 5 finding is deferred. The
+pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.

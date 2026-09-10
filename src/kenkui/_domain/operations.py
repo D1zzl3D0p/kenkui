@@ -94,8 +94,8 @@ class SpokenForm:
 class Pauses:
     """Silence durations for each structural boundary, in milliseconds.
 
-    Zero disables a tier completely, including the chunk-break cost it would
-    otherwise impose. Structurally satisfies the domain ``PauseSpec`` protocol.
+    Zero suppresses that derived silence. Structural boundaries are grid data
+    and therefore remain unchanged when these policy values change.
     """
 
     chapter_ms: int = 0

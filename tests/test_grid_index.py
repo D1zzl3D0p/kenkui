@@ -19,7 +19,7 @@ from kenkui._domain.paths import Path, contains
 from kenkui.inspection import ChapterInspection
 
 
-def chapter(text: str) -> ChapterInspection:
+def chapter(text: str, *, headings: tuple[str, ...] = ()) -> ChapterInspection:
     """Build a minimal chapter inspection for index tests."""
     return ChapterInspection(
         id="ch01",
@@ -28,6 +28,7 @@ def chapter(text: str) -> ChapterInspection:
         speech_characters=None,
         text=text,
         emphasis=(),
+        headings=headings,
     )
 
 
@@ -143,6 +144,22 @@ def test_paragraph_boundary_closes_reset_sentence_coordinate() -> None:
     assert build_structure_index(units).gaps[0] == (
         GapReason.PHRASE | GapReason.SENTENCE | GapReason.LINE | GapReason.PARAGRAPH
     )
+
+
+def test_heading_reasons_share_their_canonical_paragraph_gaps() -> None:
+    """Heading pauses are metadata on existing gaps, never extra partitions."""
+    text = "Intro.\n\nChapter One\n\nBody."
+    units = build_grid(chapter(text, headings=("Chapter One",)))
+    gaps = build_structure_index(units).gaps
+
+    first_paragraph = next(
+        index for index, unit in enumerate(units) if unit.paragraph == 1
+    )
+    heading = next(index for index, unit in enumerate(units) if unit.is_heading)
+    assert GapReason.HEADING_BEFORE in gaps[first_paragraph]
+    assert GapReason.HEADING_AFTER in gaps[heading]
+    assert GapReason.PARAGRAPH in gaps[first_paragraph]
+    assert GapReason.PARAGRAPH in gaps[heading]
 
 
 def test_index_is_immutable_deterministic_and_owns_no_canonical_data() -> None:

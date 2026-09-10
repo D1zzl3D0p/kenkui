@@ -223,11 +223,12 @@ def test_a_later_silence_wins_on_the_same_anchor(
     assert list(manual_gaps(chapter_ch08, ops).values()) == [300]
 
 
-def plan(
+def plan(  # noqa: PLR0913 - compact real-planner fixture boundary.
     pipeline: kk.Pipeline,
     *,
     chapter_id: str = PLAN_CHAPTER_ID,
     text: str = PLAN_TEXT,
+    chapters: tuple[ChapterInspection, ...] | None = None,
     assignments: Mapping[str, str] | None = None,
     cast_voices: tuple[kk.Voice, ...] = (),
 ) -> ExecutionPlan:
@@ -244,10 +245,13 @@ def plan(
         compatible_model_revisions=(MODEL_REVISION,),
         state="loaded",
     )
-    chapter = kk.ChapterInspection(chapter_id, 0, "Chapter One", len(text), text)
+    if chapters is None:
+        chapters = (
+            kk.ChapterInspection(chapter_id, 0, "Chapter One", len(text), text),
+        )
     return compile_execution_plan(
         pipeline.assign_voice("eponine").tts(),
-        kk.BookInspection(kk.BookMetadata("T", "A", cover_available=True), (chapter,)),
+        kk.BookInspection(kk.BookMetadata("T", "A", cover_available=True), chapters),
         source_bytes_hash="1" * 64,
         resolved_voice=voice,
         model_revision=MODEL_REVISION,
@@ -286,6 +290,25 @@ def test_a_manual_silence_forces_a_chunk_boundary() -> None:
     assert tuned.trailing_silence_ms == (900, 0)
 
 
+def test_pause_values_do_not_change_grid_or_pre_semantic_boundaries() -> None:
+    """Enabled duration changes neither the grid nor its mandatory cut."""
+    chapter = kk.ChapterInspection(
+        PLAN_CHAPTER_ID, 0, "Chapter One", len(PLAN_TEXT), PLAN_TEXT
+    )
+    expected_grid = build_grid(chapter)
+    pipelines = (
+        kk.epub("book.epub").pauses(paragraph_ms=1),
+        kk.epub("book.epub").pauses(paragraph_ms=900),
+    )
+    plans = tuple(plan(pipeline) for pipeline in pipelines)
+    boundaries = tuple(
+        tuple(segment.text for segment in compiled.segments) for compiled in plans
+    )
+
+    assert all(build_grid(chapter) == expected_grid for _pipeline in pipelines)
+    assert all(current == boundaries[0] for current in boundaries[1:])
+
+
 def test_a_manual_silence_replaces_the_derived_gap() -> None:
     """Zero removes a paragraph pause that the tier model would otherwise set."""
     derived = plan(kk.epub("book.epub").pauses(paragraph_ms=500))
@@ -294,6 +317,24 @@ def test_a_manual_silence_replaces_the_derived_gap() -> None:
         .pauses(paragraph_ms=500)
         .silence(0, where={"chapter": PLAN_CHAPTER_ID, "paragraph": 1})
     )
+    assert derived.trailing_silence_ms == (500, 0)
+    assert removed.trailing_silence_ms == (0, 0)
+
+
+def test_explicit_zero_replaces_an_interchapter_pause() -> None:
+    """A chapter-scoped zero overrides chapter_ms at the shared canonical gap."""
+    chapters = (
+        kk.ChapterInspection("ch-v1-first", 0, "First", 6, "First."),
+        kk.ChapterInspection("ch-v1-second", 1, "Second", 7, "Second."),
+    )
+    derived = plan(kk.epub("book.epub").pauses(chapter_ms=500), chapters=chapters)
+    removed = plan(
+        kk.epub("book.epub")
+        .pauses(chapter_ms=500)
+        .silence(0, where={"chapter": "ch-v1-first"}),
+        chapters=chapters,
+    )
+
     assert derived.trailing_silence_ms == (500, 0)
     assert removed.trailing_silence_ms == (0, 0)
 
