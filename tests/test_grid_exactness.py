@@ -2,7 +2,7 @@
 
 Boundary placement is a quality metric to tune. Partition exactness is not
 negotiable: a gap silently drops audio and an overlap silently duplicates it,
-which is the same reasoning as _characters/quotes.py:7-10.
+which is the same reasoning as _domain/quotes.py:7-10.
 """
 
 from __future__ import annotations

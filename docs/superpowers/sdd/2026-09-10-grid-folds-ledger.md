@@ -174,3 +174,47 @@ No behavioral rulings or deferred review findings exist at pre-flight.
 
 No behavioral ruling was required and no Task 1 finding was deferred. The
 pre-flight full-gate spaCy and aggregate-coverage failures remain unchanged.
+
+#### Task 1 review gate
+
+- Independent task-scoped review of `4bc681a` approved the task with no
+  Critical, Important, or Minor findings.
+- Review confirmed the oracle is excluded from production packaging/imports,
+  expectations freeze legacy behavior rather than the future packer, and the
+  break-quality artifact separates ordinary grid edges from characterized
+  within-leaf emergency cuts.
+
+### Task 2 — Break the domain/characters cycle — 2026-09-10
+
+- Moved the pure quote scanner and `TextSpan` unchanged from
+  `_characters/quotes.py` to `_domain/quotes.py`; SHA-256 of the old and new
+  source content is identically
+  `89d0d695adb5246e554c6391e743f770c40c7dbe297ba91fe156f9c2991c0e5f`.
+- Updated every production and test consumer to import the scanner from
+  `_domain.quotes`, then deleted `_characters/quotes.py`. No compatibility
+  module or re-export remains at that path.
+- Moved canonical `PREFIX_TITLES` ownership to `_domain/titles.py`. Both grid
+  sentence splitting and character identity now consume the domain constant,
+  preserving the existing name-merging behavior while reversing the dependency
+  in the required direction.
+- Extended `tests/test_import_boundaries.py` with a recursive AST boundary that
+  rejects absolute or relative imports of `_characters` anywhere under
+  `_domain`. The existing import scanner was strengthened to resolve relative
+  imports so the boundary cannot be bypassed by spelling alone.
+- Strengthened the Task 1 grid fixture to freeze every paragraph/line/sentence/
+  phrase coordinate, canonical start/end offset, dialogue flag, emphasis flag,
+  text slice, adjacency, complete coverage, and exact source reconstruction.
+- Focused/affected regression run:
+  `rtk .venv/bin/pytest tests/test_import_boundaries.py tests/test_grid_folds_legacy_oracle.py tests/test_quote_extraction.py tests/test_grid.py tests/test_grid_exactness.py tests/test_identity.py tests/test_attribution.py tests/test_narration.py tests/test_spacy_roster.py tests/test_tuning_merge.py -q --no-cov`
+  -> `173 passed, 41 skipped in 4.17s`; the opt-in corpus cases account for 40
+  skips and the optional spaCy dependency for the other skip.
+- Full formatting and lint checks:
+  `rtk .venv/bin/ruff format --check .` -> `192 files already formatted`; and
+  `rtk .venv/bin/ruff check .` -> `All checks passed!`.
+- Full strict typing still reports only the pre-flight optional-dependency
+  failure: `src/kenkui/_characters/spacy_roster.py:482` cannot import `spacy`
+  across 155 checked files. The affected-file check excluding that already
+  known module passed: `Success: no issues found in 14 source files`.
+
+No behavioral ruling was required and no Task 2 finding was deferred. The
+pre-flight full-gate spaCy and aggregate-coverage failures remain unchanged.

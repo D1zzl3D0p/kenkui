@@ -17,9 +17,9 @@ from kenkui._characters import (
     resolve_attribution,
     spacy_roster,
 )
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
+from kenkui._domain.quotes import extract_spans
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence

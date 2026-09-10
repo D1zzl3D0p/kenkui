@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -16,12 +17,21 @@ _FORBIDDEN = "kenkui.voices.provision"
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
+    package = ".".join(("kenkui", *path.relative_to(_SOURCE).parts[:-1]))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             found.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            found.add(node.module)
-            found.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            relative = "." * node.level + (node.module or "")
+            base = (
+                importlib.util.resolve_name(relative, package)
+                if node.level
+                else node.module
+            )
+            if base is None:
+                continue
+            found.add(base)
+            found.update(f"{base}.{alias.name}" for alias in node.names)
     return found
 
 
@@ -71,3 +81,18 @@ def test_series_decisions_do_not_depend_on_effectful_modules() -> None:
     for name in ("models", "series", "continuity"):
         imported = _imported_modules(_SOURCE / "_characters" / f"{name}.py")
         assert not {module for module in imported if module.startswith(forbidden)}
+
+
+def test_domain_never_imports_characters() -> None:
+    """Pure partitioning may feed character logic, never depend on it."""
+    domain_root = _SOURCE / "_domain"
+    offenders = {
+        str(path.relative_to(_SOURCE)): sorted(
+            module
+            for module in _imported_modules(path)
+            if module == "kenkui._characters"
+            or module.startswith("kenkui._characters.")
+        )
+        for path in domain_root.rglob("*.py")
+    }
+    assert not {key: value for key, value in offenders.items() if value}

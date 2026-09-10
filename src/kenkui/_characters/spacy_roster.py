@@ -43,7 +43,7 @@ from kenkui.observability import get_logger, log_event
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from kenkui._characters.quotes import TextSpan
+    from kenkui._domain.quotes import TextSpan
     from kenkui.inspection import ChapterInspection
 
 _LOGGER = get_logger(__name__)

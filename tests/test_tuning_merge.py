@@ -6,7 +6,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import kenkui as kk
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain.operations import Attributions, Silences, SpokenForm
 from kenkui._domain.paths import parse_pattern
 from kenkui._domain.planning import (
@@ -16,6 +15,7 @@ from kenkui._domain.planning import (
     effective_spans,
     manual_gaps,
 )
+from kenkui._domain.quotes import extract_spans
 from kenkui._domain.tuning import Rule
 
 if TYPE_CHECKING:

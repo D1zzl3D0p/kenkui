@@ -14,7 +14,7 @@ from itertools import pairwise
 
 import pytest
 
-from kenkui._characters.quotes import TextSpan, extract_spans
+from kenkui._domain.quotes import TextSpan, extract_spans
 
 CASES = [
     pytest.param('He said, "Go away." She left.', 3, id="straight"),

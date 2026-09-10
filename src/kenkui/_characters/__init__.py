@@ -39,7 +39,6 @@ from kenkui._characters.prompts import (
     ROLE_GENDERS,
     ROSTER_PROMPT,
 )
-from kenkui._characters.quotes import extract_spans
 from kenkui._characters.store import AttributionRecord
 from kenkui._domain.casting import (
     CastingOutcome,
@@ -51,6 +50,7 @@ from kenkui._domain.planning import (
     NORMALIZATION_SCHEMA_VERSION,
     PARSER_SCHEMA_VERSION,
 )
+from kenkui._domain.quotes import TextSpan, extract_spans
 from kenkui.errors import ModelError
 from kenkui.observability import get_logger, log_event
 
@@ -58,7 +58,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from kenkui._characters.llm import Client
-    from kenkui._characters.quotes import TextSpan
     from kenkui._domain.planning import SpeakerSpan
     from kenkui.cancellation import CancellationToken
     from kenkui.inspection import BookInspection, ChapterInspection

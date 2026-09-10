@@ -11,11 +11,11 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain import planning
 from kenkui._domain.grid import Unit, build_grid
 from kenkui._domain.operations import Operation, Pauses
 from kenkui._domain.planning import SpeakerSpan, compile_execution_plan
+from kenkui._domain.quotes import extract_spans
 from kenkui._domain.structure import PauseSpec, split_structural
 from kenkui.inspection import BookInspection, ChapterInspection
 

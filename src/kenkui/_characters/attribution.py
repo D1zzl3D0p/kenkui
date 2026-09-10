@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING
 from kenkui._characters.infer import PRONOUNS, ROLE_PREFIX, UNKNOWN, slugify
 from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import ATTRIBUTION_PROMPT
-from kenkui._characters.quotes import TextSpan, extract_spans
 from kenkui._domain.planning import SpeakerSpan
+from kenkui._domain.quotes import TextSpan, extract_spans
 from kenkui.errors import ModelError
 
 if TYPE_CHECKING:

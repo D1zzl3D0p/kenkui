@@ -14,8 +14,8 @@ from kenkui._characters import discover_characters, resolve_attribution, store
 from kenkui._characters.attribution import attribute_chapter
 from kenkui._characters.infer import normalise_roster, slugify
 from kenkui._characters.models import CharacterRoster
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
+from kenkui._domain.quotes import extract_spans
 from kenkui.cancellation import CancellationToken
 from kenkui.errors import CancelledError
 

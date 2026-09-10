@@ -12,8 +12,8 @@ import kenkui as kk
 from kenkui._characters import _measured, _roster_for, resolve_attribution
 from kenkui._characters.attribution import _resolve
 from kenkui._characters.narration import first_person_tags, is_first_person
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain.planning import SpeakerSpan
+from kenkui._domain.quotes import extract_spans
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

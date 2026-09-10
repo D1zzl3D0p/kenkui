@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import pairwise
 
 import pytest
 
@@ -116,6 +117,10 @@ def test_legacy_grid_oracle_freezes_emphasis_and_dialogue_edges() -> None:
     units = build_grid(chapter)
     assert [
         (
+            unit.paragraph,
+            unit.line,
+            unit.sentence,
+            unit.phrase,
             unit.start,
             unit.end,
             unit.is_dialogue,
@@ -124,11 +129,15 @@ def test_legacy_grid_oracle_freezes_emphasis_and_dialogue_edges() -> None:
         )
         for unit in units
     ] == [
-        (0, 11, False, True, "He thought "),
-        (11, 16, True, False, '"Go."'),
-        (16, 17, False, False, " "),
-        (17, 21, False, False, "Now."),
+        (1, 1, 1, 1, 0, 11, False, True, "He thought "),
+        (1, 1, 1, 2, 11, 16, True, False, '"Go."'),
+        (1, 1, 1, 3, 16, 17, False, False, " "),
+        (1, 1, 2, 1, 17, 21, False, False, "Now."),
     ]
+    assert units[0].start == 0
+    assert all(left.end == right.start for left, right in pairwise(units))
+    assert units[-1].end == len(text)
+    assert "".join(unit_text(unit, text) for unit in units) == text
 
 
 def test_legacy_chunk_oracle_freezes_separator_free_prose_and_long_tokens() -> None:

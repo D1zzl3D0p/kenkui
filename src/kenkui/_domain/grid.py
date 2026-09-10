@@ -18,9 +18,9 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from kenkui._characters.identity import PREFIX_TITLES
-from kenkui._characters.quotes import extract_spans
+from kenkui._domain.quotes import extract_spans
 from kenkui._domain.structure import _blocks, _lines
+from kenkui._domain.titles import PREFIX_TITLES
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
