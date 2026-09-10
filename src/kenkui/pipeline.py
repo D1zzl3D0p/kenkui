@@ -43,6 +43,7 @@ from ._domain.sidecar import (
     sidecar_path,
     write_sidecar,
 )
+from ._domain.summary import summarize_identity, summarize_style, summarize_tuning
 from ._domain.tuning import Rule, overlap_warnings
 from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
@@ -69,6 +70,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ._characters.models import CharacterRoster, SeriesRecord
+    from ._domain.summary import TierSummary, TuningSummary
     from ._resolution import Resolved, RosterCheckpoint
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
@@ -127,6 +129,35 @@ class Pipeline:
             (item for item in self.operations if isinstance(item, MetadataIntent)),
             None,
         )
+
+    @property
+    def identity(self) -> TierSummary:
+        """Return this book's identity-tier intent: what makes it this book.
+
+        A tuple scan over ``operations`` with no parse and no I/O. ``repr``
+        is the summary; iterate it for the declared operations themselves.
+        """
+        return summarize_identity(self.operations)
+
+    @property
+    def tuning(self) -> TuningSummary:
+        """Return this book's tuning rules, grouped by kind and marked unsaved.
+
+        A tuple scan over ``operations`` with no parse and no I/O. ``repr``
+        is a truncated summary; iterate it for every declared rule.
+        """
+        return summarize_tuning(self.operations)
+
+    @property
+    def style(self) -> TierSummary:
+        """Return this book's style-tier intent: reusable taste, not this book.
+
+        A tuple scan over ``operations`` with no parse and no I/O. Style
+        settings replace rather than accumulate, so each entry already shows
+        its effective value. ``repr`` is the summary; iterate it for the
+        declared operations themselves.
+        """
+        return summarize_style(self.operations)
 
     def select_chapters(self, *chapter_ids: str) -> Pipeline:
         """Return a branch selecting explicit stable chapter IDs."""

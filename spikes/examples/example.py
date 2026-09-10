@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Render every listed Calibre book with an explicit Kenkui pipeline.
 
+Three tiers, three sources: identity (title, author, series) comes from the
+driver table below; tuning (per-book pronunciation corrections and whatever
+a GUI has dialed in) comes from code and each book's sidecar; style (models,
+pacing, casting) is the single reusable ``house_style`` function passed
+through ``.pipe()``. Change your taste in one place and every book picks it
+up; change one book's tuning and no other book moves.
+
 uv run python spikes/examples/example.py
 """
 
@@ -26,6 +33,11 @@ ATTRIBUTION_MODEL = "openrouter/deepseek/deepseek-v4-flash"
 # workers 14.5s. `auto` reserves 2 of 12 and so picks 10, which is 7% slower.
 WORKERS = 8
 
+# Per-series proper-noun corrections. These still live in code -- every book
+# in a series needs the same ones -- but they vary book to book (a Red Rising
+# lexicon means nothing to Dune), so they are tuning (a Pronunciations rule),
+# not style: notice that unlike ``house_style`` below, applying them takes
+# a ``where``-shaped decision -- which book's pipeline gets which lexicon.
 LEXICONS = {
     "dune": {
         "Muad'Dib": "Moo-ahd-Deeb",
@@ -85,27 +97,53 @@ def report_progress(event: object) -> None:
         print(f"== {event.stage} complete ==", flush=True)
 
 
-def explicit_run(
-    title: str, author: str, epub: Path, series: str | None, volume: int | None
-) -> kk.Result:
-    """Render one book while showing each configurable pipeline stage."""
-    lexicon = kk.builtin_lexicon()
-    lexicon.update(LEXICONS.get(series or "", {}))
-    cover = epub.parent / "cover.jpg"
-    pipeline = (
-        kk.book(epub)
-        # .pronounce(lexicon)
-        .metadata(
-            title=title,
-            author=author,
-            cover=cover if cover.exists() else "source",
-        )
+def house_style(pipeline: kk.Pipeline) -> kk.Pipeline:
+    """Apply the studio's reusable taste: models, pacing, numbers, casting.
+
+    Nothing here takes ``where``, and that is the point: change this
+    function and every book that pipes through it changes with it, which is
+    what makes it style rather than tuning.
+    """
+    return (
+        pipeline.pronounce(numbers="standard")
+        .pauses(chapter_ms=1200, heading_after_ms=500, paragraph_ms=300)
         .infer_characters("spacy")
         .attribute_quotes(ATTRIBUTION_MODEL)
         .assign_voices(narrator=NARRATOR, unknown=UNKNOWN)
     )
+
+
+def explicit_run(
+    title: str, author: str, epub: Path, series: str | None, volume: int | None
+) -> kk.Result:
+    """Render one book from the driver table, its own sidecar, and house style.
+
+    Identity comes from this function's arguments, tuning from the series
+    lexicon and this book's sidecar (if one exists), and style from
+    ``house_style``.
+    """
+    cover = epub.parent / "cover.jpg"
+    pipeline = kk.book(epub).metadata(
+        title=title,
+        author=author,
+        cover=cover if cover.exists() else "source",
+    )
     if series:
         pipeline = pipeline.series(series, book=volume)
+
+    # Tuning: this book's corrections. The series lexicon is declared here
+    # because it varies by book; the sidecar layers a GUI-driven dial-in
+    # session, if one has ever been saved, beneath it.
+    lexicon = LEXICONS.get(series or "", {})
+    if lexicon:
+        pipeline = pipeline.pronounce(lexicon)
+    sidecar = epub.with_suffix(".kenkui.json")
+    if sidecar.exists():
+        pipeline = pipeline.annotations()
+
+    # Style: the studio's taste, unrelated to which book this is.
+    pipeline = pipeline.pipe(house_style)
+
     # Replaces the previous render rather than refusing to run beside it.
     # Publication is the last step, so a book that fails anywhere earlier
     # leaves its existing M4B untouched.
