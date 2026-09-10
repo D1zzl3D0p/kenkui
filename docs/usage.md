@@ -823,6 +823,7 @@ The full loop:
 
 ```python
 book = kk.book("dune.epub").annotations()  # load prior corrections, if any
+book = book.assign_voice("eponine")  # preview() and tts() need a cast
 
 for row in book.script().at({"chapter": "xhtml/ch08"}):
     print(row.path, row.character, row.text[:60])

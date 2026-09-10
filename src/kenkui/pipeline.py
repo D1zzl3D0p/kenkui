@@ -311,15 +311,34 @@ class Pipeline:
         later edits to that file cannot change this pipeline branch.
         Exact duplicates across the file/code boundary retain their loaded
         copy and anchor metadata. Other inline rules follow the loaded prefix.
+
+        A book that has never been saved has no sidecar yet: that is a no-op
+        baseline, not an error. A sidecar that exists but cannot be read or
+        parsed is a different problem -- a damaged correction file -- and
+        still raises ``INVALID_SIDECAR``.
         """
         if has_operation(self.operations, Annotations):
             raise ValidationError(ErrorCode.DUPLICATE_OPERATION)
         target = sidecar_path(self.source.path) if path is None else Path(path)
         try:
-            content = target.read_bytes()
-            loaded = deserialize(json.loads(content.decode("utf-8")))
-        except (OSError, ValueError):
+            content: bytes | None = target.read_bytes()
+        except FileNotFoundError:
+            content = None
+        except OSError:
             raise ValidationError(ErrorCode.INVALID_SIDECAR) from None
+        if content is None:
+            # No file on disk to fingerprint. "" can never equal a real
+            # sha256 hexdigest, so this book's first tuned save -- any
+            # content at all -- still changes the recorded digest and
+            # invalidates plans built against the earlier absence.
+            loaded: tuple[Operation, ...] = ()
+            digest = ""
+        else:
+            try:
+                loaded = deserialize(json.loads(content.decode("utf-8")))
+            except ValueError:
+                raise ValidationError(ErrorCode.INVALID_SIDECAR) from None
+            digest = hashlib.sha256(content).hexdigest()
         counts = {"attributions": 0, "silences": 0, "pronunciations": 0}
         branch = self
         for operation in loaded:
@@ -352,7 +371,7 @@ class Pipeline:
                 )
                 branch = branch._replace(kind(rules))
         return branch._append(  # noqa: SLF001
-            Annotations(target, hashlib.sha256(content).hexdigest(), counts)
+            Annotations(target, digest, counts)
         )
 
     def write_annotations(self, path: str | os.PathLike[str] | None = None) -> Path:

@@ -495,10 +495,14 @@ def test_sidecar_cannot_overwrite_source(epub_path: Path) -> None:
 
 
 def test_file_errors_are_sanitized(epub_path: Path, tmp_path: Path) -> None:
-    """Missing paths, directories and invalid UTF-8 raise a public error."""
+    """Directories and invalid UTF-8 raise a public error; a missing file does not.
+
+    A missing path is a book that has not been tuned yet, not a damaged
+    correction file -- see ``test_missing_sidecar_loads_empty_baseline``.
+    """
     invalid = tmp_path / "invalid.json"
     invalid.write_bytes(b"\xff")
-    for path in (tmp_path / "missing.json", tmp_path, invalid):
+    for path in (tmp_path, invalid):
         with pytest.raises(ValidationError) as error:
             kk.book(epub_path).annotations(path)
         assert error.value.code == ErrorCode.INVALID_SIDECAR
@@ -506,6 +510,55 @@ def test_file_errors_are_sanitized(epub_path: Path, tmp_path: Path) -> None:
         kk.book(epub_path).attribute("a").write_annotations(
             tmp_path / "missing" / "s.json"
         )
+    assert error.value.code == ErrorCode.INVALID_SIDECAR
+
+
+def test_missing_sidecar_loads_empty_baseline(epub_path: Path, tmp_path: Path) -> None:
+    """A book with no sidecar yet loads a no-op baseline instead of raising.
+
+    This test replaces a prior assertion that ``tmp_path / "missing.json"``
+    raised ``INVALID_SIDECAR`` -- that behavior was the defect Fix 1 removes.
+    """
+    missing = tmp_path / "missing.kenkui.json"
+    loaded = kk.book(epub_path).annotations(missing)
+    annotation = next(op for op in loaded.operations if isinstance(op, Annotations))
+    assert annotation.path == missing
+    assert annotation.loaded == {
+        "attributions": 0,
+        "silences": 0,
+        "pronunciations": 0,
+    }
+    assert not any(
+        isinstance(op, (Attributions, Silences, Pronunciations))
+        for op in loaded.operations
+    )
+    written = loaded.write_annotations(tmp_path / "out.json")
+    assert json.loads(written.read_text()) == {"kenkui_sidecar": SIDECAR_VERSION}
+
+
+def test_missing_sidecar_digest_invalidates_once_the_file_appears(
+    epub_path: Path, tmp_path: Path
+) -> None:
+    """A sidecar appearing later must not be mistaken for the earlier absence."""
+    target = tmp_path / "s.json"
+    absent = kk.book(epub_path).annotations(target)
+    kk.book(epub_path).attribute("a").write_annotations(target)
+    present = kk.book(epub_path).annotations(target)
+    absent_annotation = next(
+        op for op in absent.operations if isinstance(op, Annotations)
+    )
+    present_annotation = next(
+        op for op in present.operations if isinstance(op, Annotations)
+    )
+    assert absent_annotation.digest != present_annotation.digest
+
+
+def test_corrupt_sidecar_still_raises(epub_path: Path, tmp_path: Path) -> None:
+    """An existing, unparseable sidecar is refused rather than treated as absent."""
+    corrupt = tmp_path / "bad.kenkui.json"
+    corrupt.write_text("not json", encoding="utf-8")
+    with pytest.raises(ValidationError) as error:
+        kk.book(epub_path).annotations(corrupt)
     assert error.value.code == ErrorCode.INVALID_SIDECAR
 
 
