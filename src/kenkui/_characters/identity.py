@@ -45,6 +45,16 @@ def _tokens(name: str) -> set[str]:
     return {token.lower().strip(".") for token in name.split()}
 
 
+def name_tokens(name: str) -> set[str]:
+    """Return the lowercased, dot-stripped words of a name."""
+    return _tokens(name)
+
+
+def residue(name: str, titles: frozenset[str]) -> set[str]:
+    """Return a name's words once prefix and suffix titles are set aside."""
+    return _tokens(name) - titles - SUFFIX_TITLES
+
+
 def same_person(
     first: str, second: str, titles: frozenset[str] = PREFIX_TITLES
 ) -> bool:
@@ -63,6 +73,11 @@ def same_person(
         return False
     rest_a = tokens_a - titles - SUFFIX_TITLES
     rest_b = tokens_b - titles - SUFFIX_TITLES
+    # An empty residue is a subset of every name, but a title-only name denotes
+    # nobody in particular. Keep exact spellings together via the equality
+    # check above while refusing this wildcard match.
+    if not rest_a or not rest_b:
+        return False
     return rest_a == rest_b or rest_a < rest_b or rest_b < rest_a
 
 

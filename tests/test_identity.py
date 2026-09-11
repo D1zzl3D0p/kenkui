@@ -6,8 +6,11 @@ from __future__ import annotations
 import pytest
 
 from kenkui._characters.identity import (
+    PREFIX_TITLES,
     detect_titles,
     group_full_names,
+    name_tokens,
+    residue,
     resolve_short_forms,
     same_person,
 )
@@ -34,6 +37,48 @@ from kenkui._domain.casting import CharacterProfile
 )
 def test_same_person(first: str, second: str, expected: bool) -> None:
     assert same_person(first, second) is expected
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("Great House", "Bene Gesserit"),
+        ("Great House", "Rautha Harkonnen"),
+        ("Aes Sedai", "Rand al'Thor"),
+    ],
+)
+def test_a_name_made_only_of_titles_matches_no_one(
+    first: str, second: str
+) -> None:
+    titles = PREFIX_TITLES | {"great", "house"}
+    assert same_person(first, second, titles) is False
+
+
+def test_identical_title_only_names_are_still_one_name() -> None:
+    assert same_person("Great House", "Great House", PREFIX_TITLES | {"great"})
+
+
+def test_group_full_names_has_no_title_only_wildcard() -> None:
+    names = [
+        "Bene Gesserit",
+        "Great House",
+        "Rautha Harkonnen",
+        "Shadout Mapes",
+        "House Atreides",
+        "House Harkonnen",
+        "House Corrino",
+        "Great Houses",
+        "Great Convention",
+    ]
+    entity = group_full_names(names)
+    assert entity["Rautha Harkonnen"] == "Rautha Harkonnen"
+    assert entity["Shadout Mapes"] == "Shadout Mapes"
+
+
+def test_residue_sets_titles_aside() -> None:
+    assert residue("Mr Elliot", PREFIX_TITLES) == {"elliot"}
+    assert residue("Moiraine Aes Sedai", PREFIX_TITLES) == {"moiraine"}
+    assert name_tokens("Dr. Kynes") == {"dr", "kynes"}
 
 
 def test_detect_titles_learns_invented_honorifics() -> None:
