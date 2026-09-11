@@ -692,5 +692,18 @@ No new semantic ruling was required and no Task 8 finding is deferred.
 - The delegated implementer exhausted its quota before producing changes; the
   primary agent completed and verified the task.
 
+#### Task 9 review gate
+
+- Independent review found no Critical or Important findings and approved the
+  runtime deletion, layering, compact fixtures, architecture, and narrow spaCy
+  mypy override. Its focused suite reported `91 passed, 40 skipped`; changed-
+  file Ruff and full strict mypy passed.
+- Two Minor cleanup findings were fixed before Task 10: `_gap_enabled` and
+  `_compile_segments` no longer describe the retired legacy/frozen chunker,
+  and the AST deletion guard now includes `_structural_gaps`, `_pause_pieces`,
+  `_fragments`, `CHUNKING_SCHEMA_VERSION`,
+  `STRUCTURAL_CHUNKING_SCHEMA_VERSION`, and `STRUCTURE_SCHEMA_VERSION`.
+- Post-fix focused check -> `62 passed`; changed-file Ruff format/check passed.
+
 No runtime rollback flag, dormant legacy path, or deferred Task 9 finding
-remains. Independent review is required before Task 10 corpus validation.
+remains.

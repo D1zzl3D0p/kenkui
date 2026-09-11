@@ -135,5 +135,11 @@ def test_planning_contains_no_legacy_chunker_symbols() -> None:
         "MIN_BREAK_FILL",
         "MAX_SEPARATOR_FREE_CHARACTERS",
         "POCKET_SEPARATORS",
+        "_structural_gaps",
+        "_pause_pieces",
+        "_fragments",
+        "CHUNKING_SCHEMA_VERSION",
+        "STRUCTURAL_CHUNKING_SCHEMA_VERSION",
+        "STRUCTURE_SCHEMA_VERSION",
     }
     assert names.isdisjoint(forbidden)

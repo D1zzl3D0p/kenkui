@@ -105,7 +105,7 @@ def _gap_ms(reasons: GapReason, pauses: Pauses) -> int:
 
 
 def _gap_enabled(reasons: GapReason, pauses: Pauses) -> bool:
-    """Whether a pure gap is a mandatory semantic cut for legacy packing."""
+    """Whether an effective pause makes this grid gap a mandatory cut."""
     if GapReason.PARAGRAPH in reasons:
         return bool(
             pauses.paragraph_ms
@@ -800,12 +800,12 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     grids: dict[str, tuple[Unit, ...]] | None = None,
     structures: dict[str, StructuralIndex] | None = None,
 ) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
-    """Split each speaker span while assigning one global plan-order ordinal.
+    """Pack each chapter while assigning one global plan-order ordinal.
 
-    Spans partition a chapter, and the frozen chunker runs inside each one, so
-    concatenating every chunk still reproduces the chapter exactly. A chapter
-    with no spans is one narration span, which is byte-for-byte the behaviour
-    that existed before attribution.
+    Speaker spans partition a chapter and become mandatory cuts in its single
+    hierarchical packing request. Concatenating every packed segment therefore
+    reproduces the chapter exactly. A chapter with no spans is one narration
+    region, preserving the behavior that existed before attribution.
 
     A piece holding no speakable character is never a segment of its own. Two
     adjacent quotations are separated by exactly such a span, and an engine
