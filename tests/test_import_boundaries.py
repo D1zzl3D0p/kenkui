@@ -106,3 +106,15 @@ def test_planning_never_imports_structural_discovery() -> None:
         "kenkui._domain.structure.line_ranges",
     }
     assert imported.isdisjoint(forbidden)
+
+
+def test_planning_never_calls_the_legacy_chunker() -> None:
+    """The temporary oracle definition cannot remain a production runtime path."""
+    path = _SOURCE / "_domain" / "planning.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_chunk_span" not in calls

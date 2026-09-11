@@ -12,6 +12,7 @@ import pytest
 import kenkui as kk
 from conftest import CH08_ID, CH09_ID
 from helpers import make_epub, xhtml
+from kenkui._domain import planning
 from kenkui._domain.grid import build_grid
 from kenkui._domain.operations import SpokenForm
 from kenkui._domain.paths import parse_pattern
@@ -29,6 +30,7 @@ _LAST_SENTENCE = 160
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from kenkui._domain.grid import Unit
     from kenkui._domain.planning import ExecutionPlan
 
 
@@ -277,6 +279,29 @@ def test_spoken_selection_uses_exact_offsets_and_preserves_full_identities(
         len([segment for segment in part.segments if segment.id not in whole_by_id])
         <= _MAX_EDGES
     )
+
+
+def test_selected_planning_reuses_each_chapter_grid(
+    long_book: kk.Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selection clipping and scoped transforms do not rescan grid boundaries."""
+    selected = long_book.select(
+        {"chapter": CH09_ID, "paragraph": 2, "sentence": "2..160"}
+    )
+    inspection = selected.inspect()
+    chapters = inspection._planning_chapters or inspection.chapters  # noqa: SLF001
+    real_build = build_grid
+    calls: list[str] = []
+
+    def counted(chapter: kk.ChapterInspection) -> tuple[Unit, ...]:
+        calls.append(chapter.id)
+        return real_build(chapter)
+
+    monkeypatch.setattr(planning, "build_grid", counted)
+
+    _plan(selected)
+
+    assert calls == [chapter.id for chapter in chapters]
 
 
 def test_selection_does_not_guess_inside_cross_unit_pronunciation(

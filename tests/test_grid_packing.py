@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from dataclasses import replace
 from pathlib import Path as FilePath
 
 import pytest
@@ -283,6 +284,64 @@ def test_mandatory_cut_inside_a_spoken_replacement_is_rejected() -> None:
                 mandatory=frozenset({1}),
             )
         )
+
+
+def test_malformed_regions_mappings_ranges_and_cuts_fail_before_packing() -> None:
+    """Every caller-owned coordinate structure is validated at the boundary."""
+    base = request("AB", budget=10)
+    different_leaves = build_grid(chapter("Alpha. Beta."))
+    invalid_coordinate = True
+    cases = (
+        (replace(base, spoken_regions=()), "regions must be non-empty"),
+        (
+            replace(
+                base,
+                spoken_regions=(
+                    SpokenRegion(
+                        0,
+                        2,
+                        "AB",
+                        (SpokenMapping(invalid_coordinate, 1, 0, 1),),
+                    ),
+                ),
+            ),
+            "invalid spoken mapping",
+        ),
+        (
+            replace(base, spoken_regions=(SpokenRegion(0, 2, "ABC"),)),
+            "unchanged text exactly",
+        ),
+        (
+            replace(
+                base,
+                spoken_regions=(SpokenRegion(0, 1, "A"), SpokenRegion(2, 3, "B")),
+            ),
+            "ordered, contiguous, and non-empty",
+        ),
+        (
+            replace(
+                base,
+                spoken_regions=(SpokenRegion(0, 2, "", (SpokenMapping(0, 2, 0, 0),)),),
+            ),
+            "spoken text must be non-empty",
+        ),
+        (
+            replace(base, ranges=build_structure_index(different_leaves)),
+            "structural ranges do not match leaves",
+        ),
+        (
+            replace(base, spoken_regions=(SpokenRegion(-1, 2, "?AB"),)),
+            "outside the grid",
+        ),
+        (
+            replace(base, mandatory_cuts=frozenset({-1})),
+            "mandatory cut lies outside",
+        ),
+    )
+
+    for malformed, message in cases:
+        with pytest.raises(ValueError, match=message):
+            pack_grid(malformed)
 
 
 def test_packer_has_no_pipeline_attribution_synthesis_or_pause_imports() -> None:

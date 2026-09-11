@@ -463,3 +463,60 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
   strict mypy passed for both changed files.
 - No other Critical, Important, or Minor findings were reported; scoped
   re-review remains required before Task 7.
+- Scoped re-review of fix commit `4c866a2` approved both resolutions with no
+  remaining findings, including extra adjacent/interior zero-width mapping
+  probes.
+
+### Task 7 — Integrate the packer with planning — 2026-09-11
+
+- Replaced the production `_chunk_span` call with `pack_grid`. The legacy
+  definition remains temporarily reachable only from the Task 1 test oracle
+  and is guarded by a static AST test proving planning never calls it.
+- Planning now builds one grid and structural index per chapter, reusing the
+  same leaves for effective attribution, scoped pronunciation, manual gaps,
+  packing, and selected-plan silence placement. A selected-plan spy test proves
+  exactly one planning-side grid build per materialized chapter.
+- Mandatory canonical cuts include effective speaker/voice span edges, scoped
+  lexicon region edges, explicit silence edges including zero, and enabled
+  derived-silence edges. Spoken form is applied independently inside those
+  intervals, retaining global canonical-to-spoken replacement mappings.
+- Packed results construct speech segments and trailing gaps directly. Empty
+  or whitespace-only pieces carry forward without becoming synthesis inputs;
+  emergency pieces retain their explicit `FallbackCut` provenance in the
+  temporary source observation record.
+- Restored the legacy stable `EMPTY_SPEECH` validation for empty chapters and
+  inconsistent `speech_characters` before grid packing.
+- Updated separator-free planning expectations to the approved design: the
+  general 200-character guard no longer drives production boundaries; only an
+  over-budget phrase invokes the isolated fallback, and all output remains
+  under the 1,000-character ceiling.
+- Added a differential whose two 640-character paragraphs deliberately move
+  from legacy `[994, 288]` to hierarchical `[642, 640]` chunks while preserving
+  the exact spoken stream. Added plan-origin tests proving ordinary boundaries
+  are grid edges and a hard-token cut is explicitly characterized.
+- Existing speaker/voice, scoped pronunciation, explicit/manual silence,
+  tuning-resolution checkpoint, and selection suites pass. Full/selection
+  tests retain every wholly-contained segment identity and permit at most the
+  two intersected edge chunks plus trailing selection-gap treatment to differ.
+- Ruling: selection edges are enforced as mandatory post-pack clips over the
+  stable full-grid packing. Feeding a selection start into a fresh greedy pack
+  would shift downstream boundaries and violate the authoritative requirement
+  that wholly-contained full/preview segments share identities; clipping only
+  intersected edge segments satisfies both exact selection and cache reuse.
+- Focused planning/multi-voice/tuning/selection/identity/script/packer run ->
+  `186 passed in 6.19s`; packer validation coverage subsequently increased the
+  packer-focused result to 19 passed.
+- Full regression without coverage -> `1575 passed, 46 skipped, 7 deselected,
+  1 warning in 78.66s` before the final added validation case.
+- Full Ruff format/check passed across 195 files. Changed-file strict mypy
+  passed.
+- Full gate with coverage before the final added validation case -> `1575
+  passed, 46 skipped, 7 deselected, 1 warning`; aggregate coverage was 89.57%,
+  still below the 90% requirement. Full mypy still reports only the pre-flight
+  optional-spaCy import error. Task 9 deletion and the final gate must close
+  both branch-wide acceptance gaps.
+- The delegated implementer exhausted its quota after beginning the integration;
+  the primary agent completed and verified this task.
+
+No semantic difference from phase 1 was accepted beyond the approved packing
+boundary changes. No Task 7 review finding is deferred.

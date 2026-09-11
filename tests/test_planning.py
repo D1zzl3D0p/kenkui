@@ -12,6 +12,8 @@ import pytest
 
 import kenkui as kk
 from kenkui._domain import planning
+from kenkui._domain.grid import build_grid
+from kenkui._domain.grid_packing import FallbackCut
 from kenkui._domain.planning import (
     NORMALIZATION_SCHEMA_VERSION,
     PARSER_SCHEMA_VERSION,
@@ -21,6 +23,7 @@ from kenkui._domain.planning import (
     ExecutionPlan,
     compile_execution_plan,
 )
+from legacy_grid_folds_oracle import legacy_chunks
 
 SOURCE_HASH = "1" * 64
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
@@ -391,14 +394,13 @@ def _worst_separator_free_run(text: str) -> int:
 
 def test_separator_free_runs_are_split_at_line_breaks() -> None:
     """A contents page has no separator Pocket-TTS can divide, so Kenkui divides it."""
-    text = "Contents\n\n" + "\n\n".join(f"Chapter {index}" for index in range(60))
+    text = "Contents\n\n" + "\n\n".join(f"Chapter {index}" for index in range(120))
     chunks = _chunks(text)
 
     assert "".join(chunks) == text
     assert len(chunks) > 1
-    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
     for chunk in chunks:
-        assert _worst_separator_free_run(chunk) <= budget
+        assert len(chunk) <= planning.MAX_TTS_SEGMENT_CHARACTERS
 
 
 def _ends_on_a_word(chunk: str) -> bool:
@@ -527,8 +529,8 @@ def test_token_dense_separator_free_text_is_split_at_its_hyphens() -> None:
     The hyphen tier is clean -- each fragment ends in "-", so the engine
     appends no full stop and the cut carries no false sentence ending.
     """
-    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
-    text = "a-" * budget  # twice the budget in characters, so the guard must fire
+    budget = planning.MAX_TTS_SEGMENT_CHARACTERS
+    text = "a-" * (budget // 2 + 100)
 
     chunks = _chunks(text)
 
@@ -536,4 +538,57 @@ def test_token_dense_separator_free_text_is_split_at_its_hyphens() -> None:
     assert len(chunks) > 1
     assert all(chunk.endswith("-") for chunk in chunks[:-1])
     for chunk in chunks:
-        assert _worst_separator_free_run(chunk) <= budget
+        assert len(chunk) <= budget
+
+
+def test_grid_packing_changes_boundaries_without_changing_spoken_content() -> None:
+    """The hierarchy may improve cuts while preserving the exact speech stream."""
+    paragraph = "Alpha sentence. " * 40
+    text = f"{paragraph}\n\n{paragraph}"
+    legacy = legacy_chunks("ch-v1-one", text)
+    packed = tuple(_chunks(text))
+
+    assert packed != legacy
+    assert [len(chunk) for chunk in legacy] == [994, 288]
+    assert [len(chunk) for chunk in packed] == [642, 640]
+    assert "".join(packed) == "".join(legacy) == text
+
+
+def test_planning_reports_grid_edges_and_characterized_emergency_cuts() -> None:
+    """Ordinary plan boundaries are grid edges; leaf fallbacks stay explicit."""
+    ordinary_text = ("Sentence boundary. " * 90).strip()
+    ordinary_inspection = _inspection(text=ordinary_text)
+    ordinary_plan = _compile(inspection_=ordinary_inspection)
+    ordinary_origins: list[planning._SegmentSource] = []
+    replayed, _silences = planning._compile_segments(  # noqa: SLF001
+        ordinary_inspection.chapters,
+        (),
+        ordinary_plan.cast,
+        origins=ordinary_origins,
+    )
+    edges = {
+        edge
+        for unit in build_grid(ordinary_inspection.chapters[0])
+        for edge in (unit.start, unit.end)
+    }
+
+    assert replayed == ordinary_plan.segments
+    assert all(origin.fallback_cut_after is None for origin in ordinary_origins)
+    assert all(origin.canonical_end in edges for origin in ordinary_origins[:-1])
+
+    token = "x" * (planning.MAX_TTS_SEGMENT_CHARACTERS + 1)
+    token_inspection = _inspection(text=token)
+    token_plan = _compile(inspection_=token_inspection)
+    token_origins: list[planning._SegmentSource] = []
+    replayed, _silences = planning._compile_segments(  # noqa: SLF001
+        token_inspection.chapters,
+        (),
+        token_plan.cast,
+        origins=token_origins,
+    )
+
+    assert replayed == token_plan.segments
+    assert token_origins[0].fallback_cut_after is FallbackCut.HARD_TOKEN
+    assert token_origins[0].canonical_end not in {
+        unit.end for unit in build_grid(token_inspection.chapters[0])
+    }
