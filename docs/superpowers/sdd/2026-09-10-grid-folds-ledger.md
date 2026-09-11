@@ -846,3 +846,52 @@ approval. No final-review finding has been deferred.
 
 One second scoped re-review of the amended fix wave remains required. No
 finding has been deferred or converted into a behavioral ruling.
+
+#### Task 11 final approval and verification
+
+- The second scoped re-review approved fix-wave commit `20b23a5` with no
+  Critical, Important, or Minor findings. All original and follow-up probes
+  passed: cross-leaf contraction/expansion/deletion, a budget-10 oversized
+  replacement, overlapping lexicon selection, normalized trailing whitespace,
+  full/whole-selection/Script manual-zero precedence, repacked gap ownership,
+  unique changed-edge identities, wholly-contained identity reuse, and
+  one-grid/index construction.
+- Reviewer verification included `229 passed in 2.77s`, 2,080 exact/bounded/
+  monotonic cross-leaf mapping fuzz cases, and a 31-case selection-threshold
+  sweep. Ruff and strict mypy passed. The only disclosed residual is that an
+  oversized changed selection uses one synthetic replacement mapping, so its
+  emergency canonical envelopes are intentionally coarse and clamped to
+  traversal ranges; this is safe because a full-plan origin cannot cross an
+  enabled semantic boundary.
+- Final full gate on `20b23a5`: Ruff format -> `194 files already formatted`;
+  Ruff check -> `All checks passed!`; strict mypy -> `Success: no issues found
+  in 157 source files`; pytest collected 1,642 tests, selected 1,635, and
+  finished `1590 passed, 46 skipped, 7 deselected, 1 warning in 36.78s`.
+  Aggregate coverage was 90.20%, above the configured 90% floor.
+- Final checked-in corpus property on `20b23a5` -> `39 passed, 1 skipped in
+  32.89s`. All 39 parseable EPUBs retained exact grid reconstruction,
+  dialogue-range equivalence, deterministic structural indexes, and complete
+  prefix coverage. The sole skip remains the pre-existing `Dark One - Brandon
+  Sanderson` no-visible-spine-text failure.
+- The Task 10 uncapped evidence remains the authoritative all-library pass:
+  372/377 parseable books, 20,074 chapters, 232,845,915 canonical characters,
+  7,720,584 leaves, 285,456 deterministic bounded segments, and zero migration
+  regressions. No implementation changed grid construction after that sweep;
+  Task 11 changed replacement fallback envelopes and selected-edge planning.
+- The Task 10 Dune planning artifact remains unchanged: canonical/spoken hashes,
+  774/797 character counts, six boundaries, speaker/voice order, tuning, and
+  effective silence all match phase 1; only the intended grid-v1 semantic
+  fingerprint differs. Task 11's fixes do not affect that bounded Dune
+  selection.
+- Final `/System/Volumes/Data` recheck reported 63 GiB available at 85%
+  capacity (Task 10 recorded 65 GiB at 84%). No cache entry was pruned, no
+  synthesis or render was launched, and no branch was pushed or integrated.
+- Final behavior deliberately different from phase 1 consists of the approved
+  hierarchical grid packing boundaries, the recorded whitespace-only ruling,
+  grid-v1 cache invalidation, and one additional acceptance repair: a clipped
+  selection that re-exposes more than 1,000 spoken characters is now split by
+  the grid packer instead of retaining phase 1's oversized segment.
+
+Task 11 is complete. Both `Ruling:` entries remain the complete ruling set;
+no review finding is deferred. Branch integration is left to the user as
+required by the branch-finishing workflow.
