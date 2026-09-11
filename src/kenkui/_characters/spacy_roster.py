@@ -942,9 +942,7 @@ def _group_or_place(name: str, signals: _Signals) -> str | None:
     if signals.the_det[name] / mentions >= _GROUP_THE_SHARE:
         return "group"
     governed = sum(
-        count
-        for word, count in signals.prep.get(name, {}).items()
-        if word in _LOCATIVE
+        count for word, count in signals.prep.get(name, {}).items() if word in _LOCATIVE
     )
     return "place" if governed / mentions >= _PLACE_SHARE else None
 
@@ -999,9 +997,7 @@ def _base_entries(signals: _Signals, text: str, *, fallback: bool) -> list[Roste
     ]
 
 
-def _pooled(
-    table: Mapping[str, Counter[str]], aliases: frozenset[str]
-) -> Counter[str]:
+def _pooled(table: Mapping[str, Counter[str]], aliases: frozenset[str]) -> Counter[str]:
     pooled: Counter[str] = Counter()
     for alias in aliases:
         pooled.update(table.get(alias, {}))

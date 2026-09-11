@@ -47,9 +47,7 @@ def test_same_person(first: str, second: str, expected: bool) -> None:
         ("Aes Sedai", "Rand al'Thor"),
     ],
 )
-def test_a_name_made_only_of_titles_matches_no_one(
-    first: str, second: str
-) -> None:
+def test_a_name_made_only_of_titles_matches_no_one(first: str, second: str) -> None:
     titles = PREFIX_TITLES | {"great", "house"}
     assert same_person(first, second, titles) is False
 
