@@ -602,6 +602,11 @@ class _Signals:
         # without ever speaking, and that shows up only chapter by chapter.
         self.addressed_in: dict[str, Counter[str]] = defaultdict(Counter)
         self.speaking_in: dict[str, Counter[str]] = defaultdict(Counter)
+        self.flag_hosts: dict[str, set[str]] = defaultdict(set)
+        self.titled_forms: dict[str, str] = {}
+        self.title_hosts: dict[str, Counter[str]] = defaultdict(Counter)
+        self.the_det: Counter[str] = Counter()
+        self.prep: dict[str, Counter[str]] = defaultdict(Counter)
 
     def evidence(self, name: str) -> int:
         """Weighted animacy evidence: how strongly this name denotes a person.
@@ -618,6 +623,65 @@ class _Signals:
             + self.agency[name]
         )
 
+    def rename(self, source: str, target: str | None) -> None:
+        """Move every tally for ``source`` onto ``target``, or drop it."""
+        for counter in (
+            self.mentions,
+            self.speech,
+            self.agency,
+            self.vocative,
+            self.animate,
+            self.titled,
+            self.the_det,
+        ):
+            value = counter.pop(source, 0)
+            if target is not None and value:
+                counter[target] += value
+        for table in (self.gender, self.title_gender, self.prep):
+            votes = table.pop(source, None)
+            if target is not None and votes:
+                table[target].update(votes)
+        seen = self.chapters.pop(source, None)
+        if target is not None and seen:
+            self.chapters[target] |= seen
+        for tally in (
+            *self.addressed_in.values(),
+            *self.speaking_in.values(),
+            *self.title_hosts.values(),
+        ):
+            value = tally.pop(source, 0)
+            if target is not None and value:
+                tally[target] += value
+
+
+def _usable(name: str) -> bool:
+    return _plausible(name) and name.lower() not in PRONOUNS
+
+
+def _only_titles(name: str) -> bool:
+    return all(token.lower().strip(".") in _TITLES for token in name.split())
+
+
+def _attached_title(raw: str, before: str) -> str | None:
+    """Return the title opening a mention, or standing just before it."""
+    words = raw.split()
+    leading = words[0].lower().strip(".") if words else ""
+    if leading in _TITLES:
+        return leading
+    preceding = before.strip(".")
+    return preceding if preceding in _TITLES else None
+
+
+def _leading_title(raw: str, cleaned: str) -> str | None:
+    """Return the title word a mention opens with, preserving its spelling."""
+    words = raw.strip().split()
+    if not words:
+        return None
+    head = words[0].strip(".,")
+    if head.lower() in _TITLES and head.lower() != cleaned.lower():
+        return head
+    return None
+
 
 def _scan(
     doc: Any,  # noqa: ANN401 - a spaCy Doc; the package ships no stubs
@@ -628,9 +692,19 @@ def _scan(
     """Accumulate every signal one parsed chapter carries."""
     for span in _proper_noun_spans(doc):
         token = span[0]
-        name = _clean(span.text)
-        if not _plausible(name) or name.lower() in PRONOUNS:
-            continue
+        cleaned = _clean(span.text)
+        before = doc[span.start - 1].lower_ if span.start else ""
+        attached = _attached_title(span.text, before)
+        if attached and _usable(cleaned) and not _only_titles(cleaned):
+            into.flag_hosts[cleaned].add(attached)
+        head = _leading_title(span.text, cleaned)
+        if head is None:
+            if not _usable(cleaned):
+                continue
+            name = cleaned
+        else:
+            name = f"{head} {cleaned}"
+            into.titled_forms[name] = cleaned
         into.mentions[name] += 1
         into.chapters[name].add(chapter_id)
         inside_quote = any(start <= token.idx < end for start, end in quote_bounds)
@@ -649,6 +723,43 @@ def _scan(
         if token.i and token.nbor(-1).lower_ in _TITLES:
             into.titled[name] += 1
         _gender_signals(doc, span, name, into)
+        if attached and not _only_titles(name):
+            into.title_hosts[attached][name] += 1
+        if before == "the" and span[0].lower_.strip(".") not in _TITLES:
+            into.the_det[name] += 1
+        if anchor.dep_ == "pobj":
+            into.prep[name][anchor.head.lower_] += 1
+
+
+def _fold_titles(signals: _Signals) -> None:
+    """Keep couples apart and fold every other titled form into its bare name."""
+    flagged = {
+        name
+        for name, held in signals.flag_hosts.items()
+        if held & _FEMININE_TITLES and held - _FEMININE_TITLES
+    }
+    for key, cleaned in sorted(signals.titled_forms.items()):
+        target = key if cleaned in flagged else cleaned
+        if not _usable(target):
+            signals.rename(key, None)
+        elif target != key:
+            signals.rename(key, target)
+
+
+def collect_signals(
+    chapters: Sequence[ChapterInspection],
+    dialogue: Mapping[str, Sequence[DialogueRange]],
+    *,
+    pipeline: str = DEFAULT_PIPELINE,
+) -> _Signals:
+    """Parse the book once and return every tally the roster reads."""
+    nlp = _load(pipeline)
+    signals = _Signals()
+    for chapter in chapters:
+        bounds = [(span.start, span.end) for span in dialogue.get(chapter.id, ())]
+        _scan(nlp(chapter.text), chapter.id, bounds, signals)
+    _fold_titles(signals)
+    return signals
 
 
 def _gender_signals(
@@ -790,11 +901,7 @@ def infer_roster(
     ``spoken_characters`` is left at zero here, exactly as the model roster
     leaves it. It is filled in later, once spans have been attributed.
     """
-    nlp = _load(pipeline)
-    signals = _Signals()
-    for chapter in chapters:
-        bounds = [(span.start, span.end) for span in dialogue.get(chapter.id, ())]
-        _scan(nlp(chapter.text), chapter.id, bounds, signals)
+    signals = collect_signals(chapters, dialogue, pipeline=pipeline)
 
     kept = {
         name

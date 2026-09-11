@@ -55,6 +55,70 @@ She stopped at the well. Her hands were cold, and she rubbed them together.
 Egwene thought of her mother. She missed her.
 """
 
+SPOUSES = """
+Count Fenring bowed low. "My dear Baron," Count Fenring said. He smiled thinly.
+Lady Fenring laughed. "You are cruel," Lady Fenring said. She turned away.
+"Enough," Count Fenring said. He waved a hand.
+"As you wish," Lady Fenring said. She sat down.
+Count Fenring rose. He left the room.
+Count Fenring sighed. He was tired.
+Count Fenring frowned, and Lady Fenring watched him.
+"""
+
+PROMOTED = """
+Captain Nefud saluted. "Yes, my Lord," Captain Nefud said. He waited.
+Lieutenant Nefud had once said the same. "At once," Nefud said. Nefud turned.
+"It is done," Captain Nefud said.
+"""
+
+GROUPS = """
+The Fremen came at dawn. The Fremen fought on Arrakis. "Go," Stilgar said.
+The Fremen said nothing. They lived on Arrakis. From Arrakis came spice.
+"Stay," Stilgar said. Stilgar waited. The Fremen watched Stilgar.
+"""
+
+
+def signals_of(text: str) -> spacy_roster._Signals:  # noqa: SLF001
+    chapter = kk.ChapterInspection(
+        id="ch-1", index=0, title="One", speech_characters=len(text), text=text
+    )
+    return spacy_roster.collect_signals(
+        (chapter,), {"ch-1": dialogue_ranges(build_grid(chapter))}
+    )
+
+
+class TestSignals:
+    """What one read of the book records, and how titled forms fold."""
+
+    def test_a_couple_sharing_a_surname_are_two_candidates(self) -> None:
+        signals = signals_of(SPOUSES)
+        assert signals.mentions["Count Fenring"] >= 3
+        assert signals.mentions["Lady Fenring"] >= 3
+        assert "Fenring" not in signals.mentions
+
+    def test_a_man_promoted_keeps_one_name(self) -> None:
+        signals = signals_of(PROMOTED)
+        assert signals.mentions["Nefud"] >= 5
+        assert "Captain Nefud" not in signals.mentions
+
+    def test_group_and_place_evidence_is_recorded(self) -> None:
+        signals = signals_of(GROUPS)
+        assert signals.the_det["Fremen"] >= 2
+        assert signals.prep["Arrakis"]["on"] >= 1
+
+    def test_rename_moves_every_tally(self) -> None:
+        signals = spacy_roster._Signals()  # noqa: SLF001
+        signals.mentions["A"] = 2
+        signals.gender["A"]["masculine"] = 3
+        signals.chapters["A"].add("ch-1")
+        signals.title_hosts["count"]["A"] = 1
+        signals.rename("A", "B")
+        assert signals.mentions["B"] == 2
+        assert signals.gender["B"]["masculine"] == 3
+        assert signals.chapters["B"] == {"ch-1"}
+        assert signals.title_hosts["count"]["B"] == 1
+        assert "A" not in signals.mentions
+
 
 class TestSpelling:
     """One name, however the typesetter spelled it."""
