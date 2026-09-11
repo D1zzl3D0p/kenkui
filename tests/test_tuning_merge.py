@@ -5,11 +5,14 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+import pytest
+
 import kenkui as kk
 from kenkui._domain.grid import build_grid, dialogue_ranges
 from kenkui._domain.operations import Attributions, Silences, SpokenForm
 from kenkui._domain.paths import parse_pattern
 from kenkui._domain.planning import (
+    MAX_TTS_SEGMENT_CHARACTERS,
     ExecutionPlan,
     SpeakerSpan,
     compile_execution_plan,
@@ -321,6 +324,26 @@ def test_a_manual_silence_replaces_the_derived_gap() -> None:
     assert removed.trailing_silence_ms == (0, 0)
 
 
+def test_manual_zero_survives_whitespace_settlement_in_whole_selection() -> None:
+    """Full and whole-selected plans share explicit-zero gap precedence."""
+    text = '"A."\n"B."'
+    pipeline = (
+        kk.epub("book.epub")
+        .pauses(line_ms=100)
+        .silence(
+            0,
+            where={"paragraph": 1, "line": 1, "sentence": 1, "phrase": 1},
+        )
+    )
+
+    full = plan(pipeline, text=text)
+    selected = plan(pipeline.select({}), text=text)
+
+    assert [segment.text for segment in full.segments] == ['"A."', '\n"B."']
+    assert selected.segments == full.segments
+    assert full.trailing_silence_ms == selected.trailing_silence_ms == (0, 0)
+
+
 def test_explicit_zero_replaces_an_interchapter_pause() -> None:
     """A chapter-scoped zero overrides chapter_ms at the shared canonical gap."""
     chapters = (
@@ -430,6 +453,86 @@ def test_a_whole_book_lexicon_reaches_the_segment_text() -> None:
     )
     assert plain == LEAD_TEXT
     assert tuned == "He took the leed.\n\nThe leed pipe burst."
+
+
+@pytest.mark.parametrize("replacement", ["First Last", "Mister First Last"])
+def test_cross_leaf_pronunciation_remains_exact_and_bounded(
+    replacement: str,
+) -> None:
+    """A lexicon edit spanning a phrase edge can reach emergency packing."""
+    source = "Intro. Last, First " + "word " * 230
+    compiled = plan(
+        kk.epub("book.epub").pronounce(
+            {"Last, First": replacement}, numbers="off", builtin=False
+        ),
+        text=source,
+    )
+
+    assert "".join(segment.text for segment in compiled.segments) == source.replace(
+        "Last, First", replacement
+    )
+    assert all(
+        segment.character_count <= MAX_TTS_SEGMENT_CHARACTERS
+        for segment in compiled.segments
+    )
+
+
+def test_selection_repacking_bounds_a_partially_reversed_pronunciation() -> None:
+    """A clipped contraction expands through the grid packer, never past 1000."""
+    source = "Prefix. Extraordinary " + ("tail " * 199).rstrip() + "."
+    pipeline = kk.epub("book.epub").pronounce(
+        {"Prefix. Extraordinary": "A"}, numbers="off", builtin=False
+    )
+    full = plan(pipeline, text=source)
+    selected = plan(pipeline.select({"sentence": 2}), text=source)
+
+    assert len(full.segments) == 1
+    assert (
+        "".join(segment.text for segment in selected.segments)
+        == source[source.index("Extraordinary") :]
+    )
+    assert all(
+        segment.character_count <= MAX_TTS_SEGMENT_CHARACTERS
+        for segment in selected.segments
+    )
+
+
+def test_selection_repacking_preserves_partial_overlapping_lexicon_choice() -> None:
+    """Bounding an edge does not re-run longest-match over a wider context."""
+    source = "Prefix. Extraordinary " + ("tail " * 196).rstrip() + "."
+    pipeline = kk.epub("book.epub").pronounce(
+        {
+            "Prefix. Extraordinary": "A",
+            "Extraordinary": "B" * 128,
+            "Extraordinary tail": "C" * 128,
+        },
+        numbers="off",
+        builtin=False,
+    )
+
+    selected = plan(pipeline.select({"sentence": 2}), text=source)
+
+    assert "".join(segment.text for segment in selected.segments).startswith("B" * 128)
+    assert all(
+        segment.character_count <= MAX_TTS_SEGMENT_CHARACTERS
+        for segment in selected.segments
+    )
+
+
+def test_selection_repacking_never_emits_whitespace_only_speech() -> None:
+    """Trailing structural whitespace follows the Task 7 settlement ruling."""
+    source = "Prefix. Extraordinary " + "x" * 985 + ".\n\nNext."
+    pipeline = kk.epub("book.epub").pronounce(
+        {"Prefix. Extraordinary": "A"}, numbers="off", builtin=False
+    )
+
+    selected = plan(pipeline.select({"paragraph": 1, "sentence": 2}), text=source)
+
+    assert all(segment.text.strip() for segment in selected.segments)
+    assert all(
+        segment.character_count <= MAX_TTS_SEGMENT_CHARACTERS
+        for segment in selected.segments
+    )
 
 
 def test_a_scoped_lexicon_speaks_only_inside_its_scope() -> None:

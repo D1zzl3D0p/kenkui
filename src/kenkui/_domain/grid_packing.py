@@ -76,7 +76,6 @@ class _PackingViolation(StrEnum):
     EMPTY_REGIONS = "spoken regions must be non-empty"
     REGION_ORDER = "spoken regions must be ordered, contiguous, and non-empty"
     EMPTY_SPOKEN = "spoken text must be non-empty"
-    FALLBACK_START = "fallback lost its canonical start"
     INVALID_REQUEST = "packing requires non-empty leaves and a positive budget"
     RANGES = "structural ranges do not match leaves"
     REGION_BOUNDS = "spoken regions lie outside the grid"
@@ -337,8 +336,14 @@ def _fallback_pieces(  # noqa: PLR0913, PLR0917 - one bounded leaf projection.
             reason = FallbackCut.HARD_TOKEN
         pieces.append(
             _Piece(
-                projection.to_canonical(position, upper_edge=False),
-                projection.to_canonical(cut, upper_edge=True),
+                max(
+                    canonical_start,
+                    projection.to_canonical(position, upper_edge=False),
+                ),
+                min(
+                    canonical_end,
+                    projection.to_canonical(cut, upper_edge=True),
+                ),
                 position,
                 cut,
                 reason,
@@ -347,14 +352,15 @@ def _fallback_pieces(  # noqa: PLR0913, PLR0917 - one bounded leaf projection.
         position = cut
     pieces.append(
         _Piece(
-            projection.to_canonical(position, upper_edge=False),
+            max(
+                canonical_start,
+                projection.to_canonical(position, upper_edge=False),
+            ),
             canonical_end,
             position,
             spoken_end,
         )
     )
-    if pieces[0].canonical_start != canonical_start:
-        raise AssertionError(_PackingViolation.FALLBACK_START.value)
     return tuple(pieces)
 
 

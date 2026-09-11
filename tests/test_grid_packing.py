@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path as FilePath
 
 import pytest
@@ -205,6 +206,75 @@ def test_leading_deleted_text_stays_in_first_fallback_canonical_envelope() -> No
     assert packed[0].canonical_start == 0
     assert packed[-1].canonical_end == len(canonical)
     assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+@pytest.mark.parametrize("replacement", ["First Last", "Mister First Last"])
+def test_cross_leaf_replacement_keeps_traversal_envelopes(
+    replacement: str,
+) -> None:
+    """A replacement spanning a phrase edge remains exactly packable."""
+    prefix = "Intro. "
+    source = prefix + "Last, First " + "word " * 230
+    spoken = prefix + replacement + " " + "word " * 230
+    budget = 1000
+    mapping = SpokenMapping(
+        len(prefix),
+        len(prefix + "Last, First"),
+        len(prefix),
+        len(prefix + replacement),
+    )
+
+    packed = pack_grid(
+        request(source, spoken=spoken, mappings=(mapping,), budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert packed[0].canonical_start == 0
+    assert packed[-1].canonical_end == len(source)
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+def test_cross_leaf_deletion_before_expansion_keeps_canonical_coverage() -> None:
+    """Zero-spoken leaves can precede an expanded emergency replacement."""
+    canonical = "Gone, Away X"
+    spoken = "y" * 12
+    budget = 5
+    mappings = (
+        SpokenMapping(0, len("Gone, Away "), 0, 0),
+        SpokenMapping(len("Gone, Away "), len(canonical), 0, len(spoken)),
+    )
+
+    packed = pack_grid(
+        request(canonical, spoken=spoken, mappings=mappings, budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert packed[0].canonical_start == 0
+    assert packed[-1].canonical_end == len(canonical)
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+def test_cross_leaf_expansion_larger_than_budget_has_monotonic_envelopes() -> None:
+    """Every emergency piece stays inside its traversal-owned leaf range."""
+    source = "Intro. Last, First tail."
+    replacement = "x" * 30
+    budget = 10
+    start = source.index("Last")
+    end = start + len("Last, First")
+    spoken = source[:start] + replacement + source[end:]
+    mapping = SpokenMapping(start, end, start, start + len(replacement))
+
+    packed = pack_grid(
+        request(source, spoken=spoken, mappings=(mapping,), budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+    assert all(
+        left.canonical_start <= right.canonical_start
+        and left.canonical_end <= right.canonical_end
+        for left, right in pairwise(packed)
+    )
 
 
 def test_ellipsis_is_a_punctuation_first_fallback_edge() -> None:

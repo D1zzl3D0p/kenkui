@@ -768,3 +768,81 @@ review is required before the final whole-branch review.
   from the recorded 90.07% run does not change the configured 90% outcome.
 
 No Task 10 finding is deferred.
+
+### Task 11 — Final whole-branch review and one fix wave — 2026-09-11
+
+- Generated the review package from the actual merge base `d72c1e8` through
+  `f6f60dc`: 20 commits, 35 changed paths, 4,255 insertions, and 752
+  deletions. The target branch had independently advanced by four
+  documentation commits to `70334f4`; its merge base with this worktree
+  remained `d72c1e8`, so target-only work was excluded from the migration
+  review.
+- The final reviewer examined both ledger rulings, grid-v1 identity inputs and
+  stale-cache behavior, planning/resolution ownership, one-grid/index reuse,
+  quote and structure scanner deletion, the removed temporary oracle,
+  selection identity reuse, corpus/Dune arithmetic, and all claimed deferred
+  findings. It found no Critical or Minor issues and reported two Important
+  edge cases; approval was withheld pending the required single fix wave.
+- A valid pronunciation spanning a phrase edge, such as `Last, First -> First
+  Last`, could reach emergency packing with a structural leaf start inside the
+  replacement. Reverse projection correctly returned the replacement's stable
+  lower envelope but the fallback incorrectly asserted that it must equal the
+  nested leaf start. The fallback now retains the traversal-owned first
+  canonical edge while preserving reverse-projected envelopes for actual
+  emergency cuts. Contraction, expansion, a prefix before the replacement,
+  and a cross-leaf deletion followed by expansion are covered.
+- `grid_silences` applied selected leaf gaps sequentially, allowing a derived
+  newline pause to raise an explicit zero that had already settled onto the
+  preceding speech. Selected planning and Script now coalesce selected
+  whitespace gap reasons and manual values before applying pause policy, using
+  the same max-derived/manual-replacement precedence as full planning. The
+  normalized `"A."\n"B."` full and whole-selection plans now share segment
+  identities and effective `(0, 0)` silence.
+- The reviewer also identified a pre-existing acceptance residual: clipping a
+  contraction could re-expose more than 1,000 spoken characters in one
+  selected edge. Although `d72c1e8` behaved the same way, the authoritative
+  design requires the hard ceiling unconditionally, so it was included in the
+  fix wave rather than accepted by ruling. An over-budget changed edge is now
+  re-spoken and passed through the same hierarchical grid packer; bounded and
+  wholly-contained full-plan segments still retain their identities. Exact
+  selected reconstruction and the 1,000-character ceiling are covered.
+- The plan-required delegated implementer could not continue because the
+  workspace agent pool reported exhausted credits. The primary agent completed
+  the already-scoped single fix wave without expanding its finding list.
+- Focused post-fix verification across packer, tuning, planning,
+  multi-voice, selection/preview, structure, and Script tests -> `210 passed
+  in 2.62s`. Changed-file Ruff format/check and strict mypy passed across four
+  source/test files.
+
+Scoped re-review and the final full/corpus gates remain required before Task 11
+approval. No final-review finding has been deferred.
+
+#### Task 11 fix-wave re-review repair
+
+- The first scoped re-review withheld approval with three Important follow-up
+  findings and no Critical or Minor findings. The original cases and one-grid/
+  index checks passed, but stronger probes exposed an over-budget replacement
+  envelope, overlapping lexicon context drift, and a whitespace-only selected
+  segment.
+- Clamping only the first fallback piece was insufficient when one cross-leaf
+  expansion itself exceeded a small packer budget: later pieces could
+  reverse-project to an earlier replacement envelope. Every fallback piece is
+  now clamped to the canonical leaf range owned by its structural traversal.
+  A `Last, First -> 30 characters` replacement under a 10-character budget
+  proves exact reconstruction, the hard bound, and monotonic envelopes.
+- Re-speaking an entire selected canonical range could choose a different
+  overlapping longest lexicon match from `_selected_text`, which deliberately
+  re-speaks only the surviving portion of a clipped edit. Oversized edge
+  packing now preserves that already-decided exact text as one explicit
+  canonical replacement mapping instead of making a second pronunciation
+  decision. Valid overlapping 128-character entries are covered.
+- Selected-edge repacking now runs the same bounded unspeakable redistribution
+  as full planning. A normalized paragraph-ending blank-line case proves it
+  emits no whitespace-only synthesis segment while respecting the
+  1,000-character ceiling and the Task 7 whitespace ruling.
+- Post-repair focused packer, tuning, planning, multi-voice, selection/preview,
+  structure, and Script verification -> `213 passed in 2.73s`. Changed-file
+  Ruff format/check, strict mypy, and diff checks passed.
+
+One second scoped re-review of the amended fix wave remains required. No
+finding has been deferred or converted into a behavioral ruling.

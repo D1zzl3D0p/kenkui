@@ -1023,9 +1023,18 @@ def _settle_unspeakable_reasons(
     structure: StructuralIndex,
 ) -> dict[int, GapReason]:
     """Fold pure gap reasons across spans that cannot produce speech."""
-    settled = {
-        unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)
-    }
+    return _settle_reasons_over(
+        unspeakable,
+        {unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)},
+    )
+
+
+def _settle_reasons_over(
+    unspeakable: tuple[tuple[int, int], ...],
+    reasons: Mapping[int, GapReason],
+) -> dict[int, GapReason]:
+    """Fold selected pure gap reasons across inaudible canonical spans."""
+    settled = dict(reasons)
     for start, end in unspeakable:
         offsets = sorted(edge for edge in settled if start < edge <= end)
         for edge in offsets:
@@ -1203,15 +1212,33 @@ def grid_silences(
     manual = _gaps_over(units, rules) if rules else {}
     patterns = selected_patterns(operations)
     siblings = sibling_counts(units)
+    selected = tuple(
+        index
+        for index, unit in enumerate(units)
+        if selected_unit(unit, patterns, siblings)
+    )
+    selected_units = tuple(units[index] for index in selected)
+    unspeakable = _unspeakable_ranges(chapter.text, (), selected_units)
+    reasons_by_offset = _settle_reasons_over(
+        unspeakable, {units[index].end: derived[index] for index in selected}
+    )
+    gaps = _settle_unspeakable_gaps(
+        unspeakable,
+        {units[index].end: manual[index] for index in selected if index in manual},
+    )
     indices: list[int] = []
     silence: list[int] = []
-    for index, unit in enumerate(units):
-        if not selected_unit(unit, patterns, siblings):
-            continue
+    for index in selected:
+        unit = units[index]
         if chapter.text[unit.start : unit.end].strip():
             indices.append(index)
             silence.append(0)
-        _apply_gap(silence, derived[index], pauses, manual.get(index))
+            _apply_gap(
+                silence,
+                reasons_by_offset.get(unit.end, GapReason.NONE),
+                pauses,
+                gaps.get(unit.end),
+            )
     return dict(zip(indices, silence, strict=True))
 
 
@@ -1284,7 +1311,95 @@ def _selected_text(
     return start, end, "".join(pieces)
 
 
-def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
+def _selected_edge_segments(  # noqa: PLR0913, PLR0917 - one edge context.
+    segment: SpeechSegment,
+    origin: _SegmentSource,
+    chapter: ChapterInspection,
+    text: str,
+    start: int,
+    end: int,
+    first: int,
+    last: int,
+    spoken: SpokenForm | None,
+    grid: tuple[Unit, ...],
+    structure: StructuralIndex,
+) -> tuple[tuple[SpeechSegment, int], ...]:
+    """Return one bounded selected edge and its canonical source starts."""
+    if start == origin.chunk_start and end == origin.chunk_end and text == segment.text:
+        source_start = origin.start + _translated_offset(
+            origin.offsets, start, reverse=True
+        )
+        return ((segment, source_start),)
+    if len(text) <= MAX_TTS_SEGMENT_CHARACTERS:
+        source_start = origin.start + _translated_offset(
+            origin.offsets, start, reverse=True
+        )
+        return (
+            (
+                _segment(
+                    chapter,
+                    segment.ordinal,
+                    origin.chunk_index,
+                    text,
+                    speaker_id=segment.speaker_id,
+                    voice_id=segment.voice_id,
+                    spoken=spoken,
+                    selection=(first, last),
+                ),
+                source_start,
+            ),
+        )
+
+    # A selection may expose canonical text that a full-plan pronunciation
+    # contracted below the ceiling. Re-speak and hierarchically pack only this
+    # changed edge; bounded and wholly-contained segments retain their IDs.
+    source_first = max(origin.canonical_start, origin.start + first)
+    source_last = min(origin.canonical_end, origin.start + last)
+    # Preserve the exact edge text already produced by `_selected_text`.
+    # Re-speaking the wider selected range can choose a different overlapping
+    # longest-match lexicon entry than the partial edit did. Treat this changed
+    # edge as one mapped replacement so the packer owns only its hierarchy,
+    # hard ceiling, and emergency cuts—not a second transformation decision.
+    selected_regions = (
+        SpokenRegion(
+            source_first,
+            source_last,
+            text,
+            (SpokenMapping(source_first, source_last, 0, len(text)),),
+        ),
+    )
+    repacked = pack_grid(
+        PackingInput(
+            leaves=grid,
+            ranges=structure,
+            spoken_regions=selected_regions,
+            mandatory_cuts=frozenset({source_first, source_last}),
+            character_budget=MAX_TTS_SEGMENT_CHARACTERS,
+        )
+    )
+    selected_spoken = text
+    repacked = _redistribute_unspeakable_ranges(
+        repacked, selected_spoken, _global_offsets(selected_regions)
+    )
+    return tuple(
+        (
+            _segment(
+                chapter,
+                segment.ordinal,
+                origin.chunk_index,
+                selected_spoken[item.spoken_start : item.spoken_end],
+                speaker_id=segment.speaker_id,
+                voice_id=segment.voice_id,
+                spoken=spoken,
+                selection=(first, last, item.spoken_start, item.spoken_end),
+            ),
+            item.canonical_start,
+        )
+        for item in repacked
+    )
+
+
+def _select_segments(  # noqa: C901, PLR0913, PLR0917 - pure selection inputs.
     segments: tuple[SpeechSegment, ...],
     origins: list[_SegmentSource],
     chapters: tuple[ChapterInspection, ...],
@@ -1325,27 +1440,24 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
             )
             if not text.strip():
                 continue
-            source_start = origin.start + _translated_offset(
-                origin.offsets, start, reverse=True
+            chapter = by_id[segment.chapter_id]
+            selected_segments = _selected_edge_segments(
+                segment,
+                origin,
+                chapter,
+                text,
+                start,
+                end,
+                first,
+                last,
+                spoken,
+                grids[segment.chapter_id],
+                structures[segment.chapter_id],
             )
-            positions.setdefault(segment.chapter_id, []).append(len(result))
-            starts.setdefault(segment.chapter_id, []).append(source_start)
-            result.append(
-                segment
-                if start == origin.chunk_start
-                and end == origin.chunk_end
-                and text == segment.text
-                else _segment(
-                    by_id[segment.chapter_id],
-                    segment.ordinal,
-                    origin.chunk_index,
-                    text,
-                    speaker_id=segment.speaker_id,
-                    voice_id=segment.voice_id,
-                    spoken=spoken,
-                    selection=(first, last),
-                )
-            )
+            for selected_segment, source_start in selected_segments:
+                positions.setdefault(segment.chapter_id, []).append(len(result))
+                starts.setdefault(segment.chapter_id, []).append(source_start)
+                result.append(selected_segment)
     silence = [0] * len(result)
     for chapter_id, indices in positions.items():
         chapter = by_id[chapter_id]
@@ -1422,7 +1534,7 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     speaker_id: str | None = None,
     voice_id: str = "",
     spoken: SpokenForm | None = None,
-    selection: tuple[int, int] | None = None,
+    selection: tuple[int, ...] | None = None,
 ) -> SpeechSegment:
     content_hash = _hash_utf8(text)
     fields: dict[str, object] = {
