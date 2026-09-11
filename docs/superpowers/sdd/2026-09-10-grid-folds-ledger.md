@@ -582,6 +582,20 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
   silence with a manual gap.
 - Third repair focused planning/multi-voice/tuning/selection/identity/script/
   packer/oracle run -> `204 passed`; changed-file Ruff and strict mypy passed.
+- Full regression after the third repair -> `1578 passed, 46 skipped, 7
+  deselected, 1 warning in 78.36s`.
+
+#### Task 7 final review gate
+
+- Independent third-repair re-review approved Task 7 with no Critical,
+  Important, or Minor findings.
+- Reviewer probes confirmed exact 1,208-character reconstruction in bounded
+  208/1,000-character segments, stable manual/no-manual segment identities,
+  manual `(900, 0)` and derived `line_ms=700` silence preservation, identical
+  selected/full silence, contiguous origins, and `FallbackCut.WHITESPACE`.
+- Review also confirmed Script retains whitespace rows while their gaps settle
+  onto preceding effective speech, and selected planning constructs exactly one
+  `StructuralIndex` per chapter.
 
 No semantic difference from phase 1 was accepted beyond the approved packing
 boundary changes and the whitespace-only ruling above. No Task 7 review finding
