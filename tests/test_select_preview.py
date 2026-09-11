@@ -245,7 +245,9 @@ def test_selection_preserves_interior_segments_and_only_clips_edges(
             edge.append(segment)
         offset = end
     assert len(interior) >= _MAX_EDGES
-    assert interior == [segment for segment in part.segments if segment in interior]
+    retained = [segment for segment in part.segments if segment in interior]
+    assert [segment.id for segment in retained] == [segment.id for segment in interior]
+    assert retained == interior
     changed = [segment for segment in part.segments if segment not in interior]
     assert len(changed) == len(edge) <= _MAX_EDGES
     assert [segment.ordinal for segment in changed] == [
@@ -419,6 +421,10 @@ def test_preview_is_real_wav_and_retains_cache_for_full_render(
         ),
     )
     selected = book.select({"chapter": CH09_ID})
+    selected_ids = [segment.id for segment in _plan(selected).segments]
+    assert selected_ids == [
+        segment.id for segment in _plan(book).segments if segment.chapter_id == CH09_ID
+    ]
     events: list[kk.ExecutionEvent] = []
     target = tmp_path / "preview.wav"
     operations = selected.operations
@@ -443,7 +449,7 @@ def test_preview_is_real_wav_and_retains_cache_for_full_render(
         CacheStore, "lookup", lambda _self, *args, **kwargs: tracked(*args, **kwargs)
     )
     book.tts().write_m4b(tmp_path / "whole.m4b", workers=1)
-    assert recorded == [segment.id for segment in _plan(selected).segments]
+    assert recorded == selected_ids
 
 
 @pytest.mark.parametrize("suffix", [".m4b", ".M4B", ".mp3"])

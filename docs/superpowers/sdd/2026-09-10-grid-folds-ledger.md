@@ -600,3 +600,40 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
 No semantic difference from phase 1 was accepted beyond the approved packing
 boundary changes and the whitespace-only ruling above. No Task 7 review finding
 is deferred.
+
+### Task 8 — Unify identities under grid-v1 — 2026-09-11
+
+- Replaced `CHUNKING_SCHEMA_VERSION = "tts-chunks-v4"` and
+  `STRUCTURAL_CHUNKING_SCHEMA_VERSION = "tts-chunks-v5"` with the single
+  explicit `GRID_CHUNKING_SCHEMA_VERSION = "grid-v1"` segment-identity input.
+  Every segment, including clipped selection edges, now reaches the same
+  constructor and receives that input exactly once.
+- Removed pause-tier and structure-schema fields from segment identities and
+  deleted their identity-only plumbing through chapter compilation and
+  selection clipping. Plan-level structure schema and effective silence remain
+  in the semantic fingerprint because they still describe rendered audio.
+- Retained every synthesis-relevant segment input: canonical chapter and
+  ordinal/chunk position, content hash and normalization version, clipped-edge
+  selection coordinates, attributed speaker and voice, and active spoken-form
+  configuration.
+- Migrated the plain-plan golden IDs and fingerprint to grid-v1. A payload spy
+  proves plain, paused, and spoken segments each contain grid-v1 once and contain
+  neither retired pause-tier field; independently reproduced v4 and v5 payloads
+  prove both old ID namespaces are disjoint from every corresponding new ID.
+- A cache regression stores a genuine v4-keyed segment and proves a grid-v1
+  lookup misses it without deleting or corrupting the legacy database row or
+  PCM. The legacy entry remains independently readable.
+- Strengthened preview coverage to compare identities explicitly: every wholly
+  contained interior segment is identical between full and selected plans, and
+  a whole-chapter preview shares the exact full-plan IDs later observed as warm
+  cache hits.
+- Existing attribution-store reuse and tuning-sidecar round-trip/checkpoint
+  tests remain green; neither persistence format nor schema was changed.
+- Focused planning/multi-voice/tuning/identity/selection/preview/cache/sidecar/
+  attribution run -> `257 passed in 43.73s`. Changed-file Ruff format/check and
+  strict mypy passed.
+- No cache files were deleted and no Task 9 legacy-code cleanup was performed.
+  The pre-flight aggregate-coverage and optional-spaCy full-gate failures remain
+  unchanged for the final task.
+
+No new semantic ruling was required and no Task 8 finding is deferred.

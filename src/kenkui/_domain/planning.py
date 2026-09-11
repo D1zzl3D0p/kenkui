@@ -69,8 +69,7 @@ PARSER_SCHEMA_VERSION = "epub-visible-text-v1"
 NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
 PLANNING_SCHEMA_VERSION = "execution-plan-v2"
 RENDER_SCHEMA_VERSION = "m4b-render-v1"
-CHUNKING_SCHEMA_VERSION = "tts-chunks-v4"
-STRUCTURAL_CHUNKING_SCHEMA_VERSION = "tts-chunks-v5"
+GRID_CHUNKING_SCHEMA_VERSION = "grid-v1"
 _NO_PAUSES = Pauses()
 MAX_TTS_SEGMENT_CHARACTERS = 1000
 # Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
@@ -141,7 +140,7 @@ _LexiconRegions: TypeAlias = tuple[tuple[int, int, _Entries], ...]
 
 
 def _break_tiers(pauses: Pauses) -> tuple[str, ...]:
-    """Return enabled pause-policy names for the temporary legacy identity."""
+    """Return enabled pause-policy names for plan-level structure semantics."""
     tiers: list[str] = []
     if pauses.heading_before_ms or pauses.heading_after_ms:
         tiers.append("heading")
@@ -884,7 +883,6 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     next effective speaker before packing, preserving the legacy concatenated
     text without recombining already-bounded packer output.
     """
-    tiers = _break_tiers(pauses)
     result: list[SpeechSegment] = []
     silence: list[int] = []
     for chapter_index, chapter in enumerate(chapters):
@@ -909,7 +907,6 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
             structure=structure,
             spoken=spoken,
             pauses=pauses,
-            tiers=tiers,
             gaps=manual,
             regions=_lexicon_regions(chapter, operations, spoken, grid),
             result=result,
@@ -1251,7 +1248,6 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     structure: StructuralIndex,
     spoken: SpokenForm | None,
     pauses: Pauses,
-    tiers: tuple[str, ...],
     gaps: Mapping[int, int],
     regions: _LexiconRegions,
     result: list[SpeechSegment],
@@ -1297,7 +1293,6 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                 speaker_id=span.character_id,
                 voice_id=voice.id,
                 spoken=spoken,
-                tiers=tiers,
             )
         )
         silence.append(0)
@@ -1484,7 +1479,6 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
                     speaker_id=segment.speaker_id,
                     voice_id=segment.voice_id,
                     spoken=spoken,
-                    tiers=_break_tiers(pauses),
                     selection=(first, last),
                 )
             )
@@ -1640,16 +1634,13 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     speaker_id: str | None = None,
     voice_id: str = "",
     spoken: SpokenForm | None = None,
-    tiers: tuple[str, ...] = (),
     selection: tuple[int, int] | None = None,
 ) -> SpeechSegment:
     content_hash = _hash_utf8(text)
     fields: dict[str, object] = {
         "chapter_id": _string_identity(chapter.id),
         "chunk_index": chunk_index,
-        "chunking_schema": (
-            STRUCTURAL_CHUNKING_SCHEMA_VERSION if tiers else CHUNKING_SCHEMA_VERSION
-        ),
+        "chunking_schema": GRID_CHUNKING_SCHEMA_VERSION,
         "content_hash": content_hash,
         "normalization": NORMALIZATION_SCHEMA_VERSION,
         "ordinal": ordinal,
@@ -1660,18 +1651,14 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
         # chunk. Unclipped segments never acquire this field.
         fields["selection"] = selection
     if speaker_id is not None:
-        # Added only for attributed speech, so single-voice identities -- and
-        # therefore every existing cache entry -- stay byte-identical.
+        # Added only for attributed speech: narration takes its voice from the
+        # plan, while attributed speech must distinguish speaker/cast changes.
         fields["speaker_id"] = _string_identity(speaker_id)
         fields["voice_id"] = _string_identity(voice_id)
-    if tiers:
-        # Added only when a break tier is active, so a plain pipeline's
-        # identities stay byte-identical.
-        fields["structure_schema"] = STRUCTURE_SCHEMA_VERSION
-        fields["break_tiers"] = list(tiers)
     if spoken is not None:
-        # Added only when the stage is active, so a plain pipeline's identities
-        # -- and therefore every existing cache entry -- stay byte-identical.
+        # Added only when the stage is active. Its configuration changes the
+        # synthesis input even where a particular transformed string happens
+        # to compare equal to the canonical text.
         fields.update(
             spoken_identity(
                 numbers=cast("NumberTier", spoken.numbers),
