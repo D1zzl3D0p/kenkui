@@ -183,12 +183,14 @@ Used only when no identity model is configured or the pass fails. These are
 the five rules the identity pass replaces; together with the safety rules they
 pass every check on the six books.
 
-- **Bare titles.** A title used alone folds into its only holder ("Baron" →
-  Vladimir Harkonnen, "General" → Gareth Bryne); with no holder it stays as a
-  role ("the Mayor"); with several it is dropped ("the Duke", held by Leto and
-  later Paul), leaving the attribution model to resolve it per passage. Holders
-  come from both the titles `_clean` strips and those it keeps ("Inspector
-  Borlú").
+- **Bare titles.** A name made only of words from either existing title list
+  (`identity.PREFIX_TITLES` or `spacy_roster._TITLES` — the first lacks baron,
+  duke and count, which the second strips) is a bare title. It folds into its
+  only holder ("Baron" → Vladimir Harkonnen, "Admiral" → Croft); with no holder
+  it stays as a role ("the Mayor"); with several it is dropped ("the Duke", held
+  by Leto and later Paul; "the Count", Fenring and Rabban), leaving the
+  attribution model to resolve it per passage. Holders come from both the titles
+  `_clean` strips and those it keeps ("Inspector Borlú").
 - **Tie rule.** For an untitled bare name with several claimants, claimants
   with under a tenth of the bare name's mentions do not compete ("Paul" beside
   "Paul Atreides" and "Paul Muad'Dib"; "Seldon" beside "Raven Seldon"). Only
@@ -314,6 +316,9 @@ The harness that produced every number is under `evals/attribution/`
   Anne when Elizabeth is absent and Elizabeth otherwise; "the Duke" is Leto, then
   Paul. No fixed roster is right; the attribution model resolves them per
   passage.
+- **Disagreeing runs leave an entry as it is.** On Dune the two identity runs
+  disagreed about "the Duke" (one merged it with Leto, one excluded it), so it
+  stays its own entry and voice on the identity path. Safe, but not fixed.
 - **Small wrong folds in the fallback.** "Master Aybara" into Perrin (father into
   son, same gender); "Mrs Charles Musgrove" into Charles (a wife named by her
   husband's name). The identity pass maps the latter correctly to Mary.
