@@ -445,3 +445,21 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
 
 No behavioral ruling was required and no Task 6 finding is deferred. The
 pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
+
+#### Task 6 review gate
+
+- Independent task-scoped review found two Important defects. A valid leading
+  zero-spoken replacement mapped the first emergency piece past its canonical
+  start, and the punctuation-first fallback omitted typographic ellipsis even
+  though the grid recognizes it as sentence punctuation.
+- Resolved zero-width mapping ambiguity by projecting its shared spoken edge
+  to the canonical start for a lower envelope and the canonical end for an
+  upper envelope. Added a regression for `A -> ""` followed by an expanded
+  `B`, proving exact bounded reconstruction without dropped canonical coverage.
+- Added typographic ellipsis to the punctuation/hyphen fallback class and a
+  separator-free regression proving it cuts after `…` rather than reporting a
+  hard-token cut.
+- Post-fix focused packer/grid/index/import/oracle run -> `64 passed`; Ruff and
+  strict mypy passed for both changed files.
+- No other Critical, Important, or Minor findings were reported; scoped
+  re-review remains required before Task 7.

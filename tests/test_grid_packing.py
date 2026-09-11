@@ -186,6 +186,36 @@ def test_fallback_inside_one_expanded_token_uses_stable_canonical_envelopes() ->
     ]
 
 
+def test_leading_deleted_text_stays_in_first_fallback_canonical_envelope() -> None:
+    """A zero-spoken leading replacement cannot drop its canonical coverage."""
+    canonical = "AB"
+    spoken = "x" * 10
+    budget = 4
+    mappings = (
+        SpokenMapping(0, 1, 0, 0),
+        SpokenMapping(1, 2, 0, len(spoken)),
+    )
+
+    packed = pack_grid(
+        request(canonical, spoken=spoken, mappings=mappings, budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert packed[0].canonical_start == 0
+    assert packed[-1].canonical_end == len(canonical)
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+def test_ellipsis_is_a_punctuation_first_fallback_edge() -> None:
+    """Grid-supported typographic terminal punctuation beats a hard cut."""
+    source = "abcdefgh…ijklmnop"
+
+    packed = pack_grid(request(source, budget=10))
+
+    assert texts(packed, source) == ("abcdefgh…", "ijklmnop")
+    assert packed[0].fallback_cut_after is FallbackCut.PUNCTUATION_OR_HYPHEN
+
+
 def test_ordinary_boundaries_are_grid_or_mandatory_edges() -> None:
     """Only explicitly characterized fallback cuts may land within one leaf."""
     source = "First, clause. Second sentence.\n\nFinal paragraph."

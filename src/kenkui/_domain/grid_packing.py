@@ -19,7 +19,7 @@ from kenkui._domain.grid import LeafRange, StructuralIndex, Unit
 if TYPE_CHECKING:
     from kenkui._domain.paths import Path
 
-_PUNCTUATION_OR_HYPHEN = re.compile(r"[.!?,;:\-\u2010-\u2015][\"'\u2019\u201d)\]]*\s*")
+_PUNCTUATION_OR_HYPHEN = re.compile(r"[.!?,;:\-\u2010-\u2015…][\"'\u2019\u201d)\]]*\s*")
 _WHITESPACE = re.compile(r"\s+")
 _LEVELS = ("paragraph", "line", "sentence", "phrase")
 
@@ -258,6 +258,8 @@ def _spoken_to_canonical(region: SpokenRegion, offset: int, *, upper_edge: bool)
         if offset < mapping.spoken_start:
             return canonical_cursor + offset - spoken_cursor
         if offset <= mapping.spoken_end:
+            if mapping.spoken_start == mapping.spoken_end:
+                return mapping.canonical_end if upper_edge else mapping.canonical_start
             if offset == mapping.spoken_end:
                 return mapping.canonical_end
             return mapping.canonical_end if upper_edge else mapping.canonical_start
