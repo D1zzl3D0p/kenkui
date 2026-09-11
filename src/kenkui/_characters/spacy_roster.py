@@ -50,6 +50,7 @@ from kenkui.observability import get_logger, log_event
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from kenkui._characters.entries import IdentityResolver
     from kenkui._domain.grid import DialogueRange
     from kenkui.inspection import ChapterInspection
 
@@ -1112,6 +1113,7 @@ def infer_roster(
     dialogue: Mapping[str, Sequence[DialogueRange]],
     *,
     pipeline: str = DEFAULT_PIPELINE,
+    identity: IdentityResolver | None = None,
 ) -> tuple[tuple[CharacterProfile, ...], str | None]:
     """Return the whole book's roster and its first-person narrator, if any.
 
@@ -1125,5 +1127,11 @@ def infer_roster(
     signals = collect_signals(chapters, dialogue, pipeline=pipeline)
 
     text = "\n".join(chapter.text for chapter in chapters)
-    entries = _base_entries(signals, text, fallback=True)
+    entries: Sequence[RosterEntry] | None = None
+    if identity is not None:
+        entries = identity.resolve(
+            _base_entries(signals, text, fallback=False), text, signals.mentions
+        )
+    if entries is None:
+        entries = _base_entries(signals, text, fallback=True)
     return _profiles(entries, signals, chapters, dialogue, pipeline)

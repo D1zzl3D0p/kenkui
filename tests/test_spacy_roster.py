@@ -1,5 +1,5 @@
 """Deriving a character roster with spaCy instead of a language model."""
-# ruff: noqa: D102, D103, PLR2004
+# ruff: noqa: D101, D102, D103, PLR2004
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from kenkui._characters import (
     resolve_attribution,
     spacy_roster,
 )
+from kenkui._characters.entries import RosterEntry
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.grid import build_grid, dialogue_ranges
 from kenkui._domain.planning import SpeakerSpan
@@ -279,6 +280,67 @@ class TestFallbackFilters:
             for entry in spacy_roster._base_entries(signals, "", fallback=False)  # noqa: SLF001
         }
         assert names == {"Fremen"}
+
+
+class _MergeAll:
+    def resolve(
+        self,
+        entries: Sequence[RosterEntry],
+        text: str,
+        mentions: Mapping[str, int],
+    ) -> tuple[RosterEntry, ...]:
+        del text, mentions
+        head = max(entries, key=lambda entry: entry.mentions)
+        return (
+            RosterEntry(
+                head.display_name,
+                frozenset().union(*(entry.aliases for entry in entries)),
+                sum(entry.mentions for entry in entries),
+                sum(entry.evidence for entry in entries),
+            ),
+        )
+
+
+class _Fails:
+    def resolve(
+        self,
+        entries: Sequence[RosterEntry],
+        text: str,
+        mentions: Mapping[str, int],
+    ) -> None:
+        del entries, text, mentions
+
+
+class TestIdentityWiring:
+    def test_the_resolver_reshapes_the_roster(self) -> None:
+        chapter = kk.ChapterInspection(
+            id="ch-1",
+            index=0,
+            title="One",
+            speech_characters=len(PASSAGE),
+            text=PASSAGE,
+        )
+        characters, _ = spacy_roster.infer_roster(
+            (chapter,),
+            {"ch-1": dialogue_ranges(build_grid(chapter))},
+            identity=_MergeAll(),
+        )
+        assert len(characters) == 1
+
+    def test_a_failed_pass_falls_back_to_the_rules(self) -> None:
+        chapter = kk.ChapterInspection(
+            id="ch-1",
+            index=0,
+            title="One",
+            speech_characters=len(PASSAGE),
+            text=PASSAGE,
+        )
+        spans = {"ch-1": dialogue_ranges(build_grid(chapter))}
+        with_failure, _ = spacy_roster.infer_roster(
+            (chapter,), spans, identity=_Fails()
+        )
+        offline, _ = spacy_roster.infer_roster((chapter,), spans)
+        assert with_failure == offline
 
 
 class TestSpelling:

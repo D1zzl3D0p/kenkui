@@ -25,6 +25,7 @@ from kenkui._characters.attribution import (
     AttributionCoverage,
     attribute_chapter,
 )
+from kenkui._characters.identity_pass import IDENTITY_REASONING, IdentityPass
 from kenkui._characters.infer import (
     ROLE_PREFIX,
     merge_rosters,
@@ -350,6 +351,8 @@ def _with_current_roster(
     record: AttributionRecord,
     inspection: BookInspection,
     roster_model: str,
+    identity_model_id: str | None = None,
+    client: Client | None = None,
 ) -> AttributionRecord:
     """Re-derive a stored record's genders without re-attributing its quotes.
 
@@ -374,7 +377,14 @@ def _with_current_roster(
         return record
     extracted = _dialogue_by_chapter(inspection.chapters)
     fresh, _ = spacy_roster.infer_roster(
-        inspection.chapters, extracted, pipeline=pipeline
+        inspection.chapters,
+        extracted,
+        pipeline=pipeline,
+        identity=(
+            IdentityPass(identity_model_id, client=client)
+            if identity_model_id
+            else None
+        ),
     )
     genders = {character.id: character.gender for character in fresh}
     characters = tuple(
@@ -428,6 +438,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     model_id: str,
     *,
     roster_model_id: str | None = None,
+    identity_model_id: str | None = None,
     client: Client | None = None,
     cancel: CancellationToken | None = None,
     roster: CharacterRoster | None = None,
@@ -451,7 +462,6 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     path retains its existing cache identity.
     """
     roster_model = roster_model_id or model_id
-    supplied_roster = roster is not None
     if cancel is not None:
         cancel.raise_if_cancelled()
     params: Mapping[str, object] = PARAMS
@@ -471,6 +481,8 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         tuple(chapter.id for chapter in inspection.chapters),
         (PARSER_SCHEMA_VERSION, NORMALIZATION_SCHEMA_VERSION),
         roster_model_id=roster_model,
+        identity_model_id=identity_model_id or "",
+        identity_reasoning=IDENTITY_REASONING if identity_model_id else "",
     )
     cached = store.read_attribution(key)
     if cached is not None:
@@ -479,7 +491,9 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         result = (
             cached
             if roster is not None
-            else _with_current_roster(cached, inspection, roster_model)
+            else _with_current_roster(
+                cached, inspection, roster_model, identity_model_id, client
+            )
         )
         if total:
             _progress(on_progress, cancel, "attribution", total, total)
@@ -491,7 +505,13 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
 
     if roster is None:
         roster = _discover_roster(
-            inspection, extracted, roster_model, client, cancel, on_progress=on_progress
+            inspection,
+            extracted,
+            roster_model,
+            client,
+            cancel,
+            on_progress=on_progress,
+            identity_model_id=identity_model_id,
         )
     characters, narrator_id = roster.characters, roster.narrator_id
 
@@ -504,7 +524,7 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         client=client,
         cancel=cancel,
         on_progress=on_progress,
-        include_aliases=supplied_roster,
+        include_aliases=True,
     )
 
     spans: list[SpeakerSpan] = []
@@ -621,10 +641,11 @@ def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
     return attributed
 
 
-def discover_characters(
+def discover_characters(  # noqa: PLR0913 - explicit model execution inputs
     inspection: BookInspection,
     model_id: str,
     *,
+    identity_model_id: str | None = None,
     client: Client | None = None,
     cancel: CancellationToken | None = None,
     on_progress: Callable[[str, int, int, str | None], None] | None = None,
@@ -632,7 +653,13 @@ def discover_characters(
     """Discover characters without attributing quotes or writing attribution."""
     extracted = _dialogue_by_chapter(inspection.chapters)
     return _discover_roster(
-        inspection, extracted, model_id, client, cancel, on_progress=on_progress
+        inspection,
+        extracted,
+        model_id,
+        client,
+        cancel,
+        on_progress=on_progress,
+        identity_model_id=identity_model_id,
     )
 
 
@@ -644,13 +671,21 @@ def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
     cancel: CancellationToken | None,
     *,
     on_progress: Callable[[str, int, int, str | None], None] | None,
+    identity_model_id: str | None = None,
 ) -> CharacterRoster:
     total = len(inspection.chapters)
     _progress(on_progress, cancel, "characters", 0, total)
     spacy_pipeline = spacy_roster.pipeline_for(model_id)
     if spacy_pipeline is not None:
         characters, narrator_id = spacy_roster.infer_roster(
-            inspection.chapters, extracted, pipeline=spacy_pipeline
+            inspection.chapters,
+            extracted,
+            pipeline=spacy_pipeline,
+            identity=(
+                IdentityPass(identity_model_id, client=client, cancel=cancel)
+                if identity_model_id
+                else None
+            ),
         )
         if total:
             _progress(on_progress, cancel, "characters", total, total)
