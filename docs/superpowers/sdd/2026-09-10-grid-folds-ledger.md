@@ -752,3 +752,19 @@ remains.
 
 Task 10 changes are documentation/measurement fixtures only. Independent
 review is required before the final whole-branch review.
+
+#### Task 10 review gate
+
+- Independent review approved `d01aa6a` with no Critical, Important, or Minor
+  findings. It confirmed the commit contains exactly the ledger and
+  verification artifact, all corpus/boundary/Dune/test arithmetic is
+  internally consistent, representative offsets and classifications match the
+  d72c1e8 baseline, parse failures are individually classified against a base-
+  checkout rerun, and emergency cuts, free space, attribution reuse, and zero
+  deletions are disclosed separately.
+- The reviewer independently reran the full gate: `1580 passed, 46 skipped, 7
+  deselected, 1 warning`; aggregate coverage rounded to 90.08% on that run.
+  Ruff format/check and strict mypy passed. The 0.01-point coverage variation
+  from the recorded 90.07% run does not change the configured 90% outcome.
+
+No Task 10 finding is deferred.
