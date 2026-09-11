@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from kenkui._characters import llm
 from kenkui._characters.llm import _LiteLLMClient, complete_json
 from kenkui.cancellation import CancellationToken
 from kenkui.errors import CancelledError, ErrorCode, ModelError
@@ -67,6 +68,22 @@ def test_litellm_client_disables_reasoning(
     monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
 
     assert _LiteLLMClient().complete("openrouter/test", "prompt") == "answer"
+
+
+def test_a_reasoning_client_sends_its_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def completion(**kwargs: object) -> SimpleNamespace:
+        seen.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))]
+        )
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+    llm.reasoning_client("high").complete("m", "p")
+    assert seen["reasoning_effort"] == "high"
 
 
 SCHEMA = {"items": list}

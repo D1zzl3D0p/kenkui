@@ -56,6 +56,9 @@ class Client(Protocol):
 class _LiteLLMClient:
     """Direct LiteLLM call at fixed parameters."""
 
+    def __init__(self, reasoning_effort: str = "none") -> None:
+        self._reasoning_effort = reasoning_effort
+
     def complete(self, model: str, prompt: str) -> str:
         """Return one completion, imported lazily to keep import cheap."""
         import litellm  # noqa: PLC0415 - heavy, and unused unless casting runs
@@ -67,9 +70,14 @@ class _LiteLLMClient:
             timeout=_REQUEST_TIMEOUT_SECONDS,
             # Reasoning tokens dominated attribution latency; these calls are
             # extraction, not deliberation.
-            reasoning_effort="none",
+            reasoning_effort=self._reasoning_effort,
         )
         return str(response.choices[0].message.content)
+
+
+def reasoning_client(effort: str) -> Client:
+    """Return a provider client with an explicit reasoning effort."""
+    return _LiteLLMClient(reasoning_effort=effort)
 
 
 def _extract_json(raw: str) -> object:
