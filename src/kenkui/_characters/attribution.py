@@ -80,6 +80,7 @@ def _resolve(  # noqa: PLR0911 - one branch per resolution rule, kept flat.
     narrator_id: str | None = None,
     *,
     chapter_id: str | None = None,
+    aliases: Mapping[str, str] | None = None,
 ) -> str | None:
     """Return a known character id, a scoped role id, or None meaning unknown.
 
@@ -106,6 +107,10 @@ def _resolve(  # noqa: PLR0911 - one branch per resolution rule, kept flat.
         return None
     if candidate in known:
         return candidate
+    if aliases:
+        owner = aliases.get(slugify(candidate))
+        if owner is not None:
+            return owner
     if chapter_id is not None:
         # Any answer that is not on the roster is a speaker the roster
         # missed, not a non-answer. A closed vocabulary could not anticipate
@@ -169,6 +174,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         quotes=_escaped(json.dumps(quotes, ensure_ascii=False, indent=2)),
     )
     known = frozenset(character.id for character in characters)
+    aliases = _alias_ids(characters)
     answers = _answers(
         model_id,
         prompt,
@@ -176,6 +182,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         known,
         narrator_id,
         chapter_id=chapter.id,
+        aliases=aliases,
         cancel=cancel,
     )
 
@@ -228,6 +235,7 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     narrator_id: str | None = None,
     *,
     chapter_id: str | None = None,
+    aliases: Mapping[str, str] | None = None,
     cancel: CancellationToken | None = None,
 ) -> dict[int, str | None]:
     """Return quote index to resolved speaker, tolerating a bad response.
@@ -247,6 +255,25 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
         quote_id = item.get("quote_id")
         if isinstance(quote_id, int) and not isinstance(quote_id, bool):
             answers[quote_id] = _resolve(
-                item.get("speaker"), known, narrator_id, chapter_id=chapter_id
+                item.get("speaker"),
+                known,
+                narrator_id,
+                chapter_id=chapter_id,
+                aliases=aliases,
             )
     return answers
+
+
+def _alias_ids(characters: Sequence[CharacterProfile]) -> dict[str, str]:
+    """Map aliases claimed by exactly one character to that character's ID."""
+    owners: dict[str, set[str]] = {}
+    for character in characters:
+        for alias in (*character.aliases, character.display_name):
+            slug = slugify(alias)
+            if slug:
+                owners.setdefault(slug, set()).add(character.id)
+    return {
+        slug: next(iter(character_ids))
+        for slug, character_ids in owners.items()
+        if len(character_ids) == 1
+    }

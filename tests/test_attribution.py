@@ -11,7 +11,7 @@ import pytest
 
 import kenkui as kk
 from kenkui._characters import discover_characters, resolve_attribution, store
-from kenkui._characters.attribution import attribute_chapter
+from kenkui._characters.attribution import _alias_ids, _resolve, attribute_chapter
 from kenkui._characters.infer import normalise_roster, slugify
 from kenkui._characters.models import CharacterRoster
 from kenkui._domain.casting import CharacterProfile
@@ -30,6 +30,46 @@ LINE = QUOTED + TAG
 NARRATION_B = " Nobody answered him."
 TEXT = NARRATION_A + LINE + NARRATION_B
 BOOK = "a" * 64
+
+
+def _profile(character_id: str, *aliases: str) -> CharacterProfile:
+    """Build a compact character profile for alias resolution tests."""
+    return CharacterProfile(
+        id=character_id,
+        display_name=aliases[0],
+        gender=None,
+        spoken_characters=0,
+        chapter_ids=(),
+        aliases=aliases,
+    )
+
+
+def test_an_answer_matching_one_alias_resolves_to_that_character() -> None:
+    """A model may answer with the book's alias rather than the canonical ID."""
+    aliases = _alias_ids([_profile("paul-atreides", "Paul Atreides", "Paul", "Usul")])
+    known = frozenset({"paul-atreides"})
+    assert (
+        _resolve("paul", known, chapter_id="ch-1", aliases=aliases) == "paul-atreides"
+    )
+    assert (
+        _resolve("Usul", known, chapter_id="ch-1", aliases=aliases) == "paul-atreides"
+    )
+
+
+def test_an_alias_two_characters_share_resolves_to_neither() -> None:
+    """An ambiguous alias cannot safely name either claimant."""
+    aliases = _alias_ids(
+        [
+            _profile("charles-hayter", "Charles Hayter", "Charles"),
+            _profile("charles-musgrove", "Charles Musgrove", "Charles"),
+        ]
+    )
+    known = frozenset({"charles-hayter", "charles-musgrove"})
+    assert "charles" not in aliases
+    assert (
+        _resolve("charles", known, chapter_id="ch-1", aliases=aliases)
+        == "role:charles@ch-1"
+    )
 
 
 class ScriptedClient:
