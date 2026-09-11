@@ -12,7 +12,38 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-PROMPT_VERSION = "characters-v5"
+PROMPT_VERSION = "characters-v6"
+
+IDENTITY_PROMPT = """\
+Below is the cast list extracted from a novel. Each numbered entry is one
+character as found so far: the names it appears under, how often it is
+mentioned, and a few short excerpts from the book.
+
+Some entries may be the same individual as another entry under a different
+name: a nickname, a title or epithet used for that one person, a name given to
+them later in the story, or a formal and an informal name.
+
+Return ONLY JSON: {"same_person": [[1, 7], [4, 12, 30]], "not_individuals": [5, 9]}
+
+- Each inner list holds the numbers of entries that are all one individual.
+- List only entries that belong to a group of two or more. Leave everything
+  else out.
+- People who share a surname or a title are different individuals unless the
+  excerpts show otherwise: husband and wife, parent and child, two sisters,
+  two people with the same first name.
+- If you are not sure, leave them out. Merging two different people is much
+  worse than missing a match.
+
+- not_individuals: numbers of entries that are not one individual character at
+  all: a place, a group or a people, an organisation, an object or concept, the
+  title of a book, or a word used to address many different people ("Sire",
+  "my Lord"). A title that names different people at different points in the
+  story ("the Duke") also goes here. Someone known mainly by an epithet or a
+  title held by one person ("the Dragon", "the Emperor", "the Mayor") IS an
+  individual: do not list them. If unsure, do not list it.
+
+ENTRIES
+"""
 
 # The role words that state a gender outright. An innkeeper or a guard may be
 # anyone, and casting them from a gendered pool would be a guess; a woman is a
