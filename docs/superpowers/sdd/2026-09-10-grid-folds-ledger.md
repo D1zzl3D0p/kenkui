@@ -518,5 +518,38 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
 - The delegated implementer exhausted its quota after beginning the integration;
   the primary agent completed and verified this task.
 
+#### Task 7 review repair
+
+- Independent review of `8fa25e7` did not approve the first integration pass.
+  It reported three Important findings and no Critical or Minor findings:
+  whitespace-only packed ranges could be reassembled past the 1,000-character
+  ceiling; selection and billing independently rebuilt the same chapter grid;
+  and the planning oracle invoked the current compiler on both sides instead
+  of remaining independent.
+- Removed post-pack carry/reassembly. Whitespace-only source spans are now
+  assigned to adjacent effective speech before mandatory speaker cuts are
+  formed, so the packer itself bounds the combined text and retains fallback
+  provenance. The 1,200-space regression produces only bounded synthesis
+  segments and preserves the effective `a`, `b` speaker order.
+- Ruling: a canonical span containing only whitespace has no synthesizable
+  speaker. Preserve phase-1 behavior by assigning it to the following
+  effective speech span before packing (or the preceding span at chapter end),
+  rather than emitting an engine-invalid whitespace segment or joining packed
+  results afterward. Over-budget whitespace-only fallback pieces remain
+  omitted exactly as phase 1 omitted whitespace-only chunks.
+- Added an optional prebuilt-grid input to `selected_ranges`; planning passes
+  its cached grid to both selection clipping and billing. The spy now patches
+  both the planning and selection module symbols and compiles from one already
+  materialized inspection, proving one boundary scan per source chapter.
+- Replaced the dynamic legacy-plan observer with literal immutable data
+  captured at `d72c1e8`. The current compiler is observed separately and
+  compared field-for-field for transformed spoken text, segment text, speaker
+  and voice order, canonical/spoken ranges, and effective silences.
+- Post-repair focused planning/selection/oracle/packer run -> `120 passed`;
+  changed-file Ruff format/check and strict mypy passed. Full regression
+  without coverage -> `1577 passed, 46 skipped, 7 deselected, 1 warning in
+  77.33s`.
+
 No semantic difference from phase 1 was accepted beyond the approved packing
-boundary changes. No Task 7 review finding is deferred.
+boundary changes and the whitespace-only ruling above. No Task 7 review finding
+is deferred.

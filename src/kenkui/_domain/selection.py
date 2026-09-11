@@ -44,16 +44,23 @@ def selected_unit(
 
 
 def selected_ranges(
-    chapter: ChapterInspection, patterns: tuple[Pattern, ...]
+    chapter: ChapterInspection,
+    patterns: tuple[Pattern, ...],
+    *,
+    grid: tuple[Unit, ...] | None = None,
 ) -> tuple[tuple[int, int], ...]:
-    """Return disjoint canonical intervals without filling holes between matches."""
+    """Return disjoint canonical intervals without filling holes between matches.
+
+    Planning passes its already-materialized chapter grid so selection, scoped
+    tuning, and billing share one boundary scan. Other callers may omit it.
+    """
     if not patterns:
         return ((0, len(chapter.text)),)
     if not any(
         pattern.get("chapter", Any()).covers(chapter.id, None) for pattern in patterns
     ):
         return ()
-    units = build_grid(chapter)
+    units = build_grid(chapter) if grid is None else grid
     siblings = sibling_counts(units)
     ranges: list[tuple[int, int]] = []
     for unit in units:

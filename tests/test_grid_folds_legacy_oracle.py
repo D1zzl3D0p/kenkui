@@ -9,6 +9,7 @@ from itertools import pairwise
 import pytest
 
 import kenkui as kk
+from kenkui._domain import planning
 from kenkui._domain.grid import (
     DialogueRange,
     GapReason,
@@ -27,16 +28,17 @@ from kenkui._domain.planning import (
 from legacy_grid_folds_oracle import (
     HEADING_AFTER,
     HEADING_BEFORE,
+    LEGACY_PLAN_OBSERVATION,
     LINE,
     PARAGRAPH,
     BreakQualityObservation,
+    PlanObservation,
     QuoteObservation,
     StructureObservation,
     legacy_break_quality,
     legacy_chunks,
     legacy_quote_partition,
     legacy_structure_partition,
-    observe_legacy_plan,
 )
 
 CHAPTER_ID = "ch-v1-oracle"
@@ -274,6 +276,57 @@ def _voice(voice_id: str, fingerprint: str) -> kk.Voice:
     )
 
 
+def _observe_current_plan(
+    pipeline: kk.Pipeline,
+    inspection: kk.BookInspection,
+    narrator: kk.Voice,
+    mira: kk.Voice,
+    spans: tuple[SpeakerSpan, ...],
+) -> PlanObservation:
+    """Expose current planner semantics for comparison with frozen d72c1e8 data."""
+    plan = planning.compile_execution_plan(
+        pipeline,
+        inspection,
+        source_bytes_hash=SOURCE_HASH,
+        resolved_voice=narrator,
+        model_revision=MODEL_REVISION,
+        cast_voices=(mira,),
+        assignments={"mira": "mira-voice"},
+        spans=spans,
+    )
+    spoken = planning.effective_spoken_form(pipeline.operations)
+    pauses = planning._one_operation(pipeline.operations, Pauses) or Pauses()  # noqa: SLF001
+    origins: list[planning._SegmentSource] = []
+    replayed, replayed_silences = planning._compile_segments(  # noqa: SLF001
+        inspection.chapters,
+        spans,
+        plan.cast,
+        spoken,
+        pauses,
+        operations=pipeline.operations,
+        origins=origins,
+    )
+    assert replayed == plan.segments
+    assert replayed_silences == plan.trailing_silence_ms
+
+    spoken_position = 0
+    spoken_ranges: list[tuple[int, int]] = []
+    for segment in plan.segments:
+        spoken_ranges.append((spoken_position, spoken_position + len(segment.text)))
+        spoken_position += len(segment.text)
+    return PlanObservation(
+        spoken_text="".join(segment.text for segment in plan.segments),
+        segment_texts=tuple(segment.text for segment in plan.segments),
+        speakers=tuple(segment.speaker_id for segment in plan.segments),
+        voices=tuple(segment.voice_id for segment in plan.segments),
+        canonical_ranges=tuple(
+            (origin.canonical_start, origin.canonical_end) for origin in origins
+        ),
+        spoken_ranges=tuple(spoken_ranges),
+        effective_silences_ms=plan.trailing_silence_ms,
+    )
+
+
 def test_legacy_planning_observation_freezes_semantic_sequence_and_ranges() -> None:
     """Spoken expansion preserves speakers, voices, source ranges, and gaps."""
     text = 'Chapter IV\n\nHe paid 21%.\n"Wait," Mira said.\n\nTail.'
@@ -302,44 +355,15 @@ def test_legacy_planning_observation_freezes_semantic_sequence_and_ranges() -> N
         .tts()
     )
 
-    observed = observe_legacy_plan(
+    observed = _observe_current_plan(
         pipeline,
         kk.BookInspection(kk.BookMetadata("Oracle", "Fixture"), (chapter,)),
-        source_bytes_hash=SOURCE_HASH,
-        resolved_voice=narrator,
-        model_revision=MODEL_REVISION,
-        cast_voices=(mira,),
-        assignments={"mira": "mira-voice"},
-        spans=spans,
+        narrator,
+        mira,
+        spans,
     )
 
-    assert observed.spoken_text == (
-        'Chapter Four\n\nHe paid twenty-one percent.\n"Wait," Mira said.\n\nTail.'
-    )
-    assert observed.segment_texts == (
-        "Chapter Four\n\n",
-        "He paid twenty-one percent.\n",
-        '"Wait,"',
-        " Mira said.\n\n",
-        "Tail.",
-    )
-    assert observed.speakers == (None, None, "mira", None, None)
-    assert observed.voices == (
-        "narrator",
-        "narrator",
-        "mira-voice",
-        "narrator",
-        "narrator",
-    )
-    assert observed.canonical_ranges == (
-        (0, 12),
-        (12, dialogue_start),
-        (dialogue_start, dialogue_end),
-        (dialogue_end, len(text) - len("Tail.")),
-        (len(text) - len("Tail."), len(text)),
-    )
-    assert observed.spoken_ranges == ((0, 14), (14, 42), (42, 49), (49, 62), (62, 67))
-    assert observed.effective_silences_ms == (500, 100, 0, 300, 0)
+    assert observed == LEGACY_PLAN_OBSERVATION
 
 
 @pytest.mark.parametrize(

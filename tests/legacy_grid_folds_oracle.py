@@ -10,28 +10,12 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from kenkui._domain import planning
 from kenkui._domain.grid import Unit, build_grid
-from kenkui._domain.operations import Operation, Pauses
-from kenkui._domain.planning import SpeakerSpan, compile_execution_plan
 from kenkui._domain.quotes import extract_spans
-from kenkui.inspection import BookInspection, ChapterInspection
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
-    from kenkui.voices import Voice
-
-
-class PipelineIntent(Protocol):
-    """The narrow pipeline surface accepted by the legacy planner."""
-
-    @property
-    def operations(self) -> tuple[Operation, ...]:
-        """Return the pipeline's immutable semantic operations."""
-        ...
+from kenkui.inspection import ChapterInspection
 
 
 class PauseSpec(Protocol):
@@ -171,6 +155,28 @@ class PlanObservation:
     effective_silences_ms: tuple[int, ...]
 
 
+# Captured at d72c1e8 before the production planner switched packers. Keeping
+# this as plain immutable data makes the Task 7 differential independent of
+# whichever compiler implementation is currently imported by the test suite.
+LEGACY_PLAN_OBSERVATION = PlanObservation(
+    spoken_text=(
+        'Chapter Four\n\nHe paid twenty-one percent.\n"Wait," Mira said.\n\nTail.'
+    ),
+    segment_texts=(
+        "Chapter Four\n\n",
+        "He paid twenty-one percent.\n",
+        '"Wait,"',
+        " Mira said.\n\n",
+        "Tail.",
+    ),
+    speakers=(None, None, "mira", None, None),
+    voices=("narrator", "narrator", "mira-voice", "narrator", "narrator"),
+    canonical_ranges=((0, 12), (12, 25), (25, 32), (32, 45), (45, 50)),
+    spoken_ranges=((0, 14), (14, 42), (42, 49), (49, 62), (62, 67)),
+    effective_silences_ms=(500, 100, 0, 300, 0),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BreakQualityObservation:
     """Counts of normal grid-edge breaks and within-leaf emergency cuts."""
@@ -204,81 +210,6 @@ def legacy_chunks(chapter_id: str, text: str) -> tuple[str, ...]:
     """Run the current ``_chunk_span`` policy behind a test-only boundary."""
     chapter = ChapterInspection(chapter_id, 0, "Fixture", len(text), text)
     return planning._chunk_span(chapter, text)  # noqa: SLF001
-
-
-def observe_legacy_plan(  # noqa: PLR0913
-    pipeline: PipelineIntent,
-    inspection: BookInspection,
-    *,
-    source_bytes_hash: str,
-    resolved_voice: Voice,
-    model_revision: str,
-    cast_voices: tuple[Voice, ...] = (),
-    assignments: Mapping[str, str] | None = None,
-    unknown_voice_id: str | None = None,
-    spans: tuple[SpeakerSpan, ...] = (),
-) -> PlanObservation:
-    """Compile and expose the legacy plan's semantic sequence and coordinates.
-
-    The public plan intentionally omits canonical offsets.  A second invocation
-    of the same pure legacy segment compiler asks it for its temporary source
-    records, then verifies those records reproduce the public plan exactly.
-    """
-    plan = compile_execution_plan(
-        pipeline,
-        inspection,
-        source_bytes_hash=source_bytes_hash,
-        resolved_voice=resolved_voice,
-        model_revision=model_revision,
-        cast_voices=cast_voices,
-        assignments=assignments,
-        unknown_voice_id=unknown_voice_id,
-        spans=spans,
-    )
-    spoken = planning.effective_spoken_form(pipeline.operations)
-    if spoken is not None and not plan.cast.narrator.language.lower().startswith("en"):
-        spoken = None
-    pauses = planning._one_operation(pipeline.operations, Pauses) or Pauses()  # noqa: SLF001
-    origins: list[planning._SegmentSource] = []
-    chapters = inspection._planning_chapters or inspection.chapters  # noqa: SLF001
-    replayed, replayed_silences = planning._compile_segments(  # noqa: SLF001
-        chapters,
-        spans,
-        plan.cast,
-        spoken,
-        pauses,
-        operations=pipeline.operations,
-        origins=origins,
-    )
-    assert replayed == plan.segments
-    assert replayed_silences == plan.trailing_silence_ms
-
-    canonical_ranges: list[tuple[int, int]] = []
-    spoken_ranges: list[tuple[int, int]] = []
-    spoken_position = 0
-    for segment, origin in zip(plan.segments, origins, strict=True):
-        canonical_start = origin.start + planning._translated_offset(  # noqa: SLF001
-            origin.offsets, origin.chunk_start, reverse=True
-        )
-        canonical_end = origin.start + planning._translated_offset(  # noqa: SLF001
-            origin.offsets,
-            origin.chunk_end,
-            reverse=True,
-            upper_edge=True,
-        )
-        canonical_ranges.append((canonical_start, canonical_end))
-        spoken_ranges.append((spoken_position, spoken_position + len(segment.text)))
-        spoken_position += len(segment.text)
-
-    return PlanObservation(
-        spoken_text="".join(segment.text for segment in plan.segments),
-        segment_texts=tuple(segment.text for segment in plan.segments),
-        speakers=tuple(segment.speaker_id for segment in plan.segments),
-        voices=tuple(segment.voice_id for segment in plan.segments),
-        canonical_ranges=tuple(canonical_ranges),
-        spoken_ranges=tuple(spoken_ranges),
-        effective_silences_ms=plan.trailing_silence_ms,
-    )
 
 
 def _grid_edge_kind(left: Unit, right: Unit) -> str:

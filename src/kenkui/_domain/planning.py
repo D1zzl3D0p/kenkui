@@ -465,7 +465,8 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     # must describe the book the caller supplied.
     counts = {
         chapter.id: sum(
-            end - start for start, end in selected_ranges(chapter, patterns)
+            end - start
+            for start, end in selected_ranges(chapter, patterns, grid=grids[chapter.id])
         )
         for chapter in inspection.chapters
     }
@@ -874,10 +875,10 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     that existed before attribution.
 
     A piece holding no speakable character is never a segment of its own. Two
-    adjacent quotations are separated by exactly such a piece, and an engine
-    handed pure whitespace returns no samples, which fails the whole render.
-    The text is carried onto the next segment instead, so the partition still
-    reproduces the chapter exactly.
+    adjacent quotations are separated by exactly such a span, and an engine
+    handed pure whitespace returns no samples. Such spans are assigned to the
+    next effective speaker before packing, preserving the legacy concatenated
+    text without recombining already-bounded packer output.
     """
     tiers = _break_tiers(pauses)
     result: list[SpeechSegment] = []
@@ -1089,6 +1090,34 @@ def _owns_canonical_end(packed: tuple[PackedRange, ...], index: int) -> bool:
     )
 
 
+def _absorb_unspeakable_spans(
+    canonical: str, spans: tuple[SpeakerSpan, ...]
+) -> tuple[SpeakerSpan, ...]:
+    """Assign whitespace-only source spans to adjacent effective speech.
+
+    Whitespace has no synthesizable speaker of its own. Phase 1 carried such a
+    run onto the next spoken fragment before chunking; moving its canonical
+    start onto that fragment preserves the same content/voice ordering while
+    letting the grid packer enforce the budget and record every fallback cut.
+    A trailing whitespace-only run belongs to the preceding effective span.
+    """
+    result: list[SpeakerSpan] = []
+    pending_start: int | None = None
+    for span in spans:
+        if not canonical[span.start : span.end].strip():
+            if pending_start is None:
+                pending_start = span.start
+            continue
+        effective = (
+            span if pending_start is None else replace(span, start=pending_start)
+        )
+        pending_start = None
+        result.append(effective)
+    if pending_start is not None and result:
+        result[-1] = replace(result[-1], end=spans[-1].end)
+    return tuple(result)
+
+
 def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     chapter: ChapterInspection,
     spans: tuple[SpeakerSpan, ...],
@@ -1106,6 +1135,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     origins: list[_SegmentSource] | None = None,
 ) -> None:
     """Append one chapter packed over its grid and semantic boundaries."""
+    spans = _absorb_unspeakable_spans(chapter.text, spans)
     cuts = _semantic_cuts(grid, structure, spans, pauses, gaps, regions)
     spoken_regions = _spoken_regions(chapter, spoken, regions, cuts)
     spoken_text = "".join(region.text for region in spoken_regions)
@@ -1122,14 +1152,9 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     reasons_by_offset = {
         unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)
     }
-    carried_spoken_start: int | None = None
-    carried_canonical_start: int | None = None
     for chunk_index, item in enumerate(packed):
         text = spoken_text[item.spoken_start : item.spoken_end]
         if not text.strip():
-            if carried_spoken_start is None:
-                carried_spoken_start = item.spoken_start
-                carried_canonical_start = item.canonical_start
             if _owns_canonical_end(packed, chunk_index):
                 _apply_gap(
                     silence,
@@ -1139,17 +1164,8 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                 )
             continue
 
-        chunk_start = (
-            item.spoken_start if carried_spoken_start is None else carried_spoken_start
-        )
-        canonical_start = (
-            item.canonical_start
-            if carried_canonical_start is None
-            else carried_canonical_start
-        )
-        text = spoken_text[chunk_start : item.spoken_end]
-        carried_spoken_start = None
-        carried_canonical_start = None
+        chunk_start = item.spoken_start
+        canonical_start = item.canonical_start
         span = _span_at(spans, item.canonical_start)
         voice = cast_plan.voice_for(span.character_id)
         result.append(
@@ -1300,7 +1316,10 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
     """
     patterns = selected_patterns(operations)
     by_id = {chapter.id: chapter for chapter in chapters}
-    ranges = {chapter.id: selected_ranges(chapter, patterns) for chapter in chapters}
+    ranges = {
+        chapter.id: selected_ranges(chapter, patterns, grid=grids[chapter.id])
+        for chapter in chapters
+    }
     regions = {
         chapter.id: _lexicon_regions(chapter, operations, spoken, grids[chapter.id])
         for chapter in chapters

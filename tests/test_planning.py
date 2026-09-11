@@ -554,6 +554,37 @@ def test_grid_packing_changes_boundaries_without_changing_spoken_content() -> No
     assert "".join(packed) == "".join(legacy) == text
 
 
+def test_whitespace_only_spans_are_absorbed_before_bounded_packing() -> None:
+    """Unspeakable carries cannot recombine bounded fallback output."""
+    whitespace = " " * 1200
+    text = f"A.{whitespace}B."
+    chapter = _inspection(text=text).chapters[0]
+    first_end = 2
+    second_start = first_end + len(whitespace)
+    spans = (
+        planning.SpeakerSpan(chapter.id, 0, first_end, "a"),
+        planning.SpeakerSpan(chapter.id, first_end, second_start, None),
+        planning.SpeakerSpan(chapter.id, second_start, len(text), "b"),
+    )
+    plan = compile_execution_plan(
+        _pipeline(),
+        kk.BookInspection(kk.BookMetadata("Fixture"), (chapter,)),
+        source_bytes_hash=SOURCE_HASH,
+        resolved_voice=_voice(),
+        model_revision=MODEL_REVISION,
+        cast_voices=(_voice(id="a-voice"), _voice(id="b-voice")),
+        assignments={"a": "a-voice", "b": "b-voice"},
+        spans=spans,
+    )
+
+    assert [segment.speaker_id for segment in plan.segments] == ["a", "b"]
+    assert "".join(segment.text for segment in plan.segments).split() == ["A.", "B."]
+    assert all(
+        len(segment.text) <= planning.MAX_TTS_SEGMENT_CHARACTERS
+        for segment in plan.segments
+    )
+
+
 def test_planning_reports_grid_edges_and_characterized_emergency_cuts() -> None:
     """Ordinary plan boundaries are grid edges; leaf fallbacks stay explicit."""
     ordinary_text = ("Sentence boundary. " * 90).strip()

@@ -12,7 +12,7 @@ import pytest
 import kenkui as kk
 from conftest import CH08_ID, CH09_ID
 from helpers import make_epub, xhtml
-from kenkui._domain import planning
+from kenkui._domain import planning, selection
 from kenkui._domain.grid import build_grid
 from kenkui._domain.operations import SpokenForm
 from kenkui._domain.paths import parse_pattern
@@ -298,8 +298,20 @@ def test_selected_planning_reuses_each_chapter_grid(
         return real_build(chapter)
 
     monkeypatch.setattr(planning, "build_grid", counted)
+    monkeypatch.setattr(selection, "build_grid", counted)
 
-    _plan(selected)
+    checkpoint = selected._resolved  # noqa: SLF001
+    assert checkpoint is not None
+    compile_execution_plan(
+        selected.tts(),
+        inspection,
+        source_bytes_hash=checkpoint.source_hash,
+        resolved_voice=checkpoint.bindings.voice,
+        model_revision=checkpoint.bindings.model_revision,
+        spans=checkpoint.spans,
+        assignments=checkpoint.cast_assignments,
+        cast_voices=checkpoint.bindings.cast_voices,
+    )
 
     assert calls == [chapter.id for chapter in chapters]
 
