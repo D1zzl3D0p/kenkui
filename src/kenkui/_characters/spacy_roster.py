@@ -54,6 +54,10 @@ SPACY_SCHEME = "spacy"
 # reverse.
 DEFAULT_PIPELINE = "en_core_web_lg"
 
+# Curly and modifier apostrophes are one character to a reader but three to a
+# string comparison.
+_APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'"})
+
 # A name must be mentioned this often before any evidence is weighed. Below it,
 # a parse error and a walk-on are indistinguishable.
 MIN_MENTIONS = 3
@@ -508,8 +512,9 @@ def _strip_titles(name: str) -> str:
 
 
 def _clean(name: str) -> str:
-    """Strip surrounding punctuation, the possessive, and honorifics."""
-    cleaned = name.strip().strip(" ,.;:!?-\u2014\u2019'").replace("\u2019s", "")
+    """Fold apostrophes, strip punctuation, the possessive, and honorifics."""
+    name = name.translate(_APOSTROPHES)
+    cleaned = name.strip().strip(" ,.;:!?-—'").replace("'s", "")
     return _strip_titles(cleaned)
 
 
@@ -546,7 +551,7 @@ def _addressed(token: Any) -> bool:  # noqa: ANN401 - a spaCy Token
 
 
 def _proper_noun_spans(doc: Any) -> list[Any]:  # noqa: ANN401 - a spaCy Doc
-    """Group adjacent proper nouns into one name.
+    """Group adjacent proper nouns into one name, across an unspaced hyphen.
 
     Without this, "Padan Fain" becomes two candidates, neither merges, and the
     fullest form -- which is what attribution asks the model to answer with --
@@ -554,13 +559,25 @@ def _proper_noun_spans(doc: Any) -> list[Any]:  # noqa: ANN401 - a spaCy Doc
     """
     spans = []
     start: int | None = None
-    for token in doc:
+    index, length = 0, len(doc)
+    while index < length:
+        token = doc[index]
         if token.pos_ == "PROPN":
             start = token.i if start is None else start
+            index += 1
             continue
-        if start is not None:
-            spans.append(doc[start : token.i])
+        bridge = (
+            start is not None
+            and token.text == "-"
+            and not doc[index - 1].whitespace_
+            and not token.whitespace_
+            and index + 1 < length
+            and doc[index + 1].pos_ == "PROPN"
+        )
+        if not bridge and start is not None:
+            spans.append(doc[start:index])
             start = None
+        index += 1
     if start is not None:
         spans.append(doc[start:])
     return spans

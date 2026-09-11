@@ -56,6 +56,27 @@ Egwene thought of her mother. She missed her.
 """
 
 
+class TestSpelling:
+    """One name, however the typesetter spelled it."""
+
+    def test_apostrophe_variants_clean_to_one_name(self) -> None:
+        clean = spacy_roster._clean  # noqa: SLF001
+        assert clean("Muad‘Dib") == clean("Muad’Dib") == "Muad'Dib"
+
+    def test_hyphenated_names_stay_whole(self) -> None:
+        nlp = spacy_roster._load(spacy_roster.DEFAULT_PIPELINE)  # noqa: SLF001
+        doc = nlp('"Enough," said Feyd-Rautha Harkonnen, and Feyd-Rautha smiled.')
+        spans = [s.text for s in spacy_roster._proper_noun_spans(doc)]  # noqa: SLF001
+        assert "Feyd-Rautha Harkonnen" in spans
+        assert "Rautha Harkonnen" not in spans
+
+    def test_a_spaced_dash_still_separates_names(self) -> None:
+        nlp = spacy_roster._load(spacy_roster.DEFAULT_PIPELINE)  # noqa: SLF001
+        doc = nlp("Paul - Jessica watched him - said nothing.")
+        spans = [s.text for s in spacy_roster._proper_noun_spans(doc)]  # noqa: SLF001
+        assert "Paul - Jessica" not in spans
+
+
 def roster_of(
     text: str, *, pipeline: str = "en_core_web_lg"
 ) -> tuple[tuple[CharacterProfile, ...], str | None]:
