@@ -23,11 +23,11 @@ from kenkui._domain.planning import (
     SpeechSegment,
     compile_execution_plan,
 )
-from kenkui._domain.structure import STRUCTURE_SCHEMA_VERSION
 
 GOLDEN = Path(__file__).parent / "data" / "identity-golden.json"
 SOURCE_HASH = "1" * 64
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
+_LEGACY_STRUCTURE_SCHEMA_VERSION = "epub-structure-v1"
 PARAGRAPH_MS = 250
 _PARAGRAPH_ONE = (
     "It was 100,000 to one. The cello sounded in 1984, and the 3rd "
@@ -171,7 +171,7 @@ def _legacy_segment_id(
         "segment_id_version": "v2",
     }
     if tiers:
-        fields["structure_schema"] = STRUCTURE_SCHEMA_VERSION
+        fields["structure_schema"] = _LEGACY_STRUCTURE_SCHEMA_VERSION
         fields["break_tiers"] = list(tiers)
     identity = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(identity.encode()).hexdigest()[:24]

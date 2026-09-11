@@ -650,3 +650,47 @@ No new semantic ruling was required and no Task 8 finding is deferred.
   undeleted readable legacy cache data, attribution/sidecar compatibility, and
   equal full/preview identities for wholly contained segments. Ruff and strict
   mypy passed.
+
+### Task 9 — Delete legacy partitioning and tighten modules — 2026-09-11
+
+- Deleted the retired `_chunk_span`, `_break_offset`,
+  `_separator_free_end`, `_BREAK_TIERS`, `_CLEAN_BREAK_TIERS`,
+  `MIN_BREAK_FILL`, `MAX_SEPARATOR_FREE_CHARACTERS`, and `POCKET_SEPARATORS`
+  implementation and constants. Also removed the unused `_structural_gaps`,
+  `_pause_pieces`, and `_fragments` transitional helpers.
+- Removed the obsolete structure schema from `SchemaVersions`, plan
+  fingerprint serialization, and `_domain/structure.py`; grid-v1 segment IDs
+  plus effective segment/silence content now carry the applicable semantics.
+- Deleted `tests/legacy_grid_folds_oracle.py`. Compact migration evidence
+  remains as literal d72c1e8 plan values and fixed quote/gap fixtures in the
+  migration test, the identity tests' literal v4/v5 payload reconstruction,
+  and the checked-in break-quality baseline artifact. No test helper executes a
+  retired algorithm.
+- Strengthened the import-boundary test from “no call” to absence of every
+  legacy function/constant definition, and retained AST enforcement that
+  `_domain` never imports `_characters` and planning never imports structural
+  discovery scanners. Direct searches also found no quote/block/line scanner in
+  planning or attribution and no `_characters` import under `_domain`.
+- Replaced remaining tests that referenced retired constants/helpers with
+  direct grid-packer assertions and literal pre-migration boundary measurements.
+  Corpus dialogue comparison now uses the canonical domain scanner directly.
+- Updated `docs/architecture.md` for the one-grid ownership model,
+  transformation-before-fit, hierarchy/fallback behavior, mandatory semantic
+  cuts, whitespace settlement, grid-v1 invalidation, retained legacy cache
+  data, and explicit cache-pruning/free-space choice.
+- Added a narrow mypy override for the lazily imported optional `spacy` package,
+  matching the existing pocket-tts missing-stubs policy without installing the
+  optional runtime. Full strict mypy now passes: `Success: no issues found in
+  157 source files`.
+- Added focused branch coverage for adjacent/trailing unspeakable spans,
+  leading/consecutive/trailing whitespace redistribution, invalid span lookup,
+  and empty gap settlement. Targeted cleanup suite -> `140 passed, 40 skipped`;
+  focused defensive additions -> `20 passed`; full Ruff format/check passed
+  across 194 files.
+- Full project gate -> `1580 passed, 46 skipped, 7 deselected, 1 warning in
+  84.63s`; branch coverage reached 90.11%, clearing the configured 90% floor.
+- The delegated implementer exhausted its quota before producing changes; the
+  primary agent completed and verified the task.
+
+No runtime rollback flag, dormant legacy path, or deferred Task 9 finding
+remains. Independent review is required before Task 10 corpus validation.

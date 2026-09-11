@@ -10,8 +10,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-STRUCTURE_SCHEMA_VERSION = "epub-structure-v1"
-
 _BLOCK = re.compile(r"\n{2,}")
 _NEWLINE = re.compile(r"\n")
 

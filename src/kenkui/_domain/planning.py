@@ -45,7 +45,6 @@ from kenkui._domain.spoken import (
     spoken_identity,
     to_spoken,
 )
-from kenkui._domain.structure import STRUCTURE_SCHEMA_VERSION
 from kenkui._domain.text import NORMALIZATION_VERSION
 from kenkui._domain.tuning import layered_rules, resolve_rules
 from kenkui.errors import (
@@ -72,61 +71,6 @@ RENDER_SCHEMA_VERSION = "m4b-render-v1"
 GRID_CHUNKING_SCHEMA_VERSION = "grid-v1"
 _NO_PAUSES = Pauses()
 MAX_TTS_SEGMENT_CHARACTERS = 1000
-# Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
-# only then packs the pieces into bounded chunks. A run holding none of these is
-# indivisible to it, so an over-long one is generated past the model's own limit
-# and returns as unusable audio. Kenkui splits such a run itself while a natural
-# boundary is still available.
-POCKET_SEPARATORS = ".!?,;:"
-# Calibrated against the engine's own tokenizer over three full books, counting
-# the way it does (newlines collapse to spaces before tokenizing). English prose
-# runs about 2.8-3.2 characters per token, not the one-token-per-character worst
-# case a previous value assumed: at 200 characters the worst separator-free run
-# measured 70-104 tokens, and only 31-126 runs per whole book exceeded the
-# engine's 50-token limit at all.
-#
-# That limit is softer than it looks. Transcribing synthesized runs with Whisper
-# puts word loss at zero through 80 tokens -- 60% past the limit -- and at 0.4%
-# through 150, rising to 3% only beyond that. 200 characters holds every book
-# measured inside the zero-loss band, while leaving the guard able to divide the
-# genuinely pathological runs that reach 207 tokens without it.
-#
-# The earlier value of 48 held every run under the limit and cost 78-86% of all
-# segments a cut mid-clause, which the engine then spoke as a finished sentence.
-# 150 is the conservative alternative: about 4% more segments for a slightly
-# tighter token tail.
-MAX_SEPARATOR_FREE_CHARACTERS = 200
-# Break points ranked by how natural the resulting pause sounds. Each tier keeps
-# its separator in the preceding chunk so joining stays exact.
-_BREAK_TIERS = (
-    r"\n\s*",
-    r"[.!?][\"')\]]*\s+|[,;:][\"')\]]*\s+",
-    r"\s+",
-    r"[-\u2010-\u2015]",
-)
-# The subset of _BREAK_TIERS whose cut leaves the preceding fragment ending in
-# punctuation or a line break. Pocket-TTS's prepare_text_prompt appends a full
-# stop to any input ending alphanumeric, and every segment is its own
-# generate_audio call, so a cut on the bare-whitespace tier is synthesized as a
-# completed sentence -- an audible break mid-clause. Its own splitter never
-# does this: it cuts on ".!?" or ",;:" and keeps the separator, so its
-# fragments always end in punctuation and the stop is never appended.
-#
-# A forced cut may therefore use every tier except bare whitespace. Where none
-# of these is available the run is left whole and the engine packs it
-# internally, which measured at zero word loss below 80 tokens.
-_CLEAN_BREAK_TIERS = (
-    r"\n\s*",
-    r"[.!?][\"')\]]*\s+|[,;:][\"')\]]*\s+",
-    r"[-\u2010-\u2015]",
-)
-# A better boundary is only worth taking when it still fills the window. Without
-# this, one early line break would strand a nearly empty chunk and multiply the
-# per-segment synthesis overhead across a book. Measured over one 594k-character
-# book, the share of breaks landing on a line break or clause boundary moves only
-# from 71% to 64% across fills of 0.5 to 0.8, while segment count falls 1211 to
-# 987, so the middle of that range buys most of the quality for less overhead.
-MIN_BREAK_FILL = 0.7
 _SEGMENT_ID_VERSION = "v2"
 _UTF8_HASH_CHUNK_CHARACTERS = 64 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -137,18 +81,6 @@ _Entries: TypeAlias = tuple[tuple[str, str], ...]
 # entries). Empty means no scoped lexicon exists and the whole chapter speaks
 # under ``SpokenForm.lexicon``, which is the pre-tuning path exactly.
 _LexiconRegions: TypeAlias = tuple[tuple[int, int, _Entries], ...]
-
-
-def _break_tiers(pauses: Pauses) -> tuple[str, ...]:
-    """Return enabled pause-policy names for plan-level structure semantics."""
-    tiers: list[str] = []
-    if pauses.heading_before_ms or pauses.heading_after_ms:
-        tiers.append("heading")
-    if pauses.paragraph_ms:
-        tiers.append("paragraph")
-    if pauses.line_ms:
-        tiers.append("line")
-    return tuple(sorted(tiers))
 
 
 def _gap_ms(reasons: GapReason, pauses: Pauses) -> int:
@@ -221,7 +153,6 @@ class SchemaVersions:
     planning: str
     render: str
     spoken_form: str | None = None
-    structure: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -494,7 +425,6 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         planning=PLANNING_SCHEMA_VERSION,
         render=RENDER_SCHEMA_VERSION,
         spoken_form=SPOKEN_FORM_VERSION if spoken is not None else None,
-        structure=STRUCTURE_SCHEMA_VERSION if _break_tiers(pauses) else None,
     )
     material = _PlanMaterial(
         schemas,
@@ -925,69 +855,6 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     return tuple(result), tuple(silence)
 
 
-def _structural_gaps(
-    grid: tuple[Unit, ...], structure: StructuralIndex
-) -> tuple[tuple[int, GapReason], ...]:
-    """Return every canonical line/paragraph/chapter gap from the grid."""
-    boundaries = GapReason.LINE | GapReason.PARAGRAPH | GapReason.CHAPTER
-    return tuple(
-        (unit.end, reasons)
-        for unit, reasons in zip(grid, structure.gaps, strict=True)
-        if reasons & boundaries
-    )
-
-
-def _pause_pieces(
-    grid: tuple[Unit, ...], structure: StructuralIndex, pauses: Pauses
-) -> tuple[tuple[int, int, GapReason], ...]:
-    """Turn already-discovered gaps into current chunker inputs.
-
-    The pure gap set never changes. Until the hierarchical packer lands, a
-    non-zero derived silence is a semantic mandatory cut around the legacy
-    chunker; changing one enabled duration does not alter that cut.
-    """
-    pieces: list[tuple[int, int, GapReason]] = []
-    start = 0
-    for end, reasons in _structural_gaps(grid, structure):
-        final = GapReason.CHAPTER in reasons
-        if final or _gap_enabled(reasons, pauses):
-            pieces.append((start, end, GapReason.NONE if final else reasons))
-            start = end
-    return tuple(pieces)
-
-
-def _fragments(
-    pieces: tuple[tuple[int, int, GapReason], ...],
-    span: SpeakerSpan,
-    gaps: Mapping[int, int],
-) -> tuple[tuple[int, int, GapReason, int | None], ...]:
-    """Clip chapter pieces to one span, keeping a gap only where a piece ends.
-
-    A fragment that stops early stops because the speaker changed, which is
-    not a structural boundary and carries no silence of its own. A declared
-    silence is such a boundary: cutting the fragment there is what gives the
-    gap a segment to land on.
-    """
-    out: list[tuple[int, int, GapReason, int | None]] = []
-    for start, end, reasons in pieces:
-        lower, upper = max(start, span.start), min(end, span.end)
-        if lower >= upper:
-            continue
-        position = lower
-        for cut in [offset for offset in sorted(gaps) if lower < offset < upper]:
-            out.append((position, cut, GapReason.NONE, gaps[cut]))
-            position = cut
-        out.append(
-            (
-                position,
-                upper,
-                reasons if upper == end else GapReason.NONE,
-                gaps.get(upper),
-            )
-        )
-    return tuple(out)
-
-
 def _semantic_cuts(  # noqa: PLR0913, PLR0917 - complete semantic boundary set.
     grid: tuple[Unit, ...],
     spans: tuple[SpeakerSpan, ...],
@@ -1277,9 +1144,6 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     emitted: list[PackedRange] = []
     for chunk_index, item in enumerate(packed):
         text = spoken_text[item.spoken_start : item.spoken_end]
-        if not text.strip():
-            continue
-
         chunk_start = item.spoken_start
         canonical_start = item.canonical_start
         span = _span_at(spans, item.canonical_start)
@@ -1549,82 +1413,6 @@ def _spans_for(
     return ordered
 
 
-def _break_offset(
-    text: str, start: int, stop: int, tiers: tuple[str, ...] = _BREAK_TIERS
-) -> int:
-    """Offset past the best boundary in ``text[start:stop]``, or 0 when none fits."""
-    window = text[start:stop]
-    if not window:
-        return 0
-    threshold = len(window) * MIN_BREAK_FILL
-    fullest = 0
-    for pattern in tiers:
-        offsets = [match.end() for match in re.finditer(pattern, window)]
-        if not offsets:
-            continue
-        best = offsets[-1]
-        if best >= threshold:
-            return best
-        fullest = max(fullest, best)
-    return fullest
-
-
-def _separator_free_end(text: str, start: int, stop: int) -> int:
-    """Return where a run the engine cannot divide outgrows its chunk budget."""
-    run_start = start
-    for index in range(start, stop):
-        if text[index] in POCKET_SEPARATORS:
-            run_start = index + 1
-        elif index - run_start >= MAX_SEPARATOR_FREE_CHARACTERS:
-            return index
-    return stop
-
-
-def _chunk_span(chapter: ChapterInspection, text: str) -> tuple[str, ...]:
-    """Apply the current chunking policy to one speaker fragment.
-
-    The chapter is still validated as a whole, because speech_characters
-    describes the chapter and not the span.
-    """
-    if (
-        not chapter.text
-        or chapter.speech_characters is None
-        or chapter.speech_characters != len(chapter.text)
-        or not text
-    ):
-        raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        hard_end = min(start + MAX_TTS_SEGMENT_CHARACTERS, len(text))
-        end = hard_end
-        if hard_end < len(text):
-            # A clean boundary first, for the same reason the forced cut below
-            # insists on one. Unlike that cut this one cannot be declined --
-            # the character bound has to hold -- so bare whitespace remains the
-            # fallback for a window holding no punctuation at all.
-            offset = _break_offset(
-                text, start, hard_end, _CLEAN_BREAK_TIERS
-            ) or _break_offset(text, start, hard_end)
-            if offset:
-                end = start + offset
-        budget_end = _separator_free_end(text, start, hard_end)
-        if budget_end < end:
-            # Cutting needs a boundary that leaves punctuation behind. A bare
-            # whitespace cut would render as a completed sentence, so where no
-            # clean boundary exists the run is left for the engine to pack.
-            forced = _break_offset(text, start, budget_end, _CLEAN_BREAK_TIERS)
-            if forced:
-                end = start + forced
-        if end <= start:  # Defensive hard fallback for arbitrarily long tokens.
-            end = hard_end
-        chunks.append(text[start:end])
-        start = end
-    if not chunks or any(not chunk for chunk in chunks) or "".join(chunks) != text:
-        raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    return tuple(chunks)
-
-
 def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     chapter: ChapterInspection,
     ordinal: int,
@@ -1751,8 +1539,6 @@ def _fingerprint(material: _PlanMaterial) -> str:
         "planning": schemas.planning,
         "render": schemas.render,
     }
-    if schemas.structure is not None:
-        schema_versions["structure"] = schemas.structure
     if schemas.spoken_form is not None:
         # Present only when the stage is active. Emitting an explicit null
         # would change the canonical JSON -- and so the fingerprint -- for

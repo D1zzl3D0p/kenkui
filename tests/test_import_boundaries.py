@@ -108,13 +108,32 @@ def test_planning_never_imports_structural_discovery() -> None:
     assert imported.isdisjoint(forbidden)
 
 
-def test_planning_never_calls_the_legacy_chunker() -> None:
-    """The temporary oracle definition cannot remain a production runtime path."""
+def test_planning_contains_no_legacy_chunker_symbols() -> None:
+    """No dormant function, ladder, or tuning constant survives the migration."""
     path = _SOURCE / "_domain" / "planning.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    calls = {
-        node.func.id
+    names = {
+        node.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert "_chunk_span" not in calls
+    names.update(
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            (*node.targets,) if isinstance(node, ast.Assign) else (node.target,)
+        )
+        if isinstance(target, ast.Name)
+    )
+    forbidden = {
+        "_chunk_span",
+        "_break_offset",
+        "_separator_free_end",
+        "_BREAK_TIERS",
+        "_CLEAN_BREAK_TIERS",
+        "MIN_BREAK_FILL",
+        "MAX_SEPARATOR_FREE_CHARACTERS",
+        "POCKET_SEPARATORS",
+    }
+    assert names.isdisjoint(forbidden)

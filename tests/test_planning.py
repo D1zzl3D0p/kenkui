@@ -12,8 +12,9 @@ import pytest
 
 import kenkui as kk
 from kenkui._domain import planning
-from kenkui._domain.grid import build_grid
-from kenkui._domain.grid_packing import FallbackCut
+from kenkui._domain.grid import GapReason, build_grid
+from kenkui._domain.grid_packing import FallbackCut, PackedRange
+from kenkui._domain.operations import Pauses
 from kenkui._domain.planning import (
     NORMALIZATION_SCHEMA_VERSION,
     PARSER_SCHEMA_VERSION,
@@ -23,7 +24,6 @@ from kenkui._domain.planning import (
     ExecutionPlan,
     compile_execution_plan,
 )
-from legacy_grid_folds_oracle import legacy_chunks
 
 SOURCE_HASH = "1" * 64
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
@@ -384,14 +384,6 @@ def _chunks(text: str) -> list[str]:
     return [segment.text for segment in plan.segments]
 
 
-def _worst_separator_free_run(text: str) -> int:
-    longest = run = 0
-    for character in text:
-        run = 0 if character in planning.POCKET_SEPARATORS else run + 1
-        longest = max(longest, run)
-    return longest
-
-
 def test_separator_free_runs_are_split_at_line_breaks() -> None:
     """A contents page has no separator Pocket-TTS can divide, so Kenkui divides it."""
     text = "Contents\n\n" + "\n\n".join(f"Chapter {index}" for index in range(120))
@@ -486,8 +478,7 @@ def test_unbroken_token_keeps_the_character_bound() -> None:
 def test_line_break_is_preferred_over_a_later_space() -> None:
     """A line break is the strongest boundary, so a full-enough one wins."""
     sentence = "Sentence one. "
-    fill = planning.MAX_TTS_SEGMENT_CHARACTERS * planning.MIN_BREAK_FILL
-    head = sentence * (int(fill // len(sentence)) + 1)
+    head = sentence * 51
     text = head + "\n\n" + "Sentence two. " * 43
     chunks = _chunks(text)
 
@@ -545,13 +536,12 @@ def test_grid_packing_changes_boundaries_without_changing_spoken_content() -> No
     """The hierarchy may improve cuts while preserving the exact speech stream."""
     paragraph = "Alpha sentence. " * 40
     text = f"{paragraph}\n\n{paragraph}"
-    legacy = legacy_chunks("ch-v1-one", text)
     packed = tuple(_chunks(text))
 
-    assert packed != legacy
-    assert [len(chunk) for chunk in legacy] == [994, 288]
+    legacy_lengths = [994, 288]
+    assert [len(chunk) for chunk in packed] != legacy_lengths
     assert [len(chunk) for chunk in packed] == [642, 640]
-    assert "".join(packed) == "".join(legacy) == text
+    assert "".join(packed) == text
 
 
 def test_whitespace_only_spans_are_absorbed_before_bounded_packing() -> None:
@@ -658,6 +648,70 @@ def test_zero_gap_on_unspeakable_span_keeps_text_and_identity() -> None:
     assert [segment.text for segment in plain_plan.segments] == ['"A."', ' "B."']
     assert zero_plan.segments == plain_plan.segments
     assert zero_plan.trailing_silence_ms == plain_plan.trailing_silence_ms == (0, 0)
+
+
+def test_unspeakable_span_helpers_cover_adjacent_and_trailing_runs() -> None:
+    """Adjacent whitespace spans coalesce and trailing space stays synthesizable."""
+    text = '"A."  "B."'
+    chapter = _inspection(text=text).chapters[0]
+    spans = (
+        planning.SpeakerSpan(chapter.id, 0, 4, "a"),
+        planning.SpeakerSpan(chapter.id, 4, 5, None),
+        planning.SpeakerSpan(chapter.id, 5, 6, None),
+        planning.SpeakerSpan(chapter.id, 6, len(text), "b"),
+    )
+
+    assert planning._unspeakable_ranges(  # noqa: SLF001
+        text, spans, build_grid(chapter)
+    ) == ((4, 6),)
+    assert planning._absorb_unspeakable_spans(text, spans) == (  # noqa: SLF001
+        spans[0],
+        replace(spans[-1], start=4),
+    )
+
+    trailing = '"A." '
+    trailing_spans = (
+        planning.SpeakerSpan(chapter.id, 0, 4, "a"),
+        planning.SpeakerSpan(chapter.id, 4, 5, None),
+    )
+    assert planning._absorb_unspeakable_spans(  # noqa: SLF001
+        trailing, trailing_spans
+    ) == (replace(trailing_spans[0], end=5),)
+
+
+def test_unspeakable_range_redistribution_handles_edge_and_adjacent_runs() -> None:
+    """Leading, consecutive, and trailing whitespace ranges attach deterministically."""
+    ranges = (
+        PackedRange(0, 1, 0, 1),
+        PackedRange(1, 2, 1, 2, FallbackCut.WHITESPACE),
+        PackedRange(2, 3, 2, 3, FallbackCut.WHITESPACE),
+        PackedRange(3, 4, 3, 4),
+    )
+    assert planning._redistribute_unspeakable_ranges(  # noqa: SLF001
+        ranges, "A  B", ()
+    ) == (ranges[0], replace(ranges[-1], canonical_start=1, spoken_start=1))
+
+    assert (
+        planning._redistribute_unspeakable_ranges(  # noqa: SLF001
+            ranges[1:], "A  B", ()
+        )
+        == (replace(ranges[-1], canonical_start=1, spoken_start=1),)
+    )
+    assert (
+        planning._redistribute_unspeakable_ranges(  # noqa: SLF001
+            ranges[:3], "A  ", ()
+        )
+        == (replace(ranges[0], canonical_end=3, spoken_end=3),)
+    )
+
+
+def test_invalid_span_lookup_and_empty_gap_target_fail_safely() -> None:
+    """Private defensive seams retain stable empty-speech behavior."""
+    span = planning.SpeakerSpan("chapter", 1, 2, None)
+    with pytest.raises(kk.ValidationError) as caught:
+        planning._span_at((span,), 0)  # noqa: SLF001
+    assert caught.value.code is kk.ErrorCode.EMPTY_SPEECH
+    planning._apply_gap([], GapReason.LINE, Pauses(line_ms=1), None)  # noqa: SLF001
 
 
 def test_planning_reports_grid_edges_and_characterized_emergency_cuts() -> None:

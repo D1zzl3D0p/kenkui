@@ -19,9 +19,9 @@ from kenkui._domain.grid import (
     unit_text,
 )
 from kenkui._domain.paths import Path as GridPath
+from kenkui._domain.quotes import extract_spans
 from kenkui.api import book
 from kenkui.errors import SourceError
-from legacy_grid_folds_oracle import legacy_quote_partition
 
 LIBRARY = FilePath("/Users/dizzler/Projects/Calibre Library")
 
@@ -51,8 +51,8 @@ def test_grid_partitions_every_chapter_exactly(epub: FilePath) -> None:
             (span.start, span.end) for span in dialogue_ranges(units)
         ) == tuple(
             (span.start, span.end)
-            for span in legacy_quote_partition(chapter.id, chapter.text)
-            if span.dialogue
+            for span in extract_spans(chapter.id, chapter.text)
+            if span.is_dialogue
         ), f"{epub.stem} / {chapter.id}"
         index = build_structure_index(units)
         assert index == build_structure_index(tuple(units))
