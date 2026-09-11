@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import pairwise
@@ -1088,14 +1088,6 @@ def _span_at(spans: tuple[SpeakerSpan, ...], offset: int) -> SpeakerSpan:
     return spans[index]
 
 
-def _owns_canonical_end(packed: tuple[PackedRange, ...], index: int) -> bool:
-    """Whether this packed item, rather than an overlapping fallback, owns its end."""
-    return (
-        index + 1 == len(packed)
-        or packed[index + 1].canonical_start >= packed[index].canonical_end
-    )
-
-
 def _absorb_unspeakable_spans(
     canonical: str, spans: tuple[SpeakerSpan, ...]
 ) -> tuple[SpeakerSpan, ...]:
@@ -1124,25 +1116,45 @@ def _absorb_unspeakable_spans(
     return tuple(result)
 
 
-def _settle_unspeakable_gaps(
+def _unspeakable_ranges(
     canonical: str,
     spans: tuple[SpeakerSpan, ...],
-    gaps: Mapping[int, int],
+    grid: tuple[Unit, ...],
+) -> tuple[tuple[int, int], ...]:
+    """Return coalesced canonical runs that cannot produce speech."""
+    candidates = sorted(
+        {
+            (start, end)
+            for start, end in (
+                *((span.start, span.end) for span in spans),
+                *((unit.start, unit.end) for unit in grid),
+            )
+            if not canonical[start:end].strip()
+        }
+    )
+    result: list[tuple[int, int]] = []
+    for start, end in candidates:
+        if result and start <= result[-1][1]:
+            result[-1] = (result[-1][0], max(result[-1][1], end))
+        else:
+            result.append((start, end))
+    return tuple(result)
+
+
+def _settle_unspeakable_gaps(
+    unspeakable: tuple[tuple[int, int], ...], gaps: Mapping[int, int]
 ) -> dict[int, int]:
     """Move gaps inside inaudible spans to the preceding effective boundary."""
     settled = dict(gaps)
-    for span in spans:
-        if canonical[span.start : span.end].strip():
-            continue
-        offsets = sorted(edge for edge in settled if span.start < edge <= span.end)
+    for start, end in unspeakable:
+        offsets = sorted(edge for edge in settled if start < edge <= end)
         for edge in offsets:
-            settled[span.start] = settled.pop(edge)
+            settled[start] = settled.pop(edge)
     return settled
 
 
 def _settle_unspeakable_reasons(
-    canonical: str,
-    spans: tuple[SpeakerSpan, ...],
+    unspeakable: tuple[tuple[int, int], ...],
     grid: tuple[Unit, ...],
     structure: StructuralIndex,
 ) -> dict[int, GapReason]:
@@ -1150,14 +1162,10 @@ def _settle_unspeakable_reasons(
     settled = {
         unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)
     }
-    for span in spans:
-        if canonical[span.start : span.end].strip():
-            continue
-        offsets = sorted(edge for edge in settled if span.start < edge <= span.end)
+    for start, end in unspeakable:
+        offsets = sorted(edge for edge in settled if start < edge <= end)
         for edge in offsets:
-            settled[span.start] = settled.get(span.start, GapReason.NONE) | settled.pop(
-                edge
-            )
+            settled[start] = settled.get(start, GapReason.NONE) | settled.pop(edge)
     return settled
 
 
@@ -1251,10 +1259,9 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     origins: list[_SegmentSource] | None = None,
 ) -> None:
     """Append one chapter packed over its grid and semantic boundaries."""
-    gaps = _settle_unspeakable_gaps(chapter.text, spans, gaps)
-    reasons_by_offset = _settle_unspeakable_reasons(
-        chapter.text, spans, grid, structure
-    )
+    unspeakable = _unspeakable_ranges(chapter.text, spans, grid)
+    gaps = _settle_unspeakable_gaps(unspeakable, gaps)
+    reasons_by_offset = _settle_unspeakable_reasons(unspeakable, grid, structure)
     spans = _absorb_unspeakable_spans(chapter.text, spans)
     cuts = _semantic_cuts(grid, spans, pauses, gaps, reasons_by_offset, regions)
     spoken_regions = _spoken_regions(chapter, spoken, regions, cuts)
@@ -1270,16 +1277,11 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     )
     source_offsets = _global_offsets(spoken_regions)
     packed = _redistribute_unspeakable_ranges(packed, spoken_text, source_offsets)
+    chapter_segment_start = len(result)
+    emitted: list[PackedRange] = []
     for chunk_index, item in enumerate(packed):
         text = spoken_text[item.spoken_start : item.spoken_end]
         if not text.strip():
-            if _owns_canonical_end(packed, chunk_index):
-                _apply_gap(
-                    silence,
-                    reasons_by_offset.get(item.canonical_end, GapReason.NONE),
-                    pauses,
-                    gaps.get(item.canonical_end),
-                )
             continue
 
         chunk_start = item.spoken_start
@@ -1299,6 +1301,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
             )
         )
         silence.append(0)
+        emitted.append(item)
         if origins is not None:
             origins.append(
                 _SegmentSource(
@@ -1314,12 +1317,16 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
                     item.fallback_cut_after,
                 )
             )
-        if _owns_canonical_end(packed, chunk_index):
-            _apply_gap(
+    starts = [item.canonical_start for item in emitted]
+    for offset in sorted(reasons_by_offset.keys() | gaps.keys()):
+        owner = bisect_left(starts, offset) - 1
+        if owner >= 0:
+            _apply_gap_at(
                 silence,
-                reasons_by_offset.get(item.canonical_end, GapReason.NONE),
+                chapter_segment_start + owner,
+                reasons_by_offset.get(offset, GapReason.NONE),
                 pauses,
-                gaps.get(item.canonical_end),
+                gaps.get(offset),
             )
 
 
@@ -1518,8 +1525,19 @@ def _apply_gap(
     """
     if not silence:
         return
-    silence[-1] = (
-        manual if manual is not None else max(silence[-1], _gap_ms(reasons, pauses))
+    _apply_gap_at(silence, len(silence) - 1, reasons, pauses, manual)
+
+
+def _apply_gap_at(
+    silence: list[int],
+    index: int,
+    reasons: GapReason,
+    pauses: Pauses,
+    manual: int | None,
+) -> None:
+    """Settle one effective gap onto an explicit preceding segment."""
+    silence[index] = (
+        manual if manual is not None else max(silence[index], _gap_ms(reasons, pauses))
     )
 
 

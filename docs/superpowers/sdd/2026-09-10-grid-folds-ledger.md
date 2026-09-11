@@ -567,6 +567,21 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
   and proves exactly one grid plus one index build per materialized chapter.
 - Second repair focused run -> `121 passed`; changed-file Ruff and strict mypy
   passed.
+- The broad regression exposed two pre-existing Script parity cases not present
+  in the narrower run: without attribution spans, a whitespace grid leaf still
+  owns manual gap settlement. Unspeakable normalization now uses the union of
+  whitespace-only speaker spans and whitespace-only grid leaves; all three
+  300/zero/absent gap cases pass again.
+- The second re-review then found one remaining Important case: redistributing
+  a 1,200-space run extended the preceding range beyond the normalized gap, so
+  end-keyed gap attachment lost a non-zero manual silence. Gap ownership is now
+  determined after redistribution from the last emitted range whose canonical
+  start precedes the effective gap. The exact long-whitespace regression proves
+  full reconstruction, 208/1,000 bounded segment lengths, stable segment IDs,
+  contiguous origins, `WHITESPACE` provenance, and `(900, 0)` effective
+  silence with a manual gap.
+- Third repair focused planning/multi-voice/tuning/selection/identity/script/
+  packer/oracle run -> `204 passed`; changed-file Ruff and strict mypy passed.
 
 No semantic difference from phase 1 was accepted beyond the approved packing
 boundary changes and the whitespace-only ruling above. No Task 7 review finding

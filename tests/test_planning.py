@@ -557,9 +557,9 @@ def test_grid_packing_changes_boundaries_without_changing_spoken_content() -> No
 def test_whitespace_only_spans_are_absorbed_before_bounded_packing() -> None:
     """Unspeakable carries cannot recombine bounded fallback output."""
     whitespace = " " * 1200
-    text = f"A.{whitespace}B."
+    text = f'"A."{whitespace}"B."'
     chapter = _inspection(text=text).chapters[0]
-    first_end = 2
+    first_end = 4
     second_start = first_end + len(whitespace)
     spans = (
         planning.SpeakerSpan(chapter.id, 0, first_end, "a"),
@@ -589,10 +589,29 @@ def test_whitespace_only_spans_are_absorbed_before_bounded_packing() -> None:
     )
     assert replayed == plan.segments
     assert [(item.canonical_start, item.canonical_end) for item in origins] == [
-        (0, 204),
-        (204, len(text)),
+        (0, 208),
+        (208, len(text)),
     ]
     assert origins[0].fallback_cut_after is FallbackCut.WHITESPACE
+
+    with_gap = compile_execution_plan(
+        kk.epub("book.epub")
+        .silence(
+            900,
+            where={"chapter": chapter.id, "sentence": 1, "phrase": 2},
+        )
+        .assign_voice("fixture")
+        .tts(),
+        kk.BookInspection(kk.BookMetadata("Fixture"), (chapter,)),
+        source_bytes_hash=SOURCE_HASH,
+        resolved_voice=_voice(),
+        model_revision=MODEL_REVISION,
+        cast_voices=(_voice(id="a-voice"), _voice(id="b-voice")),
+        assignments={"a": "a-voice", "b": "b-voice"},
+        spans=spans,
+    )
+    assert with_gap.segments == plan.segments
+    assert with_gap.trailing_silence_ms == (900, 0)
 
 
 def test_zero_gap_on_unspeakable_span_keeps_text_and_identity() -> None:
