@@ -1,6 +1,9 @@
 # Coreference and Gender — Design
 
-**Status:** Approved for implementation planning on 2026-09-10.
+**Status:** Superseded on 2026-09-11 by `2026-09-11-roster-identity-design.md`.
+Measurement showed the dominant defects were over-merge bugs in the roster
+(`identity.same_person`, title stripping), not unmergeable aliases. Kept for
+the record of how the investigation started.
 
 **Relates to:** `2026-08-27-character-identification-design.md` (defect 3,
 "coreference under-merges"), `2026-09-05-chunking-and-gender-fixes.md`

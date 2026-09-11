@@ -1,5 +1,9 @@
 # Coreference and Gender Measurement Implementation Plan
 
+> **Superseded on 2026-09-11** by `docs/superpowers/specs/2026-09-11-roster-identity-design.md`.
+> Do not execute. The measurement it planned was carried out in `evals/attribution/`
+> (roster_* scripts) and changed the design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make both defects measurable — one person getting several voices, and a
