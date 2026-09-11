@@ -120,6 +120,112 @@ class TestSignals:
         assert "A" not in signals.mentions
 
 
+def signals_with(
+    mentions: Mapping[str, int],
+    *,
+    gender: Mapping[str, Mapping[str, int]] | None = None,
+    title_hosts: Mapping[str, Mapping[str, int]] | None = None,
+) -> spacy_roster._Signals:  # noqa: SLF001
+    signals = spacy_roster._Signals()  # noqa: SLF001
+    signals.mentions.update(mentions)
+    signals.agency.update(dict.fromkeys(mentions, 1))
+    for name, votes in (gender or {}).items():
+        signals.gender[name].update(votes)
+    for title, hosts in (title_hosts or {}).items():
+        signals.title_hosts[title].update(hosts)
+    return signals
+
+
+def fold(
+    signals: spacy_roster._Signals, *, fallback: bool = True  # noqa: SLF001
+):  # noqa: ANN201
+    return spacy_roster._fold_names(  # noqa: SLF001
+        signals, set(signals.mentions), fallback=fallback
+    )
+
+
+class TestFold:
+    """Which names are one person, decided by rule."""
+
+    def test_title_and_surname_do_not_absorb_the_family(self) -> None:
+        canonical, _ = fold(
+            signals_with(
+                {"Mr Elliot": 40, "Anne Elliot": 30, "Walter Elliot": 20, "Anne": 400}
+            )
+        )
+        assert canonical["Mr Elliot"] == "Mr Elliot"
+        assert canonical["Anne"] == "Anne Elliot"
+
+    def test_a_single_claimant_owns_a_titled_short_form(self) -> None:
+        canonical, _ = fold(
+            signals_with({"Iakin Nefud": 3, "Captain Nefud": 5, "Nefud": 50})
+        )
+        assert canonical["Captain Nefud"] == "Iakin Nefud"
+        assert canonical["Nefud"] == "Iakin Nefud"
+
+    def test_a_wife_never_folds_into_her_husband(self) -> None:
+        signals = signals_with(
+            {"Perrin Aybara": 20, "Perrin": 900, "Mistress Aybara": 5},
+            gender={"Perrin": {"masculine": 90}, "Perrin Aybara": {"masculine": 5}},
+        )
+        canonical, _ = fold(signals)
+        assert canonical["Mistress Aybara"] == "Mistress Aybara"
+        assert canonical["Perrin"] == "Perrin Aybara"
+
+    def test_tie_rule_ignores_tiny_claimants_in_the_fallback(self) -> None:
+        paul = signals_with({"Paul": 1678, "Paul Atreides": 18, "Paul Muad'Dib": 14})
+        assert fold(paul)[0]["Paul"] == "Paul"
+        seldon = signals_with({"Seldon": 77, "Hari Seldon": 45, "Raven Seldon": 4})
+        assert fold(seldon)[0]["Seldon"] == "Hari Seldon"
+
+    def test_a_real_tie_drops_the_bare_name_in_the_fallback(self) -> None:
+        charles = signals_with(
+            {"Charles": 111, "Charles Hayter": 30, "Charles Musgrove": 40}
+        )
+        canonical, removed = fold(charles)
+        assert "Charles" not in canonical
+        assert "Charles" in removed
+
+    def test_the_identity_path_keeps_ambiguous_names_for_the_model(self) -> None:
+        charles = signals_with(
+            {"Charles": 111, "Charles Hayter": 30, "Charles Musgrove": 40}
+        )
+        assert fold(charles, fallback=False)[0]["Charles"] == "Charles"
+
+    def test_bare_titles_in_the_fallback(self) -> None:
+        signals = signals_with(
+            {
+                "Baron": 500,
+                "Vladimir Harkonnen": 16,
+                "Duke": 480,
+                "Leto Atreides": 15,
+                "Paul Atreides": 18,
+                "Mayor": 70,
+            },
+            title_hosts={
+                "baron": {"Vladimir Harkonnen": 8},
+                "duke": {"Leto Atreides": 50, "Paul Atreides": 5},
+            },
+        )
+        canonical, removed = fold(signals)
+        assert canonical["Baron"] == "Vladimir Harkonnen"
+        assert "Duke" in removed
+        assert canonical["Mayor"] == "Mayor"
+
+    def test_bare_titles_on_the_identity_path_are_left_for_the_model(self) -> None:
+        signals = signals_with(
+            {"Baron": 500, "Vladimir Harkonnen": 16},
+            title_hosts={"baron": {"Vladimir Harkonnen": 8}},
+        )
+        assert fold(signals, fallback=False)[0]["Baron"] == "Baron"
+
+    def test_couple_stays_apart_end_to_end(self) -> None:
+        characters, _ = roster_of(SPOUSES)
+        by_name = {character.display_name: character for character in characters}
+        assert "Count Fenring" in by_name and "Lady Fenring" in by_name
+        assert by_name["Lady Fenring"].gender == "feminine"
+
+
 class TestSpelling:
     """One name, however the typesetter spelled it."""
 

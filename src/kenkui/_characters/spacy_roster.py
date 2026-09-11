@@ -33,7 +33,12 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any
 
-from kenkui._characters.identity import group_full_names, resolve_short_forms
+from kenkui._characters.identity import (
+    detect_titles,
+    group_full_names,
+    name_tokens,
+    residue,
+)
 from kenkui._characters.infer import PRONOUNS, slugify
 from kenkui._characters.narration import is_first_person
 from kenkui._domain.casting import CharacterProfile
@@ -91,6 +96,10 @@ _GENDER_LOOKAHEAD = 12
 # must hold over the loser. A character seen twice near "she" is not evidence.
 _GENDER_MINIMUM = 3
 _GENDER_MARGIN = 2
+
+# Fallback only: claimants below this share of a bare name do not compete for
+# it when breaking a tie between several possible full names.
+_TIE_SHARE = 0.1
 
 # Speech verbs by lemma. The parser resolves inflection, so "said"/"says"/
 # "saying" all reduce to "say". Far wider than the obvious set: novels carry
@@ -814,27 +823,99 @@ def _gender_of(pronouns: Counter[str], titles: Counter[str]) -> str | None:
     return _majority(titles) or _majority(pronouns)
 
 
-def _canonical_names(signals: _Signals, kept: set[str]) -> dict[str, str]:
-    """Fold the surface forms that denote one person onto a single name.
+def _contradicts(
+    name: str, host: str, canonical: Mapping[str, str], signals: _Signals
+) -> bool:
+    """Report whether a titled name's gender contradicts its host's pronouns."""
+    lead = name.split()[0].lower().strip(".")
+    said = (
+        "feminine"
+        if lead in _FEMININE_TITLES
+        else "masculine"
+        if lead in _MASCULINE_TITLES
+        else None
+    )
+    if said is None:
+        return False
+    votes: Counter[str] = Counter()
+    for alias, target in canonical.items():
+        if target == host:
+            votes.update(signals.gender.get(alias, {}))
+    known = _majority(votes)
+    return known is not None and known != said
 
-    Full names first, so "Moiraine Sedai" and "Moiraine Aes Sedai" become one
-    entity before any short form is offered to them. A bare form then belongs
-    to a full name only when exactly one entity claims it: "Tam" reaches "Tam
-    al'Thor" unopposed, while "Charles" is claimed by both Charles Hayter and
-    Charles Musgrove, and merging it into either would put the other's lines
-    in the wrong voice. An ambiguous short form is dropped rather than kept as
-    its own entry, which would split one person across two voices.
-    """
+
+def _title_holders(
+    bare: str, canonical: Mapping[str, str], signals: _Signals
+) -> Counter[str]:
+    """Return who a bare title belongs to, across stripped and kept forms."""
+    title = bare.split()[0].lower().strip(".")
+    holders: Counter[str] = Counter()
+    for host, count in signals.title_hosts.get(title, {}).items():
+        if host in canonical:
+            holders[canonical[host]] += count
+    for other in canonical:
+        parts = other.split()
+        if len(parts) > 1 and parts[0].lower().strip(".") == title:
+            holders[canonical[other]] += signals.mentions[other]
+    return holders
+
+
+def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
+    signals: _Signals, kept: set[str], *, fallback: bool
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Fold surface forms conservatively and report deliberately removed names."""
+    mentions = signals.mentions
+    titles = detect_titles([name for name in kept if len(name.split()) > 1])
     fulls = sorted(
-        (name for name in kept if len(name.split()) > 1),
-        key=lambda name: (-signals.mentions[name], name),
+        (name for name in kept if len(residue(name, titles)) >= 2),
+        key=lambda name: (-mentions[name], name),
     )
     entity = group_full_names(fulls)
-    shorts = sorted(name for name in kept if len(name.split()) == 1)
-    resolved = resolve_short_forms(shorts, entity)
     canonical = {name: entity[name] for name in fulls}
-    canonical.update(resolved.assigned)
-    return canonical
+    removed: dict[str, str] = {}
+    bare: list[str] = []
+    for name in sorted(
+        set(kept) - set(fulls), key=lambda item: (bool(name_tokens(item) & titles), item)
+    ):
+        rest = residue(name, titles)
+        only_titles = all(token in (titles | _TITLES) for token in name_tokens(name))
+        if not rest or (fallback and only_titles):
+            bare.append(name)
+            continue
+        token = next(iter(rest))
+        claims: Counter[str] = Counter()
+        for full in fulls:
+            if token in name_tokens(full):
+                claims[entity[full]] += mentions[full]
+        titled = bool(name_tokens(name) & titles)
+        tie_break = fallback and not titled and len(claims) > 1
+        hosts = {
+            host
+            for host, count in claims.items()
+            if not tie_break or count >= _TIE_SHARE * mentions[name]
+        }
+        if len(hosts) == 1:
+            host = next(iter(hosts))
+            canonical[name] = (
+                name if titled and _contradicts(name, host, canonical, signals) else host
+            )
+        elif not hosts or titled or not fallback:
+            canonical[name] = name
+        else:
+            removed[name] = "ambiguous bare name"
+    for name in bare:
+        if not fallback:
+            canonical[name] = name
+            continue
+        holders = _title_holders(name, canonical, signals)
+        if len(holders) == 1:
+            canonical[name] = next(iter(holders))
+        elif not holders:
+            canonical[name] = name
+        else:
+            removed[name] = "title held by several"
+    return canonical, removed
 
 
 def _narrator_of(
@@ -908,7 +989,7 @@ def infer_roster(
         for name, count in signals.mentions.items()
         if count >= MIN_MENTIONS and signals.evidence(name) >= MIN_EVIDENCE
     }
-    canonical = _canonical_names(signals, kept)
+    canonical, _ = _fold_names(signals, kept, fallback=True)
 
     merged: dict[str, dict[str, Any]] = {}
     for name in sorted(canonical):
