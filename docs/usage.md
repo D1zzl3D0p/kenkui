@@ -282,6 +282,13 @@ model independently. Discovery can also use the optional local
 [spaCy pipeline](installation.md#optional-offline-character-discovery-with-spacy);
 quote attribution uses a configured LiteLLM provider:
 
+`infer_characters()` also accepts `identity=`. For spaCy rosters it defaults to
+`openrouter/z-ai/glm-5.3-flash`, which makes two high-reasoning calls to merge
+aliases and remove entries that are not individuals. It uses the same
+OpenRouter credentials as `attribute_quotes()` and typically costs about two
+cents per book. Pass `identity=None` to keep roster derivation fully offline
+with the rule-based fallback.
+
 ```python
 import os
 

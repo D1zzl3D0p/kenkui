@@ -14,6 +14,7 @@ from ._characters.continuity import eligible_series_voice_ids
 from ._characters.review import validate_roster
 from ._domain.casting import validate_method
 from ._domain.operations import (
+    DEFAULT_IDENTITY_MODEL,
     Annotations,
     AssignVoices,
     AttributeQuotes,
@@ -452,9 +453,19 @@ class Pipeline:
                 raise ValidationError(ErrorCode.INVALID_PAUSE)
         return self._replace(Pauses(*requested))
 
-    def infer_characters(self, model: str) -> Pipeline:
-        """Return a branch that will derive a character roster."""
-        return self._replace(InferCharacters(_model_id(model)))
+    def infer_characters(
+        self, model: str, *, identity: str | None = DEFAULT_IDENTITY_MODEL
+    ) -> Pipeline:
+        """Return a branch that will derive a character roster.
+
+        ``identity`` selects the reasoning model that merges aliases and
+        removes non-people from a spaCy roster. ``None`` stays fully offline.
+        """
+        return self._replace(
+            InferCharacters(
+                _model_id(model), None if identity is None else _model_id(identity)
+            )
+        )
 
     def attribute_quotes(self, model: str) -> Pipeline:
         """Return a branch that will assign a speaker to each quoted run."""

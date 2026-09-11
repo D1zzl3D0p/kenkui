@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from kenkui._domain.operations import (
+    DEFAULT_IDENTITY_MODEL,
     Annotations,
     AssignVoices,
     AttributeQuotes,
@@ -219,7 +220,12 @@ def _format_operation(operation: Operation) -> str:  # noqa: C901, PLR0911
     if isinstance(operation, SpokenForm):
         return _format_spoken_form(operation)
     if isinstance(operation, InferCharacters):
-        return f"infer_characters({operation.model_id!r})"
+        if operation.identity_model_id == DEFAULT_IDENTITY_MODEL:
+            return f"infer_characters({operation.model_id!r})"
+        return (
+            f"infer_characters({operation.model_id!r}, "
+            f"identity={operation.identity_model_id!r})"
+        )
     if isinstance(operation, AttributeQuotes):
         return f"attribute_quotes({operation.model_id!r})"
     if isinstance(operation, AssignVoices):

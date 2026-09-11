@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, TypeVar
 
 from kenkui.errors import ErrorCode, ValidationError
 
+DEFAULT_IDENTITY_MODEL = "openrouter/z-ai/glm-5.3-flash"
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
@@ -110,6 +112,7 @@ class InferCharacters:
     """Derive a character roster with the named model."""
 
     model_id: str
+    identity_model_id: str | None = DEFAULT_IDENTITY_MODEL
 
 
 @dataclass(frozen=True, slots=True)

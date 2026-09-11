@@ -33,6 +33,29 @@ if TYPE_CHECKING:
 EXPECTED_OPERATION_COUNT = 4
 IO_ERROR_MESSAGE = "pipeline construction performed I/O"
 PAUSE_CHAPTER_MS = 1500
+
+
+def test_infer_characters_defaults_to_the_identity_model(tmp_path: Path) -> None:
+    """The reasoning identity pass is enabled unless explicitly disabled."""
+    from kenkui._domain.operations import DEFAULT_IDENTITY_MODEL  # noqa: PLC0415
+
+    book = kk.book(tmp_path / "x.epub").infer_characters("spacy")
+    operation = next(
+        item for item in book.operations if isinstance(item, InferCharacters)
+    )
+    assert operation.identity_model_id == DEFAULT_IDENTITY_MODEL
+
+
+def test_identity_none_keeps_the_roster_offline(tmp_path: Path) -> None:
+    """Callers can retain deterministic rule-only roster derivation."""
+    book = kk.book(tmp_path / "x.epub").infer_characters("spacy", identity=None)
+    operation = next(
+        item for item in book.operations if isinstance(item, InferCharacters)
+    )
+    assert operation.identity_model_id is None
+    assert "identity=None" in repr(book.style)
+
+
 PAUSE_HEADING_MS = 600
 PAUSE_PARAGRAPH_MS = 250
 

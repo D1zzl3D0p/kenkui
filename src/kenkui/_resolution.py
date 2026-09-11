@@ -142,6 +142,9 @@ def resolve_inputs(
         digest,
         attributing.model_id,
         roster_model_id=inferring.model_id if inferring is not None else None,
+        identity_model_id=(
+            inferring.identity_model_id if inferring is not None else None
+        ),
         client=_attribution_client(),
         cancel=cancel,
         roster=inspection.roster,
@@ -352,6 +355,7 @@ def resolve_characters(
     roster = discover_characters(
         inspection,
         inferring.model_id,
+        identity_model_id=inferring.identity_model_id,
         client=_attribution_client(),
         cancel=cancel,
         on_progress=emitter.emit_model_progress if emitter is not None else None,
