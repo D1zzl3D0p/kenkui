@@ -156,6 +156,24 @@ def test_attribution_key_covers_everything_that_determines_content() -> None:
     assert base != store.attribution_key(BOOK, MODEL, PROMPT_VERSION, other_params)
 
 
+def test_the_identity_model_enters_the_attribution_key() -> None:
+    """A roster-changing identity choice cannot reuse another attribution."""
+    params = {"temperature": 0.0}
+    base = store.attribution_key("book", "m", "v", params)
+    assert store.attribution_key("book", "m", "v", params, identity_model_id="") == base
+    assert (
+        store.attribution_key(
+            "book",
+            "m",
+            "v",
+            params,
+            identity_model_id="glm",
+            identity_reasoning="high",
+        )
+        != base
+    )
+
+
 def test_cast_key_is_order_independent_for_pins() -> None:
     """Two callers writing the same cast differently must land on one row."""
     first = store.cast_key("x", "gendered", {"a": "1", "b": "2"}, "n", "u")

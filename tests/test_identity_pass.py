@@ -110,3 +110,27 @@ def test_resolve_returns_none_when_the_runs_fail() -> None:
         )
         is None
     )
+
+
+def test_a_decision_is_reused_without_calling_the_model() -> None:
+    answer = json.dumps({"same_person": [[1, 2]], "not_individuals": [3]})
+    first = ScriptedClient(answer, answer)
+    IdentityPass("cached-model", client=first, backoff_base=0).resolve(
+        ENTRIES, TEXT, MENTIONS
+    )
+    second = ScriptedClient()
+    result = IdentityPass("cached-model", client=second, backoff_base=0).resolve(
+        ENTRIES, TEXT, MENTIONS
+    )
+    assert result is not None
+    assert {entry.display_name for entry in result} == {"Paul"}
+    assert second.prompts == []
+
+
+def test_a_different_model_is_a_different_decision() -> None:
+    from kenkui._characters import store  # noqa: PLC0415
+    from kenkui._characters.prompts import PROMPT_VERSION  # noqa: PLC0415
+
+    assert store.identity_key("p", "a", "high", PROMPT_VERSION) != store.identity_key(
+        "p", "b", "high", PROMPT_VERSION
+    )

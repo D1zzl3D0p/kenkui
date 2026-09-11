@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import TYPE_CHECKING, Any
 
+from kenkui._characters import store
 from kenkui._characters.entries import RosterEntry, most_mentioned
 from kenkui._characters.llm import DEFAULT_BACKOFF_BASE, complete_json, reasoning_client
-from kenkui._characters.prompts import IDENTITY_PROMPT
+from kenkui._characters.prompts import IDENTITY_PROMPT, PROMPT_VERSION
 from kenkui.errors import ModelError
 from kenkui.observability import get_logger, log_event
 
@@ -188,6 +189,15 @@ class IdentityPass:
         return None if decision is None else apply(ordered, decision)
 
     def _decide(self, prompt: str, count: int) -> Decision | None:
+        key = store.identity_key(
+            prompt, self._model_id, IDENTITY_REASONING, PROMPT_VERSION
+        )
+        cached = store.read_identity(key)
+        if cached is not None:
+            return Decision(
+                frozenset(frozenset(pair) for pair in cached["pairs"]),
+                frozenset(cached["excluded"]),
+            )
         caller = self._client or reasoning_client(IDENTITY_REASONING)
         with ThreadPoolExecutor(max_workers=_RUNS) as pool:
             futures = [
@@ -211,4 +221,13 @@ class IdentityPass:
                     context={"boundary": "characters", "model": self._model_id},
                 )
                 return None
-        return agree(parse(payloads[0], count), parse(payloads[1], count))
+        decision = agree(parse(payloads[0], count), parse(payloads[1], count))
+        store.write_identity(
+            key,
+            self._model_id,
+            {
+                "pairs": sorted(sorted(pair) for pair in decision.pairs),
+                "excluded": sorted(decision.excluded),
+            },
+        )
+        return decision

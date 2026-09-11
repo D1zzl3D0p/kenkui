@@ -147,6 +147,11 @@ CREATE TABLE IF NOT EXISTS series_contributions(
     book_digest TEXT NOT NULL,
     spoken_characters INTEGER NOT NULL,
     PRIMARY KEY (series_id, canonical_id, book_digest));
+
+CREATE TABLE IF NOT EXISTS identity_passes(
+    identity_key TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL,
+    decision_json TEXT NOT NULL);
 """
     + _SERIES_ALIASES_DDL
 )
@@ -176,6 +181,8 @@ def attribution_key(  # noqa: PLR0913, PLR0917 - every input that determines con
     schemas: tuple[str, ...] = (),
     *,
     roster_model_id: str = "",
+    identity_model_id: str = "",
+    identity_reasoning: str = "",
 ) -> str:
     """Key attribution by everything that determines its content.
 
@@ -204,6 +211,22 @@ def attribution_key(  # noqa: PLR0913, PLR0917 - every input that determines con
         # before. A separately named roster model is different material: the
         # characters it invents decide who every later attribution can name.
         material["roster_model_id"] = roster_model_id
+    if identity_model_id:
+        material["identity_model_id"] = identity_model_id
+        material["identity_reasoning"] = identity_reasoning
+    return hashlib.sha256(_canonical(material).encode()).hexdigest()
+
+
+def identity_key(
+    prompt: str, model_id: str, reasoning: str, prompt_version: str
+) -> str:
+    """Key a decision by the prompt and every model parameter that determines it."""
+    material = {
+        "model_id": model_id,
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        "prompt_version": prompt_version,
+        "reasoning": reasoning,
+    }
     return hashlib.sha256(_canonical(material).encode()).hexdigest()
 
 
@@ -303,6 +326,35 @@ def _reading(path: Path | None = None) -> Iterator[sqlite3.Connection | None]:
             yield connection
     except (sqlite3.Error, OSError):
         yield None
+
+
+def read_identity(key: str, path: Path | None = None) -> dict[str, Any] | None:
+    """Return a stored identity decision, or None on a miss or unusable store."""
+    with _reading(path) as connection:
+        if connection is None:
+            return None
+        row = connection.execute(
+            "SELECT decision_json FROM identity_passes WHERE identity_key = ?", (key,)
+        ).fetchone()
+    return None if row is None else json.loads(row["decision_json"])
+
+
+def write_identity(
+    key: str,
+    model_id: str,
+    decision: Mapping[str, Any],
+    path: Path | None = None,
+) -> None:
+    """Persist one identity decision, best-effort because it is recomputable."""
+    try:
+        with _connect(path) as connection, connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO identity_passes"
+                "(identity_key, model_id, decision_json) VALUES (?, ?, ?)",
+                (key, model_id, _canonical(decision)),
+            )
+    except (sqlite3.Error, OSError):
+        return
 
 
 def write_attribution(record: AttributionRecord, path: Path | None = None) -> None:
