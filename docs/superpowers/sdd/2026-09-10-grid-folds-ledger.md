@@ -707,3 +707,48 @@ No new semantic ruling was required and no Task 8 finding is deferred.
 
 No runtime rollback flag, dormant legacy path, or deferred Task 9 finding
 remains.
+
+### Task 10 — Corpus, Dune, and quality verification — 2026-09-11
+
+- Ran an uncapped property over all 377 local EPUBs. The 372 parseable books
+  contain 20,074 chapters, 232,845,915 canonical characters, and 7,720,584
+  grid leaves. Every chapter produced equal grids on two builds, reconstructed
+  canonical text and dialogue ranges exactly, produced equal structural
+  indexes with complete path-prefix coverage, and packed deterministically
+  under the 1,000-character ceiling with exact spoken reconstruction.
+- Five EPUBs failed before grid construction. A second all-library parse from
+  the unchanged `d72c1e8` target checkout reproduced the same paths and errors:
+  Dark One (no visible spine text), The Phoenix of Destiny (safe archive
+  limit), A Memory of Light (malformed/unsupported), The Truth
+  (malformed/unsupported), and Unseen Academicals (malformed/unsupported).
+  They are pre-existing parser/source failures; migration regressions: zero.
+- The real-book quality pass produced 285,456 packed segments and 265,382
+  internal boundaries: 251,170 paragraph, 1,330 line, 12,796 sentence, 11
+  dialogue, and 75 phrase grid edges. Emergency cuts were reported separately:
+  zero punctuation/hyphen, zero whitespace, and zero hard-token cuts.
+- Re-ran the three representative break-quality fixtures at the baseline
+  1,000-character budget. Old/new classifications and offsets are identical:
+  sentence grid edge at 988, whitespace fallback at 999, and hard-token
+  fallback at 1,000. Aggregate old/new totals are one normal grid edge and two
+  characterized emergency cuts.
+- Replayed the selected Dune planning smoke from the existing attribution and
+  cast through an immutable SQLite URI. It made zero provider/model calls,
+  initialized no PCM cache, synthesized/rendered nothing, and deleted nothing.
+  Canonical hash, spoken hash, 774/797 canonical/spoken character counts, all
+  six canonical/spoken boundaries, speaker/voice order, lexicon and number
+  tuning application, effective `(500, 300, 0, 0, 300, 0)` silences, and the
+  paragraph 1-4 selection plan match pre-flight exactly. The semantic
+  fingerprint changed from `0d53c7d5...` to `2ce00c73...` as intended by the
+  grid-v1 invalidation. Its five internal boundaries are three paragraph and
+  two dialogue grid edges, with no emergency cut.
+- `/System/Volumes/Data` reported 460 GiB total, 341 GiB used, 65 GiB
+  available, and 84% capacity. No cache entry was pruned.
+- Full gate on `17389eb`: Ruff format passed for 194 files; Ruff check passed;
+  mypy passed all 157 source files; pytest collected 1,632 tests / selected
+  1,625 and finished `1580 passed, 46 skipped, 7 deselected, 1 warning in
+  84.75s`; total coverage 90.07%, above the configured 90% floor.
+- Exact machine-readable evidence is in
+  `docs/superpowers/artifacts/2026-09-11-grid-folds-verification.json`.
+
+Task 10 changes are documentation/measurement fixtures only. Independent
+review is required before the final whole-branch review.
