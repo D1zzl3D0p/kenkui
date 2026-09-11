@@ -637,3 +637,16 @@ is deferred.
   unchanged for the final task.
 
 No new semantic ruling was required and no Task 8 finding is deferred.
+
+#### Task 8 review gate
+
+- Independent review approved `4ccfb65` with no Critical, Important, or Minor
+  findings.
+- Review confirmed every production segment path either constructs one identity
+  containing exactly one `grid-v1` input or reuses an already-built segment;
+  only obsolete tier fields were removed and all synthesis-relevant fields
+  remain.
+- Reviewer reran the 257-test focused suite and verified v4/v5 disjointness,
+  undeleted readable legacy cache data, attribution/sidecar compatibility, and
+  equal full/preview identities for wholly contained segments. Ruff and strict
+  mypy passed.
