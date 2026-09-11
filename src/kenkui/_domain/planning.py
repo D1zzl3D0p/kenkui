@@ -438,6 +438,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     patterns = selected_patterns(pipeline.operations)
     origins: list[_SegmentSource] | None = [] if patterns else None
     grids: dict[str, tuple[Unit, ...]] = {}
+    structures: dict[str, StructuralIndex] = {}
     source_chapters = inspection._planning_chapters or inspection.chapters  # noqa: SLF001
     segments, trailing_silence = _compile_segments(
         source_chapters,
@@ -448,6 +449,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         operations=pipeline.operations,
         origins=origins,
         grids=grids,
+        structures=structures,
     )
     if origins is not None:
         segments, trailing_silence = _select_segments(
@@ -458,6 +460,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
             spoken,
             pauses,
             grids,
+            structures,
         )
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
@@ -866,6 +869,7 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     operations: tuple[Operation, ...] = (),
     origins: list[_SegmentSource] | None = None,
     grids: dict[str, tuple[Unit, ...]] | None = None,
+    structures: dict[str, StructuralIndex] | None = None,
 ) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
     """Split each speaker span while assigning one global plan-order ordinal.
 
@@ -894,6 +898,8 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
         if grids is not None:
             grids[chapter.id] = grid
         structure = build_structure_index(grid)
+        if structures is not None:
+            structures[chapter.id] = structure
         manual = _manual_offsets(grid, operations)
         _append_chapter(
             chapter,
@@ -987,10 +993,10 @@ def _fragments(
 
 def _semantic_cuts(  # noqa: PLR0913, PLR0917 - complete semantic boundary set.
     grid: tuple[Unit, ...],
-    structure: StructuralIndex,
     spans: tuple[SpeakerSpan, ...],
     pauses: Pauses,
     gaps: Mapping[int, int],
+    reasons_by_offset: Mapping[int, GapReason],
     regions: _LexiconRegions,
 ) -> frozenset[int]:
     """Return every canonical edge the packer is forbidden to cross.
@@ -1011,8 +1017,8 @@ def _semantic_cuts(  # noqa: PLR0913, PLR0917 - complete semantic boundary set.
         *gaps,
     }
     cuts.update(
-        unit.end
-        for unit, reasons in zip(grid, structure.gaps, strict=True)
+        offset
+        for offset, reasons in reasons_by_offset.items()
         if _gap_enabled(reasons, pauses)
     )
     return frozenset(cuts)
@@ -1118,6 +1124,116 @@ def _absorb_unspeakable_spans(
     return tuple(result)
 
 
+def _settle_unspeakable_gaps(
+    canonical: str,
+    spans: tuple[SpeakerSpan, ...],
+    gaps: Mapping[int, int],
+) -> dict[int, int]:
+    """Move gaps inside inaudible spans to the preceding effective boundary."""
+    settled = dict(gaps)
+    for span in spans:
+        if canonical[span.start : span.end].strip():
+            continue
+        offsets = sorted(edge for edge in settled if span.start < edge <= span.end)
+        for edge in offsets:
+            settled[span.start] = settled.pop(edge)
+    return settled
+
+
+def _settle_unspeakable_reasons(
+    canonical: str,
+    spans: tuple[SpeakerSpan, ...],
+    grid: tuple[Unit, ...],
+    structure: StructuralIndex,
+) -> dict[int, GapReason]:
+    """Fold pure gap reasons across spans that cannot produce speech."""
+    settled = {
+        unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)
+    }
+    for span in spans:
+        if canonical[span.start : span.end].strip():
+            continue
+        offsets = sorted(edge for edge in settled if span.start < edge <= span.end)
+        for edge in offsets:
+            settled[span.start] = settled.get(span.start, GapReason.NONE) | settled.pop(
+                edge
+            )
+    return settled
+
+
+def _redistribute_unspeakable_ranges(
+    packed: tuple[PackedRange, ...],
+    spoken_text: str,
+    offsets: tuple[tuple[int, int, int, int], ...],
+) -> tuple[PackedRange, ...]:
+    """Attach bounded whitespace runs to adjacent synthesizable ranges.
+
+    Prefer the following range, matching phase 1's carry direction. If a long
+    run does not fit there, its prefix fills the preceding range. Only an
+    unrepresentable middle remainder is omitted; that requires more whitespace
+    than both adjacent speech segments can hold and phase 1 also discarded the
+    resulting whitespace-only chunks.
+    """
+    items = list(packed)
+    result: list[PackedRange] = []
+    index = 0
+    while index < len(items):
+        item = items[index]
+        if spoken_text[item.spoken_start : item.spoken_end].strip():
+            result.append(item)
+            index += 1
+            continue
+
+        past = index + 1
+        while (
+            past < len(items)
+            and not spoken_text[
+                items[past].spoken_start : items[past].spoken_end
+            ].strip()
+        ):
+            past += 1
+        run_start = item.spoken_start
+        run_end = items[past - 1].spoken_end
+
+        suffix_start = run_end
+        if past < len(items):
+            following = items[past]
+            capacity = MAX_TTS_SEGMENT_CHARACTERS - (
+                following.spoken_end - following.spoken_start
+            )
+            suffix_start = max(run_start, run_end - capacity)
+            if suffix_start < run_end:
+                items[past] = replace(
+                    following,
+                    canonical_start=_translated_offset(
+                        offsets, suffix_start, reverse=True
+                    ),
+                    spoken_start=suffix_start,
+                )
+
+        if result and run_start < suffix_start:
+            preceding = result[-1]
+            capacity = MAX_TTS_SEGMENT_CHARACTERS - (
+                preceding.spoken_end - preceding.spoken_start
+            )
+            prefix_end = min(suffix_start, run_start + capacity)
+            if run_start < prefix_end:
+                result[-1] = replace(
+                    preceding,
+                    canonical_end=_translated_offset(
+                        offsets, prefix_end, reverse=True, upper_edge=True
+                    ),
+                    spoken_end=prefix_end,
+                    fallback_cut_after=(
+                        FallbackCut.WHITESPACE
+                        if prefix_end < run_end
+                        else preceding.fallback_cut_after
+                    ),
+                )
+        index = past
+    return tuple(result)
+
+
 def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     chapter: ChapterInspection,
     spans: tuple[SpeakerSpan, ...],
@@ -1135,8 +1251,12 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     origins: list[_SegmentSource] | None = None,
 ) -> None:
     """Append one chapter packed over its grid and semantic boundaries."""
+    gaps = _settle_unspeakable_gaps(chapter.text, spans, gaps)
+    reasons_by_offset = _settle_unspeakable_reasons(
+        chapter.text, spans, grid, structure
+    )
     spans = _absorb_unspeakable_spans(chapter.text, spans)
-    cuts = _semantic_cuts(grid, structure, spans, pauses, gaps, regions)
+    cuts = _semantic_cuts(grid, spans, pauses, gaps, reasons_by_offset, regions)
     spoken_regions = _spoken_regions(chapter, spoken, regions, cuts)
     spoken_text = "".join(region.text for region in spoken_regions)
     packed = pack_grid(
@@ -1149,9 +1269,7 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
         )
     )
     source_offsets = _global_offsets(spoken_regions)
-    reasons_by_offset = {
-        unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)
-    }
+    packed = _redistribute_unspeakable_ranges(packed, spoken_text, source_offsets)
     for chunk_index, item in enumerate(packed):
         text = spoken_text[item.spoken_start : item.spoken_end]
         if not text.strip():
@@ -1209,10 +1327,12 @@ def grid_silences(
     chapter: ChapterInspection,
     units: tuple[Unit, ...],
     operations: tuple[Operation, ...],
+    *,
+    structure: StructuralIndex | None = None,
 ) -> dict[int, int]:
     """Settle selected grid gaps onto speech-bearing leaves, shared with Script."""
     pauses = _one_operation(operations, Pauses) or _NO_PAUSES
-    derived = build_structure_index(units).gaps
+    derived = (build_structure_index(units) if structure is None else structure).gaps
     rules = _rules_of(operations, Silences)
     manual = _gaps_over(units, rules) if rules else {}
     patterns = selected_patterns(operations)
@@ -1306,6 +1426,7 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
     spoken: SpokenForm | None,
     pauses: Pauses,
     grids: Mapping[str, tuple[Unit, ...]],
+    structures: Mapping[str, StructuralIndex],
 ) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
     """Apply selection edges as mandatory clips over the stable full-grid packing.
 
@@ -1364,7 +1485,12 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
     for chapter_id, indices in positions.items():
         chapter = by_id[chapter_id]
         grid = grids[chapter_id]
-        for unit_index, value in grid_silences(chapter, grid, operations).items():
+        for unit_index, value in grid_silences(
+            chapter,
+            grid,
+            operations,
+            structure=structures[chapter_id],
+        ).items():
             local = bisect_right(starts[chapter_id], grid[unit_index].end - 1) - 1
             if local >= 0:
                 silence[indices[local]] = value

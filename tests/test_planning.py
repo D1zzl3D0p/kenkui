@@ -578,11 +578,67 @@ def test_whitespace_only_spans_are_absorbed_before_bounded_packing() -> None:
     )
 
     assert [segment.speaker_id for segment in plan.segments] == ["a", "b"]
-    assert "".join(segment.text for segment in plan.segments).split() == ["A.", "B."]
+    assert "".join(segment.text for segment in plan.segments) == text
     assert all(
         len(segment.text) <= planning.MAX_TTS_SEGMENT_CHARACTERS
         for segment in plan.segments
     )
+    origins: list[planning._SegmentSource] = []
+    replayed, _silence = planning._compile_segments(  # noqa: SLF001
+        (chapter,), spans, plan.cast, origins=origins
+    )
+    assert replayed == plan.segments
+    assert [(item.canonical_start, item.canonical_end) for item in origins] == [
+        (0, 204),
+        (204, len(text)),
+    ]
+    assert origins[0].fallback_cut_after is FallbackCut.WHITESPACE
+
+
+def test_zero_gap_on_unspeakable_span_keeps_text_and_identity() -> None:
+    """An inaudible zero-gap boundary settles without changing TTS content."""
+    text = '"A." "B."'
+    chapter = _inspection(text=text).chapters[0]
+    spans = (
+        planning.SpeakerSpan(chapter.id, 0, 4, "a"),
+        planning.SpeakerSpan(chapter.id, 4, 5, None),
+        planning.SpeakerSpan(chapter.id, 5, len(text), "b"),
+    )
+    base = kk.epub("book.epub").assign_voice("fixture").tts()
+    zero = (
+        kk.epub("book.epub")
+        .silence(
+            0,
+            where={
+                "chapter": chapter.id,
+                "paragraph": 1,
+                "line": 1,
+                "sentence": 1,
+                "phrase": 2,
+            },
+        )
+        .assign_voice("fixture")
+        .tts()
+    )
+
+    def compile_with(pipeline: kk.Pipeline) -> ExecutionPlan:
+        return compile_execution_plan(
+            pipeline,
+            kk.BookInspection(kk.BookMetadata("Fixture"), (chapter,)),
+            source_bytes_hash=SOURCE_HASH,
+            resolved_voice=_voice(),
+            model_revision=MODEL_REVISION,
+            cast_voices=(_voice(id="a-voice"), _voice(id="b-voice")),
+            assignments={"a": "a-voice", "b": "b-voice"},
+            spans=spans,
+        )
+
+    plain_plan = compile_with(base)
+    zero_plan = compile_with(zero)
+
+    assert [segment.text for segment in plain_plan.segments] == ['"A."', ' "B."']
+    assert zero_plan.segments == plain_plan.segments
+    assert zero_plan.trailing_silence_ms == plain_plan.trailing_silence_ms == (0, 0)
 
 
 def test_planning_reports_grid_edges_and_characterized_emergency_cuts() -> None:

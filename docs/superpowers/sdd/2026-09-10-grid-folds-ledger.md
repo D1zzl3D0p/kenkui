@@ -526,17 +526,21 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
   ceiling; selection and billing independently rebuilt the same chapter grid;
   and the planning oracle invoked the current compiler on both sides instead
   of remaining independent.
-- Removed post-pack carry/reassembly. Whitespace-only source spans are now
+- Removed the unbounded post-pack carry. Whitespace-only source spans are
   assigned to adjacent effective speech before mandatory speaker cuts are
-  formed, so the packer itself bounds the combined text and retains fallback
-  provenance. The 1,200-space regression produces only bounded synthesis
-  segments and preserves the effective `a`, `b` speaker order.
+  formed; bounded whitespace output is then attached to available capacity on
+  the following and preceding synthesizable ranges without exceeding the hard
+  ceiling. The 1,200-space regression reconstructs the complete text in two
+  bounded ranges with contiguous canonical origins and a characterized
+  whitespace fallback.
 - Ruling: a canonical span containing only whitespace has no synthesizable
   speaker. Preserve phase-1 behavior by assigning it to the following
   effective speech span before packing (or the preceding span at chapter end),
-  rather than emitting an engine-invalid whitespace segment or joining packed
-  results afterward. Over-budget whitespace-only fallback pieces remain
-  omitted exactly as phase 1 omitted whitespace-only chunks.
+  rather than emitting an engine-invalid whitespace segment. If a run cannot
+  fit wholly with the following speech, fill available capacity on the
+  preceding speech and retain a `WHITESPACE` fallback marker. Only a middle run
+  too large for both adjacent bounded speech segments can remain omitted,
+  matching phase 1's removal of whitespace-only chunks.
 - Added an optional prebuilt-grid input to `selected_ranges`; planning passes
   its cached grid to both selection clipping and billing. The spy now patches
   both the planning and selection module symbols and compiles from one already
@@ -549,6 +553,20 @@ pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
   changed-file Ruff format/check and strict mypy passed. Full regression
   without coverage -> `1577 passed, 46 skipped, 7 deselected, 1 warning in
   77.33s`.
+- The first re-review resolved the independent differential and one-grid
+  findings, but reported two Important follow-ups: a manual zero gap at the end
+  of an inaudible span could remove its whitespace and churn the following
+  identity, and selected planning rebuilt `StructuralIndex` in
+  `grid_silences`.
+- Manual and derived gaps inside an unspeakable attribution span now settle at
+  its preceding effective boundary before mandatory cuts are constructed.
+  Exact regression coverage proves adding an explicit zero gap to the space in
+  `"A." "B."` leaves both segments, IDs, and `(0, 0)` silences unchanged.
+- Planning now caches `StructuralIndex` beside each grid and threads it into
+  selected silence calculation. The strengthened spy patches both constructors
+  and proves exactly one grid plus one index build per materialized chapter.
+- Second repair focused run -> `121 passed`; changed-file Ruff and strict mypy
+  passed.
 
 No semantic difference from phase 1 was accepted beyond the approved packing
 boundary changes and the whitespace-only ruling above. No Task 7 review finding
