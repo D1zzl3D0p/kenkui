@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import TYPE_CHECKING, NamedTuple
 
-from kenkui._domain.titles import PREFIX_TITLES
+from kenkui._domain.titles import PREFIX_TITLES as PREFIX_TITLES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
