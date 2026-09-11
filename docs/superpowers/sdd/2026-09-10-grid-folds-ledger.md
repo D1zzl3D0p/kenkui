@@ -397,3 +397,51 @@ No behavioral ruling was required and no review finding remains deferred.
 
 No behavioral ruling was required and no Task 5 finding is deferred. The
 pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
+
+#### Task 5 review gate
+
+- Independent task-scoped review of `e291349` approved Task 5 with no
+  Critical, Important, or Minor findings.
+- Review confirmed pause-independent structure discovery, complete coincident
+  gap reasons, no planning-side rescan, post-grid pause translation, explicit
+  zero replacement, and legacy effective-gap equality across 336 structural
+  and pause combinations.
+
+### Task 6 — Implement hierarchical grid packing — 2026-09-10
+
+- Added pure `_domain/grid_packing.py` with immutable typed `PackingInput`,
+  `SpokenRegion`, `SpokenMapping`, and `PackedRange` values. The module imports
+  only grid/index and path types; it has no pipeline, attribution, synthesis,
+  planning, structure-discovery, or pause-policy dependency.
+- Packing projects canonical grid ranges into concatenated transformed text,
+  attempts paragraph, line, sentence, then phrase ranges, descends only when a
+  candidate exceeds the configured character budget, and greedily combines
+  adjacent fitting pieces inside each mandatory canonical interval.
+- An isolated over-budget phrase fallback chooses the final punctuation or
+  hyphen edge inside the budget, then whitespace, then a hard token cut. Each
+  within-leaf output records its `FallbackCut` category; ordinary output
+  boundaries remain grid or mandatory edges.
+- Spoken mappings validate unchanged runs exactly and let expanded/contracted
+  text drive fit decisions while output retains stable canonical envelopes and
+  exact spoken subranges. Emergency pieces inside one expanded replacement may
+  share its canonical envelope and remain distinct by their spoken ranges.
+- Result validation enforces non-empty output, exact contiguous spoken
+  reconstruction, the hard bound, ordered in-grid canonical envelopes, and
+  preservation of every mandatory boundary.
+- Added focused cases for hierarchy descent, greedy recombination, mandatory
+  cuts, all three fallback categories, spoken expansion, multiple independently
+  transformed regions, expanded-token emergency cuts, ordinary-boundary
+  provenance, invalid inputs, and the module dependency boundary.
+- Added a deterministic randomized property over 100 generated prose inputs,
+  varied budgets, and sampled mandatory grid edges; every run reconstructs
+  spoken text exactly, stays bounded, preserves cuts, and compares equal on a
+  second invocation.
+- Focused packer/grid/index/import/oracle run -> `62 passed in 0.33s`.
+- Full Ruff format/check passed across 195 files. Strict mypy passed for both
+  new files.
+- The delegated implementer exhausted its agent quota after drafting the
+  module, so the primary agent completed validation hardening, tests, and the
+  task commit while retaining the required task-scoped review gate.
+
+No behavioral ruling was required and no Task 6 finding is deferred. The
+pre-flight aggregate-coverage and optional-spaCy failures remain unchanged.
