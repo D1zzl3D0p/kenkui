@@ -30,9 +30,11 @@ candidates are admitted on any of several animacy signals, not only on speaking.
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any
 
+from kenkui._characters.entries import RosterEntry
 from kenkui._characters.identity import (
     detect_titles,
     group_full_names,
@@ -61,7 +63,7 @@ DEFAULT_PIPELINE = "en_core_web_lg"
 
 # Curly and modifier apostrophes are one character to a reader but three to a
 # string comparison.
-_APOSTROPHES = str.maketrans({"‘": "'", "’": "'", "ʼ": "'"})
+_APOSTROPHES = str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'"})
 
 # A name must be mentioned this often before any evidence is weighed. Below it,
 # a parse error and a walk-on are indistinguishable.
@@ -100,6 +102,12 @@ _GENDER_MARGIN = 2
 # Fallback only: claimants below this share of a bare name do not compete for
 # it when breaking a tie between several possible full names.
 _TIE_SHARE = 0.1
+_GROUP_THE_SHARE = 0.3
+_PLACE_SHARE = 0.25
+_PERSONHOOD_FLOOR = 0.05
+_ADDRESS_SHARE = 0.8
+_LOCATIVE = frozenset({"in", "on", "at", "from", "into", "onto", "across", "upon"})
+_FULL_NAME_TOKENS = 2
 
 # Speech verbs by lemma. The parser resolves inflection, so "said"/"says"/
 # "saying" all reduce to "say". Far wider than the obvious set: novels carry
@@ -692,7 +700,7 @@ def _leading_title(raw: str, cleaned: str) -> str | None:
     return None
 
 
-def _scan(
+def _scan(  # noqa: C901, PLR0912 - one branch per additive parse signal
     doc: Any,  # noqa: ANN401 - a spaCy Doc; the package ships no stubs
     chapter_id: str,
     quote_bounds: Sequence[tuple[int, int]],
@@ -827,7 +835,7 @@ def _contradicts(
     name: str, host: str, canonical: Mapping[str, str], signals: _Signals
 ) -> bool:
     """Report whether a titled name's gender contradicts its host's pronouns."""
-    lead = name.split()[0].lower().strip(".")
+    lead = name.split(maxsplit=1)[0].lower().strip(".")
     said = (
         "feminine"
         if lead in _FEMININE_TITLES
@@ -849,7 +857,7 @@ def _title_holders(
     bare: str, canonical: Mapping[str, str], signals: _Signals
 ) -> Counter[str]:
     """Return who a bare title belongs to, across stripped and kept forms."""
-    title = bare.split()[0].lower().strip(".")
+    title = bare.split(maxsplit=1)[0].lower().strip(".")
     holders: Counter[str] = Counter()
     for host, count in signals.title_hosts.get(title, {}).items():
         if host in canonical:
@@ -868,7 +876,7 @@ def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
     mentions = signals.mentions
     titles = detect_titles([name for name in kept if len(name.split()) > 1])
     fulls = sorted(
-        (name for name in kept if len(residue(name, titles)) >= 2),
+        (name for name in kept if len(residue(name, titles)) >= _FULL_NAME_TOKENS),
         key=lambda name: (-mentions[name], name),
     )
     entity = group_full_names(fulls)
@@ -876,7 +884,8 @@ def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
     removed: dict[str, str] = {}
     bare: list[str] = []
     for name in sorted(
-        set(kept) - set(fulls), key=lambda item: (bool(name_tokens(item) & titles), item)
+        set(kept) - set(fulls),
+        key=lambda item: (bool(name_tokens(item) & titles), item),
     ):
         rest = residue(name, titles)
         only_titles = all(token in (titles | _TITLES) for token in name_tokens(name))
@@ -898,7 +907,9 @@ def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
         if len(hosts) == 1:
             host = next(iter(hosts))
             canonical[name] = (
-                name if titled and _contradicts(name, host, canonical, signals) else host
+                name
+                if titled and _contradicts(name, host, canonical, signals)
+                else host
             )
         elif not hosts or titled or not fallback:
             canonical[name] = name
@@ -916,6 +927,139 @@ def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
         else:
             removed[name] = "title held by several"
     return canonical, removed
+
+
+def _personhood(name: str, signals: _Signals) -> float:
+    """Return the share of mentions where a name speaks or owns something animate."""
+    return (signals.speech[name] + signals.animate[name]) / signals.mentions[name]
+
+
+def _group_or_place(name: str, signals: _Signals) -> str | None:
+    """Return why a name is not a person, while preserving speaking epithets."""
+    if _personhood(name, signals) >= _PERSONHOOD_FLOOR:
+        return None
+    mentions = signals.mentions[name]
+    if signals.the_det[name] / mentions >= _GROUP_THE_SHARE:
+        return "group"
+    governed = sum(
+        count
+        for word, count in signals.prep.get(name, {}).items()
+        if word in _LOCATIVE
+    )
+    return "place" if governed / mentions >= _PLACE_SHARE else None
+
+
+def _lowercase_attested(name: str, text: str) -> bool:
+    """Report whether a candidate also occurs twice as an ordinary lowercase word."""
+    word = re.escape(name.lower()).replace("'", "['\u2019]")
+    return len(re.findall(rf"(?<![\w'\u2019]){word}(?![\w'\u2019])", text)) >= 2  # noqa: PLR2004
+
+
+def _is_address(entry: RosterEntry, signals: _Signals, text: str) -> bool:
+    """Report a word used only to address people, never as a multi-word name."""
+    if any(len(alias.split()) > 1 for alias in entry.aliases):
+        return False
+    acts = sum(signals.speech[alias] for alias in entry.aliases) > 1 or any(
+        signals.animate[alias] for alias in entry.aliases
+    )
+    vocative = sum(signals.vocative[alias] for alias in entry.aliases)
+    return (
+        not acts
+        and vocative / max(1, entry.mentions) >= _ADDRESS_SHARE
+        and all(_lowercase_attested(alias, text) for alias in entry.aliases)
+    )
+
+
+def _base_entries(signals: _Signals, text: str, *, fallback: bool) -> list[RosterEntry]:
+    """Build folded entries, applying book-derived filters only in the fallback."""
+    kept = {
+        name
+        for name, count in signals.mentions.items()
+        if count >= MIN_MENTIONS and signals.evidence(name) >= MIN_EVIDENCE
+    }
+    if fallback:
+        kept = {name for name in kept if _group_or_place(name, signals) is None}
+    canonical, _ = _fold_names(signals, kept, fallback=fallback)
+    grouped: dict[str, set[str]] = defaultdict(set)
+    for name, target in canonical.items():
+        grouped[target].add(name)
+    entries = [
+        RosterEntry(
+            display_name=target,
+            aliases=frozenset(aliases),
+            mentions=sum(signals.mentions[alias] for alias in aliases),
+            evidence=sum(signals.evidence(alias) for alias in aliases),
+        )
+        for target, aliases in sorted(grouped.items())
+    ]
+    if fallback:
+        entries = [entry for entry in entries if not _is_address(entry, signals, text)]
+    return sorted(entries, key=lambda entry: (-entry.evidence, entry.display_name))[
+        :MAX_CHARACTERS
+    ]
+
+
+def _pooled(
+    table: Mapping[str, Counter[str]], aliases: frozenset[str]
+) -> Counter[str]:
+    pooled: Counter[str] = Counter()
+    for alias in aliases:
+        pooled.update(table.get(alias, {}))
+    return pooled
+
+
+def _profiles(
+    entries: Sequence[RosterEntry],
+    signals: _Signals,
+    chapters: Sequence[ChapterInspection],
+    dialogue: Mapping[str, Sequence[DialogueRange]],
+    pipeline: str,
+) -> tuple[tuple[CharacterProfile, ...], str | None]:
+    """Turn entries into characters and identify the first-person narrator."""
+    roster = tuple(
+        sorted(
+            (
+                CharacterProfile(
+                    id=slugify(entry.display_name),
+                    display_name=entry.display_name,
+                    gender=_gender_of(
+                        _pooled(signals.gender, entry.aliases),
+                        _pooled(signals.title_gender, entry.aliases),
+                    ),
+                    spoken_characters=0,
+                    chapter_ids=tuple(
+                        sorted(
+                            set().union(
+                                *(signals.chapters[alias] for alias in entry.aliases)
+                            )
+                        )
+                    ),
+                    aliases=tuple(sorted(entry.aliases)),
+                )
+                for entry in entries
+                if slugify(entry.display_name)
+            ),
+            key=lambda character: character.id,
+        )
+    )
+    canonical = {
+        alias: entry.display_name for entry in entries for alias in entry.aliases
+    }
+    narrator = _narrator_of(
+        chapters, dialogue, signals, canonical, frozenset(c.id for c in roster)
+    )
+    log_event(
+        _LOGGER,
+        "spacy_roster_derived",
+        context={
+            "boundary": "characters",
+            "pipeline": pipeline,
+            "candidates": len(signals.mentions),
+            "characters": len(roster),
+            "first_person": narrator is not None,
+        },
+    )
+    return roster, narrator
 
 
 def _narrator_of(
@@ -984,71 +1128,6 @@ def infer_roster(
     """
     signals = collect_signals(chapters, dialogue, pipeline=pipeline)
 
-    kept = {
-        name
-        for name, count in signals.mentions.items()
-        if count >= MIN_MENTIONS and signals.evidence(name) >= MIN_EVIDENCE
-    }
-    canonical, _ = _fold_names(signals, kept, fallback=True)
-
-    merged: dict[str, dict[str, Any]] = {}
-    for name in sorted(canonical):
-        target = canonical[name]
-        row = merged.setdefault(
-            target,
-            {
-                "display_name": target,
-                "aliases": set(),
-                "evidence": 0,
-                "chapter_ids": set(),
-                "gender": Counter(),
-                "title_gender": Counter(),
-            },
-        )
-        row["aliases"].add(name)
-        row["evidence"] += signals.evidence(name)
-        row["chapter_ids"] |= signals.chapters[name]
-        row["gender"].update(signals.gender[name])
-        row["title_gender"].update(signals.title_gender[name])
-
-    # Ranked by evidence to apply the cap, then returned sorted by id: the
-    # plan fingerprint requires a total order that content alone decides.
-    ranked = sorted(
-        merged.values(), key=lambda row: (-row["evidence"], row["display_name"])
-    )[:MAX_CHARACTERS]
-    roster = tuple(
-        sorted(
-            (
-                CharacterProfile(
-                    id=slugify(row["display_name"]),
-                    display_name=row["display_name"],
-                    gender=_gender_of(row["gender"], row["title_gender"]),
-                    spoken_characters=0,
-                    chapter_ids=tuple(sorted(row["chapter_ids"])),
-                    aliases=tuple(sorted(row["aliases"])),
-                )
-                for row in ranked
-                if slugify(row["display_name"])
-            ),
-            key=lambda character: character.id,
-        )
-    )
-    narrator = _narrator_of(
-        chapters,
-        dialogue,
-        signals,
-        canonical,
-        frozenset(character.id for character in roster),
-    )
-    log_event(
-        _LOGGER,
-        "spacy_roster_derived",
-        context={
-            "boundary": "characters",
-            "pipeline": pipeline,
-            "candidates": len(signals.mentions),
-            "characters": len(roster),
-            "first_person": narrator is not None,
-        },
-    )
-    return roster, narrator
+    text = "\n".join(chapter.text for chapter in chapters)
+    entries = _base_entries(signals, text, fallback=True)
+    return _profiles(entries, signals, chapters, dialogue, pipeline)

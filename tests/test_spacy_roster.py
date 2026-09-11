@@ -1,4 +1,5 @@
 """Deriving a character roster with spaCy instead of a language model."""
+# ruff: noqa: D102, D103, PLR2004
 
 from __future__ import annotations
 
@@ -78,7 +79,7 @@ The Fremen said nothing. They lived on Arrakis. From Arrakis came spice.
 """
 
 
-def signals_of(text: str) -> spacy_roster._Signals:  # noqa: SLF001
+def signals_of(text: str) -> spacy_roster._Signals:
     chapter = kk.ChapterInspection(
         id="ch-1", index=0, title="One", speech_characters=len(text), text=text
     )
@@ -125,7 +126,7 @@ def signals_with(
     *,
     gender: Mapping[str, Mapping[str, int]] | None = None,
     title_hosts: Mapping[str, Mapping[str, int]] | None = None,
-) -> spacy_roster._Signals:  # noqa: SLF001
+) -> spacy_roster._Signals:
     signals = spacy_roster._Signals()  # noqa: SLF001
     signals.mentions.update(mentions)
     signals.agency.update(dict.fromkeys(mentions, 1))
@@ -137,8 +138,8 @@ def signals_with(
 
 
 def fold(
-    signals: spacy_roster._Signals, *, fallback: bool = True  # noqa: SLF001
-):  # noqa: ANN201
+    signals: spacy_roster._Signals, *, fallback: bool = True
+) -> tuple[dict[str, str], dict[str, str]]:
     return spacy_roster._fold_names(  # noqa: SLF001
         signals, set(signals.mentions), fallback=fallback
     )
@@ -222,8 +223,62 @@ class TestFold:
     def test_couple_stays_apart_end_to_end(self) -> None:
         characters, _ = roster_of(SPOUSES)
         by_name = {character.display_name: character for character in characters}
-        assert "Count Fenring" in by_name and "Lady Fenring" in by_name
+        assert "Count Fenring" in by_name
+        assert "Lady Fenring" in by_name
         assert by_name["Lady Fenring"].gender == "feminine"
+
+
+class TestFallbackFilters:
+    """Offline-only filters for groups, places, and forms of address."""
+
+    def test_a_group_that_never_speaks_is_removed(self) -> None:
+        signals = signals_with({"Fremen": 100, "Stilgar": 80})
+        signals.the_det["Fremen"] = 60
+        signals.speech["Stilgar"] = 30
+        names = {
+            entry.display_name
+            for entry in spacy_roster._base_entries(signals, "", fallback=True)  # noqa: SLF001
+        }
+        assert names == {"Stilgar"}
+
+    def test_an_epithet_character_who_speaks_is_kept(self) -> None:
+        signals = signals_with({"Dragon": 368})
+        signals.the_det["Dragon"] = 360
+        signals.speech["Dragon"] = 102
+        names = {
+            entry.display_name
+            for entry in spacy_roster._base_entries(signals, "", fallback=True)  # noqa: SLF001
+        }
+        assert names == {"Dragon"}
+
+    def test_a_place_is_removed_but_of_does_not_count(self) -> None:
+        signals = signals_with({"Caladan": 52, "Muad'Dib": 165})
+        signals.prep["Caladan"].update({"on": 20, "from": 5})
+        signals.prep["Muad'Dib"].update({"of": 60})
+        names = {
+            entry.display_name
+            for entry in spacy_roster._base_entries(signals, "", fallback=True)  # noqa: SLF001
+        }
+        assert names == {"Muad'Dib"}
+
+    def test_a_form_of_address_is_removed_but_a_nickname_is_kept(self) -> None:
+        signals = signals_with({"Sire": 47, "Nieshka": 39})
+        signals.vocative.update({"Sire": 44, "Nieshka": 39})
+        text = "Yes, sire. No, sire. Nieshka laughed."
+        names = {
+            entry.display_name
+            for entry in spacy_roster._base_entries(signals, text, fallback=True)  # noqa: SLF001
+        }
+        assert names == {"Nieshka"}
+
+    def test_the_identity_path_skips_the_filters(self) -> None:
+        signals = signals_with({"Fremen": 100})
+        signals.the_det["Fremen"] = 60
+        names = {
+            entry.display_name
+            for entry in spacy_roster._base_entries(signals, "", fallback=False)  # noqa: SLF001
+        }
+        assert names == {"Fremen"}
 
 
 class TestSpelling:
@@ -231,7 +286,7 @@ class TestSpelling:
 
     def test_apostrophe_variants_clean_to_one_name(self) -> None:
         clean = spacy_roster._clean  # noqa: SLF001
-        assert clean("Muad‘Dib") == clean("Muad’Dib") == "Muad'Dib"
+        assert clean("Muad\u2018Dib") == clean("Muad\u2019Dib") == "Muad'Dib"
 
     def test_hyphenated_names_stay_whole(self) -> None:
         nlp = spacy_roster._load(spacy_roster.DEFAULT_PIPELINE)  # noqa: SLF001
