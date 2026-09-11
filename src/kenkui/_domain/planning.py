@@ -5,13 +5,28 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeVar, cast
 
-from kenkui._domain.grid import build_grid, sibling_counts
+from kenkui._domain.grid import (
+    GapReason,
+    StructuralIndex,
+    build_grid,
+    build_structure_index,
+    sibling_counts,
+)
+from kenkui._domain.grid_packing import (
+    FallbackCut,
+    PackedRange,
+    PackingInput,
+    SpokenMapping,
+    SpokenRegion,
+    pack_grid,
+)
 from kenkui._domain.operations import (
     AssignVoices,
     Attributions,
@@ -29,13 +44,6 @@ from kenkui._domain.spoken import (
     SPOKEN_FORM_VERSION,
     spoken_identity,
     to_spoken,
-)
-from kenkui._domain.structure import (
-    CHAPTER,
-    STRUCTURE_SCHEMA_VERSION,
-    break_tiers,
-    gap_ms,
-    split_structural,
 )
 from kenkui._domain.text import NORMALIZATION_VERSION
 from kenkui._domain.tuning import layered_rules, resolve_rules
@@ -60,65 +68,9 @@ PARSER_SCHEMA_VERSION = "epub-visible-text-v1"
 NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
 PLANNING_SCHEMA_VERSION = "execution-plan-v2"
 RENDER_SCHEMA_VERSION = "m4b-render-v1"
-CHUNKING_SCHEMA_VERSION = "tts-chunks-v4"
-STRUCTURAL_CHUNKING_SCHEMA_VERSION = "tts-chunks-v5"
+GRID_CHUNKING_SCHEMA_VERSION = "grid-v1"
 _NO_PAUSES = Pauses()
 MAX_TTS_SEGMENT_CHARACTERS = 1000
-# Pocket-TTS divides a segment on ".!?", sub-divides what is left on ",;:", and
-# only then packs the pieces into bounded chunks. A run holding none of these is
-# indivisible to it, so an over-long one is generated past the model's own limit
-# and returns as unusable audio. Kenkui splits such a run itself while a natural
-# boundary is still available.
-POCKET_SEPARATORS = ".!?,;:"
-# Calibrated against the engine's own tokenizer over three full books, counting
-# the way it does (newlines collapse to spaces before tokenizing). English prose
-# runs about 2.8-3.2 characters per token, not the one-token-per-character worst
-# case a previous value assumed: at 200 characters the worst separator-free run
-# measured 70-104 tokens, and only 31-126 runs per whole book exceeded the
-# engine's 50-token limit at all.
-#
-# That limit is softer than it looks. Transcribing synthesized runs with Whisper
-# puts word loss at zero through 80 tokens -- 60% past the limit -- and at 0.4%
-# through 150, rising to 3% only beyond that. 200 characters holds every book
-# measured inside the zero-loss band, while leaving the guard able to divide the
-# genuinely pathological runs that reach 207 tokens without it.
-#
-# The earlier value of 48 held every run under the limit and cost 78-86% of all
-# segments a cut mid-clause, which the engine then spoke as a finished sentence.
-# 150 is the conservative alternative: about 4% more segments for a slightly
-# tighter token tail.
-MAX_SEPARATOR_FREE_CHARACTERS = 200
-# Break points ranked by how natural the resulting pause sounds. Each tier keeps
-# its separator in the preceding chunk so joining stays exact.
-_BREAK_TIERS = (
-    r"\n\s*",
-    r"[.!?][\"')\]]*\s+|[,;:][\"')\]]*\s+",
-    r"\s+",
-    r"[-\u2010-\u2015]",
-)
-# The subset of _BREAK_TIERS whose cut leaves the preceding fragment ending in
-# punctuation or a line break. Pocket-TTS's prepare_text_prompt appends a full
-# stop to any input ending alphanumeric, and every segment is its own
-# generate_audio call, so a cut on the bare-whitespace tier is synthesized as a
-# completed sentence -- an audible break mid-clause. Its own splitter never
-# does this: it cuts on ".!?" or ",;:" and keeps the separator, so its
-# fragments always end in punctuation and the stop is never appended.
-#
-# A forced cut may therefore use every tier except bare whitespace. Where none
-# of these is available the run is left whole and the engine packs it
-# internally, which measured at zero word loss below 80 tokens.
-_CLEAN_BREAK_TIERS = (
-    r"\n\s*",
-    r"[.!?][\"')\]]*\s+|[,;:][\"')\]]*\s+",
-    r"[-\u2010-\u2015]",
-)
-# A better boundary is only worth taking when it still fills the window. Without
-# this, one early line break would strand a nearly empty chunk and multiply the
-# per-segment synthesis overhead across a book. Measured over one 594k-character
-# book, the share of breaks landing on a line break or clause boundary moves only
-# from 71% to 64% across fills of 0.5 to 0.8, while segment count falls 1211 to
-# 987, so the middle of that range buys most of the quality for less overhead.
-MIN_BREAK_FILL = 0.7
 _SEGMENT_ID_VERSION = "v2"
 _UTF8_HASH_CHUNK_CHARACTERS = 64 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -129,6 +81,38 @@ _Entries: TypeAlias = tuple[tuple[str, str], ...]
 # entries). Empty means no scoped lexicon exists and the whole chapter speaks
 # under ``SpokenForm.lexicon``, which is the pre-tuning path exactly.
 _LexiconRegions: TypeAlias = tuple[tuple[int, int, _Entries], ...]
+
+
+def _gap_ms(reasons: GapReason, pauses: Pauses) -> int:
+    """Translate pure grid reasons to one derived duration after packing.
+
+    A line pause applies only to a single-newline boundary; paragraph and
+    chapter boundaries close nested line ranges too, but retain their distinct
+    legacy pause semantics. Coincident pause-policy reasons take the maximum.
+    """
+    if GapReason.CHAPTER in reasons:
+        return pauses.chapter_ms
+    durations: list[int] = []
+    if GapReason.PARAGRAPH in reasons:
+        durations.append(pauses.paragraph_ms)
+        if GapReason.HEADING_BEFORE in reasons:
+            durations.append(pauses.heading_before_ms)
+        if GapReason.HEADING_AFTER in reasons:
+            durations.append(pauses.heading_after_ms)
+    elif GapReason.LINE in reasons:
+        durations.append(pauses.line_ms)
+    return max(durations, default=0)
+
+
+def _gap_enabled(reasons: GapReason, pauses: Pauses) -> bool:
+    """Whether an effective pause makes this grid gap a mandatory cut."""
+    if GapReason.PARAGRAPH in reasons:
+        return bool(
+            pauses.paragraph_ms
+            or (GapReason.HEADING_BEFORE in reasons and pauses.heading_before_ms)
+            or (GapReason.HEADING_AFTER in reasons and pauses.heading_after_ms)
+        )
+    return GapReason.LINE in reasons and bool(pauses.line_ms)
 
 
 class _HashDigest(Protocol):
@@ -169,7 +153,6 @@ class SchemaVersions:
     planning: str
     render: str
     spoken_form: str | None = None
-    structure: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +315,9 @@ class _SegmentSource:
     chunk_end: int
     chunk_index: int
     offsets: tuple[tuple[int, int, int, int], ...]
+    canonical_start: int = 0
+    canonical_end: int = 0
+    fallback_cut_after: FallbackCut | None = None
 
 
 def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
@@ -381,6 +367,8 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     pauses = _one_operation(pipeline.operations, Pauses) or _NO_PAUSES
     patterns = selected_patterns(pipeline.operations)
     origins: list[_SegmentSource] | None = [] if patterns else None
+    grids: dict[str, tuple[Unit, ...]] = {}
+    structures: dict[str, StructuralIndex] = {}
     source_chapters = inspection._planning_chapters or inspection.chapters  # noqa: SLF001
     segments, trailing_silence = _compile_segments(
         source_chapters,
@@ -390,10 +378,19 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         pauses,
         operations=pipeline.operations,
         origins=origins,
+        grids=grids,
+        structures=structures,
     )
     if origins is not None:
         segments, trailing_silence = _select_segments(
-            segments, origins, source_chapters, pipeline.operations, spoken, pauses
+            segments,
+            origins,
+            source_chapters,
+            pipeline.operations,
+            spoken,
+            pauses,
+            grids,
+            structures,
         )
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
@@ -401,7 +398,8 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
     # must describe the book the caller supplied.
     counts = {
         chapter.id: sum(
-            end - start for start, end in selected_ranges(chapter, patterns)
+            end - start
+            for start, end in selected_ranges(chapter, patterns, grid=grids[chapter.id])
         )
         for chapter in inspection.chapters
     }
@@ -427,7 +425,6 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         planning=PLANNING_SCHEMA_VERSION,
         render=RENDER_SCHEMA_VERSION,
         spoken_form=SPOKEN_FORM_VERSION if spoken is not None else None,
-        structure=STRUCTURE_SCHEMA_VERSION if break_tiers(pauses) else None,
     )
     material = _PlanMaterial(
         schemas,
@@ -515,6 +512,8 @@ def effective_spans(
     chapter: ChapterInspection,
     machine_spans: tuple[SpeakerSpan, ...],
     operations: tuple[Operation, ...],
+    *,
+    grid: tuple[Unit, ...] | None = None,
 ) -> tuple[SpeakerSpan, ...]:
     """Merge machine attribution with tuning rules into the spans planning compiles.
 
@@ -529,21 +528,21 @@ def effective_spans(
 
     Once any rule exists the chapter is re-tiled from grid units, and a rule
     matching nothing must still return the machine spans byte for byte. That
-    holds on an unstated property of ``extract_spans``: it emits a narration
-    span between any two quote runs, so no two machine spans ever share a
-    speaker across a boundary and ``_coalesce`` has nothing to merge that
-    attribution left separate. ``test_tuning_merge`` pins it.
+    holds on an attribution invariant: it emits a narration span between any
+    two quote runs, so no two machine spans ever share a speaker across a
+    boundary and ``_coalesce`` has nothing to merge that attribution left
+    separate. ``test_tuning_merge`` pins it.
     """
     rules = _rules_of(operations, Attributions)
     if not rules:
         return machine_spans
-    grid = build_grid(chapter)
-    siblings = sibling_counts(grid)
+    units = build_grid(chapter) if grid is None else grid
+    siblings = sibling_counts(units)
     speaker = _machine_lookup(chapter.id, machine_spans)
     decided = [
-        resolve_rules(unit, speaker(unit), rules, siblings).value for unit in grid
+        resolve_rules(unit, speaker(unit), rules, siblings).value for unit in units
     ]
-    return _coalesce(chapter.id, grid, decided)
+    return _coalesce(chapter.id, units, decided)
 
 
 def effective_spoken_form(operations: tuple[Operation, ...]) -> SpokenForm | None:
@@ -589,6 +588,7 @@ def _lexicon_regions(
     chapter: ChapterInspection,
     operations: tuple[Operation, ...],
     spoken: SpokenForm | None,
+    grid: tuple[Unit, ...] | None = None,
 ) -> _LexiconRegions:
     """Return each canonical run of a chapter beside the lexicon speaking it.
 
@@ -606,10 +606,10 @@ def _lexicon_regions(
     )
     if not scoped:
         return ()
-    grid = build_grid(chapter)
-    siblings = sibling_counts(grid)
+    units = build_grid(chapter) if grid is None else grid
+    siblings = sibling_counts(units)
     regions: list[tuple[int, int, _Entries]] = []
-    for unit in grid:
+    for unit in units:
         entries = _merged_entries(spoken.lexicon, layered_rules(unit, scoped, siblings))
         if regions and regions[-1][2] == entries and regions[-1][1] == unit.start:
             regions[-1] = (regions[-1][0], unit.end, entries)
@@ -779,13 +779,12 @@ def _subtree(unit: Unit, depth: int) -> tuple[str | int, ...]:
 
 
 def _manual_offsets(
-    chapter: ChapterInspection, operations: tuple[Operation, ...]
+    grid: tuple[Unit, ...], operations: tuple[Operation, ...]
 ) -> Mapping[int, int]:
     """Return declared silences keyed by the text offset they follow."""
     rules = _rules_of(operations, Silences)
     if not rules:
         return {}
-    grid = build_grid(chapter)
     return {grid[index].end: value for index, value in _gaps_over(grid, rules).items()}
 
 
@@ -798,33 +797,48 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
     *,
     operations: tuple[Operation, ...] = (),
     origins: list[_SegmentSource] | None = None,
+    grids: dict[str, tuple[Unit, ...]] | None = None,
+    structures: dict[str, StructuralIndex] | None = None,
 ) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
-    """Split each speaker span while assigning one global plan-order ordinal.
+    """Pack each chapter while assigning one global plan-order ordinal.
 
-    Spans partition a chapter, and the frozen chunker runs inside each one, so
-    concatenating every chunk still reproduces the chapter exactly. A chapter
-    with no spans is one narration span, which is byte-for-byte the behaviour
-    that existed before attribution.
+    Speaker spans partition a chapter and become mandatory cuts in its single
+    hierarchical packing request. Concatenating every packed segment therefore
+    reproduces the chapter exactly. A chapter with no spans is one narration
+    region, preserving the behavior that existed before attribution.
 
     A piece holding no speakable character is never a segment of its own. Two
-    adjacent quotations are separated by exactly such a piece, and an engine
-    handed pure whitespace returns no samples, which fails the whole render.
-    The text is carried onto the next segment instead, so the partition still
-    reproduces the chapter exactly.
+    adjacent quotations are separated by exactly such a span, and an engine
+    handed pure whitespace returns no samples. Such spans are assigned to the
+    next effective speaker before packing, preserving the legacy concatenated
+    text without recombining already-bounded packer output.
     """
-    tiers = break_tiers(pauses)
     result: list[SpeechSegment] = []
     silence: list[int] = []
     for chapter_index, chapter in enumerate(chapters):
+        if (
+            not chapter.text
+            or chapter.speech_characters is None
+            or chapter.speech_characters != len(chapter.text)
+        ):
+            raise ValidationError(ErrorCode.EMPTY_SPEECH)
+        grid = build_grid(chapter)
+        if grids is not None:
+            grids[chapter.id] = grid
+        structure = build_structure_index(grid)
+        if structures is not None:
+            structures[chapter.id] = structure
+        manual = _manual_offsets(grid, operations)
         _append_chapter(
             chapter,
-            _spans_for(chapter, effective_spans(chapter, spans, operations)),
+            _spans_for(chapter, effective_spans(chapter, spans, operations, grid=grid)),
             cast_plan,
+            grid=grid,
+            structure=structure,
             spoken=spoken,
             pauses=pauses,
-            tiers=tiers,
-            gaps=_manual_offsets(chapter, operations),
-            regions=_lexicon_regions(chapter, operations, spoken),
+            gaps=manual,
+            regions=_lexicon_regions(chapter, operations, spoken, grid),
             result=result,
             silence=silence,
             origins=origins,
@@ -833,58 +847,272 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
         # chapter N+1 begins exactly on its first spoken word. Max, not sum:
         # a chapter end meeting a heading-before pause is one gap.
         if silence and chapter_index + 1 < len(chapters):
-            silence[-1] = max(silence[-1], gap_ms(frozenset({CHAPTER}), pauses))
+            chapter_manual = manual.get(grid[-1].end) if grid else None
+            if chapter_manual is None:
+                silence[-1] = max(silence[-1], _gap_ms(GapReason.CHAPTER, pauses))
     if silence:
         silence[-1] = 0  # A book must not end on dead air.
     return tuple(result), tuple(silence)
 
 
-def _structural_pieces(
-    chapter: ChapterInspection, pauses: Pauses
-) -> tuple[tuple[int, int, frozenset[str]], ...]:
-    """Return each structural piece of a chapter as (start, end, reasons).
-
-    Decided once over the whole chapter, because a gap belongs to the text and
-    not to whoever happens to speak either side of it. Deciding it inside a
-    span makes that span's final block look like the end of the text, which
-    suppresses the gap after it -- and a paragraph break before a line of
-    dialogue is exactly that shape.
-    """
-    headings = frozenset(chapter.headings)
-    pieces: list[tuple[int, int, frozenset[str]]] = []
-    position = 0
-    for piece in split_structural(chapter.text, headings, pauses):
-        end = position + len(piece.text)
-        pieces.append((position, end, piece.reasons))
-        position = end
-    return tuple(pieces)
-
-
-def _fragments(
-    pieces: tuple[tuple[int, int, frozenset[str]], ...],
-    span: SpeakerSpan,
+def _semantic_cuts(  # noqa: PLR0913, PLR0917 - complete semantic boundary set.
+    grid: tuple[Unit, ...],
+    spans: tuple[SpeakerSpan, ...],
+    pauses: Pauses,
     gaps: Mapping[int, int],
-) -> tuple[tuple[int, int, frozenset[str], int | None], ...]:
-    """Clip chapter pieces to one span, keeping a gap only where a piece ends.
+    reasons_by_offset: Mapping[int, GapReason],
+    regions: _LexiconRegions,
+) -> frozenset[int]:
+    """Return every canonical edge the packer is forbidden to cross.
 
-    A fragment that stops early stops because the speaker changed, which is
-    not a structural boundary and carries no silence of its own. A declared
-    silence is such a boundary: cutting the fragment there is what gives the
-    gap a segment to land on.
+    Speaker spans also cover voice changes because the cast is a pure lookup
+    from effective speaker to voice.  Pronunciation regions are already
+    coalesced by effective lexicon, while manual gaps remain mandatory even
+    when their replacement duration is zero.
     """
-    out: list[tuple[int, int, frozenset[str], int | None]] = []
-    for start, end, reasons in pieces:
-        lower, upper = max(start, span.start), min(end, span.end)
-        if lower >= upper:
-            continue
-        position = lower
-        for cut in [offset for offset in sorted(gaps) if lower < offset < upper]:
-            out.append((position, cut, frozenset(), gaps[cut]))
-            position = cut
-        out.append(
-            (position, upper, reasons if upper == end else frozenset(), gaps.get(upper))
+    chapter_start = grid[0].start
+    chapter_end = grid[-1].end
+    cuts = {
+        chapter_start,
+        chapter_end,
+        *(span.start for span in spans),
+        *(span.end for span in spans),
+        *(edge for region in regions for edge in region[:2]),
+        *gaps,
+    }
+    cuts.update(
+        offset
+        for offset, reasons in reasons_by_offset.items()
+        if _gap_enabled(reasons, pauses)
+    )
+    return frozenset(cuts)
+
+
+def _spoken_regions(  # noqa: PLR0913 - complete transformation boundary.
+    chapter: ChapterInspection,
+    spoken: SpokenForm | None,
+    lexicon_regions: _LexiconRegions,
+    cuts: Iterable[int],
+    *,
+    lower: int = 0,
+    upper: int | None = None,
+) -> tuple[SpokenRegion, ...]:
+    """Transform each semantic interval and retain exact canonical mappings."""
+    last = len(chapter.text) if upper is None else upper
+    boundaries = (
+        lower,
+        *sorted(edge for edge in set(cuts) if lower < edge < last),
+        last,
+    )
+    regions: list[SpokenRegion] = []
+    for start, end in pairwise(boundaries):
+        canonical = chapter.text[start:end]
+        offsets: list[tuple[int, int, int, int]] = []
+        rendered = (
+            canonical
+            if spoken is None
+            else _speak(canonical, start, spoken, lexicon_regions, offsets)
         )
-    return tuple(out)
+        mappings = tuple(
+            SpokenMapping(
+                start + source_start, start + source_end, spoken_start, spoken_end
+            )
+            for source_start, source_end, spoken_start, spoken_end in offsets
+        )
+        regions.append(SpokenRegion(start, end, rendered, mappings))
+    return tuple(regions)
+
+
+def _global_offsets(
+    regions: tuple[SpokenRegion, ...],
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Flatten region-local replacement mappings into chapter coordinates."""
+    offsets: list[tuple[int, int, int, int]] = []
+    spoken_start = 0
+    for region in regions:
+        offsets.extend(
+            (
+                mapping.canonical_start,
+                mapping.canonical_end,
+                spoken_start + mapping.spoken_start,
+                spoken_start + mapping.spoken_end,
+            )
+            for mapping in region.mappings
+        )
+        spoken_start += len(region.text)
+    return tuple(offsets)
+
+
+def _span_at(spans: tuple[SpeakerSpan, ...], offset: int) -> SpeakerSpan:
+    """Return the effective speaker span owning one packed canonical start."""
+    starts = [span.start for span in spans]
+    index = bisect_right(starts, offset) - 1
+    if index < 0 or not spans[index].start <= offset < spans[index].end:
+        raise ValidationError(ErrorCode.EMPTY_SPEECH)
+    return spans[index]
+
+
+def _absorb_unspeakable_spans(
+    canonical: str, spans: tuple[SpeakerSpan, ...]
+) -> tuple[SpeakerSpan, ...]:
+    """Assign whitespace-only source spans to adjacent effective speech.
+
+    Whitespace has no synthesizable speaker of its own. Phase 1 carried such a
+    run onto the next spoken fragment before chunking; moving its canonical
+    start onto that fragment preserves the same content/voice ordering while
+    letting the grid packer enforce the budget and record every fallback cut.
+    A trailing whitespace-only run belongs to the preceding effective span.
+    """
+    result: list[SpeakerSpan] = []
+    pending_start: int | None = None
+    for span in spans:
+        if not canonical[span.start : span.end].strip():
+            if pending_start is None:
+                pending_start = span.start
+            continue
+        effective = (
+            span if pending_start is None else replace(span, start=pending_start)
+        )
+        pending_start = None
+        result.append(effective)
+    if pending_start is not None and result:
+        result[-1] = replace(result[-1], end=spans[-1].end)
+    return tuple(result)
+
+
+def _unspeakable_ranges(
+    canonical: str,
+    spans: tuple[SpeakerSpan, ...],
+    grid: tuple[Unit, ...],
+) -> tuple[tuple[int, int], ...]:
+    """Return coalesced canonical runs that cannot produce speech."""
+    candidates = sorted(
+        {
+            (start, end)
+            for start, end in (
+                *((span.start, span.end) for span in spans),
+                *((unit.start, unit.end) for unit in grid),
+            )
+            if not canonical[start:end].strip()
+        }
+    )
+    result: list[tuple[int, int]] = []
+    for start, end in candidates:
+        if result and start <= result[-1][1]:
+            result[-1] = (result[-1][0], max(result[-1][1], end))
+        else:
+            result.append((start, end))
+    return tuple(result)
+
+
+def _settle_unspeakable_gaps(
+    unspeakable: tuple[tuple[int, int], ...], gaps: Mapping[int, int]
+) -> dict[int, int]:
+    """Move gaps inside inaudible spans to the preceding effective boundary."""
+    settled = dict(gaps)
+    for start, end in unspeakable:
+        offsets = sorted(edge for edge in settled if start < edge <= end)
+        for edge in offsets:
+            settled[start] = settled.pop(edge)
+    return settled
+
+
+def _settle_unspeakable_reasons(
+    unspeakable: tuple[tuple[int, int], ...],
+    grid: tuple[Unit, ...],
+    structure: StructuralIndex,
+) -> dict[int, GapReason]:
+    """Fold pure gap reasons across spans that cannot produce speech."""
+    return _settle_reasons_over(
+        unspeakable,
+        {unit.end: reasons for unit, reasons in zip(grid, structure.gaps, strict=True)},
+    )
+
+
+def _settle_reasons_over(
+    unspeakable: tuple[tuple[int, int], ...],
+    reasons: Mapping[int, GapReason],
+) -> dict[int, GapReason]:
+    """Fold selected pure gap reasons across inaudible canonical spans."""
+    settled = dict(reasons)
+    for start, end in unspeakable:
+        offsets = sorted(edge for edge in settled if start < edge <= end)
+        for edge in offsets:
+            settled[start] = settled.get(start, GapReason.NONE) | settled.pop(edge)
+    return settled
+
+
+def _redistribute_unspeakable_ranges(
+    packed: tuple[PackedRange, ...],
+    spoken_text: str,
+    offsets: tuple[tuple[int, int, int, int], ...],
+) -> tuple[PackedRange, ...]:
+    """Attach bounded whitespace runs to adjacent synthesizable ranges.
+
+    Prefer the following range, matching phase 1's carry direction. If a long
+    run does not fit there, its prefix fills the preceding range. Only an
+    unrepresentable middle remainder is omitted; that requires more whitespace
+    than both adjacent speech segments can hold and phase 1 also discarded the
+    resulting whitespace-only chunks.
+    """
+    items = list(packed)
+    result: list[PackedRange] = []
+    index = 0
+    while index < len(items):
+        item = items[index]
+        if spoken_text[item.spoken_start : item.spoken_end].strip():
+            result.append(item)
+            index += 1
+            continue
+
+        past = index + 1
+        while (
+            past < len(items)
+            and not spoken_text[
+                items[past].spoken_start : items[past].spoken_end
+            ].strip()
+        ):
+            past += 1
+        run_start = item.spoken_start
+        run_end = items[past - 1].spoken_end
+
+        suffix_start = run_end
+        if past < len(items):
+            following = items[past]
+            capacity = MAX_TTS_SEGMENT_CHARACTERS - (
+                following.spoken_end - following.spoken_start
+            )
+            suffix_start = max(run_start, run_end - capacity)
+            if suffix_start < run_end:
+                items[past] = replace(
+                    following,
+                    canonical_start=_translated_offset(
+                        offsets, suffix_start, reverse=True
+                    ),
+                    spoken_start=suffix_start,
+                )
+
+        if result and run_start < suffix_start:
+            preceding = result[-1]
+            capacity = MAX_TTS_SEGMENT_CHARACTERS - (
+                preceding.spoken_end - preceding.spoken_start
+            )
+            prefix_end = min(suffix_start, run_start + capacity)
+            if run_start < prefix_end:
+                result[-1] = replace(
+                    preceding,
+                    canonical_end=_translated_offset(
+                        offsets, prefix_end, reverse=True, upper_edge=True
+                    ),
+                    spoken_end=prefix_end,
+                    fallback_cut_after=(
+                        FallbackCut.WHITESPACE
+                        if prefix_end < run_end
+                        else preceding.fallback_cut_after
+                    ),
+                )
+        index = past
+    return tuple(result)
 
 
 def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
@@ -892,124 +1120,125 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     spans: tuple[SpeakerSpan, ...],
     cast_plan: CastPlan,
     *,
+    grid: tuple[Unit, ...],
+    structure: StructuralIndex,
     spoken: SpokenForm | None,
     pauses: Pauses,
-    tiers: tuple[str, ...],
     gaps: Mapping[int, int],
     regions: _LexiconRegions,
     result: list[SpeechSegment],
     silence: list[int],
     origins: list[_SegmentSource] | None = None,
 ) -> None:
-    """Append one chapter's segments and their trailing gaps, in plan order."""
-    pieces = _structural_pieces(chapter, pauses)
-    carried = ""
-    carried_source = ""
-    for span in spans:
+    """Append one chapter packed over its grid and semantic boundaries."""
+    unspeakable = _unspeakable_ranges(chapter.text, spans, grid)
+    gaps = _settle_unspeakable_gaps(unspeakable, gaps)
+    reasons_by_offset = _settle_unspeakable_reasons(unspeakable, grid, structure)
+    spans = _absorb_unspeakable_spans(chapter.text, spans)
+    cuts = _semantic_cuts(grid, spans, pauses, gaps, reasons_by_offset, regions)
+    spoken_regions = _spoken_regions(chapter, spoken, regions, cuts)
+    spoken_text = "".join(region.text for region in spoken_regions)
+    packed = pack_grid(
+        PackingInput(
+            leaves=grid,
+            ranges=structure,
+            spoken_regions=spoken_regions,
+            mandatory_cuts=cuts,
+            character_budget=MAX_TTS_SEGMENT_CHARACTERS,
+        )
+    )
+    source_offsets = _global_offsets(spoken_regions)
+    packed = _redistribute_unspeakable_ranges(packed, spoken_text, source_offsets)
+    chapter_segment_start = len(result)
+    emitted: list[PackedRange] = []
+    for chunk_index, item in enumerate(packed):
+        text = spoken_text[item.spoken_start : item.spoken_end]
+        chunk_start = item.spoken_start
+        canonical_start = item.canonical_start
+        span = _span_at(spans, item.canonical_start)
         voice = cast_plan.voice_for(span.character_id)
-        for start, end, reasons, manual in _fragments(pieces, span, gaps):
-            text = chapter.text[start:end]
-            canonical = carried_source + text
-            canonical_start = start - len(carried_source)
-            carried_source = ""
-            offsets: list[tuple[int, int, int, int]] | None = (
-                [] if origins is not None and spoken is not None else None
-            )
-            if spoken is not None:
-                text = _speak(text, start, spoken, regions, offsets)
-            text = f"{carried}{text}"
-            carried = ""
-            if not text.strip():
-                # Nothing to say. Hold the characters for the next fragment
-                # and let this fragment's gap land on the last real segment.
-                carried = text
-                carried_source = canonical
-                _apply_gap(silence, reasons, pauses, manual)
-                continue
-            chunk_start = 0
-            source_offsets = tuple(
-                (
-                    lower + start - canonical_start,
-                    upper + start - canonical_start,
-                    first + start - canonical_start,
-                    last + start - canonical_start,
-                )
-                for lower, upper, first, last in offsets or ()
-            )
-            for chunk_index, chunk in enumerate(_chunk_span(chapter, text)):
-                chunk_end = chunk_start + len(chunk)
-                if not chunk.strip():
-                    # A break cut can leave a whitespace-only tail chunk, such
-                    # as a paragraph's trailing newline. It carries no speech,
-                    # and the engine cannot synthesize empty text, so it is
-                    # dropped; the fragment's gap lands on the last real chunk.
-                    chunk_start = chunk_end
-                    continue
-                result.append(
-                    _segment(
-                        chapter,
-                        len(result),
-                        chunk_index,
-                        chunk,
-                        speaker_id=span.character_id,
-                        voice_id=voice.id,
-                        spoken=spoken,
-                        tiers=tiers,
-                    )
-                )
-                silence.append(0)
-                if origins is not None:
-                    origins.append(
-                        _SegmentSource(
-                            canonical_start,
-                            canonical,
-                            text,
-                            chunk_start,
-                            chunk_end,
-                            chunk_index,
-                            source_offsets,
-                        )
-                    )
-                chunk_start = chunk_end
-            _apply_gap(silence, reasons, pauses, manual)
-    if carried.strip():
-        # Normalized text is not expected to end a chapter in whitespace, but
-        # spoken-form transforms can leave one (epigraph pages). A whitespace
-        # -only segment has no speech to synthesize and would fail the engine,
-        # so a truly empty carry is dropped; the chapter's trailing gap already
-        # landed on the last real segment. Emitting keeps the partition exact
-        # whenever the carry contains any speakable text.
         result.append(
-            _segment(chapter, len(result), 0, carried, spoken=spoken, tiers=tiers)
+            _segment(
+                chapter,
+                len(result),
+                chunk_index,
+                text,
+                speaker_id=span.character_id,
+                voice_id=voice.id,
+                spoken=spoken,
+            )
         )
         silence.append(0)
+        emitted.append(item)
+        if origins is not None:
+            origins.append(
+                _SegmentSource(
+                    0,
+                    chapter.text,
+                    spoken_text,
+                    chunk_start,
+                    item.spoken_end,
+                    chunk_index,
+                    source_offsets,
+                    canonical_start,
+                    item.canonical_end,
+                    item.fallback_cut_after,
+                )
+            )
+    starts = [item.canonical_start for item in emitted]
+    for offset in sorted(reasons_by_offset.keys() | gaps.keys()):
+        owner = bisect_left(starts, offset) - 1
+        if owner >= 0:
+            _apply_gap_at(
+                silence,
+                chapter_segment_start + owner,
+                reasons_by_offset.get(offset, GapReason.NONE),
+                pauses,
+                gaps.get(offset),
+            )
 
 
 def grid_silences(
     chapter: ChapterInspection,
     units: tuple[Unit, ...],
     operations: tuple[Operation, ...],
+    *,
+    structure: StructuralIndex | None = None,
 ) -> dict[int, int]:
     """Settle selected grid gaps onto speech-bearing leaves, shared with Script."""
     pauses = _one_operation(operations, Pauses) or _NO_PAUSES
-    derived = {
-        end: reasons for _start, end, reasons in _structural_pieces(chapter, pauses)
-    }
+    derived = (build_structure_index(units) if structure is None else structure).gaps
     rules = _rules_of(operations, Silences)
     manual = _gaps_over(units, rules) if rules else {}
     patterns = selected_patterns(operations)
     siblings = sibling_counts(units)
+    selected = tuple(
+        index
+        for index, unit in enumerate(units)
+        if selected_unit(unit, patterns, siblings)
+    )
+    selected_units = tuple(units[index] for index in selected)
+    unspeakable = _unspeakable_ranges(chapter.text, (), selected_units)
+    reasons_by_offset = _settle_reasons_over(
+        unspeakable, {units[index].end: derived[index] for index in selected}
+    )
+    gaps = _settle_unspeakable_gaps(
+        unspeakable,
+        {units[index].end: manual[index] for index in selected if index in manual},
+    )
     indices: list[int] = []
     silence: list[int] = []
-    for index, unit in enumerate(units):
-        if not selected_unit(unit, patterns, siblings):
-            continue
+    for index in selected:
+        unit = units[index]
         if chapter.text[unit.start : unit.end].strip():
             indices.append(index)
             silence.append(0)
-        _apply_gap(
-            silence, derived.get(unit.end, frozenset()), pauses, manual.get(index)
-        )
+            _apply_gap(
+                silence,
+                reasons_by_offset.get(unit.end, GapReason.NONE),
+                pauses,
+                gaps.get(unit.end),
+            )
     return dict(zip(indices, silence, strict=True))
 
 
@@ -1082,20 +1311,119 @@ def _selected_text(
     return start, end, "".join(pieces)
 
 
-def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
+def _selected_edge_segments(  # noqa: PLR0913, PLR0917 - one edge context.
+    segment: SpeechSegment,
+    origin: _SegmentSource,
+    chapter: ChapterInspection,
+    text: str,
+    start: int,
+    end: int,
+    first: int,
+    last: int,
+    spoken: SpokenForm | None,
+    grid: tuple[Unit, ...],
+    structure: StructuralIndex,
+) -> tuple[tuple[SpeechSegment, int], ...]:
+    """Return one bounded selected edge and its canonical source starts."""
+    if start == origin.chunk_start and end == origin.chunk_end and text == segment.text:
+        source_start = origin.start + _translated_offset(
+            origin.offsets, start, reverse=True
+        )
+        return ((segment, source_start),)
+    if len(text) <= MAX_TTS_SEGMENT_CHARACTERS:
+        source_start = origin.start + _translated_offset(
+            origin.offsets, start, reverse=True
+        )
+        return (
+            (
+                _segment(
+                    chapter,
+                    segment.ordinal,
+                    origin.chunk_index,
+                    text,
+                    speaker_id=segment.speaker_id,
+                    voice_id=segment.voice_id,
+                    spoken=spoken,
+                    selection=(first, last),
+                ),
+                source_start,
+            ),
+        )
+
+    # A selection may expose canonical text that a full-plan pronunciation
+    # contracted below the ceiling. Re-speak and hierarchically pack only this
+    # changed edge; bounded and wholly-contained segments retain their IDs.
+    source_first = max(origin.canonical_start, origin.start + first)
+    source_last = min(origin.canonical_end, origin.start + last)
+    # Preserve the exact edge text already produced by `_selected_text`.
+    # Re-speaking the wider selected range can choose a different overlapping
+    # longest-match lexicon entry than the partial edit did. Treat this changed
+    # edge as one mapped replacement so the packer owns only its hierarchy,
+    # hard ceiling, and emergency cuts—not a second transformation decision.
+    selected_regions = (
+        SpokenRegion(
+            source_first,
+            source_last,
+            text,
+            (SpokenMapping(source_first, source_last, 0, len(text)),),
+        ),
+    )
+    repacked = pack_grid(
+        PackingInput(
+            leaves=grid,
+            ranges=structure,
+            spoken_regions=selected_regions,
+            mandatory_cuts=frozenset({source_first, source_last}),
+            character_budget=MAX_TTS_SEGMENT_CHARACTERS,
+        )
+    )
+    selected_spoken = text
+    repacked = _redistribute_unspeakable_ranges(
+        repacked, selected_spoken, _global_offsets(selected_regions)
+    )
+    return tuple(
+        (
+            _segment(
+                chapter,
+                segment.ordinal,
+                origin.chunk_index,
+                selected_spoken[item.spoken_start : item.spoken_end],
+                speaker_id=segment.speaker_id,
+                voice_id=segment.voice_id,
+                spoken=spoken,
+                selection=(first, last, item.spoken_start, item.spoken_end),
+            ),
+            item.canonical_start,
+        )
+        for item in repacked
+    )
+
+
+def _select_segments(  # noqa: C901, PLR0913, PLR0917 - pure selection inputs.
     segments: tuple[SpeechSegment, ...],
     origins: list[_SegmentSource],
     chapters: tuple[ChapterInspection, ...],
     operations: tuple[Operation, ...],
     spoken: SpokenForm | None,
     pauses: Pauses,
+    grids: Mapping[str, tuple[Unit, ...]],
+    structures: Mapping[str, StructuralIndex],
 ) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
-    """Clip only full-plan edge chunks, retaining source ordinals and interior IDs."""
+    """Apply selection edges as mandatory clips over the stable full-grid packing.
+
+    Repacking greedily from a selection start would move later boundaries and
+    churn wholly-contained cache identities. Clipping only the intersected
+    full-plan edge chunks makes the selection edges mandatory while retaining
+    every interior segment byte-for-byte.
+    """
     patterns = selected_patterns(operations)
     by_id = {chapter.id: chapter for chapter in chapters}
-    ranges = {chapter.id: selected_ranges(chapter, patterns) for chapter in chapters}
+    ranges = {
+        chapter.id: selected_ranges(chapter, patterns, grid=grids[chapter.id])
+        for chapter in chapters
+    }
     regions = {
-        chapter.id: _lexicon_regions(chapter, operations, spoken)
+        chapter.id: _lexicon_regions(chapter, operations, spoken, grids[chapter.id])
         for chapter in chapters
     }
     result: list[SpeechSegment] = []
@@ -1112,37 +1440,42 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
             )
             if not text.strip():
                 continue
-            source_start = origin.start + _translated_offset(
-                origin.offsets, start, reverse=True
+            chapter = by_id[segment.chapter_id]
+            selected_segments = _selected_edge_segments(
+                segment,
+                origin,
+                chapter,
+                text,
+                start,
+                end,
+                first,
+                last,
+                spoken,
+                grids[segment.chapter_id],
+                structures[segment.chapter_id],
             )
-            positions.setdefault(segment.chapter_id, []).append(len(result))
-            starts.setdefault(segment.chapter_id, []).append(source_start)
-            result.append(
-                segment
-                if start == origin.chunk_start
-                and end == origin.chunk_end
-                and text == segment.text
-                else _segment(
-                    by_id[segment.chapter_id],
-                    segment.ordinal,
-                    origin.chunk_index,
-                    text,
-                    speaker_id=segment.speaker_id,
-                    voice_id=segment.voice_id,
-                    spoken=spoken,
-                    tiers=break_tiers(pauses),
-                    selection=(first, last),
-                )
-            )
+            for selected_segment, source_start in selected_segments:
+                positions.setdefault(segment.chapter_id, []).append(len(result))
+                starts.setdefault(segment.chapter_id, []).append(source_start)
+                result.append(selected_segment)
     silence = [0] * len(result)
     for chapter_id, indices in positions.items():
         chapter = by_id[chapter_id]
-        grid = build_grid(chapter)
-        for unit_index, value in grid_silences(chapter, grid, operations).items():
+        grid = grids[chapter_id]
+        for unit_index, value in grid_silences(
+            chapter,
+            grid,
+            operations,
+            structure=structures[chapter_id],
+        ).items():
             local = bisect_right(starts[chapter_id], grid[unit_index].end - 1) - 1
             if local >= 0:
                 silence[indices[local]] = value
-        silence[indices[-1]] = max(silence[indices[-1]], pauses.chapter_ms)
+        rules = _rules_of(operations, Silences)
+        manual = _gaps_over(grid, rules) if rules else {}
+        final_gap = len(grid) - 1
+        if final_gap not in manual:
+            silence[indices[-1]] = max(silence[indices[-1]], pauses.chapter_ms)
     if silence:
         silence[-1] = 0
     return tuple(result), tuple(silence)
@@ -1150,7 +1483,7 @@ def _select_segments(  # noqa: PLR0913, PLR0917 - pure selection inputs.
 
 def _apply_gap(
     silence: list[int],
-    reasons: frozenset[str],
+    reasons: GapReason,
     pauses: Pauses,
     manual: int | None,
 ) -> None:
@@ -1162,8 +1495,19 @@ def _apply_gap(
     """
     if not silence:
         return
-    silence[-1] = (
-        manual if manual is not None else max(silence[-1], gap_ms(reasons, pauses))
+    _apply_gap_at(silence, len(silence) - 1, reasons, pauses, manual)
+
+
+def _apply_gap_at(
+    silence: list[int],
+    index: int,
+    reasons: GapReason,
+    pauses: Pauses,
+    manual: int | None,
+) -> None:
+    """Settle one effective gap onto an explicit preceding segment."""
+    silence[index] = (
+        manual if manual is not None else max(silence[index], _gap_ms(reasons, pauses))
     )
 
 
@@ -1181,82 +1525,6 @@ def _spans_for(
     return ordered
 
 
-def _break_offset(
-    text: str, start: int, stop: int, tiers: tuple[str, ...] = _BREAK_TIERS
-) -> int:
-    """Offset past the best boundary in ``text[start:stop]``, or 0 when none fits."""
-    window = text[start:stop]
-    if not window:
-        return 0
-    threshold = len(window) * MIN_BREAK_FILL
-    fullest = 0
-    for pattern in tiers:
-        offsets = [match.end() for match in re.finditer(pattern, window)]
-        if not offsets:
-            continue
-        best = offsets[-1]
-        if best >= threshold:
-            return best
-        fullest = max(fullest, best)
-    return fullest
-
-
-def _separator_free_end(text: str, start: int, stop: int) -> int:
-    """Return where a run the engine cannot divide outgrows its chunk budget."""
-    run_start = start
-    for index in range(start, stop):
-        if text[index] in POCKET_SEPARATORS:
-            run_start = index + 1
-        elif index - run_start >= MAX_SEPARATOR_FREE_CHARACTERS:
-            return index
-    return stop
-
-
-def _chunk_span(chapter: ChapterInspection, text: str) -> tuple[str, ...]:
-    """Apply the current chunking policy to one speaker fragment.
-
-    The chapter is still validated as a whole, because speech_characters
-    describes the chapter and not the span.
-    """
-    if (
-        not chapter.text
-        or chapter.speech_characters is None
-        or chapter.speech_characters != len(chapter.text)
-        or not text
-    ):
-        raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        hard_end = min(start + MAX_TTS_SEGMENT_CHARACTERS, len(text))
-        end = hard_end
-        if hard_end < len(text):
-            # A clean boundary first, for the same reason the forced cut below
-            # insists on one. Unlike that cut this one cannot be declined --
-            # the character bound has to hold -- so bare whitespace remains the
-            # fallback for a window holding no punctuation at all.
-            offset = _break_offset(
-                text, start, hard_end, _CLEAN_BREAK_TIERS
-            ) or _break_offset(text, start, hard_end)
-            if offset:
-                end = start + offset
-        budget_end = _separator_free_end(text, start, hard_end)
-        if budget_end < end:
-            # Cutting needs a boundary that leaves punctuation behind. A bare
-            # whitespace cut would render as a completed sentence, so where no
-            # clean boundary exists the run is left for the engine to pack.
-            forced = _break_offset(text, start, budget_end, _CLEAN_BREAK_TIERS)
-            if forced:
-                end = start + forced
-        if end <= start:  # Defensive hard fallback for arbitrarily long tokens.
-            end = hard_end
-        chunks.append(text[start:end])
-        start = end
-    if not chunks or any(not chunk for chunk in chunks) or "".join(chunks) != text:
-        raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    return tuple(chunks)
-
-
 def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     chapter: ChapterInspection,
     ordinal: int,
@@ -1266,16 +1534,13 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
     speaker_id: str | None = None,
     voice_id: str = "",
     spoken: SpokenForm | None = None,
-    tiers: tuple[str, ...] = (),
-    selection: tuple[int, int] | None = None,
+    selection: tuple[int, ...] | None = None,
 ) -> SpeechSegment:
     content_hash = _hash_utf8(text)
     fields: dict[str, object] = {
         "chapter_id": _string_identity(chapter.id),
         "chunk_index": chunk_index,
-        "chunking_schema": (
-            STRUCTURAL_CHUNKING_SCHEMA_VERSION if tiers else CHUNKING_SCHEMA_VERSION
-        ),
+        "chunking_schema": GRID_CHUNKING_SCHEMA_VERSION,
         "content_hash": content_hash,
         "normalization": NORMALIZATION_SCHEMA_VERSION,
         "ordinal": ordinal,
@@ -1286,18 +1551,14 @@ def _segment(  # noqa: PLR0913 - each field is part of a distinct identity.
         # chunk. Unclipped segments never acquire this field.
         fields["selection"] = selection
     if speaker_id is not None:
-        # Added only for attributed speech, so single-voice identities -- and
-        # therefore every existing cache entry -- stay byte-identical.
+        # Added only for attributed speech: narration takes its voice from the
+        # plan, while attributed speech must distinguish speaker/cast changes.
         fields["speaker_id"] = _string_identity(speaker_id)
         fields["voice_id"] = _string_identity(voice_id)
-    if tiers:
-        # Added only when a break tier is active, so a plain pipeline's
-        # identities stay byte-identical.
-        fields["structure_schema"] = STRUCTURE_SCHEMA_VERSION
-        fields["break_tiers"] = list(tiers)
     if spoken is not None:
-        # Added only when the stage is active, so a plain pipeline's identities
-        # -- and therefore every existing cache entry -- stay byte-identical.
+        # Added only when the stage is active. Its configuration changes the
+        # synthesis input even where a particular transformed string happens
+        # to compare equal to the canonical text.
         fields.update(
             spoken_identity(
                 numbers=cast("NumberTier", spoken.numbers),
@@ -1390,8 +1651,6 @@ def _fingerprint(material: _PlanMaterial) -> str:
         "planning": schemas.planning,
         "render": schemas.render,
     }
-    if schemas.structure is not None:
-        schema_versions["structure"] = schemas.structure
     if schemas.spoken_form is not None:
         # Present only when the stage is active. Emitting an explicit null
         # would change the canonical JSON -- and so the fingerprint -- for

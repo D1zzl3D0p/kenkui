@@ -17,8 +17,8 @@ from kenkui._characters import (
     resolve_attribution,
     spacy_roster,
 )
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
+from kenkui._domain.grid import build_grid, dialogue_ranges
 from kenkui._domain.planning import SpeakerSpan
 
 if TYPE_CHECKING:
@@ -63,8 +63,8 @@ def roster_of(
     chapter = kk.ChapterInspection(
         id="ch-1", index=0, title="One", speech_characters=len(text), text=text
     )
-    spans = {"ch-1": extract_spans("ch-1", text)}
-    return spacy_roster.infer_roster((chapter,), spans, pipeline=pipeline)
+    dialogue = {"ch-1": dialogue_ranges(build_grid(chapter))}
+    return spacy_roster.infer_roster((chapter,), dialogue, pipeline=pipeline)
 
 
 class TestModelIdParsing:

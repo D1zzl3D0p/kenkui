@@ -14,8 +14,8 @@ from kenkui._characters import discover_characters, resolve_attribution, store
 from kenkui._characters.attribution import attribute_chapter
 from kenkui._characters.infer import normalise_roster, slugify
 from kenkui._characters.models import CharacterRoster
-from kenkui._characters.quotes import extract_spans
 from kenkui._domain.casting import CharacterProfile
+from kenkui._domain.grid import Unit, build_grid, dialogue_ranges
 from kenkui.cancellation import CancellationToken
 from kenkui.errors import CancelledError
 
@@ -221,6 +221,59 @@ def test_spans_still_partition_the_chapter() -> None:
     assert "".join(TEXT[s.start : s.end] for s in record.spans) == TEXT
 
 
+@pytest.mark.parametrize("text", ['"a""b"', "“a”“b”"])
+def test_adjacent_quotes_remain_separate_attribution_inputs(text: str) -> None:
+    """A shared quote edge must not collapse two independently voiced lines."""
+
+    class AdjacentClient:
+        def complete(self, model: str, prompt: str) -> str:
+            assert model
+            assert '"quote_id": 0' in prompt
+            assert '"quote_id": 1' in prompt
+            return json.dumps(
+                {
+                    "attributions": [
+                        {"quote_id": 0, "speaker": "javert"},
+                        {"quote_id": 1, "speaker": "unknown"},
+                    ]
+                }
+            )
+
+    chapter = _inspection(text).chapters[0]
+    resolved, coverage = attribute_chapter(
+        chapter,
+        (CharacterProfile("javert", "Javert", None, 0, ()),),
+        "fake/model",
+        client=AdjacentClient(),
+    )
+    expected_ranges = [(0, 3), (3, 6)]
+    assert coverage.quotes == len(expected_ranges)
+    assert [(span.start, span.end) for span in resolved] == expected_ranges
+    assert [span.character_id for span in resolved] == ["javert", None]
+
+
+def test_long_chapter_grid_is_built_once_for_both_attribution_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roster discovery and attribution share one grid even for a 600k chapter."""
+    quote = '"Go."'
+    text = "x" * (600_000 - len(quote)) + quote
+    inspection = _inspection(text)
+    built: list[str] = []
+
+    def tracked(chapter: kk.ChapterInspection) -> tuple[Unit, ...]:
+        built.append(chapter.id)
+        return build_grid(chapter)
+
+    monkeypatch.setattr("kenkui._characters.build_grid", tracked)
+    monkeypatch.setattr("kenkui._characters.attribution.build_grid", tracked)
+    record = resolve_attribution(
+        inspection, "b" * 64, "fake/model", client=ScriptedClient()
+    )
+    assert built == ["ch1"]
+    assert "".join(text[span.start : span.end] for span in record.spans) == text
+
+
 def test_an_unknown_speaker_stays_unattributed() -> None:
     """Narrating a line nobody could place beats voicing it as the wrong one."""
     record = resolve_attribution(
@@ -349,8 +402,7 @@ def test_coverage_separates_unknown_from_dropped() -> None:
         'Chapter One\n\n"One," he said. "Two," she said. "Three," they said.'
     )
     chapter = inspection.chapters[0]
-    spans = extract_spans(chapter.id, chapter.text)
-    dialogue = [span for span in spans if span.is_dialogue]
+    dialogue = dialogue_ranges(build_grid(chapter))
     assert len(dialogue) == _FIXTURE_QUOTES
 
     # ScriptedClient answers quote_id 0 only, so every later quote is dropped.
@@ -359,7 +411,7 @@ def test_coverage_separates_unknown_from_dropped() -> None:
         (CharacterProfile("dhatt", "Dhatt", None, 0, ()),),
         "fake/model",
         client=ScriptedClient("unknown"),
-        spans=spans,
+        dialogue=dialogue,
     )
     assert coverage.quotes == len(dialogue)
     assert coverage.unknown == 1

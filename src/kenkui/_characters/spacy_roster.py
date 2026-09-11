@@ -43,7 +43,7 @@ from kenkui.observability import get_logger, log_event
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from kenkui._characters.quotes import TextSpan
+    from kenkui._domain.grid import DialogueRange
     from kenkui.inspection import ChapterInspection
 
 _LOGGER = get_logger(__name__)
@@ -711,7 +711,7 @@ def _canonical_names(signals: _Signals, kept: set[str]) -> dict[str, str]:
 
 def _narrator_of(
     chapters: Sequence[ChapterInspection],
-    dialogue: Mapping[str, Sequence[TextSpan]],
+    dialogue: Mapping[str, Sequence[DialogueRange]],
     signals: _Signals,
     canonical: Mapping[str, str],
     roster_ids: frozenset[str],
@@ -732,7 +732,7 @@ def _narrator_of(
         for chapter in chapters
         if is_first_person(
             chapter.text,
-            [span.end for span in dialogue.get(chapter.id, ()) if span.is_dialogue],
+            [span.end for span in dialogue.get(chapter.id, ())],
         )
     ]
     if not first_person:
@@ -760,7 +760,7 @@ def _narrator_of(
 
 def infer_roster(
     chapters: Sequence[ChapterInspection],
-    dialogue: Mapping[str, Sequence[TextSpan]],
+    dialogue: Mapping[str, Sequence[DialogueRange]],
     *,
     pipeline: str = DEFAULT_PIPELINE,
 ) -> tuple[tuple[CharacterProfile, ...], str | None]:
@@ -776,11 +776,7 @@ def infer_roster(
     nlp = _load(pipeline)
     signals = _Signals()
     for chapter in chapters:
-        bounds = [
-            (span.start, span.end)
-            for span in dialogue.get(chapter.id, ())
-            if span.is_dialogue
-        ]
+        bounds = [(span.start, span.end) for span in dialogue.get(chapter.id, ())]
         _scan(nlp(chapter.text), chapter.id, bounds, signals)
 
     kept = {

@@ -12,6 +12,9 @@ import pytest
 
 import kenkui as kk
 from kenkui._domain import planning
+from kenkui._domain.grid import GapReason, build_grid
+from kenkui._domain.grid_packing import FallbackCut, PackedRange
+from kenkui._domain.operations import Pauses
 from kenkui._domain.planning import (
     NORMALIZATION_SCHEMA_VERSION,
     PARSER_SCHEMA_VERSION,
@@ -381,24 +384,15 @@ def _chunks(text: str) -> list[str]:
     return [segment.text for segment in plan.segments]
 
 
-def _worst_separator_free_run(text: str) -> int:
-    longest = run = 0
-    for character in text:
-        run = 0 if character in planning.POCKET_SEPARATORS else run + 1
-        longest = max(longest, run)
-    return longest
-
-
 def test_separator_free_runs_are_split_at_line_breaks() -> None:
     """A contents page has no separator Pocket-TTS can divide, so Kenkui divides it."""
-    text = "Contents\n\n" + "\n\n".join(f"Chapter {index}" for index in range(60))
+    text = "Contents\n\n" + "\n\n".join(f"Chapter {index}" for index in range(120))
     chunks = _chunks(text)
 
     assert "".join(chunks) == text
     assert len(chunks) > 1
-    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
     for chunk in chunks:
-        assert _worst_separator_free_run(chunk) <= budget
+        assert len(chunk) <= planning.MAX_TTS_SEGMENT_CHARACTERS
 
 
 def _ends_on_a_word(chunk: str) -> bool:
@@ -484,8 +478,7 @@ def test_unbroken_token_keeps_the_character_bound() -> None:
 def test_line_break_is_preferred_over_a_later_space() -> None:
     """A line break is the strongest boundary, so a full-enough one wins."""
     sentence = "Sentence one. "
-    fill = planning.MAX_TTS_SEGMENT_CHARACTERS * planning.MIN_BREAK_FILL
-    head = sentence * (int(fill // len(sentence)) + 1)
+    head = sentence * 51
     text = head + "\n\n" + "Sentence two. " * 43
     chunks = _chunks(text)
 
@@ -527,8 +520,8 @@ def test_token_dense_separator_free_text_is_split_at_its_hyphens() -> None:
     The hyphen tier is clean -- each fragment ends in "-", so the engine
     appends no full stop and the cut carries no false sentence ending.
     """
-    budget = planning.MAX_SEPARATOR_FREE_CHARACTERS
-    text = "a-" * budget  # twice the budget in characters, so the guard must fire
+    budget = planning.MAX_TTS_SEGMENT_CHARACTERS
+    text = "a-" * (budget // 2 + 100)
 
     chunks = _chunks(text)
 
@@ -536,4 +529,226 @@ def test_token_dense_separator_free_text_is_split_at_its_hyphens() -> None:
     assert len(chunks) > 1
     assert all(chunk.endswith("-") for chunk in chunks[:-1])
     for chunk in chunks:
-        assert _worst_separator_free_run(chunk) <= budget
+        assert len(chunk) <= budget
+
+
+def test_grid_packing_changes_boundaries_without_changing_spoken_content() -> None:
+    """The hierarchy may improve cuts while preserving the exact speech stream."""
+    paragraph = "Alpha sentence. " * 40
+    text = f"{paragraph}\n\n{paragraph}"
+    packed = tuple(_chunks(text))
+
+    legacy_lengths = [994, 288]
+    assert [len(chunk) for chunk in packed] != legacy_lengths
+    assert [len(chunk) for chunk in packed] == [642, 640]
+    assert "".join(packed) == text
+
+
+def test_whitespace_only_spans_are_absorbed_before_bounded_packing() -> None:
+    """Unspeakable carries cannot recombine bounded fallback output."""
+    whitespace = " " * 1200
+    text = f'"A."{whitespace}"B."'
+    chapter = _inspection(text=text).chapters[0]
+    first_end = 4
+    second_start = first_end + len(whitespace)
+    spans = (
+        planning.SpeakerSpan(chapter.id, 0, first_end, "a"),
+        planning.SpeakerSpan(chapter.id, first_end, second_start, None),
+        planning.SpeakerSpan(chapter.id, second_start, len(text), "b"),
+    )
+    plan = compile_execution_plan(
+        _pipeline(),
+        kk.BookInspection(kk.BookMetadata("Fixture"), (chapter,)),
+        source_bytes_hash=SOURCE_HASH,
+        resolved_voice=_voice(),
+        model_revision=MODEL_REVISION,
+        cast_voices=(_voice(id="a-voice"), _voice(id="b-voice")),
+        assignments={"a": "a-voice", "b": "b-voice"},
+        spans=spans,
+    )
+
+    assert [segment.speaker_id for segment in plan.segments] == ["a", "b"]
+    assert "".join(segment.text for segment in plan.segments) == text
+    assert all(
+        len(segment.text) <= planning.MAX_TTS_SEGMENT_CHARACTERS
+        for segment in plan.segments
+    )
+    origins: list[planning._SegmentSource] = []
+    replayed, _silence = planning._compile_segments(  # noqa: SLF001
+        (chapter,), spans, plan.cast, origins=origins
+    )
+    assert replayed == plan.segments
+    assert [(item.canonical_start, item.canonical_end) for item in origins] == [
+        (0, 208),
+        (208, len(text)),
+    ]
+    assert origins[0].fallback_cut_after is FallbackCut.WHITESPACE
+
+    with_gap = compile_execution_plan(
+        kk.epub("book.epub")
+        .silence(
+            900,
+            where={"chapter": chapter.id, "sentence": 1, "phrase": 2},
+        )
+        .assign_voice("fixture")
+        .tts(),
+        kk.BookInspection(kk.BookMetadata("Fixture"), (chapter,)),
+        source_bytes_hash=SOURCE_HASH,
+        resolved_voice=_voice(),
+        model_revision=MODEL_REVISION,
+        cast_voices=(_voice(id="a-voice"), _voice(id="b-voice")),
+        assignments={"a": "a-voice", "b": "b-voice"},
+        spans=spans,
+    )
+    assert with_gap.segments == plan.segments
+    assert with_gap.trailing_silence_ms == (900, 0)
+
+
+def test_zero_gap_on_unspeakable_span_keeps_text_and_identity() -> None:
+    """An inaudible zero-gap boundary settles without changing TTS content."""
+    text = '"A." "B."'
+    chapter = _inspection(text=text).chapters[0]
+    spans = (
+        planning.SpeakerSpan(chapter.id, 0, 4, "a"),
+        planning.SpeakerSpan(chapter.id, 4, 5, None),
+        planning.SpeakerSpan(chapter.id, 5, len(text), "b"),
+    )
+    base = kk.epub("book.epub").assign_voice("fixture").tts()
+    zero = (
+        kk.epub("book.epub")
+        .silence(
+            0,
+            where={
+                "chapter": chapter.id,
+                "paragraph": 1,
+                "line": 1,
+                "sentence": 1,
+                "phrase": 2,
+            },
+        )
+        .assign_voice("fixture")
+        .tts()
+    )
+
+    def compile_with(pipeline: kk.Pipeline) -> ExecutionPlan:
+        return compile_execution_plan(
+            pipeline,
+            kk.BookInspection(kk.BookMetadata("Fixture"), (chapter,)),
+            source_bytes_hash=SOURCE_HASH,
+            resolved_voice=_voice(),
+            model_revision=MODEL_REVISION,
+            cast_voices=(_voice(id="a-voice"), _voice(id="b-voice")),
+            assignments={"a": "a-voice", "b": "b-voice"},
+            spans=spans,
+        )
+
+    plain_plan = compile_with(base)
+    zero_plan = compile_with(zero)
+
+    assert [segment.text for segment in plain_plan.segments] == ['"A."', ' "B."']
+    assert zero_plan.segments == plain_plan.segments
+    assert zero_plan.trailing_silence_ms == plain_plan.trailing_silence_ms == (0, 0)
+
+
+def test_unspeakable_span_helpers_cover_adjacent_and_trailing_runs() -> None:
+    """Adjacent whitespace spans coalesce and trailing space stays synthesizable."""
+    text = '"A."  "B."'
+    chapter = _inspection(text=text).chapters[0]
+    spans = (
+        planning.SpeakerSpan(chapter.id, 0, 4, "a"),
+        planning.SpeakerSpan(chapter.id, 4, 5, None),
+        planning.SpeakerSpan(chapter.id, 5, 6, None),
+        planning.SpeakerSpan(chapter.id, 6, len(text), "b"),
+    )
+
+    assert planning._unspeakable_ranges(  # noqa: SLF001
+        text, spans, build_grid(chapter)
+    ) == ((4, 6),)
+    assert planning._absorb_unspeakable_spans(text, spans) == (  # noqa: SLF001
+        spans[0],
+        replace(spans[-1], start=4),
+    )
+
+    trailing = '"A." '
+    trailing_spans = (
+        planning.SpeakerSpan(chapter.id, 0, 4, "a"),
+        planning.SpeakerSpan(chapter.id, 4, 5, None),
+    )
+    assert planning._absorb_unspeakable_spans(  # noqa: SLF001
+        trailing, trailing_spans
+    ) == (replace(trailing_spans[0], end=5),)
+
+
+def test_unspeakable_range_redistribution_handles_edge_and_adjacent_runs() -> None:
+    """Leading, consecutive, and trailing whitespace ranges attach deterministically."""
+    ranges = (
+        PackedRange(0, 1, 0, 1),
+        PackedRange(1, 2, 1, 2, FallbackCut.WHITESPACE),
+        PackedRange(2, 3, 2, 3, FallbackCut.WHITESPACE),
+        PackedRange(3, 4, 3, 4),
+    )
+    assert planning._redistribute_unspeakable_ranges(  # noqa: SLF001
+        ranges, "A  B", ()
+    ) == (ranges[0], replace(ranges[-1], canonical_start=1, spoken_start=1))
+
+    assert (
+        planning._redistribute_unspeakable_ranges(  # noqa: SLF001
+            ranges[1:], "A  B", ()
+        )
+        == (replace(ranges[-1], canonical_start=1, spoken_start=1),)
+    )
+    assert (
+        planning._redistribute_unspeakable_ranges(  # noqa: SLF001
+            ranges[:3], "A  ", ()
+        )
+        == (replace(ranges[0], canonical_end=3, spoken_end=3),)
+    )
+
+
+def test_invalid_span_lookup_and_empty_gap_target_fail_safely() -> None:
+    """Private defensive seams retain stable empty-speech behavior."""
+    span = planning.SpeakerSpan("chapter", 1, 2, None)
+    with pytest.raises(kk.ValidationError) as caught:
+        planning._span_at((span,), 0)  # noqa: SLF001
+    assert caught.value.code is kk.ErrorCode.EMPTY_SPEECH
+    planning._apply_gap([], GapReason.LINE, Pauses(line_ms=1), None)  # noqa: SLF001
+
+
+def test_planning_reports_grid_edges_and_characterized_emergency_cuts() -> None:
+    """Ordinary plan boundaries are grid edges; leaf fallbacks stay explicit."""
+    ordinary_text = ("Sentence boundary. " * 90).strip()
+    ordinary_inspection = _inspection(text=ordinary_text)
+    ordinary_plan = _compile(inspection_=ordinary_inspection)
+    ordinary_origins: list[planning._SegmentSource] = []
+    replayed, _silences = planning._compile_segments(  # noqa: SLF001
+        ordinary_inspection.chapters,
+        (),
+        ordinary_plan.cast,
+        origins=ordinary_origins,
+    )
+    edges = {
+        edge
+        for unit in build_grid(ordinary_inspection.chapters[0])
+        for edge in (unit.start, unit.end)
+    }
+
+    assert replayed == ordinary_plan.segments
+    assert all(origin.fallback_cut_after is None for origin in ordinary_origins)
+    assert all(origin.canonical_end in edges for origin in ordinary_origins[:-1])
+
+    token = "x" * (planning.MAX_TTS_SEGMENT_CHARACTERS + 1)
+    token_inspection = _inspection(text=token)
+    token_plan = _compile(inspection_=token_inspection)
+    token_origins: list[planning._SegmentSource] = []
+    replayed, _silences = planning._compile_segments(  # noqa: SLF001
+        token_inspection.chapters,
+        (),
+        token_plan.cast,
+        origins=token_origins,
+    )
+
+    assert replayed == token_plan.segments
+    assert token_origins[0].fallback_cut_after is FallbackCut.HARD_TOKEN
+    assert token_origins[0].canonical_end not in {
+        unit.end for unit in build_grid(token_inspection.chapters[0])
+    }

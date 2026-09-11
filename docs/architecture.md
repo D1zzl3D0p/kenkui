@@ -17,14 +17,21 @@ are reduced to two. Case and punctuation are preserved. Character counts refer
 to this exact normalized string.
 
 The pure planner consumes an immutable inspection, exact source-bytes SHA-256,
-resolved voice metadata, model revision, and ordered intent. Under
-`tts-chunks-v4`, chunks contain at most 1000 characters. Line breaks and
-punctuation boundaries are preferred; plain whitespace and dashes are fallbacks
-when needed to respect that bound. Runs without `.!?,;:` trigger a search for an
-earlier clean boundary after 200 characters. If none exists, the run remains
-intact up to the 1000-character limit, avoiding artificial sentence endings at
-ordinary word boundaries. The chunker partitions each supplied text fragment
-exactly; whitespace-only fragments are not sent to synthesis.
+resolved voice metadata, model revision, and ordered intent. It builds one flat
+canonical grid from paragraph, line, sentence, phrase, quote, and emphasis
+boundaries, then derives immutable structural ranges and gap reasons from those
+leaves. Planning, attribution, selection, and tuning consume that shared grid;
+they do not rescan quotes, blocks, or lines.
+
+The `grid-v1` packer transforms spoken-form regions before measuring them and
+packs the largest fitting paragraph, line, sentence, then phrase ranges without
+crossing speaker, scoped-pronunciation, explicit-silence, or enabled-gap cuts.
+Every synthesis segment contains at most 1,000 spoken characters. Only one
+over-budget phrase enters the emergency splitter, which prefers punctuation or
+hyphens, then whitespace, and finally a hard token cut. Emergency provenance is
+retained for tests and quality metrics. Whitespace-only ranges are never sent to
+the engine; bounded redistribution preserves adjacent speech, silence, and
+canonical coverage wherever synthesizable output can represent them.
 The planner emits schema versions, content hashes, stable segment
 identities, resolved metadata, and a canonical semantic fingerprint. Canonical
 JSON key ordering and bounded UTF-8 hashing make equivalent semantic inputs
@@ -91,6 +98,11 @@ callbacks, and run IDs are excluded. Unknown schemas are never treated as
 compatible. Hits are fully hashed/validated before use and merged with misses in
 plan order. Payloads are bounded, hashed while written, fsynced, atomically
 published, then transactionally referenced.
+
+`grid-v1` deliberately replaced both `tts-chunks-v4` and `tts-chunks-v5` in
+segment identity, so legacy PCM entries are clean misses. The migration neither
+deletes nor rewrites those rows or payloads. Cache pruning remains an explicit
+operator/publication choice; check free space before a large library rerender.
 
 Caching is offline and **fail-open for rendering**: missing/corrupt/truncated or
 hash-mismatched payloads, malformed metadata, unknown schema, lock timeout,
@@ -199,18 +211,19 @@ character, but ambiguous short names and conflicting honorifics do not. A
 duplicate voice is locally audible; assigning two distinct people one voice is
 a more damaging error.
 
-## Span-then-chunk segmentation
+## Grid-folded segmentation
 
-Attribution produces speaker spans that partition a chapter. Structural pieces
-are clipped to those spans before the `tts-chunks-v4` chunker runs, preserving
-canonical speaker offsets. The chunker preserves each fragment's text; empty
-speech fragments are omitted from synthesis.
+Attribution produces speaker spans in canonical grid coordinates. Effective
+speaker changes become mandatory packer cuts; whitespace-only attribution spans
+are assigned to adjacent effective speech because they cannot produce valid
+engine input. Structural gaps remain pure grid reasons until pause policy turns
+them into durations after packing.
 
-A chapter with no attributed dialogue is one span, which is byte-for-byte what
-the chunker saw before attribution existed. Speaker and voice enter a segment's
-identity only for attributed speech, so single-voice segment identities and
-plan fingerprints are unchanged and no previously cached segment is
-invalidated.
+A chapter with no attributed dialogue is one narration span. Speaker and voice
+enter segment identity for attributed speech, while every segment contains the
+single `grid-v1` chunking input. Pause tier names and structure schema do not
+enter segment identity; silence never reaches synthesis, and a duration-only
+retune reuses unchanged PCM.
 
 ## Canonical text and the spoken form
 
@@ -221,21 +234,14 @@ actually speaks, and nothing else consumes that string. This is what lets
 `normalized_speech_characters` keep describing the book the caller supplied
 while `synthesized_characters` follows the expansion.
 
-Segment compilation runs split, then speak, then chunk. Splitting first, in
-canonical coordinates, means the spoken stage cannot move a boundary that has
-already been decided, which removes the need to map offsets through a
-length-changing transformation. Exactness therefore holds at three levels:
-chunks join to the spoken form of their piece, pieces join to their span, and
-spans join to the canonical chapter text.
-
-`tts-chunks-v5` identifies segments with active structural break tiers. The
-structural split feeds the same chunker one piece at a time, so the tuned
-break policy is shared. Every field the stages contribute — the spoken-form schema, the
-number tier, the lexicon identity, the structure schema, the break tiers —
-enters a segment's identity only when that feature is active, so a pipeline
-requesting neither pronunciation nor pauses produces byte-identical identities
-and invalidates no cached segment. The same discipline governs the plan
-fingerprint: a key is absent, never null, when its feature is not in play.
+Segment compilation establishes canonical semantic regions, speaks each region
+independently, retains exact canonical-to-spoken replacement maps, and then
+packs by spoken length. The mappings keep selection and source provenance in
+canonical coordinates even when a number or pronunciation expands or contracts
+text. The spoken-form schema, number tier, and lexicon identity enter segment
+identity whenever that stage is active. The same discipline governs the plan
+fingerprint: an optional key is absent, never null, when its feature is not in
+play.
 
 ## Silence as a gap between segments
 

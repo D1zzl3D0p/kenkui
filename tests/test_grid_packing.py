@@ -1,0 +1,423 @@
+"""Hierarchical packing over transformed addressable-grid text."""
+
+from __future__ import annotations
+
+import random
+from dataclasses import replace
+from itertools import pairwise
+from pathlib import Path as FilePath
+
+import pytest
+
+from kenkui._domain.grid import build_grid, build_structure_index
+from kenkui._domain.grid_packing import (
+    FallbackCut,
+    PackedRange,
+    PackingInput,
+    SpokenMapping,
+    SpokenRegion,
+    pack_grid,
+)
+from kenkui.inspection import ChapterInspection
+
+
+def chapter(text: str) -> ChapterInspection:
+    """Build one minimal canonical chapter."""
+    return ChapterInspection(
+        id="ch01",
+        index=0,
+        title="One",
+        speech_characters=len(text),
+        text=text,
+        emphasis=(),
+    )
+
+
+def request(
+    canonical: str,
+    *,
+    budget: int,
+    spoken: str | None = None,
+    mappings: tuple[SpokenMapping, ...] = (),
+    mandatory: frozenset[int] = frozenset(),
+) -> PackingInput:
+    """Build a full-chapter packer input."""
+    leaves = build_grid(chapter(canonical))
+    return PackingInput(
+        leaves=leaves,
+        ranges=build_structure_index(leaves),
+        spoken_regions=(
+            SpokenRegion(0, len(canonical), spoken or canonical, mappings),
+        ),
+        mandatory_cuts=mandatory,
+        character_budget=budget,
+    )
+
+
+def texts(packed: tuple[PackedRange, ...], spoken: str) -> tuple[str, ...]:
+    """Return spoken slices without making the packer own duplicate text."""
+    return tuple(spoken[item.spoken_start : item.spoken_end] for item in packed)
+
+
+def test_descends_to_sentences_then_greedily_combines_adjacent_pieces() -> None:
+    """An over-budget line descends; later fitting sentences still combine."""
+    source = "A sentence. Another one. Third."
+
+    packed = pack_grid(request(source, budget=20))
+
+    assert texts(packed, source) == ("A sentence. ", "Another one. Third.")
+    assert [(item.canonical_start, item.canonical_end) for item in packed] == [
+        (0, 12),
+        (12, len(source)),
+    ]
+
+
+def test_descends_to_phrases_before_using_an_emergency_cut() -> None:
+    """Clause-level leaves are ordinary candidates, not fallback cuts."""
+    source = "One, two, three."
+
+    packed = pack_grid(request(source, budget=10))
+
+    assert texts(packed, source) == ("One, two, ", "three.")
+    assert all(item.fallback_cut_after is None for item in packed)
+
+
+def test_mandatory_cut_prevents_an_otherwise_fitting_join() -> None:
+    """Semantic boundaries divide packing intervals before greedy joining."""
+    source = "One. Two. Three."
+    cut = len("One. Two. ")
+
+    packed = pack_grid(request(source, budget=100, mandatory=frozenset({cut})))
+
+    assert texts(packed, source) == (source[:cut], source[cut:])
+    assert packed[0].canonical_end == cut
+    assert packed[1].canonical_start == cut
+
+
+@pytest.mark.parametrize(
+    ("source", "budget", "expected", "reason"),
+    [
+        (
+            "abcdefghij-klmnopqrst",
+            12,
+            ("abcdefghij-", "klmnopqrst"),
+            FallbackCut.PUNCTUATION_OR_HYPHEN,
+        ),
+        (
+            "alpha beta gamma",
+            10,
+            ("alpha ", "beta gamma"),
+            FallbackCut.WHITESPACE,
+        ),
+        (
+            "x" * 25,
+            10,
+            ("x" * 10, "x" * 10, "x" * 5),
+            FallbackCut.HARD_TOKEN,
+        ),
+    ],
+)
+def test_isolated_leaf_fallback_is_ranked_and_characterized(
+    source: str,
+    budget: int,
+    expected: tuple[str, ...],
+    reason: FallbackCut,
+) -> None:
+    """Fallback prefers punctuation/hyphen, then whitespace, then hard cuts."""
+    packed = pack_grid(request(source, budget=budget))
+
+    assert texts(packed, source) == expected
+    assert all(item.fallback_cut_after is reason for item in packed[:-1])
+    assert packed[-1].fallback_cut_after is None
+
+
+def test_spoken_expansion_controls_fit_while_ranges_remain_canonical() -> None:
+    """Packing budgets transformed text and projects its edges back to source."""
+    canonical = "IV then."
+    spoken = "Four then."
+    mapping = SpokenMapping(0, 2, 0, 4)
+
+    packed = pack_grid(request(canonical, spoken=spoken, mappings=(mapping,), budget=6))
+
+    assert texts(packed, spoken) == ("Four ", "then.")
+    assert [(item.canonical_start, item.canonical_end) for item in packed] == [
+        (0, 3),
+        (3, len(canonical)),
+    ]
+
+
+def test_regions_keep_independent_transformations_and_mandatory_edge() -> None:
+    """Region-local spoken forms concatenate without crossing their shared cut."""
+    canonical = "IV lead"
+    spoken = "Four leed"
+    leaves = build_grid(chapter(canonical))
+    packing = PackingInput(
+        leaves=leaves,
+        ranges=build_structure_index(leaves),
+        spoken_regions=(
+            SpokenRegion(0, 2, "Four", (SpokenMapping(0, 2, 0, 4),)),
+            SpokenRegion(2, 7, " leed", (SpokenMapping(3, 7, 1, 5),)),
+        ),
+        mandatory_cuts=frozenset({2}),
+        character_budget=100,
+    )
+
+    packed = pack_grid(packing)
+
+    assert texts(packed, spoken) == ("Four", " leed")
+    assert [(item.canonical_start, item.canonical_end) for item in packed] == [
+        (0, 2),
+        (2, 7),
+    ]
+
+
+def test_fallback_inside_one_expanded_token_uses_stable_canonical_envelopes() -> None:
+    """Spoken subranges disambiguate emergency pieces inside one replacement."""
+    canonical = "X"
+    spoken = "abcdefghij"
+    mapping = SpokenMapping(0, 1, 0, len(spoken))
+
+    packed = pack_grid(request(canonical, spoken=spoken, mappings=(mapping,), budget=4))
+
+    assert texts(packed, spoken) == ("abcd", "efgh", "ij")
+    assert all((item.canonical_start, item.canonical_end) == (0, 1) for item in packed)
+    assert [item.fallback_cut_after for item in packed] == [
+        FallbackCut.HARD_TOKEN,
+        FallbackCut.HARD_TOKEN,
+        None,
+    ]
+
+
+def test_leading_deleted_text_stays_in_first_fallback_canonical_envelope() -> None:
+    """A zero-spoken leading replacement cannot drop its canonical coverage."""
+    canonical = "AB"
+    spoken = "x" * 10
+    budget = 4
+    mappings = (
+        SpokenMapping(0, 1, 0, 0),
+        SpokenMapping(1, 2, 0, len(spoken)),
+    )
+
+    packed = pack_grid(
+        request(canonical, spoken=spoken, mappings=mappings, budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert packed[0].canonical_start == 0
+    assert packed[-1].canonical_end == len(canonical)
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+@pytest.mark.parametrize("replacement", ["First Last", "Mister First Last"])
+def test_cross_leaf_replacement_keeps_traversal_envelopes(
+    replacement: str,
+) -> None:
+    """A replacement spanning a phrase edge remains exactly packable."""
+    prefix = "Intro. "
+    source = prefix + "Last, First " + "word " * 230
+    spoken = prefix + replacement + " " + "word " * 230
+    budget = 1000
+    mapping = SpokenMapping(
+        len(prefix),
+        len(prefix + "Last, First"),
+        len(prefix),
+        len(prefix + replacement),
+    )
+
+    packed = pack_grid(
+        request(source, spoken=spoken, mappings=(mapping,), budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert packed[0].canonical_start == 0
+    assert packed[-1].canonical_end == len(source)
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+def test_cross_leaf_deletion_before_expansion_keeps_canonical_coverage() -> None:
+    """Zero-spoken leaves can precede an expanded emergency replacement."""
+    canonical = "Gone, Away X"
+    spoken = "y" * 12
+    budget = 5
+    mappings = (
+        SpokenMapping(0, len("Gone, Away "), 0, 0),
+        SpokenMapping(len("Gone, Away "), len(canonical), 0, len(spoken)),
+    )
+
+    packed = pack_grid(
+        request(canonical, spoken=spoken, mappings=mappings, budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert packed[0].canonical_start == 0
+    assert packed[-1].canonical_end == len(canonical)
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+
+
+def test_cross_leaf_expansion_larger_than_budget_has_monotonic_envelopes() -> None:
+    """Every emergency piece stays inside its traversal-owned leaf range."""
+    source = "Intro. Last, First tail."
+    replacement = "x" * 30
+    budget = 10
+    start = source.index("Last")
+    end = start + len("Last, First")
+    spoken = source[:start] + replacement + source[end:]
+    mapping = SpokenMapping(start, end, start, start + len(replacement))
+
+    packed = pack_grid(
+        request(source, spoken=spoken, mappings=(mapping,), budget=budget)
+    )
+
+    assert "".join(texts(packed, spoken)) == spoken
+    assert all(item.spoken_end - item.spoken_start <= budget for item in packed)
+    assert all(
+        left.canonical_start <= right.canonical_start
+        and left.canonical_end <= right.canonical_end
+        for left, right in pairwise(packed)
+    )
+
+
+def test_ellipsis_is_a_punctuation_first_fallback_edge() -> None:
+    """Grid-supported typographic terminal punctuation beats a hard cut."""
+    source = "abcdefgh…ijklmnop"
+
+    packed = pack_grid(request(source, budget=10))
+
+    assert texts(packed, source) == ("abcdefgh…", "ijklmnop")
+    assert packed[0].fallback_cut_after is FallbackCut.PUNCTUATION_OR_HYPHEN
+
+
+def test_ordinary_boundaries_are_grid_or_mandatory_edges() -> None:
+    """Only explicitly characterized fallback cuts may land within one leaf."""
+    source = "First, clause. Second sentence.\n\nFinal paragraph."
+    cut = source.index("Second")
+    packed = pack_grid(request(source, budget=17, mandatory=frozenset({cut})))
+    leaves = build_grid(chapter(source))
+    grid_edges = {leaf.start for leaf in leaves} | {leaf.end for leaf in leaves}
+
+    for item in packed[:-1]:
+        if item.fallback_cut_after is None:
+            assert item.canonical_end in grid_edges | {cut}
+
+
+def test_randomized_packing_is_exact_bounded_deterministic_and_mandatory() -> None:
+    """Generated prose preserves every spoken character under varied budgets."""
+    rng = random.Random(81357)  # noqa: S311 - deterministic property fixture
+    vocabulary = ("alpha", "beta", "gamma", "delta", "epsilon", "zeta")
+    separators = (" ", ", ", "; ", ". ", "\n", "\n\n", "-")
+    for _case in range(100):
+        source = (
+            "".join(
+                word + rng.choice(separators)
+                for word in rng.choices(vocabulary, k=rng.randint(2, 25))
+            )
+            + "omega."
+        )
+        leaves = build_grid(chapter(source))
+        edges = sorted({leaf.start for leaf in leaves} | {leaf.end for leaf in leaves})
+        mandatory = frozenset(rng.sample(edges[1:-1], k=min(2, len(edges) - 2)))
+        packing = request(
+            source,
+            budget=rng.randint(4, 40),
+            mandatory=mandatory,
+        )
+
+        first = pack_grid(packing)
+        second = pack_grid(packing)
+
+        assert first == second
+        assert "".join(texts(first, source)) == source
+        assert all(
+            0 < item.spoken_end - item.spoken_start <= packing.character_budget
+            for item in first
+        )
+        assert mandatory <= {item.canonical_end for item in first[:-1]}
+
+
+@pytest.mark.parametrize("budget", [0, -1, True])
+def test_budget_must_be_a_positive_integer(budget: int) -> None:
+    """Invalid hard ceilings fail before producing a partial result."""
+    with pytest.raises(ValueError, match="positive budget"):
+        pack_grid(request("Text.", budget=budget))
+
+
+def test_mandatory_cut_inside_a_spoken_replacement_is_rejected() -> None:
+    """Callers must transform semantic regions independently at their edges."""
+    mapping = SpokenMapping(0, 2, 0, 4)
+    with pytest.raises(ValueError, match="inside a spoken replacement"):
+        pack_grid(
+            request(
+                "IV then.",
+                spoken="Four then.",
+                mappings=(mapping,),
+                budget=100,
+                mandatory=frozenset({1}),
+            )
+        )
+
+
+def test_malformed_regions_mappings_ranges_and_cuts_fail_before_packing() -> None:
+    """Every caller-owned coordinate structure is validated at the boundary."""
+    base = request("AB", budget=10)
+    different_leaves = build_grid(chapter("Alpha. Beta."))
+    invalid_coordinate = True
+    cases = (
+        (replace(base, spoken_regions=()), "regions must be non-empty"),
+        (
+            replace(
+                base,
+                spoken_regions=(
+                    SpokenRegion(
+                        0,
+                        2,
+                        "AB",
+                        (SpokenMapping(invalid_coordinate, 1, 0, 1),),
+                    ),
+                ),
+            ),
+            "invalid spoken mapping",
+        ),
+        (
+            replace(base, spoken_regions=(SpokenRegion(0, 2, "ABC"),)),
+            "unchanged text exactly",
+        ),
+        (
+            replace(
+                base,
+                spoken_regions=(SpokenRegion(0, 1, "A"), SpokenRegion(2, 3, "B")),
+            ),
+            "ordered, contiguous, and non-empty",
+        ),
+        (
+            replace(
+                base,
+                spoken_regions=(SpokenRegion(0, 2, "", (SpokenMapping(0, 2, 0, 0),)),),
+            ),
+            "spoken text must be non-empty",
+        ),
+        (
+            replace(base, ranges=build_structure_index(different_leaves)),
+            "structural ranges do not match leaves",
+        ),
+        (
+            replace(base, spoken_regions=(SpokenRegion(-1, 2, "?AB"),)),
+            "outside the grid",
+        ),
+        (
+            replace(base, mandatory_cuts=frozenset({-1})),
+            "mandatory cut lies outside",
+        ),
+    )
+
+    for malformed, message in cases:
+        with pytest.raises(ValueError, match=message):
+            pack_grid(malformed)
+
+
+def test_packer_has_no_pipeline_attribution_synthesis_or_pause_imports() -> None:
+    """The packing module remains a pure domain leaf/index consumer."""
+    source = (
+        FilePath(__file__).parents[1] / "src" / "kenkui" / "_domain" / "grid_packing.py"
+    ).read_text()
+    forbidden = ("pipeline", "_characters", "_tts", "planning", "Pauses")
+    assert all(token not in source for token in forbidden)

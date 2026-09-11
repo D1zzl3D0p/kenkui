@@ -1,22 +1,33 @@
-"""D6: a pipeline requesting nothing new must render byte-identically.
+"""Grid-v1 segment identity migration and semantic cache-key stability.
 
 Segment identities are cache keys. If they shift for a pipeline that asked for
-neither pronunciation nor pauses, every user silently re-synthesizes an entire
-book. The golden file is captured from the pre-change planner; this test is the
-only thing standing between a refactor and that outcome.
+neither pronunciation nor pauses after the deliberate grid-v1 transition,
+every user silently re-synthesizes an entire book. The golden file pins the new
+identity boundary while explicit legacy assertions prevent stale-cache reuse.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 import kenkui as kk
-from kenkui._domain.planning import ExecutionPlan, compile_execution_plan
+from kenkui._domain import planning
+from kenkui._domain.planning import (
+    GRID_CHUNKING_SCHEMA_VERSION,
+    NORMALIZATION_SCHEMA_VERSION,
+    ExecutionPlan,
+    SpeechSegment,
+    compile_execution_plan,
+)
 
 GOLDEN = Path(__file__).parent / "data" / "identity-golden.json"
 SOURCE_HASH = "1" * 64
 MODEL_REVISION = "pocket-tts/model@0123456789abcdef"
+_LEGACY_STRUCTURE_SCHEMA_VERSION = "epub-structure-v1"
 PARAGRAPH_MS = 250
 _PARAGRAPH_ONE = (
     "It was 100,000 to one. The cello sounded in 1984, and the 3rd "
@@ -97,10 +108,94 @@ def snapshot() -> dict[str, object]:
     }
 
 
-def test_plain_pipeline_identity_is_unchanged() -> None:
-    """Segment IDs, texts, fingerprint, and billable total all hold steady."""
+def test_plain_pipeline_identity_matches_grid_v1_golden() -> None:
+    """Grid-v1 IDs, texts, fingerprint, and billable total all hold steady."""
     expected = json.loads(GOLDEN.read_text("utf-8"))
     assert snapshot() == expected
+
+
+def test_every_segment_identity_contains_grid_v1_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plain, paused, and spoken segments share one explicit schema input."""
+    payloads: list[dict[str, object]] = []
+    real_hash = planning._hash_utf8  # noqa: SLF001
+
+    def recorded(value: str) -> str:
+        try:
+            candidate = json.loads(value)
+        except json.JSONDecodeError:
+            candidate = None
+        if isinstance(candidate, dict) and "segment_id_version" in candidate:
+            payloads.append(candidate)
+        return real_hash(value)
+
+    monkeypatch.setattr(planning, "_hash_utf8", recorded)
+    plans = (
+        plain_plan(),
+        paused_plan(paragraph_ms=PARAGRAPH_MS),
+        spoken_plan(),
+    )
+
+    assert len(payloads) == sum(len(plan.segments) for plan in plans)
+    for payload in payloads:
+        assert payload["chunking_schema"] == GRID_CHUNKING_SCHEMA_VERSION
+        assert (
+            json.dumps(payload, sort_keys=True).count(GRID_CHUNKING_SCHEMA_VERSION) == 1
+        )
+        assert "break_tiers" not in payload
+        assert "structure_schema" not in payload
+
+
+def _legacy_string_identity(value: str) -> dict[str, int | str]:
+    return {
+        "characters": len(value),
+        "sha256": hashlib.sha256(value.encode()).hexdigest(),
+    }
+
+
+def _legacy_segment_id(
+    segment: SpeechSegment,
+    *,
+    chunking_schema: str,
+    tiers: tuple[str, ...] = (),
+) -> str:
+    """Reproduce the v4/v5 key payload retired by grid-v1."""
+    fields: dict[str, object] = {
+        "chapter_id": _legacy_string_identity(segment.chapter_id),
+        "chunk_index": segment.ordinal,
+        "chunking_schema": chunking_schema,
+        "content_hash": segment.content_hash,
+        "normalization": NORMALIZATION_SCHEMA_VERSION,
+        "ordinal": segment.ordinal,
+        "segment_id_version": "v2",
+    }
+    if tiers:
+        fields["structure_schema"] = _LEGACY_STRUCTURE_SCHEMA_VERSION
+        fields["break_tiers"] = list(tiers)
+    identity = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:24]
+    return f"seg-{NORMALIZATION_SCHEMA_VERSION}-v2-{digest}"
+
+
+@pytest.mark.parametrize(
+    ("chunking_schema", "tiers"),
+    [("tts-chunks-v4", ()), ("tts-chunks-v5", ("paragraph",))],
+)
+def test_grid_v1_invalidates_both_legacy_segment_schemas(
+    chunking_schema: str, tiers: tuple[str, ...]
+) -> None:
+    """Neither old chunker namespace can collide with a new segment ID."""
+    plan = paused_plan(paragraph_ms=PARAGRAPH_MS) if tiers else plain_plan()
+    legacy = {
+        _legacy_segment_id(
+            segment,
+            chunking_schema=chunking_schema,
+            tiers=tiers,
+        )
+        for segment in plan.segments
+    }
+    assert {segment.id for segment in plan.segments}.isdisjoint(legacy)
 
 
 def test_billable_total_equals_canonical_text_length() -> None:
@@ -173,11 +268,11 @@ def test_chapter_pause_alone_keeps_v2_identity() -> None:
     assert [segment.id for segment in paused.segments] == plain
 
 
-def test_paragraph_pause_changes_identity_and_adds_silence() -> None:
-    """Enabling a break tier re-chunks and records a gap on the right segment."""
-    plain = {segment.id for segment in plain_plan().segments}
+def test_paragraph_pause_reuses_identity_and_adds_silence() -> None:
+    """A pause on existing grid boundaries adds silence without key churn."""
+    plain = plain_plan()
     paused = paused_plan(paragraph_ms=PARAGRAPH_MS)
-    assert {segment.id for segment in paused.segments}.isdisjoint(plain)
+    assert paused.segments == plain.segments
     silence = paused.trailing_silence_ms
     assert len(silence) == len(paused.segments)
     assert PARAGRAPH_MS in silence

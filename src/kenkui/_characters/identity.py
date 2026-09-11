@@ -14,46 +14,13 @@ from __future__ import annotations
 from collections import Counter
 from typing import TYPE_CHECKING, NamedTuple
 
+from kenkui._domain.titles import PREFIX_TITLES
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-# Honorifics that PRECEDE a name separate individuals: "Mr Elliot" and "Miss
-# Elliot" are two Elliots, "Mr Geary" and "Mrs Geary" a husband and wife who
-# both speak. Honorifics that FOLLOW attach to one person: "Moiraine Sedai"
-# and "Moiraine Aes Sedai" are one Moiraine.
-PREFIX_TITLES: frozenset[str] = frozenset(
-    {
-        "mr",
-        "mrs",
-        "miss",
-        "ms",
-        "master",
-        "mistress",
-        "lord",
-        "lady",
-        "sir",
-        "dame",
-        "dr",
-        "doctor",
-        "captain",
-        "admiral",
-        "colonel",
-        "major",
-        "general",
-        "inspector",
-        "sergeant",
-        "king",
-        "queen",
-        "prince",
-        "princess",
-        "goodman",
-        "goodwife",
-        "mother",
-        "father",
-        "elder",
-        "mayor",
-    }
-)
+# Honorifics that FOLLOW attach to one person: "Moiraine Sedai" and "Moiraine
+# Aes Sedai" are one Moiraine.
 SUFFIX_TITLES: frozenset[str] = frozenset(
     {
         "sedai",

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pickle
 import sqlite3
@@ -19,6 +21,7 @@ import kenkui as kk
 import kenkui._execution.cache as cache_module
 from kenkui._audio.m4b import FakeArtifactAssembler
 from kenkui._domain.planning import (
+    NORMALIZATION_SCHEMA_VERSION,
     CastPlan,
     ExecutionPlan,
     SpeechSegment,
@@ -62,6 +65,27 @@ def _material(
         MAX_SEGMENT_PCM_BYTES,
     )
     return pipeline, plan, segment, task, DeterministicFakeEngine().synthesize(task)
+
+
+def _legacy_plain_segment_id(segment: SpeechSegment) -> str:
+    """Reproduce the retired tts-chunks-v4 ID for a first chapter segment."""
+    assert segment.ordinal == 0
+    chapter_id = {
+        "characters": len(segment.chapter_id),
+        "sha256": hashlib.sha256(segment.chapter_id.encode()).hexdigest(),
+    }
+    material = {
+        "chapter_id": chapter_id,
+        "chunk_index": 0,
+        "chunking_schema": "tts-chunks-v4",
+        "content_hash": segment.content_hash,
+        "normalization": NORMALIZATION_SCHEMA_VERSION,
+        "ordinal": segment.ordinal,
+        "segment_id_version": "v2",
+    }
+    identity = json.dumps(material, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:24]
+    return f"seg-{NORMALIZATION_SCHEMA_VERSION}-v2-{digest}"
 
 
 def test_cache_cold_warm_public_equivalence_and_no_warm_spawn(
@@ -154,6 +178,29 @@ def test_semantic_key_sensitivity_and_shell_insensitivity(tmp_path: Path) -> Non
     )
     assert store.key_for(plan, segment, task, bad_spec) != baseline
     assert CACHE_SCHEMA_VERSION and AUDIO_CONTRACT_VERSION
+
+
+def test_grid_v1_misses_but_preserves_a_legacy_cache_entry(tmp_path: Path) -> None:
+    """The new namespace cannot reuse old PCM and never deletes it implicitly."""
+    _, plan, segment, task, audio = _material(tmp_path)
+    store = CacheStore(tmp_path / "cache")
+    specification = EngineSpecification.fake()
+    legacy_id = _legacy_plain_segment_id(segment)
+    assert legacy_id != segment.id
+    legacy_segment = replace(segment, id=legacy_id)
+    legacy_task = replace(task, segment_id=legacy_id)
+    legacy_audio = replace(audio, segment_id=legacy_id)
+    legacy_key = store.key_for(plan, legacy_segment, legacy_task, specification)
+    current_key = store.key_for(plan, segment, task, specification)
+    assert current_key != legacy_key
+
+    store.store(legacy_key, legacy_segment, legacy_task, legacy_audio, None)
+    assert store.lookup(current_key, segment, task) is None
+    assert store.lookup(legacy_key, legacy_segment, legacy_task) == legacy_audio
+    with sqlite3.connect(tmp_path / "cache" / "cache.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT segment_id FROM segment_cache WHERE cache_key=?", (legacy_key,)
+        ).fetchone() == (legacy_id,)
 
 
 def test_payload_missing_corrupt_and_bad_metadata_recover_as_misses(

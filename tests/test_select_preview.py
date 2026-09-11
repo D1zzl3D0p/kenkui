@@ -12,7 +12,8 @@ import pytest
 import kenkui as kk
 from conftest import CH08_ID, CH09_ID
 from helpers import make_epub, xhtml
-from kenkui._domain.grid import build_grid
+from kenkui._domain import planning, selection
+from kenkui._domain.grid import StructuralIndex, build_grid, build_structure_index
 from kenkui._domain.operations import SpokenForm
 from kenkui._domain.paths import parse_pattern
 from kenkui._domain.planning import compile_execution_plan
@@ -29,6 +30,7 @@ _LAST_SENTENCE = 160
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from kenkui._domain.grid import Unit
     from kenkui._domain.planning import ExecutionPlan
 
 
@@ -243,7 +245,9 @@ def test_selection_preserves_interior_segments_and_only_clips_edges(
             edge.append(segment)
         offset = end
     assert len(interior) >= _MAX_EDGES
-    assert interior == [segment for segment in part.segments if segment in interior]
+    retained = [segment for segment in part.segments if segment in interior]
+    assert [segment.id for segment in retained] == [segment.id for segment in interior]
+    assert retained == interior
     changed = [segment for segment in part.segments if segment not in interior]
     assert len(changed) == len(edge) <= _MAX_EDGES
     assert [segment.ordinal for segment in changed] == [
@@ -277,6 +281,49 @@ def test_spoken_selection_uses_exact_offsets_and_preserves_full_identities(
         len([segment for segment in part.segments if segment.id not in whole_by_id])
         <= _MAX_EDGES
     )
+
+
+def test_selected_planning_reuses_each_chapter_grid(
+    long_book: kk.Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selection clipping and scoped transforms do not rescan grid boundaries."""
+    selected = long_book.select(
+        {"chapter": CH09_ID, "paragraph": 2, "sentence": "2..160"}
+    )
+    inspection = selected.inspect()
+    chapters = inspection._planning_chapters or inspection.chapters  # noqa: SLF001
+    real_build = build_grid
+    calls: list[str] = []
+    real_index = build_structure_index
+    index_calls: list[str] = []
+
+    def counted(chapter: kk.ChapterInspection) -> tuple[Unit, ...]:
+        calls.append(chapter.id)
+        return real_build(chapter)
+
+    def counted_index(units: tuple[Unit, ...]) -> StructuralIndex:
+        index_calls.append(units[0].chapter_id)
+        return real_index(units)
+
+    monkeypatch.setattr(planning, "build_grid", counted)
+    monkeypatch.setattr(planning, "build_structure_index", counted_index)
+    monkeypatch.setattr(selection, "build_grid", counted)
+
+    checkpoint = selected._resolved  # noqa: SLF001
+    assert checkpoint is not None
+    compile_execution_plan(
+        selected.tts(),
+        inspection,
+        source_bytes_hash=checkpoint.source_hash,
+        resolved_voice=checkpoint.bindings.voice,
+        model_revision=checkpoint.bindings.model_revision,
+        spans=checkpoint.spans,
+        assignments=checkpoint.cast_assignments,
+        cast_voices=checkpoint.bindings.cast_voices,
+    )
+
+    assert calls == [chapter.id for chapter in chapters]
+    assert index_calls == [chapter.id for chapter in chapters]
 
 
 def test_selection_does_not_guess_inside_cross_unit_pronunciation(
@@ -374,6 +421,10 @@ def test_preview_is_real_wav_and_retains_cache_for_full_render(
         ),
     )
     selected = book.select({"chapter": CH09_ID})
+    selected_ids = [segment.id for segment in _plan(selected).segments]
+    assert selected_ids == [
+        segment.id for segment in _plan(book).segments if segment.chapter_id == CH09_ID
+    ]
     events: list[kk.ExecutionEvent] = []
     target = tmp_path / "preview.wav"
     operations = selected.operations
@@ -398,7 +449,7 @@ def test_preview_is_real_wav_and_retains_cache_for_full_render(
         CacheStore, "lookup", lambda _self, *args, **kwargs: tracked(*args, **kwargs)
     )
     book.tts().write_m4b(tmp_path / "whole.m4b", workers=1)
-    assert recorded == [segment.id for segment in _plan(selected).segments]
+    assert recorded == selected_ids
 
 
 @pytest.mark.parametrize("suffix", [".m4b", ".M4B", ".mp3"])

@@ -1,0 +1,96 @@
+{
+  "artifact_schema": "grid-folds-dune-planning-baseline-v1",
+  "git_commit": "d72c1e8e3789ab17ee1687ed11779a8c1effd523",
+  "method": "planning-only selected Dune smoke; no model calls, synthesis, or rendering",
+  "plan_identity": "docs/superpowers/plans/2026-09-10-grid-folds.md",
+  "planning_inputs": {
+    "attribution_id": "3d156cdd91387c14aeff9fc5df68f2e4c63a3970f91989bf30ca9d07eddd9e13",
+    "attribution_model": "openrouter/deepseek/deepseek-v4-flash",
+    "attribution_params": {
+      "temperature": 0.0
+    },
+    "attribution_prompt_version": "characters-v5",
+    "cast_id": "a3674c4af79346669b250e11cd6aeb93104a488283e22dd70970750f19f9fef8",
+    "cast_method": "gendered",
+    "model_revision": "d29db7978e464fb90cb3359ee0c69a273b9142cc",
+    "narrator_voice": "ivy",
+    "pauses_ms": {
+      "chapter": 1200,
+      "heading_after": 500,
+      "heading_before": 0,
+      "line": 0,
+      "paragraph": 300
+    },
+    "spoken_form": "numbers=standard; Dune lexicon; defaults otherwise",
+    "unknown_voice": "michael"
+  },
+  "result": {
+    "segment_count": 6,
+    "segments": [
+      {
+        "canonical": [0, 3],
+        "ordinal": 0,
+        "silence_after_ms": 500,
+        "speaker": null,
+        "spoken": [0, 5],
+        "voice": "ivy"
+      },
+      {
+        "canonical": [3, 544],
+        "ordinal": 1,
+        "silence_after_ms": 300,
+        "speaker": null,
+        "spoken": [5, 567],
+        "voice": "ivy"
+      },
+      {
+        "canonical": [544, 550],
+        "ordinal": 2,
+        "silence_after_ms": 0,
+        "speaker": null,
+        "spoken": [567, 573],
+        "voice": "ivy"
+      },
+      {
+        "canonical": [550, 570],
+        "ordinal": 3,
+        "silence_after_ms": 0,
+        "speaker": "irulan",
+        "spoken": [573, 593],
+        "voice": "aoife"
+      },
+      {
+        "canonical": [570, 595],
+        "ordinal": 4,
+        "silence_after_ms": 300,
+        "speaker": null,
+        "spoken": [593, 618],
+        "voice": "ivy"
+      },
+      {
+        "canonical": [595, 774],
+        "ordinal": 5,
+        "silence_after_ms": 0,
+        "speaker": null,
+        "spoken": [618, 797],
+        "voice": "ivy"
+      }
+    ],
+    "semantic_fingerprint": "0d53c7d50ed77bb381aabd302c9429e8467ce2d411273132bc0fe5881622220d",
+    "spoken_characters": 797,
+    "spoken_sha256": "d397a4bdd1b20ab5e11f8443030bb8cb1a459b5e16035e3c25ef3503d59be98a"
+  },
+  "scope": {
+    "canonical_characters": 774,
+    "canonical_range": [0, 774],
+    "canonical_sha256": "236264d0c4ca443ab525b5a0890486351ef970c4d432dd7c0e83ceb5919776c5",
+    "chapter_id": "ch-v1-2cc5ecca00df5ea4a766ea67",
+    "chapter_index": 5,
+    "selected_paragraphs": [1, 2, 3, 4],
+    "title": "1"
+  },
+  "source": {
+    "path": "/Users/dizzler/Projects/Calibre Library/Frank Herbert/Dune (466)/Dune - Frank Herbert.epub",
+    "sha256": "d4649a2ca8346a4ad795d542e33d377050a5bd2ce501176a2779982a97404172"
+  }
+}
