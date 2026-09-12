@@ -291,6 +291,34 @@ places and multi-holder roles the filters kept (Fremen, Aes Sedai, Ogier, "the
 Warder", the Crofts, Anacreon). Every such removal was read; none is an
 individual character.
 
+### Dune re-attribution
+
+On 2026-09-11, the stored `characters-v5` render was compared with full-book
+`characters-v6` runs over the same 412,875 dialogue characters. Both new runs
+used `openrouter/z-ai/glm-5.3-flash` for the identity pass; the attribution
+model is shown below.
+
+| Attribution | Attributed dialogue | Roster entries | Paul entries (`role:` fragments) | `role:` speech (ungendered) | All ungendered |
+|---|---:|---:|---:|---:|---:|
+| Stored DeepSeek v4 Flash, v5 | 400,011 (96.9%) | 146 | 26 (23) | 74,991 (100%) | 34.1% |
+| DeepSeek v4 Flash, v6 | 400,895 (97.1%) | 102 | 1 (0) | 26,843 (58.0%) | 5.5% |
+| GLM 5.3 Flash, v6 | 0 (0%) | 0 | 0 (0) | 0 (n/a) | n/a |
+
+The v5 Paul-related entries consumed 21, 25, 25 and 26 distinct voices in the
+four stored casts. V6 resolves Paul, Paul Atreides, Muad'Dib, Paul-Muad'Dib and
+Usul to one 71,792-character entry, hence one assignable voice. The named
+non-character entries Bene Gesserit (10,572 characters) and Fremen (7,725)
+both disappear. DeepSeek still returned 5,697 characters as chapter-local
+`role:fremen` fragments, so removing a group from the roster does not prevent
+the attribution model from inventing the same label as an unknown role.
+
+GLM 5.3 Flash completed through the fail-soft path with the normal 13,444 span
+tiles but no attributed character. A diagnostic request with the same model,
+temperature and `reasoning_effort="none"` returned HTTP 400: reasoning is
+mandatory for this endpoint and cannot be disabled. It is therefore compatible
+with the high-reasoning identity pass, but not with the deliberately
+non-reasoning attribution boundary under the same production conditions.
+
 The harness that produced every number is under `evals/attribution/`
 (`roster_signals.py`, `roster_lab.py`, `roster_llm.py`, `roster_merge.py`,
 `roster_rules.py`, `roster_reasoning.py`, `roster_simplify.py`,
