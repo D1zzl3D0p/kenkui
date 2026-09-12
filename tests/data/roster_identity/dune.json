@@ -1,0 +1,524 @@
+{
+ "model": "openrouter/z-ai/glm-5.3-flash",
+ "entries": [
+  [
+   "Paul"
+  ],
+  [
+   "Jessica"
+  ],
+  [
+   "Baron"
+  ],
+  [
+   "Fremen"
+  ],
+  [
+   "Gurney",
+   "Gurney Halleck",
+   "Halleck"
+  ],
+  [
+   "Duke"
+  ],
+  [
+   "Hawat",
+   "Thufir",
+   "Thufir Hawat"
+  ],
+  [
+   "Stilgar"
+  ],
+  [
+   "Arrakis"
+  ],
+  [
+   "Emperor",
+   "Padishah Emperor",
+   "Sublime Padishah Emperor"
+  ],
+  [
+   "Chani"
+  ],
+  [
+   "Leto",
+   "Leto Atreides"
+  ],
+  [
+   "Dr. Kynes",
+   "Kynes",
+   "Pardot Kynes"
+  ],
+  [
+   "Feyd-Rautha",
+   "Feyd-Rautha Harkonnen"
+  ],
+  [
+   "House Sardaukar",
+   "Imperial Sardaukar",
+   "Sardaukar"
+  ],
+  [
+   "Muad'Dib",
+   "Paul Muad'Dib"
+  ],
+  [
+   "Bene Gesserit"
+  ],
+  [
+   "Harkonnen"
+  ],
+  [
+   "Duncan",
+   "Duncan Idaho",
+   "Idaho"
+  ],
+  [
+   "Yueh"
+  ],
+  [
+   "Piter"
+  ],
+  [
+   "Harkonnens"
+  ],
+  [
+   "Jamis"
+  ],
+  [
+   "Reverend"
+  ],
+  [
+   "Atreides"
+  ],
+  [
+   "Count",
+   "Count Fenring",
+   "Fenring"
+  ],
+  [
+   "Alia"
+  ],
+  [
+   "Guild"
+  ],
+  [
+   "Beast Rabban",
+   "Rabban"
+  ],
+  [
+   "Harah"
+  ],
+  [
+   "Mentat"
+  ],
+  [
+   "m'Lord"
+  ],
+  [
+   "Dune"
+  ],
+  [
+   "Mapes",
+   "Shadout",
+   "Shadout Mapes"
+  ],
+  [
+   "Usul"
+  ],
+  [
+   "Irulan"
+  ],
+  [
+   "Arrakeen"
+  ],
+  [
+   "Iakin Nefud",
+   "Nefud"
+  ],
+  [
+   "Caladan"
+  ],
+  [
+   "Sire"
+  ],
+  [
+   "Fedaykin"
+  ],
+  [
+   "Frank Herbert",
+   "Herbert"
+  ],
+  [
+   "Majesty"
+  ],
+  [
+   "Great Houses",
+   "Houses",
+   "Houses Minor"
+  ],
+  [
+   "Tuek"
+  ],
+  [
+   "Kwisatz Haderach"
+  ],
+  [
+   "Imperium"
+  ],
+  [
+   "Water"
+  ],
+  [
+   "Shield Wall"
+  ],
+  [
+   "Liet"
+  ],
+  [
+   "Sayyadina"
+  ],
+  [
+   "Feyd"
+  ],
+  [
+   "Truthsayer"
+  ],
+  [
+   "House"
+  ],
+  [
+   "Salusa Secundus"
+  ],
+  [
+   "Bewt"
+  ],
+  [
+   "Lisan al-Gaib"
+  ],
+  [
+   "Missionaria Protectiva"
+  ],
+  [
+   "Czigo"
+  ],
+  [
+   "M'Lord"
+  ],
+  [
+   "Paul-Muad'Dib"
+  ],
+  [
+   "Uncle"
+  ],
+  [
+   "Landsraad"
+  ],
+  [
+   "O.C. Bible"
+  ],
+  [
+   "Paul Atreides"
+  ],
+  [
+   "Dr. Yueh"
+  ],
+  [
+   "Scarface"
+  ],
+  [
+   "Stil"
+  ],
+  [
+   "Dad"
+  ],
+  [
+   "Silence"
+  ],
+  [
+   "Tharthar"
+  ],
+  [
+   "Vladimir Harkonnen"
+  ],
+  [
+   "C.E.T"
+  ],
+  [
+   "Great"
+  ],
+  [
+   "Shai-hulud"
+  ],
+  [
+   "Wanna"
+  ],
+  [
+   "Kinet"
+  ],
+  [
+   "Liet-Kynes"
+  ],
+  [
+   "Son"
+  ],
+  [
+   "Wellington"
+  ],
+  [
+   "shai-hulud"
+  ],
+  [
+   "Change"
+  ],
+  [
+   "Butlerian Jihad"
+  ],
+  [
+   "Chakobsa"
+  ],
+  [
+   "Great House"
+  ],
+  [
+   "House Atreides"
+  ],
+  [
+   "Lady Fenring"
+  ],
+  [
+   "Old"
+  ],
+  [
+   "Council"
+  ],
+  [
+   "Commentaries",
+   "Family Commentaries"
+  ],
+  [
+   "Great Convention"
+  ],
+  [
+   "Reverend Mothers"
+  ],
+  [
+   "B.G"
+  ],
+  [
+   "Farok"
+  ],
+  [
+   "Guild Bank"
+  ],
+  [
+   "Guildsman"
+  ],
+  [
+   "Guildsmen"
+  ],
+  [
+   "Otheym"
+  ],
+  [
+   "Spacing Guild"
+  ],
+  [
+   "Collected Sayings"
+  ],
+  [
+   "House Harkonnen"
+  ],
+  [
+   "Imperial Planetologist",
+   "Planetologist"
+  ],
+  [
+   "Maker"
+  ],
+  [
+   "Arrakis Awakening"
+  ],
+  [
+   "Bashar"
+  ],
+  [
+   "Ecaz"
+  ],
+  [
+   "Korba"
+  ],
+  [
+   "Manual"
+  ],
+  [
+   "Orange Catholic Bible"
+  ],
+  [
+   "Reverend Mother Ramallo"
+  ],
+  [
+   "Sihaya"
+  ],
+  [
+   "Arkie"
+  ],
+  [
+   "Azhar Book"
+  ],
+  [
+   "Fremkit"
+  ],
+  [
+   "Mahdi"
+  ],
+  [
+   "Paradise"
+  ],
+  [
+   "Royal"
+  ],
+  [
+   "Shaitan"
+  ],
+  [
+   "Arrakis Affair"
+  ],
+  [
+   "Chusuk"
+  ],
+  [
+   "Convention"
+  ],
+  [
+   "Fear"
+  ],
+  [
+   "Habbanya Ridge"
+  ],
+  [
+   "Hai"
+  ],
+  [
+   "Head"
+  ],
+  [
+   "House Corrino"
+  ],
+  [
+   "Lankiveil"
+  ],
+  [
+   "Nephew"
+  ],
+  [
+   "Noble Born"
+  ],
+  [
+   "Pardee"
+  ],
+  [
+   "Poison"
+  ],
+  [
+   "Residency"
+  ],
+  [
+   "Review"
+  ],
+  [
+   "Siridar-Baron"
+  ],
+  [
+   "Subiay"
+  ],
+  [
+   "Wormsign"
+  ],
+  [
+   "Anger"
+  ],
+  [
+   "Aye"
+  ],
+  [
+   "Bomoko"
+  ],
+  [
+   "Corps"
+  ],
+  [
+   "Dawn"
+  ],
+  [
+   "Dib"
+  ],
+  [
+   "Grandfather"
+  ],
+  [
+   "Green"
+  ],
+  [
+   "Grumman"
+  ],
+  [
+   "Harkon"
+  ],
+  [
+   "Hero"
+  ],
+  [
+   "Kanly"
+  ],
+  [
+   "Kull"
+  ],
+  [
+   "Mattai"
+  ],
+  [
+   "Movement"
+  ],
+  [
+   "Pillars"
+  ],
+  [
+   "Rock"
+  ],
+  [
+   "Shishakli"
+  ],
+  [
+   "Soo-soo-Sook"
+  ],
+  [
+   "Standard"
+  ],
+  [
+   "Uliet"
+  ],
+  [
+   "Umman Kudu"
+  ],
+  [
+   "Varota"
+  ],
+  [
+   "White"
+  ],
+  [
+   "Wind Pass"
+  ],
+  [
+   "Worm"
+  ],
+  [
+   "Yawm"
+  ]
+ ],
+ "responses": [
+  "{\n  \"same_person\": [\n    [1, 16, 35, 61, 65],\n    [3, 72, 134],\n    [6, 12],\n    [8, 68],\n    [10, 43],\n    [11, 111],\n    [13, 50, 78],\n    [14, 52],\n    [20, 66, 80],\n    [42, 69]\n  ],\n  \"not_individuals\": [\n    4, 9, 15, 17, 18, 22, 24, 25, 28, 31, 32, 33, 37, 39, 40, 41, 44, 46, 47,\n    48, 49, 51, 53, 54, 55, 58, 60, 62, 63, 64, 70, 73, 74, 75, 79, 81, 82,\n    83, 84, 85, 86, 88, 89, 90, 91, 92, 93, 95, 97, 99, 100, 101, 103, 104,\n    105, 106, 108, 109, 113, 114, 116, 117, 118, 119, 120, 121, 122, 123,\n    124, 125, 126, 127, 128, 129, 131, 132, 133, 136, 137, 138, 140, 141,\n    142, 143, 144, 145, 146, 147, 148, 149, 151, 152, 153, 155, 156, 160,\n    161, 162, 163\n  ]\n}",
+  "{\"same_person\": [[1, 16, 35, 57, 61, 65, 115, 142], [3, 72, 134], [8, 68], [11, 111], [13, 50, 78, 102], [14, 52], [20, 66, 80]], \"not_individuals\": [4, 6, 9, 15, 17, 18, 22, 24, 25, 28, 31, 32, 33, 37, 39, 40, 41, 42, 43, 44, 46, 47, 48, 49, 51, 53, 54, 55, 58, 60, 63, 64, 69, 70, 74, 75, 79, 81, 82, 83, 84, 85, 86, 88, 89, 90, 91, 92, 93, 95, 96, 97, 99, 100, 101, 103, 106, 108, 109, 113, 114, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 131, 132, 133, 136, 137, 138, 140, 141, 143, 144, 145, 146, 147, 148, 149, 151, 152, 153, 155, 156, 160, 161, 162, 163]}"
+ ]
+}

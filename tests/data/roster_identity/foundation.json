@@ -1,0 +1,307 @@
+{
+ "model": "openrouter/z-ai/glm-5.3-flash",
+ "entries": [
+  [
+   "Hardin",
+   "Salvor Hardin"
+  ],
+  [
+   "Hober Mallow",
+   "Mallow"
+  ],
+  [
+   "Foundation"
+  ],
+  [
+   "Anacreon"
+  ],
+  [
+   "Gaal"
+  ],
+  [
+   "Jorane Sutt",
+   "Sutt"
+  ],
+  [
+   "Seldon"
+  ],
+  [
+   "Empire",
+   "Galactic Empire"
+  ],
+  [
+   "Wienis"
+  ],
+  [
+   "Pirenne"
+  ],
+  [
+   "Galaxy"
+  ],
+  [
+   "Jaim Twer",
+   "Twer"
+  ],
+  [
+   "Trantor"
+  ],
+  [
+   "Emperor"
+  ],
+  [
+   "Hari Seldon"
+  ],
+  [
+   "Terminus"
+  ],
+  [
+   "Commdor"
+  ],
+  [
+   "Limmar Ponyets",
+   "Ponyets"
+  ],
+  [
+   "Sef Sermak",
+   "Sermak"
+  ],
+  [
+   "Lee",
+   "Yohan Lee"
+  ],
+  [
+   "Lepold"
+  ],
+  [
+   "Grand"
+  ],
+  [
+   "Eskel Gorov",
+   "Gorov"
+  ],
+  [
+   "Ankor Jael",
+   "Jael"
+  ],
+  [
+   "Korell"
+  ],
+  [
+   "Board"
+  ],
+  [
+   "Pherl"
+  ],
+  [
+   "Verisof"
+  ],
+  [
+   "Dr. Seldon"
+  ],
+  [
+   "Galactic Spirit",
+   "Spirit"
+  ],
+  [
+   "Encyclopedia"
+  ],
+  [
+   "Periphery"
+  ],
+  [
+   "Smyrno"
+  ],
+  [
+   "Dorwin"
+  ],
+  [
+   "Fara",
+   "Jord Fara"
+  ],
+  [
+   "Barr",
+   "Onum Barr"
+  ],
+  [
+   "Time Vault",
+   "Vault"
+  ],
+  [
+   "Bort"
+  ],
+  [
+   "Askone"
+  ],
+  [
+   "Four Kingdoms",
+   "Kingdoms"
+  ],
+  [
+   "Siwenna"
+  ],
+  [
+   "Gorm",
+   "Les Gorm"
+  ],
+  [
+   "Manlio",
+   "Publis Manlio"
+  ],
+  [
+   "Commission"
+  ],
+  [
+   "Haut Rodric"
+  ],
+  [
+   "Aporat"
+  ],
+  [
+   "Jord Parma",
+   "Revered Jord Parma"
+  ],
+  [
+   "Trustees"
+  ],
+  [
+   "Chen"
+  ],
+  [
+   "Lefkin"
+  ],
+  [
+   "Far Star"
+  ],
+  [
+   "Smyrnian"
+  ],
+  [
+   "Trader"
+  ],
+  [
+   "Fulham",
+   "Yate Fulham"
+  ],
+  [
+   "Askonian"
+  ],
+  [
+   "Council"
+  ],
+  [
+   "Commdora"
+  ],
+  [
+   "Dr. Pirenne"
+  ],
+  [
+   "Mr."
+  ],
+  [
+   "Advocate"
+  ],
+  [
+   "Anacreonians"
+  ],
+  [
+   "Avakim"
+  ],
+  [
+   "City"
+  ],
+  [
+   "Jerril"
+  ],
+  [
+   "Journal"
+  ],
+  [
+   "Nyak"
+  ],
+  [
+   "Space"
+  ],
+  [
+   "Encyclopedists"
+  ],
+  [
+   "Hahdin"
+  ],
+  [
+   "State"
+  ],
+  [
+   "Supervisor"
+  ],
+  [
+   "Tinter"
+  ],
+  [
+   "Chief Commissioner"
+  ],
+  [
+   "Commissioners"
+  ],
+  [
+   "Imperium"
+  ],
+  [
+   "Korellians"
+  ],
+  [
+   "Lameth"
+  ],
+  [
+   "Raven Seldon"
+  ],
+  [
+   "Walto"
+  ],
+  [
+   "Wiscard"
+  ],
+  [
+   "Argolid Temple"
+  ],
+  [
+   "Asimov"
+  ],
+  [
+   "Chancellor"
+  ],
+  [
+   "Dark Nebula"
+  ],
+  [
+   "Doctah Piwenne"
+  ],
+  [
+   "Jump"
+  ],
+  [
+   "Lundin Crast"
+  ],
+  [
+   "Outlander"
+  ],
+  [
+   "Outlanders"
+  ],
+  [
+   "Peace"
+  ],
+  [
+   "Plan"
+  ],
+  [
+   "Spiritual Power"
+  ],
+  [
+   "Temples"
+  ]
+ ],
+ "responses": [
+  "{\"same_person\": [[1, 69], [7, 15, 29, 78], [10, 58, 85], [49, 73]], \"not_individuals\": [3, 4, 8, 11, 13, 14, 16, 25, 26, 30, 31, 32, 33, 39, 40, 41, 44, 48, 51, 52, 53, 55, 56, 59, 61, 63, 65, 66, 67, 68, 70, 74, 75, 76, 81, 82, 84, 86, 88, 89, 90, 91, 92, 93]}",
+  "{\"same_person\": [[1, 69], [7, 15, 29, 78], [10, 58, 85], [34, 83], [49, 73]], \"not_individuals\": [3, 4, 8, 11, 13, 14, 16, 25, 26, 30, 31, 32, 33, 37, 39, 40, 41, 44, 48, 51, 52, 53, 55, 56, 59, 61, 63, 65, 66, 67, 68, 70, 74, 75, 76, 81, 82, 84, 86, 88, 89, 90, 91, 92, 93]}"
+ ]
+}

@@ -1,0 +1,259 @@
+{
+ "model": "openrouter/z-ai/glm-5.3-flash",
+ "entries": [
+  [
+   "Anne",
+   "Anne Elliot",
+   "Miss Anne",
+   "Miss Anne Elliot"
+  ],
+  [
+   "Captain Wentworth",
+   "Frederick",
+   "Frederick Wentworth",
+   "Mr Wentworth",
+   "Wentworth"
+  ],
+  [
+   "Mr Elliot"
+  ],
+  [
+   "Russell"
+  ],
+  [
+   "Walter",
+   "Walter Elliot"
+  ],
+  [
+   "Mary"
+  ],
+  [
+   "Charles"
+  ],
+  [
+   "Louisa",
+   "Louisa Musgrove"
+  ],
+  [
+   "Bath"
+  ],
+  [
+   "Elizabeth"
+  ],
+  [
+   "Henrietta"
+  ],
+  [
+   "Kellynch",
+   "Kellynch Hall"
+  ],
+  [
+   "Uppercross"
+  ],
+  [
+   "Benwick"
+  ],
+  [
+   "Lyme"
+  ],
+  [
+   "Mrs Clay"
+  ],
+  [
+   "Mrs Musgrove"
+  ],
+  [
+   "Mrs Smith"
+  ],
+  [
+   "Fanny Harville",
+   "Harville"
+  ],
+  [
+   "Miss Elliot"
+  ],
+  [
+   "Admiral"
+  ],
+  [
+   "Mrs Croft"
+  ],
+  [
+   "Charles Hayter",
+   "Hayter"
+  ],
+  [
+   "Elliot"
+  ],
+  [
+   "Mr Shepherd"
+  ],
+  [
+   "Dalrymple"
+  ],
+  [
+   "Mrs Harville"
+  ],
+  [
+   "Wallis"
+  ],
+  [
+   "Crofts"
+  ],
+  [
+   "Miss Musgroves"
+  ],
+  [
+   "Mr Musgrove"
+  ],
+  [
+   "Harvilles"
+  ],
+  [
+   "Musgroves"
+  ],
+  [
+   "Croft"
+  ],
+  [
+   "Charles Musgrove",
+   "Mrs Charles Musgrove"
+  ],
+  [
+   "London"
+  ],
+  [
+   "Cobb"
+  ],
+  [
+   "Miss Carteret"
+  ],
+  [
+   "Mrs Wallis"
+  ],
+  [
+   "Winthrop"
+  ],
+  [
+   "Dr Shirley"
+  ],
+  [
+   "November"
+  ],
+  [
+   "ma'am"
+  ],
+  [
+   "Laconia"
+  ],
+  [
+   "Monkford"
+  ],
+  [
+   "Miss Musgrove"
+  ],
+  [
+   "Plymouth"
+  ],
+  [
+   "Westgate Buildings"
+  ],
+  [
+   "Asp"
+  ],
+  [
+   "Christmas"
+  ],
+  [
+   "Elliots"
+  ],
+  [
+   "England"
+  ],
+  [
+   "Sophy"
+  ],
+  [
+   "Taunton"
+  ],
+  [
+   "Edward"
+  ],
+  [
+   "Esq"
+  ],
+  [
+   "Mrs Charles"
+  ],
+  [
+   "Richard"
+  ],
+  [
+   "Dalrymples"
+  ],
+  [
+   "Dear"
+  ],
+  [
+   "Dick"
+  ],
+  [
+   "Heaven"
+  ],
+  [
+   "Jemima"
+  ],
+  [
+   "Miss Hamilton"
+  ],
+  [
+   "Musgrove"
+  ],
+  [
+   "Nay"
+  ],
+  [
+   "Somersetshire"
+  ],
+  [
+   "Belmont"
+  ],
+  [
+   "Cape"
+  ],
+  [
+   "Gibraltar"
+  ],
+  [
+   "Gowland"
+  ],
+  [
+   "June"
+  ],
+  [
+   "Michaelmas"
+  ],
+  [
+   "Mr Robinson"
+  ],
+  [
+   "Nurse Rooke"
+  ],
+  [
+   "Portsmouth"
+  ],
+  [
+   "Providence"
+  ],
+  [
+   "Shepherd"
+  ],
+  [
+   "Thursday"
+  ]
+ ],
+ "responses": [
+  "{\"same_person\": [[1, 20], [3, 24], [6, 57], [7, 35], [18, 64], [22, 34, 53], [25, 78], [58, 61]], \"not_individuals\": [9, 12, 13, 15, 29, 30, 32, 33, 36, 37, 40, 42, 43, 44, 45, 47, 48, 49, 50, 51, 52, 54, 56, 59, 60, 62, 65, 66, 67, 68, 69, 70, 71, 72, 73, 76, 77, 79]}",
+  "{\"same_person\": [[1, 20], [3, 24], [6, 57], [7, 35], [18, 64], [22, 34, 53], [25, 78], [58, 61]], \"not_individuals\": [9, 12, 13, 15, 29, 30, 32, 33, 36, 37, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 54, 56, 59, 60, 62, 65, 66, 67, 68, 69, 70, 71, 72, 73, 76, 77, 79]}"
+ ]
+}
