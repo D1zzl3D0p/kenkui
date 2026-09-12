@@ -8,6 +8,7 @@ import os
 import re
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 import pytest
 
@@ -16,13 +17,18 @@ from kenkui._characters import spacy_roster
 from kenkui._characters.identity_pass import IdentityPass
 from kenkui._domain.grid import build_grid, dialogue_ranges
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from kenkui._domain.casting import CharacterProfile
+
 pytestmark = pytest.mark.skipif(
     not os.environ.get("KENKUI_RUN_CORPUS"), reason="set KENKUI_RUN_CORPUS=1 to run"
 )
 
 LIBRARY = Path("/Users/dizzler/Projects/Calibre Library")
 FIXTURES = Path(__file__).parent / "data" / "roster_identity"
-BOOKS = {
+BOOKS: dict[str, str] = {
     "dune": "Frank Herbert/Dune (466)/Dune - Frank Herbert.epub",
     "eotw": (
         "Robert Jordan/The Eye of the World (322)/"
@@ -41,8 +47,13 @@ BOOKS = {
     ),
     "foundation": "Isaac Asimov/Foundation (453)/Foundation - Isaac Asimov.epub",
 }
-T = lambda *words: set(words)  # noqa: E731
-PRINCIPALS = {  # copied from evals/attribution/roster_lab.py
+
+
+def T(*words: str) -> set[str]:  # noqa: N802 - compact copied fixture helper
+    return set(words)
+
+
+PRINCIPALS: dict[str, dict[str, set[str]]] = {  # copied from roster_lab.py
     "dune": {
         "Paul": T("paul"),
         "Jessica": T("jessica"),
@@ -143,7 +154,7 @@ PRINCIPALS = {  # copied from evals/attribution/roster_lab.py
         "Chen": T("chen", "linge"),
     },
 }
-APART = {
+APART: dict[str, list[tuple[str, str]]] = {
     "dune": [
         ("Paul Atreides", "Leto Atreides"),
         ("Vladimir Harkonnen", "Beast Rabban"),
@@ -171,7 +182,7 @@ APART = {
     "uprooted": [],
     "foundation": [],
 }
-SAME = {
+SAME: dict[str, list[tuple[str, str]]] = {
     "dune": [
         ("Paul", "Usul"),
         ("Paul", "Muad'Dib"),
@@ -227,9 +238,12 @@ def _inspection(book: str, tmp_path: Path) -> kk.BookInspection:
 class _Replay:
     """Returns the recorded answers, renumbered onto this prompt by alias set."""
 
-    def __init__(self, fixture: dict) -> None:
-        self.entries = [frozenset(e) for e in fixture["entries"]]
-        self.responses = list(fixture["responses"])
+    def __init__(self, fixture: Mapping[str, Any]) -> None:
+        self.entries = [
+            frozenset(cast("list[str]", entry))
+            for entry in cast("list[object]", fixture["entries"])
+        ]
+        self.responses = cast("list[str]", fixture["responses"]).copy()
 
     def complete(self, model: str, prompt: str) -> str:  # noqa: ARG002
         here: dict[frozenset[str], int] = {}
@@ -255,8 +269,16 @@ class _Replay:
         return json.dumps(payload)
 
 
-def _score(book: str, roster, mentions) -> tuple[list, list, list, int]:  # noqa: ANN001
-    def words(character) -> set[str]:  # noqa: ANN001
+Score: TypeAlias = tuple[list[str], list[str], list[str], int]
+CorpusResults: TypeAlias = dict[str, dict[str, Score]]
+
+
+def _score(
+    book: str,
+    roster: Sequence[CharacterProfile],
+    mentions: Mapping[str, int],
+) -> Score:
+    def words(character: CharacterProfile) -> set[str]:
         return {
             _norm(w)
             for a in (*character.aliases, character.display_name)
@@ -264,7 +286,7 @@ def _score(book: str, roster, mentions) -> tuple[list, list, list, int]:  # noqa
         }
 
     kept = {a for c in roster for a in c.aliases}
-    lost = []
+    lost: list[str] = []
     for label, toks in PRINCIPALS[book].items():
         mine = [n for n in mentions if {_norm(w) for w in n.split()} & toks]
         total = sum(mentions[n] for n in mine)
@@ -290,14 +312,16 @@ def _score(book: str, roster, mentions) -> tuple[list, list, list, int]:  # noqa
 
 
 @pytest.fixture(scope="module")
-def results(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
-    out = {}
+def results(tmp_path_factory: pytest.TempPathFactory) -> CorpusResults:
+    out: CorpusResults = {}
     for book in BOOKS:
         inspection = _inspection(book, tmp_path_factory.mktemp(book))
         spans = {c.id: dialogue_ranges(build_grid(c)) for c in inspection.chapters}
         mentions = spacy_roster.collect_signals(inspection.chapters, spans).mentions
         offline, _ = spacy_roster.infer_roster(inspection.chapters, spans)
-        fixture = json.loads((FIXTURES / f"{book}.json").read_text())
+        fixture = cast(
+            "dict[str, Any]", json.loads((FIXTURES / f"{book}.json").read_text())
+        )
         identity = IdentityPass(
             fixture["model"], client=_Replay(fixture), backoff_base=0
         )
@@ -312,15 +336,15 @@ def results(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
 
 
 @pytest.mark.parametrize("path", ["offline", "online"])
-def test_no_person_lost_merged_or_joined(results: dict, path: str) -> None:
+def test_no_person_lost_merged_or_joined(results: CorpusResults, path: str) -> None:
     for book, scored in results.items():
         lost, merged, apart, _ = scored[path]
         assert (lost, merged, apart) == ([], [], []), f"{book} {path}"
 
 
-def test_the_identity_pass_merges_nicknames(results: dict) -> None:
+def test_the_identity_pass_merges_nicknames(results: CorpusResults) -> None:
     assert sum(scored["online"][3] for scored in results.values()) >= 14
 
 
-def test_the_fallback_matches_its_measured_baseline(results: dict) -> None:
+def test_the_fallback_matches_its_measured_baseline(results: CorpusResults) -> None:
     assert sum(scored["offline"][3] for scored in results.values()) >= 3

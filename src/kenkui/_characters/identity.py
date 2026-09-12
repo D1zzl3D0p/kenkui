@@ -14,10 +14,22 @@ from __future__ import annotations
 from collections import Counter
 from typing import TYPE_CHECKING, NamedTuple
 
-from kenkui._domain.titles import PREFIX_TITLES as PREFIX_TITLES
+from kenkui._domain.titles import PREFIX_TITLES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+
+__all__ = [
+    "PREFIX_TITLES",
+    "SUFFIX_TITLES",
+    "ShortForms",
+    "detect_titles",
+    "group_full_names",
+    "name_tokens",
+    "residue",
+    "resolve_short_forms",
+    "same_person",
+]
 
 # Honorifics that FOLLOW attach to one person: "Moiraine Sedai" and "Moiraine
 # Aes Sedai" are one Moiraine.
