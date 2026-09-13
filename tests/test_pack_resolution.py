@@ -94,9 +94,9 @@ def test_asset_url_pins_the_revision_from_the_manifest(
     pack_at(_PACK)
     entry = registry.load_pack().entries[0]
     assert entry.asset_url == (
-        "hf://D1zzl3D0p/kenkui-voices/"
+        "https://huggingface.co/datasets/D1zzl3D0p/kenkui-voices/resolve/"
+        "cafe1234cafe1234cafe1234cafe1234cafe1234/"
         "compiled/alasdair-m-vctk-p246-scottish.safetensors"
-        "@cafe1234cafe1234cafe1234cafe1234cafe1234"
     )
 
 

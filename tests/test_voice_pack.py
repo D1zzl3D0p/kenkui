@@ -68,15 +68,22 @@ def test_every_catalog_id_is_unique_and_nonempty() -> None:
     assert all(entry_id and entry_id == entry.id for entry_id, entry in CATALOG.items())
 
 
-def test_pack_asset_urls_are_pinned() -> None:
-    """A moving revision would silently change which bytes are fetched."""
+def test_pack_asset_urls_are_pinned_dataset_downloads() -> None:
+    """A moving revision would silently change which bytes are fetched.
+
+    The pack is a Hugging Face *dataset*. An ``hf://owner/repo/...`` URL makes
+    Pocket-TTS ask for a model repository of that name, which does not exist,
+    so every pack voice failed to load on a machine without a warm cache.
+    """
     payload = json.loads(
         Path(registry.__file__).with_name("pack.json").read_text(encoding="utf-8")
     )
     revision = payload["assets"]["revision"]
     url = asset_url("alasdair", "english")
-    assert url.startswith("hf://D1zzl3D0p/kenkui-voices/compiled/")
-    assert url.endswith(f"@{revision}")
+    assert url.startswith(
+        f"https://huggingface.co/datasets/D1zzl3D0p/kenkui-voices/resolve/{revision}/"
+        "compiled/"
+    )
     assert len(revision) == _REVISION_LENGTH
 
 

@@ -146,7 +146,13 @@ def _pack_entry(
         license_id=voice["license_id"],
         commercial_use_allowed=bool(voice["commercial_use_allowed"]),
         voice_rights=voice["voice_rights"],
-        asset_url=f"hf://{repo}/{voice['compiled']['path']}@{revision}",
+        # A dataset resolve URL, not hf://: Pocket-TTS reads hf:// as a model
+        # repository, and the pack is a dataset, so hf:// cannot be fetched.
+        # The revision in the path still pins the exact bytes.
+        asset_url=(
+            f"https://huggingface.co/datasets/{repo}/resolve/{revision}/"
+            f"{voice['compiled']['path']}"
+        ),
         perceived_gender=_GENDERS.get(voice["gender"]),
     )
 
