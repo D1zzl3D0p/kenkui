@@ -180,6 +180,9 @@ def test_review_preserves_known_genders_and_keeps_unspecified_values_inferable(
     assert record.characters[0].gender == expected
 
 
+_LATER = " Later that night."
+
+
 class _AliasFoldClient:
     """Names one woman "Corwi" in chapter one and "Lizbyet Corwi" in chapter two.
 
@@ -192,17 +195,17 @@ class _AliasFoldClient:
     def __init__(self) -> None:
         """Track calls so the fixture reads like the ones above it."""
         self.calls: list[str] = []
-        self._rosters_seen = 0
 
     def complete(self, model: str, prompt: str) -> str:
         """Return the next scripted roster or attribution answer."""
         assert model
         self.calls.append(prompt)
         if "List the speaking characters" in prompt:
-            self._rosters_seen += 1
+            # Keyed on the chapter's text, not call order: identical prompts
+            # get identical answers, and stored responses are reused.
             character = (
                 {"id": "corwi", "name": "Corwi", "gender": "feminine"}
-                if self._rosters_seen == 1
+                if _LATER not in prompt
                 else {
                     "id": "lizbyet-corwi",
                     "name": "Lizbyet Corwi",
@@ -469,7 +472,9 @@ def test_folded_aliases_survive_measurement_and_the_store() -> None:
     actually takes, roster inference through the stored record.
     """
     chapter_one = kk.ChapterInspection("ch1", 0, "One", len(TEXT), TEXT)
-    chapter_two = kk.ChapterInspection("ch2", 1, "Two", len(TEXT), TEXT)
+    chapter_two = kk.ChapterInspection(
+        "ch2", 1, "Two", len(TEXT + _LATER), TEXT + _LATER
+    )
     metadata = kk.BookMetadata("T", "A", cover_available=False)
     inspection = kk.BookInspection(metadata, (chapter_one, chapter_two))
 

@@ -15,8 +15,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from kenkui._characters.checkpoint import complete_json_checkpointed
 from kenkui._characters.infer import PRONOUNS, ROLE_PREFIX, UNKNOWN, slugify
-from kenkui._characters.llm import complete_json
 from kenkui._characters.prompts import ATTRIBUTION_PROMPT
 from kenkui._domain.grid import DialogueRange, build_grid, dialogue_ranges
 from kenkui._domain.planning import SpeakerSpan
@@ -49,6 +49,9 @@ class AttributionCoverage:
     answered: int
     unknown: int
     dropped: int
+    # The model never produced a usable answer, so every quote is unplaced
+    # for want of a response rather than by the model's judgement.
+    failed: bool = False
 
 
 def _escaped(text: str) -> str:
@@ -175,7 +178,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     )
     known = frozenset(character.id for character in characters)
     aliases = _alias_ids(characters)
-    answers = _answers(
+    response = _answers(
         model_id,
         prompt,
         client,
@@ -185,6 +188,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         aliases=aliases,
         cancel=cancel,
     )
+    answers = response if response is not None else {}
 
     # A quote's id is its position among the dialogue spans, so pairing them
     # back up is a zip. A model that skipped an id leaves None, which is
@@ -198,6 +202,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         answered=sum(1 for value in answers.values() if value is not None),
         unknown=sum(1 for value in answers.values() if value is None),
         dropped=sum(1 for index in range(len(dialogue)) if index not in returned),
+        failed=response is None,
     )
     by_start = dict(zip((span.start for span in dialogue), speakers, strict=True))
 
@@ -237,17 +242,20 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     chapter_id: str | None = None,
     aliases: Mapping[str, str] | None = None,
     cancel: CancellationToken | None = None,
-) -> dict[int, str | None]:
-    """Return quote index to resolved speaker, tolerating a bad response.
+) -> dict[int, str | None] | None:
+    """Return quote index to resolved speaker, or None if no usable answer came.
 
     A model that fails or answers unusably leaves every quote unknown rather
     than stopping the render: the book still reads, in one voice for the lines
-    it could not place.
+    it could not place. None, rather than an empty mapping, tells the caller
+    this chapter is unfinished and must not be stored as if it were.
     """
     try:
-        payload = complete_json(model_id, prompt, _SCHEMA, client=client, cancel=cancel)
+        payload = complete_json_checkpointed(
+            model_id, prompt, _SCHEMA, client=client, cancel=cancel
+        )
     except ModelError:
-        return {}
+        return None
     answers: dict[int, str | None] = {}
     for item in payload["attributions"]:
         if not isinstance(item, dict):

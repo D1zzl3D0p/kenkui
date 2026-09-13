@@ -505,6 +505,12 @@ kk.remove_attribution(attribution_id)  # cascades; costs a fresh model pass
 The two removal verbs are separate because their costs differ by orders of
 magnitude.
 
+Each chapter's model answer is also stored as soon as it arrives. If a
+provider call still fails after its retries, that chapter's dialogue is
+narrated for this render, a `WARNING` named `attribution_incomplete` is
+logged, and the book is **not** stored as finished. The next `resolve()` or
+`write()` asks the model again about only the chapters that failed.
+
 ### Registering your own voice
 
 `add_voice` takes a local `.wav` or `.safetensors` and requires every rights

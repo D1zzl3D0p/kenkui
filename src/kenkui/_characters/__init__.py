@@ -25,6 +25,7 @@ from kenkui._characters.attribution import (
     AttributionCoverage,
     attribute_chapter,
 )
+from kenkui._characters.checkpoint import complete_json_checkpointed
 from kenkui._characters.identity_pass import IDENTITY_REASONING, IdentityPass
 from kenkui._characters.infer import (
     ROLE_PREFIX,
@@ -32,7 +33,6 @@ from kenkui._characters.infer import (
     normalise_roster,
     slugify,
 )
-from kenkui._characters.llm import complete_json
 from kenkui._characters.models import CharacterRoster
 from kenkui._characters.narration import is_first_person
 from kenkui._characters.prompts import (
@@ -107,18 +107,19 @@ def _roster_for(
     first_person: bool,
     cancel: CancellationToken | None = None,
 ) -> tuple[tuple[CharacterProfile, ...], str | None]:
-    """Infer one chapter's characters, and who narrates it when asked."""
+    """Infer one chapter's characters, and who narrates it when asked.
+
+    Raises ``ModelError`` when no usable answer came, so the caller can tell a
+    chapter with no characters from one the model never answered for.
+    """
     escaped = chapter_text.replace("{", "{{").replace("}", "}}")
-    try:
-        payload = complete_json(
-            model_id,
-            ROSTER_PROMPT.format(passage=escaped),
-            _ROSTER_SCHEMA,
-            client=client,
-            cancel=cancel,
-        )
-    except ModelError:
-        return (), None
+    payload = complete_json_checkpointed(
+        model_id,
+        ROSTER_PROMPT.format(passage=escaped),
+        _ROSTER_SCHEMA,
+        client=client,
+        cancel=cancel,
+    )
     roster = normalise_roster(payload["characters"])
     narrator = None
     if first_person:
@@ -264,8 +265,11 @@ def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
     cancel: CancellationToken | None,
     *,
     on_progress: Callable[[str, int, int, str | None], None] | None,
-) -> tuple[tuple[CharacterProfile, ...], str | None]:
+) -> tuple[tuple[CharacterProfile, ...], str | None, int]:
     """Infer the roster by asking a model about each chapter in turn.
+
+    Returns the characters, the narrating character, and how many chapters
+    got no usable answer; those contribute nothing to the roster.
 
     One call per chapter that contains dialogue, merged afterwards. The
     alternative offline pass is `spacy_roster.infer_roster`, which reads the
@@ -273,6 +277,7 @@ def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
     """
     rosters: list[tuple[CharacterProfile, ...]] = []
     narrators: Counter[str] = Counter()
+    failed = 0
     total = len(inspection.chapters)
     for completed, chapter in enumerate(inspection.chapters, start=1):
         if cancel is not None:
@@ -285,13 +290,17 @@ def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
             _progress(on_progress, cancel, "characters", completed, total, chapter.id)
             continue
         ends = [span.end for span in spans_here]
-        roster, narrator = _roster_for(
-            chapter.text,
-            roster_model,
-            client,
-            first_person=is_first_person(chapter.text, ends),
-            cancel=cancel,
-        )
+        try:
+            roster, narrator = _roster_for(
+                chapter.text,
+                roster_model,
+                client,
+                first_person=is_first_person(chapter.text, ends),
+                cancel=cancel,
+            )
+        except ModelError:
+            failed += 1
+            roster, narrator = (), None
         rosters.append(roster)
         if narrator is not None:
             narrators[narrator] += 1
@@ -309,7 +318,7 @@ def _model_roster(  # noqa: PLR0913 - explicit model execution inputs.
     ):
         narrator_id = None
 
-    return characters, narrator_id
+    return characters, narrator_id, failed
 
 
 def _chapter_roster(
@@ -503,8 +512,9 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     # dialogue ranges, and scanning a 600k-character chapter twice is waste.
     extracted = _dialogue_by_chapter(inspection.chapters)
 
+    roster_failed = 0
     if roster is None:
-        roster = _discover_roster(
+        roster, roster_failed = _discover_roster(
             inspection,
             extracted,
             roster_model,
@@ -530,6 +540,9 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     spans: list[SpeakerSpan] = []
     for chapter in inspection.chapters:
         spans.extend(attributed[chapter.id][0])
+    failed = roster_failed + sum(
+        1 for _, coverage in attributed.values() if coverage.failed
+    )
 
     record = AttributionRecord(
         attribution_id=key,
@@ -561,6 +574,22 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         )
     if cancel is not None:
         cancel.raise_if_cancelled()
+    if failed:
+        # Rendered, but not stored. A stored record is reused as-is, so the
+        # failed chapters' dialogue would be narrated on every later render
+        # with no further attempt. The chapters that did succeed are kept as
+        # individual responses, so the next run pays only for these.
+        log_event(
+            _LOGGER,
+            "attribution_incomplete",
+            level=logging.WARNING,
+            context={
+                "boundary": "attribution",
+                "failed_chapters": failed,
+                "chapters": len(inspection.chapters),
+            },
+        )
+        return record
     store.write_attribution(record)
     return record
 
@@ -652,7 +681,7 @@ def discover_characters(  # noqa: PLR0913 - explicit model execution inputs
 ) -> CharacterRoster:
     """Discover characters without attributing quotes or writing attribution."""
     extracted = _dialogue_by_chapter(inspection.chapters)
-    return _discover_roster(
+    roster, _failed = _discover_roster(
         inspection,
         extracted,
         model_id,
@@ -661,6 +690,7 @@ def discover_characters(  # noqa: PLR0913 - explicit model execution inputs
         on_progress=on_progress,
         identity_model_id=identity_model_id,
     )
+    return roster
 
 
 def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
@@ -672,8 +702,10 @@ def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
     *,
     on_progress: Callable[[str, int, int, str | None], None] | None,
     identity_model_id: str | None = None,
-) -> CharacterRoster:
+) -> tuple[CharacterRoster, int]:
+    """Return the roster and how many chapters got no usable roster answer."""
     total = len(inspection.chapters)
+    failed = 0
     _progress(on_progress, cancel, "characters", 0, total)
     spacy_pipeline = spacy_roster.pipeline_for(model_id)
     if spacy_pipeline is not None:
@@ -690,12 +722,12 @@ def _discover_roster(  # noqa: PLR0913 - explicit model execution inputs.
         if total:
             _progress(on_progress, cancel, "characters", total, total)
     else:
-        characters, narrator_id = _model_roster(
+        characters, narrator_id, failed = _model_roster(
             inspection, extracted, model_id, client, cancel, on_progress=on_progress
         )
     if cancel is not None:
         cancel.raise_if_cancelled()
-    return CharacterRoster(characters, narrator_id)
+    return CharacterRoster(characters, narrator_id), failed
 
 
 def _dialogue_by_chapter(

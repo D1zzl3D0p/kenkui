@@ -152,6 +152,11 @@ CREATE TABLE IF NOT EXISTS identity_passes(
     identity_key TEXT PRIMARY KEY,
     model_id TEXT NOT NULL,
     decision_json TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS model_responses(
+    response_key TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL);
 """
     + _SERIES_ALIASES_DDL
 )
@@ -226,6 +231,21 @@ def identity_key(
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "prompt_version": prompt_version,
         "reasoning": reasoning,
+    }
+    return hashlib.sha256(_canonical(material).encode()).hexdigest()
+
+
+def response_key(model_id: str, prompt: str, schema: Mapping[str, type]) -> str:
+    """Key one validated model response by exactly what produced it.
+
+    The prompt carries the chapter text, the roster, and the prompt template,
+    so its hash already changes whenever any of them does. Only a digest is
+    kept: the prompt is the book, and the store has no reason to hold it.
+    """
+    material = {
+        "model_id": model_id,
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        "schema": sorted(schema),
     }
     return hashlib.sha256(_canonical(material).encode()).hexdigest()
 
@@ -352,6 +372,32 @@ def write_identity(
                 "INSERT OR REPLACE INTO identity_passes"
                 "(identity_key, model_id, decision_json) VALUES (?, ?, ?)",
                 (key, model_id, _canonical(decision)),
+            )
+    except (sqlite3.Error, OSError):
+        return
+
+
+def read_response(key: str, path: Path | None = None) -> dict[str, Any] | None:
+    """Return a stored model response, or None on a miss or unusable store."""
+    with _reading(path) as connection:
+        if connection is None:
+            return None
+        row = connection.execute(
+            "SELECT payload_json FROM model_responses WHERE response_key = ?", (key,)
+        ).fetchone()
+    return None if row is None else json.loads(row["payload_json"])
+
+
+def write_response(
+    key: str, model_id: str, payload: Mapping[str, Any], path: Path | None = None
+) -> None:
+    """Persist one validated response, best-effort because it is recomputable."""
+    try:
+        with _connect(path) as connection, connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO model_responses"
+                "(response_key, model_id, payload_json) VALUES (?, ?, ?)",
+                (key, model_id, _canonical(payload)),
             )
     except (sqlite3.Error, OSError):
         return
