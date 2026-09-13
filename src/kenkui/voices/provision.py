@@ -308,15 +308,31 @@ def _engine_view(record: EngineRecord) -> Engine:
     )
 
 
+def _terms(record: VoiceRecord) -> tuple[str, bool, str]:
+    """Return (license_id, commercial_use_allowed, voice_rights) for a record.
+
+    A built-in voice's terms belong to its source dataset, so they are read
+    from the catalog rather than from the copy a manifest recorded when the
+    voice was loaded, which would go stale when the dataset table changes.
+    An added voice keeps exactly what its owner declared.
+    """
+    entry = CATALOG.get(record.id) if record.variety == "built-in" else None
+    if entry is not None:
+        return entry.license_id, entry.commercial_use_allowed, entry.voice_rights
+    return record.license_id, record.commercial_use_allowed, record.voice_rights
+
+
 def _loaded_view(record: VoiceRecord, engine: EngineRecord) -> Voice:
     asset = Path(record.asset_path or "")
+    license_id, commercial_use_allowed, voice_rights = _terms(record)
     return Voice(
         id=record.id,
         name=record.name,
         enabled=record.enabled,
         provenance=record.provenance,
-        license_id=record.license_id,
-        commercial_use_allowed=record.commercial_use_allowed,
+        license_id=license_id,
+        commercial_use_allowed=commercial_use_allowed,
+        voice_rights=voice_rights,
         language=record.language,
         content_fingerprint=record.asset_sha256,
         compatible_model_revisions=record.compatible_model_revisions,
@@ -509,13 +525,15 @@ def _gender_for(record: VoiceRecord) -> PerceivedGender:
 
 
 def _registered_view(record: VoiceRecord) -> Voice:
+    license_id, commercial_use_allowed, voice_rights = _terms(record)
     return Voice(
         id=record.id,
         name=record.name,
         enabled=record.enabled,
         provenance=record.provenance,
-        license_id=record.license_id,
-        commercial_use_allowed=record.commercial_use_allowed,
+        license_id=license_id,
+        commercial_use_allowed=commercial_use_allowed,
+        voice_rights=voice_rights,
         language=record.language,
         variety=record.variety,
         state="registered",

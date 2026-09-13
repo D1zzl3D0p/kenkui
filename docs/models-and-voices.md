@@ -67,6 +67,21 @@ voices remain available. A missing pack manifest also leaves the upstream catalo
 available. Both sources are exposed as `Voice.variety == "built-in"`; the
 `"pre-compiled"` variety identifies embeddings registered by the caller.
 
+A catalog voice's terms come from the dataset its source recording belongs
+to, not from a per-voice record: every VCTK voice carries VCTK's license and
+rights statement, and every EARS voice carries EARS's. `Voice.license_id` and
+`Voice.voice_rights` report them. A recording Kenkui does not recognize is
+reported as `unreviewed`. Because terms follow the source bytes, changing a
+rights statement never invalidates cached audio.
+
+| Dataset | Voices | License ID |
+| --- | --- | --- |
+| VCTK | 12 upstream, 47 pack | CC-BY-4.0 |
+| EARS | 1 upstream (`jean`), 48 pack | CC-BY-NC-4.0 |
+| Expresso | 1 upstream (`cosette`) | CC-BY-NC-4.0 |
+| Common Voice | `giovanni`, `lola` | CC0-1.0 |
+| kyutai voice donations | the other 10 upstream voices | unreviewed |
+
 **Every built-in voice ships as `commercial_use_allowed = false`.** None of the
 source terms were reviewed by this project, and a conservative default is the
 only honest one. Setting a voice commercial is a deployment decision that

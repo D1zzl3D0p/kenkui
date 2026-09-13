@@ -1,4 +1,4 @@
-"""Static built-in voice catalog with per-voice rights metadata."""
+"""Static built-in voice catalog; each voice's terms come from its dataset."""
 
 from __future__ import annotations
 
@@ -16,6 +16,12 @@ from packaging.version import InvalidVersion, Version
 
 from kenkui.errors import ErrorCode, VoiceError
 from kenkui.observability import get_logger, log_event
+from kenkui.voices.datasets import (
+    Dataset,
+    dataset_for_origin,
+    dataset_for_pack,
+    rights_for,
+)
 from kenkui.voices.types import PerceivedGender, Voice
 
 _LOGGER = get_logger(__name__)
@@ -55,9 +61,9 @@ class CatalogEntry:
     name: str
     language: str
     origin_url: str
-    license_id: str
-    commercial_use_allowed: bool
-    voice_rights: str
+    # The source corpus. License, rights statement, and the commercial default
+    # are derived from it rather than recorded per voice.
+    dataset: Dataset
     # Set for pack voices, which are fetched from the Kenkui voice pack rather
     # than derived from a kyutai catalog name. None means derive the kyutai
     # embedding URL from the language and ID.
@@ -69,6 +75,21 @@ class CatalogEntry:
     # Kenkui invented -- would be worse than admitting the gap.
     perceived_gender: PerceivedGender = None
 
+    @property
+    def license_id(self) -> str:
+        """The dataset's license identifier."""
+        return rights_for(self.dataset).license_id
+
+    @property
+    def voice_rights(self) -> str:
+        """The dataset's rights statement."""
+        return rights_for(self.dataset).voice_rights
+
+    @property
+    def commercial_use_allowed(self) -> bool:
+        """The dataset's commercial-use default; False for every catalog voice."""
+        return rights_for(self.dataset).commercial_use_allowed
+
 
 def _builtin_entry(voice: dict[str, Any]) -> CatalogEntry:
     """Convert one builtin.json record into a catalog entry."""
@@ -77,9 +98,7 @@ def _builtin_entry(voice: dict[str, Any]) -> CatalogEntry:
         name=voice["display_name"],
         language=voice["language"],
         origin_url=voice["origin_url"],
-        license_id=voice["license_id"],
-        commercial_use_allowed=bool(voice["commercial_use_allowed"]),
-        voice_rights=voice["voice_rights"],
+        dataset=dataset_for_origin(voice["origin_url"]),
         perceived_gender=voice["perceived_gender"],
     )
 
@@ -143,9 +162,9 @@ def _pack_entry(
         name=voice["display_name"],
         language=voice["language"],
         origin_url=f"hf://{voice['source']['repo_id']}/{voice['source']['path']}",
-        license_id=voice["license_id"],
-        commercial_use_allowed=bool(voice["commercial_use_allowed"]),
-        voice_rights=voice["voice_rights"],
+        # The pack's own license fields are ignored: the dataset decides, and
+        # a test holds the bundled pack to agreeing with it.
+        dataset=dataset_for_pack(voice["dataset"]),
         # A dataset resolve URL, not hf://: Pocket-TTS reads hf:// as a model
         # repository, and the pack is a dataset, so hf:// cannot be fetched.
         # The revision in the path still pins the exact bytes.
@@ -302,4 +321,5 @@ def catalog_voice(voice_id: str) -> Voice:
         variety="built-in",
         state="registered",
         perceived_gender=entry.perceived_gender,
+        voice_rights=entry.voice_rights,
     )

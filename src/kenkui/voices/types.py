@@ -42,3 +42,6 @@ class Voice:
     asset_bytes: int | None = None
     engine: Engine | None = None
     perceived_gender: PerceivedGender = None
+    # The terms statement that accompanies license_id. Catalog voices inherit
+    # it from their source dataset; added voices carry what their owner declared.
+    voice_rights: str | None = None

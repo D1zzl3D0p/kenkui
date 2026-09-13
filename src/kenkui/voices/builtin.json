@@ -3,267 +3,189 @@
     "repo_id": "kyutai/pocket-tts-without-voice-cloning",
     "revision": "e041936c75475d350b405bc870bcf7c22da4e9e6"
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "voices": [
     {
-      "commercial_use_allowed": false,
       "display_name": "Anna",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p228_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "anna",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "anna"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Vera",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p229_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "vera",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "vera"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Fantine",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p244_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "fantine",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "fantine"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Charles",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p254_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "charles",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "charles"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Paul",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p259_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "paul",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "paul"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Eponine",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p262_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "eponine",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "eponine"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Azelma",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p303_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "azelma",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "azelma"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "George",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p315_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "george",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "george"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Mary",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p333_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "mary",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "mary"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Jane",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p339_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "jane",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "jane"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Michael",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p360_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "michael",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "michael"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Eve",
       "language": "english",
-      "license_id": "CC-BY-4.0",
       "origin_url": "hf://kyutai/tts-voices/vctk/p361_023_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "eve",
-      "voice_rights": "Derived from the VCTK corpus via kyutai/tts-voices. Review the VCTK terms and speaker consent for your intended use before commercial deployment."
+      "voice_id": "eve"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Bill Boerst",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/bill_boerst.wav",
       "perceived_gender": null,
-      "voice_id": "bill_boerst",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "bill_boerst"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Peter Yearsley",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/peter_yearsley.wav",
       "perceived_gender": null,
-      "voice_id": "peter_yearsley",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "peter_yearsley"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Stuart Bell",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/stuart_bell.wav",
       "perceived_gender": null,
-      "voice_id": "stuart_bell",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "stuart_bell"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Caro Davy",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/caro_davy.wav",
       "perceived_gender": null,
-      "voice_id": "caro_davy",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "caro_davy"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Marius",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/voice-donations/Selfie.wav",
       "perceived_gender": null,
-      "voice_id": "marius",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "marius"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Javert",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/voice-donations/Butter.wav",
       "perceived_gender": null,
-      "voice_id": "javert",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "javert"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Cosette",
       "language": "english",
-      "license_id": "CC-BY-NC-4.0",
       "origin_url": "hf://kyutai/tts-voices/expresso/ex04-ex02_confused_001_channel1_499s.wav",
       "perceived_gender": null,
-      "voice_id": "cosette",
-      "voice_rights": "Derived from the Expresso dataset. Treat as research-only/noncommercial unless your own review of the source terms concludes otherwise."
+      "voice_id": "cosette"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Jean",
       "language": "english",
-      "license_id": "CC-BY-NC-4.0",
       "origin_url": "hf://kyutai/tts-voices/ears/p010/freeform_speech_01_enhanced.wav",
       "perceived_gender": null,
-      "voice_id": "jean",
-      "voice_rights": "Derived from the EARS corpus. Treat as research-only/noncommercial unless your own review of the source terms concludes otherwise."
+      "voice_id": "jean"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Alba",
       "language": "english",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/alba-mackenna/casual.wav",
       "perceived_gender": null,
-      "voice_id": "alba",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "alba"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Giovanni",
       "language": "italian",
-      "license_id": "CC0-1.0",
       "origin_url": "hf://kyutai/pocket-tts/common_voice_it_36520747-enhanced-v2.mp3@64ab7d24c479d736a83b8cc666c4a776fca30fda",
       "perceived_gender": null,
-      "voice_id": "giovanni",
-      "voice_rights": "Derived from Common Voice via kyutai/pocket-tts. Review the Common Voice terms for your intended use before commercial deployment."
+      "voice_id": "giovanni"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Lola",
       "language": "spanish",
-      "license_id": "CC0-1.0",
       "origin_url": "hf://kyutai/pocket-tts/common_voice_es_19762977-enhanced-v2.mp3@64ab7d24c479d736a83b8cc666c4a776fca30fda",
       "perceived_gender": null,
-      "voice_id": "lola",
-      "voice_rights": "Derived from Common Voice via kyutai/pocket-tts. Review the Common Voice terms for your intended use before commercial deployment."
+      "voice_id": "lola"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Juergen",
       "language": "german",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/pocket-tts/de-DE-juergen.mp3@64ab7d24c479d736a83b8cc666c4a776fca30fda",
       "perceived_gender": null,
-      "voice_id": "juergen",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "juergen"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Rafael",
       "language": "portuguese",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/pocket-tts/g-Vi8PgmSY0-enhanced-v2.wav@64ab7d24c479d736a83b8cc666c4a776fca30fda",
       "perceived_gender": null,
-      "voice_id": "rafael",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "rafael"
     },
     {
-      "commercial_use_allowed": false,
       "display_name": "Estelle",
       "language": "french_24l",
-      "license_id": "unreviewed",
       "origin_url": "hf://kyutai/tts-voices/unmute-prod-website/developpeuse-3.wav@1fc7395b7e012e2bbebfca14b942a4ef62ccc899",
       "perceived_gender": null,
-      "voice_id": "estelle",
-      "voice_rights": "Voice donation distributed by kyutai. Confirm the donor's permission scope for your intended use."
+      "voice_id": "estelle"
     }
   ]
 }
