@@ -341,6 +341,7 @@ splits and merges below, is the whole output.
 from __future__ import annotations
 
 from collections import defaultdict
+
 # Mapping is imported at runtime, not under TYPE_CHECKING: the Partition alias
 # below is evaluated at import time whatever `from __future__ import
 # annotations` does to signatures.
@@ -424,11 +425,7 @@ def bcubed(gold: Partition, system: Partition, volume: Mapping[str, int]) -> Sco
         total += weight
     precision = precision_acc / total
     recall = recall_acc / total
-    f1 = (
-        2 * precision * recall / (precision + recall)
-        if precision + recall
-        else 0.0
-    )
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
     return Scores(precision, recall, f1)
 
 
@@ -458,9 +455,7 @@ def merges(
     for cluster, names in _members(system, scored).items():
         folded = {gold[name] for name in names}
         if len(folded) > 1:
-            found.append(
-                Merge(cluster, tuple(sorted(folded)), _weight(names, volume))
-            )
+            found.append(Merge(cluster, tuple(sorted(folded)), _weight(names, volume)))
     return tuple(sorted(found, key=lambda row: -row.volume))
 ```
 
@@ -510,6 +505,7 @@ Create `evals/attribution/test_citations.py`:
 from __future__ import annotations
 
 from citations import HALLUCINATED, TIER1, TIER2, TIER3, Proposal, verify
+
 
 def test_both_names_in_one_verified_span_is_tier1() -> None:
     text = "They called him Paul-Muad'Dib and the name carried."
@@ -931,7 +927,9 @@ def main() -> int:
         genders = {g.get(members) for g in gender_ballots} - {None}
         clusters.append(
             {
-                "id": min(sorted(members), key=lambda n: -len(n)).lower().replace(" ", "-"),
+                "id": min(sorted(members), key=lambda n: -len(n))
+                .lower()
+                .replace(" ", "-"),
                 "names": sorted(members),
                 "gender": genders.pop() if len(genders) == 1 else "unstated",
                 "source": "consensus",
@@ -941,10 +939,14 @@ def main() -> int:
 
     if args.adjudicated:
         for cluster in read_json(args.adjudicated)["clusters"]:
-            clusters = [c for c in clusters if not set(c["names"]) & set(cluster["names"])]
+            clusters = [
+                c for c in clusters if not set(c["names"]) & set(cluster["names"])
+            ]
             clusters.append({**cluster, "source": "adjudicated"})
 
-    write_json(WORK / "gold-clusters.json", {"book": seed["book"], "clusters": clusters})
+    write_json(
+        WORK / "gold-clusters.json", {"book": seed["book"], "clusters": clusters}
+    )
     write_json(
         WORK / "cluster-disagreements.json",
         [sorted(m) for m in sorted(contested, key=lambda m: sorted(m))],
@@ -1167,7 +1169,9 @@ def main() -> int:
     write_json(WORK / "gender-diagnosis.json", rows)
 
     ungendered = [r for r in rows if r["gender"] is None]
-    print(f"{len(rows)} characters, {len(ungendered)} with no gender, narrator={narrator}")
+    print(
+        f"{len(rows)} characters, {len(ungendered)} with no gender, narrator={narrator}"
+    )
     print(f"\n{'id':32} {'gender':10} chapters")
     for row in sorted(rows, key=lambda r: -r["chapters"])[:40]:
         print(f"{row['id'][:32]:32} {str(row['gender']):10} {row['chapters']}")
@@ -1424,7 +1428,9 @@ def main() -> int:
         if row["splits"]:
             print(f"\n{row['tag']} splits (worst volume first):")
             for split in row["splits"][:8]:
-                print(f"  {split['cluster']:30} {split['pieces']} pieces, {split['volume']:,} chars")
+                print(
+                    f"  {split['cluster']:30} {split['pieces']} pieces, {split['volume']:,} chars"
+                )
         if row["merges"]:
             print(f"\n{row['tag']} MERGES -- these fail the gate:")
             for merge in row["merges"][:8]:
@@ -1600,7 +1606,9 @@ def _arm_cited(args):
 
     partition = _fold(base, accepted)
     hallucinated = sum(1 for g in graded if g["tier"] == HALLUCINATED)
-    print(f"  proposals {len(graded)}, accepted {len(accepted)}, hallucinated {hallucinated}")
+    print(
+        f"  proposals {len(graded)}, accepted {len(accepted)}, hallucinated {hallucinated}"
+    )
     return partition, volume, client.total_cost, client.ledger(), graded
 
 
@@ -1789,17 +1797,22 @@ each cast character to its gold cluster by surface name, and report four numbers
 alongside the existing table:
 
 ```python
-    correct = sum(1 for row in rows if inferred(row) == gold_gender(row) != "unstated")
-    wrong = sum(
-        1 for row in rows
-        if inferred(row) and gold_gender(row) not in (None, "unstated")
-        and inferred(row) != gold_gender(row)
-    )
-    abstained = sum(1 for row in rows if not inferred(row) and gold_gender(row) != "unstated")
-    abstained_volume = sum(
-        row["spoken_characters"] for row in rows
-        if not inferred(row) and gold_gender(row) != "unstated"
-    )
+correct = sum(1 for row in rows if inferred(row) == gold_gender(row) != "unstated")
+wrong = sum(
+    1
+    for row in rows
+    if inferred(row)
+    and gold_gender(row) not in (None, "unstated")
+    and inferred(row) != gold_gender(row)
+)
+abstained = sum(
+    1 for row in rows if not inferred(row) and gold_gender(row) != "unstated"
+)
+abstained_volume = sum(
+    row["spoken_characters"]
+    for row in rows
+    if not inferred(row) and gold_gender(row) != "unstated"
+)
 ```
 
 `abstained_volume` is the number that made Nefud invisible: how much speech is
@@ -1852,9 +1865,7 @@ def _windows(character_id, spans, chapters, radius, limit):
         if span["character_id"] != character_id:
             continue
         text = chapters.get(span["chapter_id"], "")
-        found.append(
-            text[max(0, span["start"] - radius) : span["end"] + radius]
-        )
+        found.append(text[max(0, span["start"] - radius) : span["end"] + radius])
         if len(found) >= limit:
             break
     return found
@@ -1898,13 +1909,18 @@ def _arm_named(args, client):
         try:
             raw = client.complete(
                 args.model,
-                NAMED_PROMPT.format(blocks=blocks.replace("{", "{{").replace("}", "}}")),
+                NAMED_PROMPT.format(
+                    blocks=blocks.replace("{", "{{").replace("}", "}}")
+                ),
             )
             payload = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
         except (ValueError, KeyError):
             continue
         for item in payload.get("genders", []):
-            if isinstance(item, dict) and item.get("gender") in ("masculine", "feminine"):
+            if isinstance(item, dict) and item.get("gender") in (
+                "masculine",
+                "feminine",
+            ):
                 genders[item["id"]] = item["gender"]
     return genders, client.total_cost
 

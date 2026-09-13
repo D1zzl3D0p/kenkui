@@ -84,9 +84,15 @@ def test_group_full_names_has_no_title_only_wildcard() -> None:
     # and "Great House" is left with nothing. Before the guard it matched every
     # later full name and pulled them all into Bene Gesserit.
     names = [
-        "Bene Gesserit", "Great House", "Rautha Harkonnen", "Shadout Mapes",
-        "House Atreides", "House Harkonnen", "House Corrino",
-        "Great Houses", "Great Convention",
+        "Bene Gesserit",
+        "Great House",
+        "Rautha Harkonnen",
+        "Shadout Mapes",
+        "House Atreides",
+        "House Harkonnen",
+        "House Corrino",
+        "Great Houses",
+        "Great Convention",
     ]
     entity = group_full_names(names)
     assert entity["Rautha Harkonnen"] == "Rautha Harkonnen"
@@ -361,29 +367,35 @@ In `_Signals.__init__`, after the existing fields:
 Add to `_Signals`:
 
 ```python
-    def rename(self, source: str, target: str | None) -> None:
-        """Move every tally kept for ``source`` onto ``target``, or drop it."""
-        for counter in (
-            self.mentions, self.speech, self.agency, self.vocative,
-            self.animate, self.titled, self.the_det,
-        ):
-            value = counter.pop(source, 0)
-            if target is not None and value:
-                counter[target] += value
-        for table in (self.gender, self.title_gender, self.prep):
-            votes = table.pop(source, None)
-            if target is not None and votes:
-                table[target].update(votes)
-        seen = self.chapters.pop(source, None)
-        if target is not None and seen:
-            self.chapters[target] |= seen
-        for tally in (
-            *self.addressed_in.values(), *self.speaking_in.values(),
-            *self.title_hosts.values(),
-        ):
-            value = tally.pop(source, 0)
-            if target is not None and value:
-                tally[target] += value
+def rename(self, source: str, target: str | None) -> None:
+    """Move every tally kept for ``source`` onto ``target``, or drop it."""
+    for counter in (
+        self.mentions,
+        self.speech,
+        self.agency,
+        self.vocative,
+        self.animate,
+        self.titled,
+        self.the_det,
+    ):
+        value = counter.pop(source, 0)
+        if target is not None and value:
+            counter[target] += value
+    for table in (self.gender, self.title_gender, self.prep):
+        votes = table.pop(source, None)
+        if target is not None and votes:
+            table[target].update(votes)
+    seen = self.chapters.pop(source, None)
+    if target is not None and seen:
+        self.chapters[target] |= seen
+    for tally in (
+        *self.addressed_in.values(),
+        *self.speaking_in.values(),
+        *self.title_hosts.values(),
+    ):
+        value = tally.pop(source, 0)
+        if target is not None and value:
+            tally[target] += value
 ```
 
 Add helpers before `_scan`:
@@ -574,13 +586,17 @@ class TestFold:
 
     def test_title_and_surname_do_not_absorb_the_family(self) -> None:
         canonical, _ = fold(
-            signals_with({"Mr Elliot": 40, "Anne Elliot": 30, "Walter Elliot": 20, "Anne": 400})
+            signals_with(
+                {"Mr Elliot": 40, "Anne Elliot": 30, "Walter Elliot": 20, "Anne": 400}
+            )
         )
         assert canonical["Mr Elliot"] == "Mr Elliot"
         assert canonical["Anne"] == "Anne Elliot"
 
     def test_a_single_claimant_owns_a_titled_short_form(self) -> None:
-        canonical, _ = fold(signals_with({"Iakin Nefud": 3, "Captain Nefud": 5, "Nefud": 50}))
+        canonical, _ = fold(
+            signals_with({"Iakin Nefud": 3, "Captain Nefud": 5, "Nefud": 50})
+        )
         assert canonical["Captain Nefud"] == "Iakin Nefud"
         assert canonical["Nefud"] == "Iakin Nefud"
 
@@ -600,21 +616,33 @@ class TestFold:
         assert fold(seldon)[0]["Seldon"] == "Hari Seldon"
 
     def test_a_real_tie_drops_the_bare_name_in_the_fallback(self) -> None:
-        charles = signals_with({"Charles": 111, "Charles Hayter": 30, "Charles Musgrove": 40})
+        charles = signals_with(
+            {"Charles": 111, "Charles Hayter": 30, "Charles Musgrove": 40}
+        )
         canonical, removed = fold(charles)
         assert "Charles" not in canonical
         assert "Charles" in removed
 
     def test_the_identity_path_keeps_ambiguous_names_for_the_model(self) -> None:
-        charles = signals_with({"Charles": 111, "Charles Hayter": 30, "Charles Musgrove": 40})
+        charles = signals_with(
+            {"Charles": 111, "Charles Hayter": 30, "Charles Musgrove": 40}
+        )
         assert fold(charles, fallback=False)[0]["Charles"] == "Charles"
 
     def test_bare_titles_in_the_fallback(self) -> None:
         signals = signals_with(
-            {"Baron": 500, "Vladimir Harkonnen": 16, "Duke": 480, "Leto Atreides": 15,
-             "Paul Atreides": 18, "Mayor": 70},
-            title_hosts={"baron": {"Vladimir Harkonnen": 8},
-                         "duke": {"Leto Atreides": 50, "Paul Atreides": 5}},
+            {
+                "Baron": 500,
+                "Vladimir Harkonnen": 16,
+                "Duke": 480,
+                "Leto Atreides": 15,
+                "Paul Atreides": 18,
+                "Mayor": 70,
+            },
+            title_hosts={
+                "baron": {"Vladimir Harkonnen": 8},
+                "duke": {"Leto Atreides": 50, "Paul Atreides": 5},
+            },
         )
         canonical, removed = fold(signals)
         assert canonical["Baron"] == "Vladimir Harkonnen"
@@ -671,8 +699,10 @@ def _contradicts(
     """Whether a titled name's gender contradicts its host's pronouns."""
     lead = name.split()[0].lower().strip(".")
     said = (
-        "feminine" if lead in _FEMININE_TITLES
-        else "masculine" if lead in _MASCULINE_TITLES
+        "feminine"
+        if lead in _FEMININE_TITLES
+        else "masculine"
+        if lead in _MASCULINE_TITLES
         else None
     )
     if said is None:
@@ -728,9 +758,7 @@ def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
         set(kept) - set(fulls), key=lambda n: (bool(name_tokens(n) & titles), n)
     ):
         rest = residue(name, titles)
-        only_titles = all(
-            token in (titles | _TITLES) for token in name_tokens(name)
-        )
+        only_titles = all(token in (titles | _TITLES) for token in name_tokens(name))
         if not rest or (fallback and only_titles):
             bare.append(name)
             continue
@@ -742,13 +770,16 @@ def _fold_names(  # noqa: C901 - one branch per rule, kept together on purpose
         titled = bool(name_tokens(name) & titles)
         tie_break = fallback and not titled and len(claims) > 1
         hosts = {
-            host for host, count in claims.items()
+            host
+            for host, count in claims.items()
             if not tie_break or count >= _TIE_SHARE * mentions[name]
         }
         if len(hosts) == 1:
             host = next(iter(hosts))
             canonical[name] = (
-                name if titled and _contradicts(name, host, canonical, signals) else host
+                name
+                if titled and _contradicts(name, host, canonical, signals)
+                else host
             )
         elif not hosts or titled or not fallback:
             canonical[name] = name
@@ -844,34 +875,49 @@ class TestFallbackFilters:
         signals = signals_with({"Fremen": 100, "Stilgar": 80})
         signals.the_det["Fremen"] = 60
         signals.speech["Stilgar"] = 30
-        names = {e.display_name for e in spacy_roster._base_entries(signals, "", fallback=True)}  # noqa: SLF001
+        names = {
+            e.display_name
+            for e in spacy_roster._base_entries(signals, "", fallback=True)
+        }  # noqa: SLF001
         assert names == {"Stilgar"}
 
     def test_an_epithet_character_who_speaks_is_kept(self) -> None:
         signals = signals_with({"Dragon": 368})
         signals.the_det["Dragon"] = 360
         signals.speech["Dragon"] = 102
-        names = {e.display_name for e in spacy_roster._base_entries(signals, "", fallback=True)}  # noqa: SLF001
+        names = {
+            e.display_name
+            for e in spacy_roster._base_entries(signals, "", fallback=True)
+        }  # noqa: SLF001
         assert names == {"Dragon"}
 
     def test_a_place_is_removed_but_of_does_not_count(self) -> None:
         signals = signals_with({"Caladan": 52, "Muad'Dib": 165})
         signals.prep["Caladan"].update({"on": 20, "from": 5})
         signals.prep["Muad'Dib"].update({"of": 60})
-        names = {e.display_name for e in spacy_roster._base_entries(signals, "", fallback=True)}  # noqa: SLF001
+        names = {
+            e.display_name
+            for e in spacy_roster._base_entries(signals, "", fallback=True)
+        }  # noqa: SLF001
         assert names == {"Muad'Dib"}
 
     def test_a_form_of_address_is_removed_but_a_nickname_is_kept(self) -> None:
         signals = signals_with({"Sire": 47, "Nieshka": 39})
         signals.vocative.update({"Sire": 44, "Nieshka": 39})
         text = "Yes, sire. No, sire. Nieshka laughed."
-        names = {e.display_name for e in spacy_roster._base_entries(signals, text, fallback=True)}  # noqa: SLF001
+        names = {
+            e.display_name
+            for e in spacy_roster._base_entries(signals, text, fallback=True)
+        }  # noqa: SLF001
         assert names == {"Nieshka"}
 
     def test_the_identity_path_skips_the_filters(self) -> None:
         signals = signals_with({"Fremen": 100})
         signals.the_det["Fremen"] = 60
-        names = {e.display_name for e in spacy_roster._base_entries(signals, "", fallback=False)}  # noqa: SLF001
+        names = {
+            e.display_name
+            for e in spacy_roster._base_entries(signals, "", fallback=False)
+        }  # noqa: SLF001
         assert names == {"Fremen"}
 ```
 
@@ -939,7 +985,8 @@ def _is_address(entry: RosterEntry, signals: _Signals, text: str) -> bool:
 def _base_entries(signals: _Signals, text: str, *, fallback: bool) -> list[RosterEntry]:
     """Kept names, folded, filtered in the fallback, ranked and capped."""
     kept = {
-        name for name, count in signals.mentions.items()
+        name
+        for name, count in signals.mentions.items()
         if count >= MIN_MENTIONS and signals.evidence(name) >= MIN_EVIDENCE
     }
     if fallback:
@@ -988,9 +1035,11 @@ def _profiles(
                         _pooled(signals.title_gender, entry.aliases),
                     ),
                     spoken_characters=0,
-                    chapter_ids=tuple(sorted(
-                        set().union(*(signals.chapters[a] for a in entry.aliases))
-                    )),
+                    chapter_ids=tuple(
+                        sorted(
+                            set().union(*(signals.chapters[a] for a in entry.aliases))
+                        )
+                    ),
                     aliases=tuple(sorted(entry.aliases)),
                 )
                 for entry in entries
@@ -999,7 +1048,9 @@ def _profiles(
             key=lambda character: character.id,
         )
     )
-    canonical = {alias: entry.display_name for entry in entries for alias in entry.aliases}
+    canonical = {
+        alias: entry.display_name for entry in entries for alias in entry.aliases
+    }
     narrator = _narrator_of(
         chapters, dialogue, signals, canonical, frozenset(c.id for c in roster)
     )
@@ -1069,7 +1120,9 @@ def _fake_completion(seen: dict[str, object]):  # noqa: ANN202
     return completion
 
 
-def test_the_default_client_keeps_reasoning_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_default_client_keeps_reasoning_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
 
     seen: dict[str, object] = {}
@@ -1252,7 +1305,13 @@ def test_prompt_numbers_entries_with_other_names_and_excerpts() -> None:
 
 
 def test_parse_discards_what_it_cannot_use() -> None:
-    verdict = parse({"same_person": [[1, 2], [3, 3], [9, 1], "x"], "not_individuals": [3, 0, True, "2"]}, 3)
+    verdict = parse(
+        {
+            "same_person": [[1, 2], [3, 3], [9, 1], "x"],
+            "not_individuals": [3, 0, True, "2"],
+        },
+        3,
+    )
     assert verdict.groups == ((0, 1),)
     assert verdict.excluded == frozenset({1, 2})
 
@@ -1283,7 +1342,9 @@ def test_apply_merges_and_excludes() -> None:
 def test_resolve_applies_what_two_runs_agree_on() -> None:
     answer = json.dumps({"same_person": [[1, 2]], "not_individuals": [3]})
     client = ScriptedClient(answer, answer)
-    result = IdentityPass("m", client=client, backoff_base=0).resolve(ENTRIES, TEXT, MENTIONS)
+    result = IdentityPass("m", client=client, backoff_base=0).resolve(
+        ENTRIES, TEXT, MENTIONS
+    )
     assert result is not None
     assert {e.display_name for e in result} == {"Paul"}
     assert len(client.prompts) == 2
@@ -1297,9 +1358,12 @@ class BrokenClient:
 
 
 def test_resolve_returns_none_when_the_runs_fail() -> None:
-    assert IdentityPass("m", client=BrokenClient(), backoff_base=0).resolve(
-        ENTRIES, TEXT, MENTIONS
-    ) is None
+    assert (
+        IdentityPass("m", client=BrokenClient(), backoff_base=0).resolve(
+            ENTRIES, TEXT, MENTIONS
+        )
+        is None
+    )
 ```
 
 - [ ] **Step 3: Run to verify failure**
@@ -1418,7 +1482,8 @@ def parse(payload: Mapping[str, Any], count: int) -> Verdict:
         if len(members) >= 2:  # noqa: PLR2004 - a group is two or more
             groups.append(tuple(members))
     excluded = frozenset(
-        i for i in (_number(x, count) for x in payload.get("not_individuals") or [])
+        i
+        for i in (_number(x, count) for x in payload.get("not_individuals") or [])
         if i is not None
     )
     return Verdict(tuple(groups), excluded)
@@ -1437,7 +1502,9 @@ def agree(first: Verdict, second: Verdict) -> Decision:
     return Decision(pairs, excluded)
 
 
-def apply(entries: Sequence[RosterEntry], decision: Decision) -> tuple[RosterEntry, ...]:
+def apply(
+    entries: Sequence[RosterEntry], decision: Decision
+) -> tuple[RosterEntry, ...]:
     """Merge agreed pairs, drop agreed exclusions; the biggest entry names a group."""
     parent = list(range(len(entries)))
 
@@ -1497,12 +1564,21 @@ class IdentityPass:
         return None if decision is None else apply(ordered, decision)
 
     def _decide(self, prompt: str, count: int) -> Decision | None:
-        caller = self._client if self._client is not None else reasoning_client(IDENTITY_REASONING)
+        caller = (
+            self._client
+            if self._client is not None
+            else reasoning_client(IDENTITY_REASONING)
+        )
         with ThreadPoolExecutor(max_workers=_RUNS) as pool:
             futures = [
                 pool.submit(
-                    complete_json, self._model_id, prompt, _SCHEMA,
-                    client=caller, cancel=self._cancel, backoff_base=self._backoff_base,
+                    complete_json,
+                    self._model_id,
+                    prompt,
+                    _SCHEMA,
+                    client=caller,
+                    cancel=self._cancel,
+                    backoff_base=self._backoff_base,
                 )
                 for _ in range(_RUNS)
             ]
@@ -1554,7 +1630,9 @@ def test_a_decision_is_reused_without_calling_the_model() -> None:
     first = ScriptedClient(answer, answer)
     IdentityPass("m", client=first, backoff_base=0).resolve(ENTRIES, TEXT, MENTIONS)
     second = ScriptedClient()  # would raise IndexError if called
-    result = IdentityPass("m", client=second, backoff_base=0).resolve(ENTRIES, TEXT, MENTIONS)
+    result = IdentityPass("m", client=second, backoff_base=0).resolve(
+        ENTRIES, TEXT, MENTIONS
+    )
     assert result is not None
     assert {e.display_name for e in result} == {"Paul"}
     assert second.prompts == []
@@ -1576,9 +1654,12 @@ def test_the_identity_model_enters_the_attribution_key() -> None:
     params = {"temperature": 0.0}
     base = store.attribution_key("book", "m", "v", params)
     assert store.attribution_key("book", "m", "v", params, identity_model_id="") == base
-    assert store.attribution_key(
-        "book", "m", "v", params, identity_model_id="glm", identity_reasoning="high"
-    ) != base
+    assert (
+        store.attribution_key(
+            "book", "m", "v", params, identity_model_id="glm", identity_reasoning="high"
+        )
+        != base
+    )
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1600,7 +1681,9 @@ CREATE TABLE IF NOT EXISTS identity_passes(
 Add:
 
 ```python
-def identity_key(prompt: str, model_id: str, reasoning: str, prompt_version: str) -> str:
+def identity_key(
+    prompt: str, model_id: str, reasoning: str, prompt_version: str
+) -> str:
     """Key an identity decision by everything that determines it.
 
     The prompt holds the whole cast list and its excerpts, so its digest stands
@@ -1668,13 +1751,16 @@ In `IdentityPass._decide`, before the pool:
 and after computing the decision:
 
 ```python
-        decision = agree(parse(payloads[0], count), parse(payloads[1], count))
-        store.write_identity(
-            key,
-            self._model_id,
-            {"pairs": sorted(sorted(p) for p in decision.pairs), "excluded": sorted(decision.excluded)},
-        )
-        return decision
+decision = agree(parse(payloads[0], count), parse(payloads[1], count))
+store.write_identity(
+    key,
+    self._model_id,
+    {
+        "pairs": sorted(sorted(p) for p in decision.pairs),
+        "excluded": sorted(decision.excluded),
+    },
+)
+return decision
 ```
 
 `identity_pass` imports `store` at module top (Task 7's import block already
@@ -1732,7 +1818,11 @@ class _Fails:
 class TestIdentityWiring:
     def test_the_resolver_reshapes_the_roster(self) -> None:
         chapter = kk.ChapterInspection(
-            id="ch-1", index=0, title="One", speech_characters=len(PASSAGE), text=PASSAGE
+            id="ch-1",
+            index=0,
+            title="One",
+            speech_characters=len(PASSAGE),
+            text=PASSAGE,
         )
         characters, _ = spacy_roster.infer_roster(
             (chapter,), {"ch-1": extract_spans("ch-1", PASSAGE)}, identity=_MergeAll()
@@ -1741,10 +1831,16 @@ class TestIdentityWiring:
 
     def test_a_failed_pass_falls_back_to_the_rules(self) -> None:
         chapter = kk.ChapterInspection(
-            id="ch-1", index=0, title="One", speech_characters=len(PASSAGE), text=PASSAGE
+            id="ch-1",
+            index=0,
+            title="One",
+            speech_characters=len(PASSAGE),
+            text=PASSAGE,
         )
         spans = {"ch-1": extract_spans("ch-1", PASSAGE)}
-        with_failure, _ = spacy_roster.infer_roster((chapter,), spans, identity=_Fails())
+        with_failure, _ = spacy_roster.infer_roster(
+            (chapter,), spans, identity=_Fails()
+        )
         offline, _ = spacy_roster.infer_roster((chapter,), spans)
         assert with_failure == offline
 ```
@@ -1835,26 +1931,39 @@ from kenkui._characters.attribution import _alias_ids, _resolve
 
 def _profile(cid: str, *aliases: str) -> CharacterProfile:
     return CharacterProfile(
-        id=cid, display_name=aliases[0], gender=None, spoken_characters=0,
-        chapter_ids=(), aliases=aliases,
+        id=cid,
+        display_name=aliases[0],
+        gender=None,
+        spoken_characters=0,
+        chapter_ids=(),
+        aliases=aliases,
     )
 
 
 def test_an_answer_matching_one_alias_resolves_to_that_character() -> None:
     aliases = _alias_ids([_profile("paul-atreides", "Paul Atreides", "Paul", "Usul")])
     known = frozenset({"paul-atreides"})
-    assert _resolve("paul", known, chapter_id="ch-1", aliases=aliases) == "paul-atreides"
-    assert _resolve("Usul", known, chapter_id="ch-1", aliases=aliases) == "paul-atreides"
+    assert (
+        _resolve("paul", known, chapter_id="ch-1", aliases=aliases) == "paul-atreides"
+    )
+    assert (
+        _resolve("Usul", known, chapter_id="ch-1", aliases=aliases) == "paul-atreides"
+    )
 
 
 def test_an_alias_two_characters_share_resolves_to_neither() -> None:
-    aliases = _alias_ids([
-        _profile("charles-hayter", "Charles Hayter", "Charles"),
-        _profile("charles-musgrove", "Charles Musgrove", "Charles"),
-    ])
+    aliases = _alias_ids(
+        [
+            _profile("charles-hayter", "Charles Hayter", "Charles"),
+            _profile("charles-musgrove", "Charles Musgrove", "Charles"),
+        ]
+    )
     known = frozenset({"charles-hayter", "charles-musgrove"})
     assert "charles" not in aliases
-    assert _resolve("charles", known, chapter_id="ch-1", aliases=aliases) == "role:charles@ch-1"
+    assert (
+        _resolve("charles", known, chapter_id="ch-1", aliases=aliases)
+        == "role:charles@ch-1"
+    )
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -2090,60 +2199,155 @@ BOOKS = {
 }
 T = lambda *words: set(words)  # noqa: E731
 PRINCIPALS = {  # copied from evals/attribution/roster_lab.py
-    "dune": {"Paul": T("paul"), "Jessica": T("jessica"), "Leto": T("leto"),
-             "Baron": T("vladimir"), "Stilgar": T("stilgar"), "Chani": T("chani"),
-             "Thufir": T("thufir", "hawat"), "Gurney": T("gurney", "halleck"),
-             "Duncan": T("duncan", "idaho"), "Yueh": T("yueh", "wellington"),
-             "Piter": T("piter"), "Feyd": T("feyd", "feyd-rautha"),
-             "Kynes": T("kynes", "liet"), "Alia": T("alia"), "Irulan": T("irulan"),
-             "Nefud": T("nefud"), "Rabban": T("rabban"), "Mapes": T("mapes"),
-             "Harah": T("harah"), "Jamis": T("jamis"), "Fenring": T("fenring"),
-             "Emperor": T("emperor", "shaddam")},
-    "eotw": {n: T(n.lower()) for n in (
-        "Rand", "Mat", "Thom", "Moiraine", "Elayne", "Gawyn", "Perrin", "Lan",
-        "Agelmar", "Mordeth", "Egwene", "Nynaeve", "Elaida", "Morgase", "Bartim",
-        "Paitr", "Loial", "Min", "Tam")} | {"Ba'alzamon": T("ba'alzamon")},
-    "persuasion": {"Anne": T("anne"), "Wentworth": T("wentworth", "frederick"),
-                   "Russell": T("russell"), "Harville": T("harville"),
-                   "Benwick": T("benwick"), "Clay": T("clay"), "Smith": T("smith"),
-                   "Louisa": T("louisa"), "Henrietta": T("henrietta"), "Mary": T("mary"),
-                   "Elizabeth": T("elizabeth"), "Walter": T("walter"), "Hayter": T("hayter")},
-    "citycity": {"Borlu": T("borlú", "borlu", "tyador"), "Corwi": T("corwi", "lizbyet"),
-                 "Dhatt": T("dhatt", "qussim"), "Bowden": T("bowden"), "Nancy": T("nancy"),
-                 "Yolanda": T("yolanda"), "Gadlem": T("gadlem"), "Syedr": T("syedr"),
-                 "Buric": T("buric"), "Aikam": T("aikam")},
-    "uprooted": {"Agnieszka": T("agnieszka", "nieshka"), "Sarkan": T("sarkan", "dragon"),
-                 "Kasia": T("kasia"), "Marek": T("marek"), "Solya": T("solya", "falcon"),
-                 "Alosha": T("alosha"), "Ballo": T("ballo"), "Danka": T("danka")},
-    "foundation": {"Seldon": T("seldon", "hari"), "Gaal": T("gaal", "dornick"),
-                   "Hardin": T("hardin", "salvor"), "Pirenne": T("pirenne"),
-                   "Wienis": T("wienis"), "Lepold": T("lepold"), "Verisof": T("verisof"),
-                   "Mallow": T("mallow", "hober"), "Sutt": T("sutt", "jorane"),
-                   "Aporat": T("aporat"), "Chen": T("chen", "linge")},
+    "dune": {
+        "Paul": T("paul"),
+        "Jessica": T("jessica"),
+        "Leto": T("leto"),
+        "Baron": T("vladimir"),
+        "Stilgar": T("stilgar"),
+        "Chani": T("chani"),
+        "Thufir": T("thufir", "hawat"),
+        "Gurney": T("gurney", "halleck"),
+        "Duncan": T("duncan", "idaho"),
+        "Yueh": T("yueh", "wellington"),
+        "Piter": T("piter"),
+        "Feyd": T("feyd", "feyd-rautha"),
+        "Kynes": T("kynes", "liet"),
+        "Alia": T("alia"),
+        "Irulan": T("irulan"),
+        "Nefud": T("nefud"),
+        "Rabban": T("rabban"),
+        "Mapes": T("mapes"),
+        "Harah": T("harah"),
+        "Jamis": T("jamis"),
+        "Fenring": T("fenring"),
+        "Emperor": T("emperor", "shaddam"),
+    },
+    "eotw": {
+        n: T(n.lower())
+        for n in (
+            "Rand",
+            "Mat",
+            "Thom",
+            "Moiraine",
+            "Elayne",
+            "Gawyn",
+            "Perrin",
+            "Lan",
+            "Agelmar",
+            "Mordeth",
+            "Egwene",
+            "Nynaeve",
+            "Elaida",
+            "Morgase",
+            "Bartim",
+            "Paitr",
+            "Loial",
+            "Min",
+            "Tam",
+        )
+    }
+    | {"Ba'alzamon": T("ba'alzamon")},
+    "persuasion": {
+        "Anne": T("anne"),
+        "Wentworth": T("wentworth", "frederick"),
+        "Russell": T("russell"),
+        "Harville": T("harville"),
+        "Benwick": T("benwick"),
+        "Clay": T("clay"),
+        "Smith": T("smith"),
+        "Louisa": T("louisa"),
+        "Henrietta": T("henrietta"),
+        "Mary": T("mary"),
+        "Elizabeth": T("elizabeth"),
+        "Walter": T("walter"),
+        "Hayter": T("hayter"),
+    },
+    "citycity": {
+        "Borlu": T("borlú", "borlu", "tyador"),
+        "Corwi": T("corwi", "lizbyet"),
+        "Dhatt": T("dhatt", "qussim"),
+        "Bowden": T("bowden"),
+        "Nancy": T("nancy"),
+        "Yolanda": T("yolanda"),
+        "Gadlem": T("gadlem"),
+        "Syedr": T("syedr"),
+        "Buric": T("buric"),
+        "Aikam": T("aikam"),
+    },
+    "uprooted": {
+        "Agnieszka": T("agnieszka", "nieshka"),
+        "Sarkan": T("sarkan", "dragon"),
+        "Kasia": T("kasia"),
+        "Marek": T("marek"),
+        "Solya": T("solya", "falcon"),
+        "Alosha": T("alosha"),
+        "Ballo": T("ballo"),
+        "Danka": T("danka"),
+    },
+    "foundation": {
+        "Seldon": T("seldon", "hari"),
+        "Gaal": T("gaal", "dornick"),
+        "Hardin": T("hardin", "salvor"),
+        "Pirenne": T("pirenne"),
+        "Wienis": T("wienis"),
+        "Lepold": T("lepold"),
+        "Verisof": T("verisof"),
+        "Mallow": T("mallow", "hober"),
+        "Sutt": T("sutt", "jorane"),
+        "Aporat": T("aporat"),
+        "Chen": T("chen", "linge"),
+    },
 }
 APART = {
-    "dune": [("Paul Atreides", "Leto Atreides"), ("Vladimir Harkonnen", "Beast Rabban"),
-             ("Count Fenring", "Lady Fenring")],
-    "eotw": [("Rand al'Thor", "Tam al'Thor"), ("Rand", "Tam"),
-             ("Master Luhhan", "Mistress Luhhan"), ("Master al'Vere", "Mistress al'Vere"),
-             ("Master Cauthon", "Mistress Cauthon"), ("Master Aybara", "Mistress Aybara"),
-             ("Master Grinwell", "Mistress Grinwell")],
-    "persuasion": [("Charles Hayter", "Charles Musgrove"), ("Anne Elliot", "Walter Elliot"),
-                   ("Mr Elliot", "Anne Elliot"), ("Admiral Croft", "Mrs Croft"),
-                   ("Mrs Musgrove", "Louisa Musgrove"), ("Mr Musgrove", "Charles Musgrove"),
-                   ("Mr Elliot", "Walter Elliot")],
-    "citycity": [("Mr Geary", "Mrs Geary")], "uprooted": [], "foundation": [],
+    "dune": [
+        ("Paul Atreides", "Leto Atreides"),
+        ("Vladimir Harkonnen", "Beast Rabban"),
+        ("Count Fenring", "Lady Fenring"),
+    ],
+    "eotw": [
+        ("Rand al'Thor", "Tam al'Thor"),
+        ("Rand", "Tam"),
+        ("Master Luhhan", "Mistress Luhhan"),
+        ("Master al'Vere", "Mistress al'Vere"),
+        ("Master Cauthon", "Mistress Cauthon"),
+        ("Master Aybara", "Mistress Aybara"),
+        ("Master Grinwell", "Mistress Grinwell"),
+    ],
+    "persuasion": [
+        ("Charles Hayter", "Charles Musgrove"),
+        ("Anne Elliot", "Walter Elliot"),
+        ("Mr Elliot", "Anne Elliot"),
+        ("Admiral Croft", "Mrs Croft"),
+        ("Mrs Musgrove", "Louisa Musgrove"),
+        ("Mr Musgrove", "Charles Musgrove"),
+        ("Mr Elliot", "Walter Elliot"),
+    ],
+    "citycity": [("Mr Geary", "Mrs Geary")],
+    "uprooted": [],
+    "foundation": [],
 }
 SAME = {
-    "dune": [("Paul", "Usul"), ("Paul", "Muad'Dib"), ("Liet", "Kynes"), ("Paul", "Paul Atreides")],
-    "eotw": [("Mat", "Matrim"), ("Mat", "Matrim Cauthon"), ("Bran", "Brandelwyn al'Vere")],
+    "dune": [
+        ("Paul", "Usul"),
+        ("Paul", "Muad'Dib"),
+        ("Liet", "Kynes"),
+        ("Paul", "Paul Atreides"),
+    ],
+    "eotw": [
+        ("Mat", "Matrim"),
+        ("Mat", "Matrim Cauthon"),
+        ("Bran", "Brandelwyn al'Vere"),
+    ],
     "uprooted": [("Agnieszka", "Nieshka"), ("Sarkan", "Dragon"), ("Solya", "Falcon")],
     "persuasion": [("Frederick", "Wentworth")],
     "foundation": [("Seldon", "Raven Seldon"), ("Seldon", "Hari Seldon")],
     "citycity": [("Tyador", "Borlú"), ("Tye", "Borlú")],
 }
 _DOCTYPE = re.compile(rb"<!DOCTYPE[^>\[]*(\[[^\]]*\])?[^>]*>", re.IGNORECASE)
-_LINE = re.compile(r'^(\d+)\. (.+?) \((\d+) mentions(?:; also "(.*?)")?\): ', re.MULTILINE)
+_LINE = re.compile(
+    r'^(\d+)\. (.+?) \((\d+) mentions(?:; also "(.*?)")?\): ', re.MULTILINE
+)
 
 
 def _norm(text: str) -> str:
@@ -2154,14 +2358,23 @@ def _inspection(book: str, tmp_path: Path) -> kk.BookInspection:
     """Parse a copy with DOCTYPE removed: the parser rejects EPUB2 declarations."""
     source = LIBRARY / BOOKS[book]
     copy = tmp_path / f"{book}.epub"
-    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(copy, "w", zipfile.ZIP_DEFLATED) as out:
+    with (
+        zipfile.ZipFile(source) as archive,
+        zipfile.ZipFile(copy, "w", zipfile.ZIP_DEFLATED) as out,
+    ):
         if "mimetype" in archive.namelist():
-            out.writestr(zipfile.ZipInfo("mimetype"), archive.read("mimetype"), zipfile.ZIP_STORED)
+            out.writestr(
+                zipfile.ZipInfo("mimetype"),
+                archive.read("mimetype"),
+                zipfile.ZIP_STORED,
+            )
         for item in archive.infolist():
             if item.filename == "mimetype":
                 continue
             data = archive.read(item.filename)
-            if item.filename.lower().endswith((".xhtml", ".html", ".htm", ".opf", ".ncx", ".xml")):
+            if item.filename.lower().endswith(
+                (".xhtml", ".html", ".htm", ".opf", ".ncx", ".xml")
+            ):
                 data = _DOCTYPE.sub(b"", data)
             out.writestr(item, data)
     return kk.epub(str(copy)).inspect()
@@ -2177,23 +2390,34 @@ class _Replay:
     def complete(self, model: str, prompt: str) -> str:  # noqa: ARG002
         here: dict[frozenset[str], int] = {}
         for match in _LINE.finditer(prompt):
-            aliases = {match.group(2)} | (set(match.group(4).split(", ")) if match.group(4) else set())
+            aliases = {match.group(2)} | (
+                set(match.group(4).split(", ")) if match.group(4) else set()
+            )
             here[frozenset(aliases)] = int(match.group(1))
         missing = [sorted(e) for e in self.entries if e not in here]
         assert not missing, f"base roster differs from the harness: {missing[:5]}"
         raw = self.responses.pop(0)
-        payload = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+        payload = json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
         renumber = {old: here[entry] for old, entry in enumerate(self.entries, start=1)}
-        payload["same_person"] = [[renumber[int(n)] for n in g if str(n).isdigit() and int(n) in renumber]
-                                  for g in payload.get("same_person", [])]
-        payload["not_individuals"] = [renumber[int(n)] for n in payload.get("not_individuals", [])
-                                      if str(n).isdigit() and int(n) in renumber]
+        payload["same_person"] = [
+            [renumber[int(n)] for n in g if str(n).isdigit() and int(n) in renumber]
+            for g in payload.get("same_person", [])
+        ]
+        payload["not_individuals"] = [
+            renumber[int(n)]
+            for n in payload.get("not_individuals", [])
+            if str(n).isdigit() and int(n) in renumber
+        ]
         return json.dumps(payload)
 
 
 def _score(book: str, roster, mentions) -> tuple[list, list, list, int]:  # noqa: ANN001
     def words(character) -> set[str]:  # noqa: ANN001
-        return {_norm(w) for a in (*character.aliases, character.display_name) for w in a.split()}
+        return {
+            _norm(w)
+            for a in (*character.aliases, character.display_name)
+            for w in a.split()
+        }
 
     kept = {a for c in roster for a in c.aliases}
     lost = []
@@ -2202,11 +2426,22 @@ def _score(book: str, roster, mentions) -> tuple[list, list, list, int]:  # noqa
         total = sum(mentions[n] for n in mine)
         if not total or sum(mentions[n] for n in mine if n in kept) / total < 0.5:
             lost.append(label)
-    merged = [c.display_name for c in roster
-              if len([p for p, toks in PRINCIPALS[book].items() if toks & words(c)]) > 1]
-    apart = [f"{a}+{b}" for a, b in APART[book] for c in roster
-             if {_norm(a), _norm(b)} <= {_norm(x) for x in (*c.aliases, c.display_name)}]
-    same = sum(1 for a, b in SAME[book] if any(a in c.aliases and b in c.aliases for c in roster))
+    merged = [
+        c.display_name
+        for c in roster
+        if len([p for p, toks in PRINCIPALS[book].items() if toks & words(c)]) > 1
+    ]
+    apart = [
+        f"{a}+{b}"
+        for a, b in APART[book]
+        for c in roster
+        if {_norm(a), _norm(b)} <= {_norm(x) for x in (*c.aliases, c.display_name)}
+    ]
+    same = sum(
+        1
+        for a, b in SAME[book]
+        if any(a in c.aliases and b in c.aliases for c in roster)
+    )
     return lost, merged, apart, same
 
 
@@ -2219,10 +2454,16 @@ def results(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
         mentions = spacy_roster.collect_signals(inspection.chapters, spans).mentions
         offline, _ = spacy_roster.infer_roster(inspection.chapters, spans)
         fixture = json.loads((FIXTURES / f"{book}.json").read_text())
-        identity = IdentityPass(fixture["model"], client=_Replay(fixture), backoff_base=0)
-        online, _ = spacy_roster.infer_roster(inspection.chapters, spans, identity=identity)
-        out[book] = {"offline": _score(book, offline, mentions),
-                     "online": _score(book, online, mentions)}
+        identity = IdentityPass(
+            fixture["model"], client=_Replay(fixture), backoff_base=0
+        )
+        online, _ = spacy_roster.infer_roster(
+            inspection.chapters, spans, identity=identity
+        )
+        out[book] = {
+            "offline": _score(book, offline, mentions),
+            "online": _score(book, online, mentions),
+        }
     return out
 
 
