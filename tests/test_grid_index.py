@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 
+from helpers import heading_ranges
 from kenkui._domain.grid import (
     GapReason,
     LeafRange,
@@ -29,6 +30,7 @@ def chapter(text: str, *, headings: tuple[str, ...] = ()) -> ChapterInspection:
         text=text,
         emphasis=(),
         headings=headings,
+        heading_ranges=heading_ranges(text, *headings),
     )
 
 

@@ -37,6 +37,10 @@ class ChapterInspection:
     # Recorded rather than marked inline: emphasis must not alter canonical
     # text, which billing, attribution offsets, and segment identity all use.
     emphasis: tuple[tuple[int, int], ...] = ()
+    # Canonical (start, end) offsets of visible h1-h6 elements, in document
+    # order. Structure comes from the element, not its words: a paragraph
+    # repeating a heading's text is still a paragraph.
+    heading_ranges: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

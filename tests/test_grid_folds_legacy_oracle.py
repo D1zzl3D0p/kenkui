@@ -9,6 +9,7 @@ from itertools import pairwise
 import pytest
 
 import kenkui as kk
+from helpers import heading_ranges
 from kenkui._domain import planning
 from kenkui._domain.grid import (
     DialogueRange,
@@ -156,6 +157,7 @@ def test_frozen_gap_durations_remain_on_the_same_canonical_edges() -> None:
         len(text),
         text,
         headings=("Chapter One", "Tail."),
+        heading_ranges=heading_ranges(text, "Chapter One", "Tail."),
     )
     units = build_grid(chapter)
     index = build_structure_index(units)
@@ -178,6 +180,7 @@ def test_coincident_grid_reasons_translate_to_the_maximum_duration() -> None:
         len(text),
         text,
         headings=("Heading A", "Heading B"),
+        heading_ranges=heading_ranges(text, "Heading A", "Heading B"),
     )
     units = build_grid(chapter)
     reasons = build_structure_index(units).gaps[0]
@@ -314,6 +317,7 @@ def test_frozen_plan_observation_matches_grid_planning_semantics() -> None:
         len(text),
         text,
         headings=("Chapter IV",),
+        heading_ranges=heading_ranges(text, "Chapter IV"),
     )
     narrator = _voice("narrator", "2" * 64)
     mira = _voice("mira-voice", "3" * 64)

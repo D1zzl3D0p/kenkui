@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from io import BytesIO
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 from xml.etree import ElementTree as ET
 from zipfile import BadZipFile, LargeZipFile, ZipFile
 
@@ -70,6 +70,11 @@ _BLOCK_ELEMENTS = frozenset(
 )
 _IGNORED_ELEMENTS = frozenset({"script", "style", "noscript", "template"})
 _EMPHASIS_ELEMENTS = frozenset({"em", "i", "cite", "dfn", "var"})
+_HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+# title, canonical text, heading strings, emphasis ranges, heading ranges.
+_ChapterMaterial: TypeAlias = tuple[
+    str, str, tuple[str, ...], tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]
+]
 
 # Parsing and speech-materialization work limits supplement the ZIP byte limits.
 MAX_SPINE_CHAPTERS = 10_000
@@ -86,6 +91,7 @@ class _TextEmitter:
     def __init__(self) -> None:
         self.parts: list[str] = []
         self.emphasis_ranges: list[tuple[int, int]] = []
+        self.heading_ranges: list[tuple[int, int]] = []
         self._length = 0
         self._emphasis_depth = 0
         self._emphasis_start = 0
@@ -119,6 +125,16 @@ class _TextEmitter:
         self._emphasis_depth -= 1
         if self._emphasis_depth == 0 and self._length > self._emphasis_start:
             self.emphasis_ranges.append((self._emphasis_start, self._length))
+
+    @property
+    def length(self) -> int:
+        """Characters emitted so far, in raw (pre-normalization) offsets."""
+        return self._length
+
+    def heading(self, start: int) -> None:
+        """Record a heading element that emitted text from ``start`` onward."""
+        if self._length > start:
+            self.heading_ranges.append((start, self._length))
 
     def value(self) -> str:
         return "".join(self.parts)
@@ -226,10 +242,13 @@ def _emit_element(element: Element, emitter: _TextEmitter) -> None:
         emitter.boundary(2)
     if emphasis:
         emitter.open_emphasis()
+    start = emitter.length
     emitter.text(element.text)
     for child in element:
         _emit_element(child, emitter)
         emitter.text(child.tail)
+    if tag in _HEADING_ELEMENTS:
+        emitter.heading(start)
     if emphasis:
         emitter.close_emphasis()
     if block:
@@ -264,7 +283,7 @@ def _visible_headings(element: Element) -> list[str]:
     """Collect heading text without descending through hidden ancestors."""
     if _local(element.tag) in _IGNORED_ELEMENTS or _hidden(element):
         return []
-    if _local(element.tag) in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+    if _local(element.tag) in _HEADING_ELEMENTS:
         emitter = _TextEmitter()
         _emit_element(element, emitter)
         title = normalize_text(emitter.value())
@@ -275,12 +294,12 @@ def _visible_headings(element: Element) -> list[str]:
     return headings
 
 
-def _resolve_emphasis(
+def _resolve_ranges(
     raw: str, text: str, ranges: list[tuple[int, int]]
 ) -> tuple[tuple[int, int], ...]:
     """Map raw emission offsets onto the normalized (canonical) chapter text.
 
-    Emphasis boundaries are recorded against the emitter's raw, pre-
+    Emphasis and heading boundaries are recorded against the emitter's raw, pre-
     normalization output, but ``normalize_text`` then collapses whitespace
     and strips leading and trailing runs -- so a raw offset does not address
     the same character in canonical text. Every step of normalization only
@@ -311,14 +330,14 @@ def _chapter_text(
     body: Element,
     fragments: dict[str, Element | None],
     fragment: str,
-) -> tuple[str, str, tuple[str, ...], tuple[tuple[int, int], ...]]:
+) -> _ChapterMaterial:
     scope = _body_scope(body, fragments, fragment)
     emitter = _TextEmitter()
     _emit_element(scope, emitter)
     raw = emitter.value()
     text = normalize_text(raw)
     if not text:
-        return "", "", (), ()
+        return "", "", (), (), ()
     headings = _visible_headings(scope)
     title = headings[0] if headings else ""
     if not title:
@@ -330,8 +349,9 @@ def _chapter_text(
             if document_titles
             else ""
         )
-    emphasis = _resolve_emphasis(raw, text, emitter.emphasis_ranges)
-    return title, text, tuple(headings), emphasis
+    emphasis = _resolve_ranges(raw, text, emitter.emphasis_ranges)
+    heading_ranges = _resolve_ranges(raw, text, emitter.heading_ranges)
+    return title, text, tuple(headings), emphasis, heading_ranges
 
 
 def _member_map(archive: TypedZipFile) -> dict[str, str]:
@@ -414,10 +434,7 @@ def _spine_chapters(
     if len(spine_items) > MAX_SPINE_CHAPTERS:
         raise SourceError(ErrorCode.ARCHIVE_LIMIT)
     occurrences: Counter[tuple[str, str]] = Counter()
-    material_cache: dict[
-        tuple[str, str],
-        tuple[str, str, tuple[str, ...], tuple[tuple[int, int], ...]],
-    ] = {}
+    material_cache: dict[tuple[str, str], _ChapterMaterial] = {}
     document_cache: dict[str, tuple[Element, Element, dict[str, Element | None]]] = {}
     speech_characters = 0
     chapters: list[ChapterInspection] = []
@@ -437,7 +454,7 @@ def _spine_chapters(
             document = _document(archive, members, member, document_cache)
             material = _chapter_text(*document, fragment)
             material_cache[identity] = material
-        title, text, headings, emphasis = material
+        title, text, headings, emphasis, heading_ranges = material
         if not text:
             # Image-only pages (covers, title pages, plates) carry no speech.
             continue
@@ -454,6 +471,7 @@ def _spine_chapters(
                 text,
                 headings,
                 emphasis,
+                heading_ranges,
             )
         )
     if not chapters:

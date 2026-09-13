@@ -604,6 +604,35 @@ def test_chapter_records_every_visible_heading(tmp_path: Path) -> None:
     assert chapter.title == "Chapter One"
 
 
+def test_only_a_real_heading_is_a_heading_when_its_text_repeats(
+    tmp_path: Path,
+) -> None:
+    """A paragraph that repeats a heading's words gets paragraph pauses.
+
+    Matching blocks to headings by text gave the paragraph heading pauses too,
+    so structure is recorded as canonical offsets of the heading elements.
+    """
+    source = make_epub(
+        tmp_path / "book.epub",
+        chapters={
+            "one": xhtml(
+                "<h1>Prologue</h1><p>Prologue</p><p>The story begins.</p><p>End.</p>"
+            )
+        },
+        spine=["one"],
+    )
+    book = (
+        kk.epub(source)
+        .pauses(heading_before_ms=200, heading_after_ms=300, paragraph_ms=100)
+        .assign_voice("eponine")
+    )
+
+    chapter = book.inspect().chapters[0]
+    assert chapter.headings == ("Prologue",)
+    assert chapter.heading_ranges == ((0, len("Prologue")),)
+    assert [row.silence_after_ms for row in book.script()] == [300, 100, 100, 0]
+
+
 def test_chapter_without_headings_records_none(tmp_path: Path) -> None:
     """A chapter with no h1-h6 carries an empty heading tuple."""
     source = make_epub(

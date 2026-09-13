@@ -419,9 +419,13 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
     dialogue = tuple((span.start, span.end) for span in spans if span.is_dialogue)
     units: list[Unit] = []
     offset = 0
-    headings = frozenset(chapter.headings)
     for p_index, block in enumerate(block_ranges(text), start=1):
-        is_heading = text[block.start : block.body_end] in headings
+        # Position, not wording: a paragraph repeating a heading's text is
+        # still a paragraph.
+        is_heading = any(
+            start < block.body_end and block.start < end
+            for start, end in chapter.heading_ranges
+        )
         for l_index, line_range in enumerate(line_ranges(text, block), start=1):
             line = text[line_range.start : line_range.end]
             for s_index, sentence in enumerate(split_sentences(line), start=1):

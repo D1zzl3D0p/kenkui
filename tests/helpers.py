@@ -80,3 +80,18 @@ def xhtml(body: str, *, title: str = "Document title") -> str:
         '<html xmlns="http://www.w3.org/1999/xhtml"><head>'
         f"<title>{title}</title></head><body>{body}</body></html>"
     )
+
+
+def heading_ranges(text: str, *headings: str) -> tuple[tuple[int, int], ...]:
+    """Return canonical offsets of each heading, searched in document order.
+
+    For fixtures that build a ChapterInspection by hand, which the parser
+    would otherwise derive from h1-h6 elements.
+    """
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for heading in headings:
+        start = text.index(heading, cursor)
+        cursor = start + len(heading)
+        ranges.append((start, cursor))
+    return tuple(ranges)
