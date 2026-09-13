@@ -11,7 +11,7 @@ method later means writing one filter rather than a second solver.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -69,7 +69,9 @@ class CastingRequest:
     # Voice usage carried in from outside this book, in spoken characters.
     # A series continues its spread across volumes rather than restarting
     # it; empty is exactly today's behaviour.
-    prior_load: Mapping[str, int] = MappingProxyType({})
+    # A factory, not a shared MappingProxyType: Python 3.11 rejects any
+    # unhashable dataclass default at class creation, which broke import.
+    prior_load: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Snapshot caller mappings so later mutation cannot change the request."""
