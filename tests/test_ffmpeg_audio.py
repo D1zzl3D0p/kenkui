@@ -137,6 +137,28 @@ def test_failed_native_command_logs_exit_without_stderr(
     assert "/private/secret" not in caplog.text
 
 
+def test_a_timed_out_native_command_says_it_timed_out(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A hung encoder and a runner that could not start need different fixes."""
+
+    class HungRunner:
+        def run(
+            self, argv: Sequence[str], *, timeout: float
+        ) -> subprocess.CompletedProcess[str]:
+            raise subprocess.TimeoutExpired(argv, timeout)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="kenkui._audio.native"),
+        pytest.raises(kk.EncodingError),
+    ):
+        run_checked(
+            HungRunner(), ("ffmpeg",), timeout=5, code=kk.ErrorCode.ENCODING_FAILED
+        )
+
+    assert "native_command_failed code=encoding_failed reason=timeout" in caplog.text
+
+
 def _plan(*, cover: CoverIntent = CoverIntent.NONE) -> ExecutionPlan:
     chapters = (
         OutputChapter("chapter-1", 0, "One = #; \\ title", 3),

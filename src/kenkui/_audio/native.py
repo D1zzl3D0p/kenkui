@@ -215,6 +215,9 @@ def run_checked(
     failed = False
     try:
         result = runner.run(tuple(argv), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _LOGGER.warning("native_command_failed code=%s reason=timeout", code.value)
+        raise EncodingError(code) from None
     except (OSError, subprocess.SubprocessError):
         failed = True
     if failed or result is None:
