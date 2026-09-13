@@ -1,4 +1,4 @@
-# Kenkui
+# Kenkui 10.0.0
 
 Kenkui is a typed Python toolkit for deterministic, security-bounded EPUB-to-M4B
 audiobook production. It exposes an immutable pipeline API for inspection,
@@ -43,7 +43,7 @@ python -m pip install "kenkui[pocket]"
 ```
 
 For a local wheel, use `uv build` and install
-`dist/kenkui-0.1.0-py3-none-any.whl`. Pocket-TTS is required in either spelling;
+`dist/kenkui-10.0.0-py3-none-any.whl`. Pocket-TTS is required in either spelling;
 its PyTorch dependencies make installation substantial. Installing the package
 does not download model weights or voice assets. See
 [installation](docs/installation.md) for the support matrix and optional spaCy
