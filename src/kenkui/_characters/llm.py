@@ -17,7 +17,7 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kenkui.errors import CancelledError, ErrorCode, ModelError
-from kenkui.observability import get_logger, log_event
+from kenkui.observability import LogContext, get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -63,6 +63,13 @@ class _LiteLLMClient:
         """Return one completion, imported lazily to keep import cheap."""
         import litellm  # noqa: PLC0415 - heavy, and unused unless casting runs
 
+        extra: dict[str, Any] = {}
+        if model.startswith("openrouter/"):
+            # LiteLLM's price table lags OpenRouter's catalogue, so the charge
+            # OpenRouter itself reports is the only reliable number, and it is
+            # returned only when asked for.
+            extra["extra_body"] = {"usage": {"include": True}}
+        started = time.monotonic()
         response = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
@@ -71,8 +78,53 @@ class _LiteLLMClient:
             # Reasoning tokens dominated attribution latency; these calls are
             # extraction, not deliberation.
             reasoning_effort=self._reasoning_effort,
+            **extra,
         )
+        _log_usage(model, response, int((time.monotonic() - started) * 1000))
         return str(response.choices[0].message.content)
+
+
+def _log_usage(model: str, response: object, elapsed_ms: int) -> None:
+    """Log what one call consumed, as the provider reported it.
+
+    Kenkui does not price anything; this records the provider's own figures
+    so an operator can see what a book cost. A charge that cannot be
+    established is left out rather than logged as zero, which would quietly
+    understate it. Nothing from the prompt or response content is logged.
+    """
+    usage = getattr(response, "usage", None)
+    context: dict[str, LogContext] = {
+        "boundary": "characters",
+        "model": model,
+        "elapsed_ms": elapsed_ms,
+    }
+    for name, field in (
+        ("input_tokens", "prompt_tokens"),
+        ("output_tokens", "completion_tokens"),
+    ):
+        count = getattr(usage, field, None)
+        if isinstance(count, int) and not isinstance(count, bool):
+            context[name] = count
+    cost = _reported_cost(response, usage)
+    if cost is not None:
+        context["cost_usd"] = f"{cost:.6g}"
+    log_event(_LOGGER, "model_call_completed", context=context)
+
+
+def _reported_cost(response: object, usage: object) -> float | None:
+    """Return the provider's charge, then LiteLLM's, else None."""
+    hidden = getattr(response, "_hidden_params", None)
+    for candidate in (
+        getattr(usage, "cost", None),
+        hidden.get("response_cost") if isinstance(hidden, dict) else None,
+    ):
+        if (
+            isinstance(candidate, (int, float))
+            and not isinstance(candidate, bool)
+            and candidate > 0
+        ):
+            return float(candidate)
+    return None
 
 
 def reasoning_client(effort: str) -> Client:

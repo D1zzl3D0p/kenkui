@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from types import SimpleNamespace
 
 import pytest
 
+from conftest import log_field
 from kenkui._characters import llm
 from kenkui._characters.llm import _LiteLLMClient, complete_json
 from kenkui.cancellation import CancellationToken
@@ -201,3 +203,68 @@ def test_cancellation_interrupts_retry_backoff(monkeypatch: pytest.MonkeyPatch) 
         complete_json("fake/model", "p", SCHEMA, client=client, cancel=token)
     assert len(sleeps) == 1
     assert sleeps == [pytest.approx(0.1)]
+
+
+def _usage_response(**usage: object) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="answer"))],
+        usage=SimpleNamespace(prompt_tokens=1200, completion_tokens=80, **usage),
+        _hidden_params={},
+    )
+
+
+def test_a_completed_call_logs_its_tokens_and_the_providers_charge(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Spend is visible per call, as the provider reported it, never as content."""
+    seen: dict[str, object] = {}
+
+    def completion(**kwargs: object) -> SimpleNamespace:
+        seen.update(kwargs)
+        return _usage_response(cost=0.000412)
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+    with caplog.at_level(logging.INFO, logger="kenkui"):
+        _LiteLLMClient().complete("openrouter/test", "the whole book")
+
+    # OpenRouter reports the real charge only when asked to.
+    assert seen["extra_body"] == {"usage": {"include": True}}
+    record = next(r for r in caplog.records if r.getMessage() == "model_call_completed")
+    assert log_field(record, "model") == "openrouter/test"
+    assert log_field(record, "input_tokens") == 1200  # noqa: PLR2004
+    assert log_field(record, "output_tokens") == 80  # noqa: PLR2004
+    assert log_field(record, "cost_usd") == "0.000412"
+    assert isinstance(log_field(record, "elapsed_ms"), int)
+    assert "the whole book" not in str(record.__dict__)
+
+
+def test_an_unknown_charge_is_left_out_rather_than_logged_as_zero(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def completion(**kwargs: object) -> SimpleNamespace:
+        assert "extra_body" not in kwargs  # only OpenRouter understands it
+        return _usage_response()
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+    with caplog.at_level(logging.INFO, logger="kenkui"):
+        _LiteLLMClient().complete("anthropic/test", "prompt")
+
+    record = next(r for r in caplog.records if r.getMessage() == "model_call_completed")
+    assert not hasattr(record, "cost_usd")
+    assert log_field(record, "input_tokens") == 1200  # noqa: PLR2004
+
+
+def test_litellm_reported_cost_is_the_fallback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def completion(**_kwargs: object) -> SimpleNamespace:
+        response = _usage_response()
+        response._hidden_params = {"response_cost": 0.5}  # noqa: SLF001
+        return response
+
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+    with caplog.at_level(logging.INFO, logger="kenkui"):
+        _LiteLLMClient().complete("openai/test", "prompt")
+
+    record = next(r for r in caplog.records if r.getMessage() == "model_call_completed")
+    assert log_field(record, "cost_usd") == "0.5"
