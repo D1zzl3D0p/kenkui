@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     from kenkui._characters.store import AttributionRecord
 
+pytestmark = pytest.mark.spacy
 spacy = pytest.importorskip("spacy", reason="the spacy extra is not installed")
 
 # One passage carrying every signal the inference reads: speech verbs, direct

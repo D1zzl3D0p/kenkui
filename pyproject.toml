@@ -148,18 +148,25 @@ addopts = [
   "--cov-branch",
   "--cov-report=term-missing",
   "--cov-fail-under=90",
-  "-m=not native",
+  "-m=not native and not spacy",
 ]
 markers = [
   "corpus: opt-in property test over the local Calibre library",
   "native: opt-in tests that execute host FFmpeg/ffprobe (requires KENKUI_RUN_NATIVE=1)",
   "pocket_real: opt-in strictly local Pocket-TTS test",
+  "spacy: opt-in tests that need the spacy extra and the en_core_web_lg pipeline",
 ]
 testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
 source = ["kenkui"]
+# The offline roster needs the optional spaCy extra plus a ~400 MB pipeline
+# download, so its tests are the opt-in `spacy` tier rather than part of the
+# default offline gate. Run them with:
+#   uv run --extra spacy python -m spacy download en_core_web_lg
+#   uv run --extra spacy pytest --no-cov -m spacy
+omit = ["*/kenkui/_characters/spacy_roster.py"]
 
 [tool.coverage.report]
 fail_under = 90

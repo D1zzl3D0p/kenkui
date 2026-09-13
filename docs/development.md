@@ -42,11 +42,15 @@ matching example and guide section whenever public behavior changes.
 
 ## Opt-in tiers
 
-Two further tiers need local resources and never run in ordinary CI:
+Further tiers need local resources and never run in ordinary CI:
 
 - **Real Pocket inference.** `KENKUI_RUN_PROVISIONING_REAL=1 uv run pytest
   --no-cov tests/test_voice_provisioning_real.py` downloads real assets and
   renders a real M4B.
+- **spaCy roster.** `uv run --extra spacy python -m spacy download
+  en_core_web_lg`, then `uv run --extra spacy pytest --no-cov -m spacy`. The
+  offline roster module is omitted from default coverage because these tests
+  need that pipeline.
 - **Corpus.** `KENKUI_RUN_CORPUS=1 uv run pytest --no-cov -m corpus` runs
   property tests over a local EPUB library, found at `~/Calibre Library` or
   the directory named by `KENKUI_CORPUS_LIBRARY`.
