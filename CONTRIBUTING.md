@@ -22,14 +22,15 @@ uv run check-wheel-contents dist/*.whl
 ```
 
 Add or update tests before implementation changes. Keep the public API typed,
-and update documentation when behavior changes. Default tests are deterministic,
+and when behavior changes, update the documentation, the matching script in
+`examples/`, and the `Unreleased` section of `CHANGELOG.md`. Default tests are deterministic,
 offline, branch-covered at 90% or higher, and exclude the explicitly opted-in
 native marker. Native FFmpeg acceptance uses generated fake audio and is not real
 Pocket inference. Gated model/voice assets, credentials, and real Pocket tests
 must not be added to ordinary CI.
 
 See [the development and release guide](docs/development.md) for archive contents,
-isolated wheel smoke, strict documentation, and release-candidate checks. The
+isolated wheel smoke, strict documentation, and the release process. The
 committed `uv.lock` is authoritative; do not refresh it in an unrelated change.
 
 ## Developer Certificate of Origin

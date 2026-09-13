@@ -1,10 +1,9 @@
 # Contributing, testing, and release checks
 
-Current user documentation is listed in `mkdocs.yml`. The `docs/superpowers/`
-directory retains historical plans and design proposals for repository research;
-they may describe superseded APIs and are excluded from the published site and
-its search index. Treat the usage guide and generated public API reference as
-the current interface documentation.
+The published documentation is exactly the pages listed in `mkdocs.yml`. The
+guide and the generated API reference are the authority on the public
+interface. Planning notes and experiments (`docs/superpowers/`, `.superpowers/`,
+`spikes/`) are git-ignored and are never versioned or published.
 
 ## Locked setup
 
@@ -36,6 +35,22 @@ credentials, user caches, model assets, or gated terms. Add/update deterministic
 tests with implementation changes and keep imports from the documented public
 facade in public API examples/smoke tests.
 
+The scripts in `examples/` are part of the documentation and are held to the
+same gates: `ruff` lints them and strict `mypy` type-checks them against the
+public API, so an API change that breaks an example fails CI. Update the
+matching example and guide section whenever public behavior changes.
+
+## Opt-in tiers
+
+Two further tiers need local resources and never run in ordinary CI:
+
+- **Real Pocket inference.** `KENKUI_RUN_PROVISIONING_REAL=1 uv run pytest
+  --no-cov tests/test_voice_provisioning_real.py` downloads real assets and
+  renders a real M4B.
+- **Corpus.** `KENKUI_RUN_CORPUS=1 uv run pytest --no-cov -m corpus` runs
+  property tests over a local EPUB library, found at `~/Calibre Library` or
+  the directory named by `KENKUI_CORPUS_LIBRARY`.
+
 ## Native FFmpeg tier
 
 Install/check host `ffmpeg` and `ffprobe` first, then opt in explicitly:
@@ -57,10 +72,9 @@ uv run mkdocs build --strict
 Strict mode must be warning-free. A theme package may print its own upstream
 informational notice; do not suppress project warnings to hide broken links/nav.
 
-## Distribution and release candidate
+## Distribution checks
 
-Start from a clean checkout when preparing a release candidate. Build does not
-need network after the locked environment is present:
+Build does not need network after the locked environment is present:
 
 ```console
 uv build
@@ -69,9 +83,9 @@ uv run check-wheel-contents dist/*.whl
 ```
 
 Inspect both archives before publishing. The sdist intentionally includes source,
-documentation, README, contribution guide, MkDocs config, Apache-2.0
-`LICENSE`/`NOTICE`, project metadata, and the lock; it excludes tests and local
-spikes/evidence. The wheel includes only the package/public code and typing marker
+documentation, examples, README, changelog, contribution guide, MkDocs config,
+Apache-2.0 `LICENSE`/`NOTICE`, project metadata, and the lock; it excludes
+tests. The wheel includes only the package/public code and typing marker
 plus required distribution metadata/licenses. Neither archive may contain tests,
 virtual environments, temporary/build/site/cache files, credentials, `.env`
 files, auth tokens, model/voice assets, or generated evidence.
@@ -83,10 +97,33 @@ without provisioned model/voice assets must reject production writing with a
 stable resource error. Real Pocket inference is a separate opt-in acceptance
 check; it is not a runtime approval switch.
 
-Publishing itself is intentionally not automated by the CI workflow. Before a
-release, confirm version/changelog policy, exact archive listing, all six
-OS/Python CI cells, both native OS jobs, metadata checks, and explicit approval
-state. Never add Pocket secrets/assets merely to make CI green.
+CI runs these checks, including the isolated wheel smoke, on every push.
+Never add Pocket secrets or assets merely to make CI green.
+
+## Releasing
+
+Versions follow [Semantic Versioning](https://semver.org/), and every
+user-visible change gets a line under `## [Unreleased]` in `CHANGELOG.md` in
+the same pull request.
+
+1. Move the `Unreleased` entries under a new `## [X.Y.Z] - YYYY-MM-DD`
+   heading, and update the comparison links at the bottom of the file.
+2. Set `version` in `pyproject.toml` and `__version__` in
+   `src/kenkui/__init__.py`, then run `uv lock`. `tests/test_package.py`
+   asserts that the two agree.
+3. Merge to `main` and wait for CI to pass.
+4. Tag the merge commit and push the tag:
+
+   ```console
+   git tag -s vX.Y.Z -m "Kenkui X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+The `Release` workflow checks that the tag matches the package version, builds
+the sdist and wheel, publishes them to PyPI through trusted publishing (no API
+token is stored anywhere), and creates a GitHub release whose notes are that
+version's changelog section. The `Docs` workflow republishes the documentation
+site on every push to `main`.
 
 ## DCO and license
 

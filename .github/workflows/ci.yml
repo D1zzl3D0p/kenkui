@@ -131,7 +131,8 @@ jobs:
           assert any(name.endswith(".dist-info/licenses/LICENSE") for name in wheel_names)
           assert any(name.endswith(".dist-info/licenses/NOTICE") for name in wheel_names)
           required_sdist_suffixes = {
-              "/README.md", "/CONTRIBUTING.md", "/LICENSE", "/NOTICE",
+              "/README.md", "/CHANGELOG.md", "/CONTRIBUTING.md", "/LICENSE", "/NOTICE",
+              "/examples/02_quickstart.py",
               "/mkdocs.yml", "/pyproject.toml", "/uv.lock",
               "/docs/usage.md", "/docs/security.md", "/docs/pocket-tts-adapter.md",
               "/src/kenkui/py.typed",
@@ -183,7 +184,7 @@ jobs:
           except kk.RenderError as error:
               assert error.code is kk.ErrorCode.RENDERER_UNAVAILABLE
           else:
-              raise AssertionError("unapproved production renderer did not fail closed")
+              raise AssertionError("rendering without provisioned voices did not fail")
           assert not Path("smoke.m4b").exists()
           print(kk.__version__, inspection.chapters[0].title)
           PY

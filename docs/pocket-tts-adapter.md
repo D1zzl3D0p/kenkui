@@ -1,4 +1,4 @@
-# Pocket-TTS 2.1.0 adapter and offline activation
+# Pocket-TTS adapter
 
 The Pocket adapter is a private, fail-closed production binding. It is not an
 online model manager: it downloads nothing, compiles nothing, and reads only a
@@ -22,9 +22,11 @@ The path passed to `get_state_for_audio_prompt` is always a `Path`, never a
 `str`. Upstream calls `download_if_necessary` only for `str` input, so a `Path`
 cannot reach the network even before the allowlist intervenes.
 
-## Required local manifest
+## The local manifest
 
-Activation requires an operator-reviewed, immutable local declaration containing:
+Every render reads a local manifest. Normally `load_voice()` writes it; an
+operator can instead point `KENKUI_POCKET_MANIFEST` at one they maintain. It
+contains:
 
 - canonical absolute owner-controlled model root and selected local YAML path;
 - immutable model revision and exact package version `2.1.0`;
@@ -90,12 +92,12 @@ URLs would be rejected at load time. Provisioning therefore writes a derived
 config with every weight reference rewritten to a local path, and a test
 asserts no remote scheme survives into it.
 
-## Remaining gate
+## Verification
 
-Real inference has not been exercised in CI. Unit tests use doubles, and the
-end-to-end test that downloads real assets and renders a real M4B is opt-in
-behind `KENKUI_RUN_PROVISIONING_REAL=1`. Fake or native FFmpeg acceptance
-cannot be relabelled as real Pocket acceptance.
+CI exercises the adapter with test doubles, and native FFmpeg acceptance with
+generated audio. Real inference, which downloads assets and renders a real
+M4B, is an opt-in local test behind `KENKUI_RUN_PROVISIONING_REAL=1`, because
+it needs hundreds of megabytes of model weights.
 
 A gated-compiled embedding **is** valid under the ungated model, confirmed by
 transcription against a negative control. Incompatibility here fails silently —

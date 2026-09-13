@@ -1,4 +1,4 @@
-# Immutable API and execution
+# Guide
 
 Only names exported by `kenkui.__all__` are public. Modules whose names start
 with `_` are implementation details and may change without compatibility notice.
@@ -21,10 +21,11 @@ construction can remain at module scope.
 import kenkui as kk
 
 source = kk.book("novel.epub")
-all_chapters = source.assign_voice("narrator").tts()
+all_chapters = source.assign_voice("eponine").tts()
+first, third = (chapter.id for chapter in source.inspect().chapters[:3:2])
 selection = (
-    source.select_chapters("chapter-a", "chapter-c")
-    .assign_voice("narrator")
+    source.select_chapters(first, third)
+    .assign_voice("eponine")
     .tts()
     .metadata(title="Novel", author="Writer", cover="source")
 )
@@ -33,8 +34,8 @@ assert source.operations == ()
 
 Use either `select_chapters(*ids)` or the inclusive
 `select_chapter_range(start_id, end_id)`, before `tts()`. Chapter IDs come from
-`inspect()` and are stable functions of canonical EPUB member/fragment identity
-and occurrence. Duplicate operations and invalid ordering fail immediately.
+`inspect()` -- they look like `ch-v1-2cc5ecca00df5ea4a766ea67` -- and are stable
+functions of canonical EPUB member/fragment identity and occurrence. Duplicate operations and invalid ordering fail immediately.
 
 ## Compose ordinary functions
 
@@ -665,10 +666,11 @@ only the keys it names, inside its own region, which is what lets one entry
 read *lead* as "leed" in one chapter and "led" in another:
 
 ```python
+chapter_12 = kk.epub("book.epub").inspect().chapters[11].id
 pipeline = (
     kk.epub("book.epub")
     .pronounce({"lead": "leed"})  # whole book, unless overridden below
-    .pronounce({"lead": "led"}, where={"chapter": "xhtml/ch12", "paragraph": 3})
+    .pronounce({"lead": "led"}, where={"chapter": chapter_12, "paragraph": 3})
 )
 ```
 
@@ -805,13 +807,13 @@ into: `chapter`, `paragraph`, `line`, `sentence`, `phrase`. Each level below
 child, a list of indices, or an inclusive `"lo..hi"` string range. Omitting a
 level matches every value at it; omitting `chapter` reaches every chapter.
 Passing a tuple of patterns adds one rule per pattern, in declaration order.
+`chapter` takes a chapter ID from `inspect()` or `"*"`.
 
 ```python
+ch8 = book.inspect().chapters[7].id
 book.attribute("irulan", where={"chapter": "*", "paragraph": 1})
-book.attribute(
-    "jessica", where={"chapter": "xhtml/ch08", "paragraph": 3, "sentence": 2}
-)
-book.silence(900, where={"chapter": "xhtml/ch08", "paragraph": 3})
+book.attribute("jessica", where={"chapter": ch8, "paragraph": 3, "sentence": 2})
+book.silence(900, where={"chapter": ch8, "paragraph": 3})
 ```
 
 `attribute()` and `silence()` accumulate rules the same way a scoped
@@ -827,7 +829,7 @@ you know which line to move.
 a model:
 
 ```python
-for row in book.script().at({"chapter": "xhtml/ch08"}):
+for row in book.script().at({"chapter": ch8}):
     print(row.path, row.character, row.provenance, row.silence_after_ms, row.text)
 ```
 
@@ -847,7 +849,7 @@ renders that selection to a `.wav` file, skipping the metadata and
 chaptering a full `write()` would pay for:
 
 ```python
-book.select({"chapter": "xhtml/ch08", "paragraph": 3}).preview("probe.wav")
+book.select({"chapter": ch8, "paragraph": 3}).preview("probe.wav")
 ```
 
 ### Saving corrections: the sidecar
@@ -864,15 +866,16 @@ The full loop:
 ```python
 book = kk.book("dune.epub").annotations()  # load prior corrections, if any
 book = book.assign_voice("eponine")  # preview() and tts() need a cast
+ch8 = book.inspect().chapters[7].id
 
-for row in book.script().at({"chapter": "xhtml/ch08"}):
+for row in book.script().at({"chapter": ch8}):
     print(row.path, row.character, row.text[:60])
 
 book = book.attribute(
-    "jessica", where={"chapter": "xhtml/ch08", "paragraph": 3, "sentence": 2}
-).silence(900, where={"chapter": "xhtml/ch08", "paragraph": 3})
+    "jessica", where={"chapter": ch8, "paragraph": 3, "sentence": 2}
+).silence(900, where={"chapter": ch8, "paragraph": 3})
 
-book.select({"chapter": "xhtml/ch08", "paragraph": 3}).preview("probe.wav")
+book.select({"chapter": ch8, "paragraph": 3}).preview("probe.wav")
 book.write_annotations()
 book.tts().write("dune.m4b", overwrite=True)
 ```

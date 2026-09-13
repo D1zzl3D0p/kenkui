@@ -1,26 +1,43 @@
 site_name: Kenkui
-site_description: Documentation for the Kenkui Python package
-repo_url: https://github.com/kenkui/kenkui
+site_description: Turn EPUB books into M4B audiobooks with local, multi-voice text-to-speech.
+site_url: https://d1zzl3d0p.github.io/kenkui/
+repo_url: https://github.com/D1zzl3D0p/kenkui
+repo_name: D1zzl3D0p/kenkui
+edit_uri: edit/main/docs/
 strict: true
-# Historical implementation proposals remain in the repository, but are not
-# current user guidance and must not appear in the published site or search.
+# Local, unversioned agent planning notes must never reach the published site.
 exclude_docs: |
   /superpowers/
 
 theme:
   name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: [.]
+      check_paths: true
 
 nav:
   - Home: index.md
-  - Installation: installation.md
-  - Immutable API: usage.md
-  - Public API reference: api.md
-  - Architecture: architecture.md
-  - Security boundaries: security.md
-  - Models and voices: models-and-voices.md
-  - Pocket-TTS adapter: pocket-tts-adapter.md
-  - Troubleshooting: troubleshooting.md
-  - Development and release: development.md
+  - Using Kenkui:
+      - Getting started: getting-started.md
+      - Installation: installation.md
+      - Guide: usage.md
+      - API reference: api.md
+      - Models and voices: models-and-voices.md
+      - Troubleshooting: troubleshooting.md
+  - Internals:
+      - Architecture: architecture.md
+      - Security boundaries: security.md
+      - Pocket-TTS adapter: pocket-tts-adapter.md
+  - Project:
+      - Development and releases: development.md
+      - Changelog: changelog.md
 
 plugins:
   - search

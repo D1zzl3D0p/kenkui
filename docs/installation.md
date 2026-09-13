@@ -24,31 +24,26 @@ EPUB library would suggest.
 
 Provisioning downloads more on top of that, on first use only: roughly 225 MB
 per language engine plus roughly 6.5 MB per voice. See
-[Usage](usage.md#provisioning-voices).
+[the guide](usage.md#provisioning-voices).
 
-The `[pocket]` extra is retained as an empty alias so existing
-`kenkui[pocket]` installs keep resolving. It no longer adds anything.
+## Install
 
-## Base and Pocket installs
-
-Install the library, including its required synthesis dependencies:
+Install the library and its synthesis dependencies:
 
 ```console
 python -m pip install kenkui
 ```
 
-The adapter dependencies are already included. This extra is a no-op, kept
-for compatibility with older installs that requested Pocket separately:
+Or add it to a uv project:
 
 ```console
-python -m pip install "kenkui[pocket]"
+uv add kenkui
 ```
 
-To build and install from this checkout:
+To install from a checkout of the repository:
 
 ```console
-uv build
-python -m pip install dist/kenkui-0.1.0-py3-none-any.whl
+python -m pip install .
 ```
 
 `pocket-tts==2.1.0` is pinned exactly: the adapter depends on the inspected

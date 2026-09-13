@@ -1,223 +1,166 @@
-# Kenkui 10.0.0
+# Kenkui
 
-Kenkui is a typed Python toolkit for deterministic, security-bounded EPUB-to-M4B
-audiobook production. It exposes an immutable pipeline API for inspection,
-validation, selection, metadata, synthesis intent, progress, cancellation, and
-atomic publication.
+[![PyPI](https://img.shields.io/pypi/v/kenkui)](https://pypi.org/project/kenkui/)
+[![Python](https://img.shields.io/pypi/pyversions/kenkui)](https://pypi.org/project/kenkui/)
+[![CI](https://github.com/D1zzl3D0p/kenkui/actions/workflows/ci.yml/badge.svg)](https://github.com/D1zzl3D0p/kenkui/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/D1zzl3D0p/kenkui/blob/main/LICENSE)
 
-Source inspection, planning, character casting, spawned synthesis, caching, and
-FFmpeg assembly are implemented. Provision a voice explicitly with `load_voice()`
-before rendering; this downloads the voice and its required model assets. The
-wheel contains metadata, not model weights or recordings. Single-voice rendering
-then uses local assets; character analysis may call a configured LiteLLM provider.
-Real Pocket inference is an opt-in acceptance tier, separate from default tests
-and native FFmpeg tests.
+Kenkui turns EPUB books into M4B audiobooks. Speech is synthesized locally on
+your CPU with [Pocket-TTS](https://github.com/kyutai-labs/pocket-tts), and a
+book can be read by a single narrator or by a full cast, with a different voice
+for each character.
 
-## Requirements and support matrix
+```python
+import kenkui as kk
 
-- CPython 3.11, 3.12, or 3.13 (other versions are outside the declared range).
-- Ubuntu 24.04 and macOS 14 are exercised in CI with every supported Python.
-- M4B writing requires `ffmpeg` and `ffprobe` 5 or newer on `PATH`, including an
-  AAC encoder. These system tools are not bundled.
+if __name__ == "__main__":
+    kk.load_voice("eponine")
+    kk.magic_run("book.epub", narrator="eponine")  # writes book.m4b
+```
 
-| Platform | Python 3.11 | Python 3.12 | Python 3.13 |
-| --- | --- | --- | --- |
-| Ubuntu 24.04 (`ubuntu-24.04`) | CI | CI | CI |
-| macOS 14 (`macos-14`) | CI | CI | CI |
+- **One narrator or a full cast.** Characters are discovered locally with spaCy
+  or by a language model, dialogue is attributed to its speaker, and voices are
+  cast deterministically, staying consistent across a whole series.
+- **Fix it without re-rendering.** Read the script a book will be spoken from,
+  correct a speaker, a pause, or a pronunciation, and preview only that line.
+- **Local and predictable.** Speech synthesis never touches the network.
+  Voices are downloaded only when you ask for them, and a failed or cancelled
+  render never leaves a half-written file behind.
+- **A typed, immutable Python API.** Every step returns a new pipeline you can
+  branch, inspect, and reuse.
 
-The pure-Python wheel is platform-independent, but the table is the exact tier-1
-CI matrix, not a claim about untested operating systems or architectures.
+## The Kenkui suite
+
+| Project | What it is | License |
+| --- | --- | --- |
+| **kenkui** (this repository) | The Python library: the EPUB-to-M4B pipeline. | Apache-2.0 |
+| [kenkui-server](https://github.com/D1zzl3D0p/kenkui-server) | A self-hostable API server that runs jobs on this library. | AGPL-3.0-only |
+| [kenkui-studio](https://github.com/D1zzl3D0p/kenkui-studio) | A web and desktop app for creating audiobooks through the server. | AGPL-3.0-only |
+| [kenkui-voices](https://huggingface.co/datasets/D1zzl3D0p/kenkui-voices) | The 95 precompiled voices in the built-in catalog. | per-voice |
 
 ## Install
 
-Install the library and its required Pocket-TTS dependencies:
+Kenkui needs Python 3.11–3.13, and FFmpeg 5 or newer on your `PATH`.
 
 ```console
-python -m pip install kenkui
+pip install kenkui
+
+brew install ffmpeg                  # macOS
+sudo apt-get install -y ffmpeg       # Debian / Ubuntu
 ```
 
-The older extra spelling remains supported as an empty compatibility alias:
+The install is large, because Pocket-TTS depends on PyTorch. Voices are
+downloaded separately, on first use: about 225 MB per language, plus about
+6.5 MB per voice. To discover characters offline, also install the spaCy
+extra:
 
 ```console
-python -m pip install "kenkui[pocket]"
+pip install "kenkui[spacy]"
+python -m spacy download en_core_web_lg
 ```
 
-For a local wheel, use `uv build` and install
-`dist/kenkui-10.0.0-py3-none-any.whl`. Pocket-TTS is required in either spelling;
-its PyTorch dependencies make installation substantial. Installing the package
-does not download model weights or voice assets. See
-[installation](docs/installation.md) for the support matrix and optional spaCy
-character inference.
+## Usage
 
-Install FFmpeg separately:
-
-```console
-# Ubuntu 24.04
-sudo apt-get update && sudo apt-get install -y ffmpeg
-
-# macOS with Homebrew
-brew install ffmpeg
-```
-
-## Immutable API quickstart
-
-Constructors and fluent methods record intent and return new frozen pipelines;
-they do not mutate the original. `validate()` is inexpensive and does not parse
-the EPUB. `inspect()` securely parses it and returns frozen metadata/chapters.
-
-Rendering spawns worker processes, so a script that calls `write_m4b()` must
-keep that call under an `if __name__ == "__main__":` guard. See
-[Rendering spawns processes](#rendering-spawns-processes) below.
+### One narrator
 
 ```python
-from kenkui import CancellationToken, KenkuiError, epub, load_voice
-
-if __name__ == "__main__":  # required: see "Rendering spawns processes"
-    load_voice("eponine")  # explicit provisioning; reused on later runs
-    base = epub("book.epub")
-    inspection = base.inspect()
-    for chapter in inspection.chapters:
-        print(chapter.id, chapter.title, chapter.speech_characters)
-
-    pipeline = (
-        base.assign_voice("eponine")
-        .tts()
-        .metadata(title="Example", author="Author", cover="source")
-    )
-    assert base.operations == ()  # branching did not mutate base
-    token = CancellationToken()
-    try:
-        result = pipeline.write(
-            "book.m4b",
-            workers="auto",
-            overwrite=False,
-            cancel=token,
-            on_event=lambda event: print(event),
-        )
-        print(result.output, result.stats.duration_ms)
-    except KenkuiError as error:
-        print(error.code.value, str(error))
-        raise
-```
-
-### One-call rendering
-
-`magic_run()` is the concise path when the default output, casting method, and
-execution settings fit. It writes `book.m4b` beside `book.epub`; an existing
-output remains protected by the normal atomic publication checks.
-
-```python
-from kenkui import magic_run
+import kenkui as kk
 
 if __name__ == "__main__":
-    # Provision the narrator first. The default output is book.m4b.
-    result = magic_run("book.epub", narrator="eponine")
-```
+    kk.load_voice("eponine")  # one-time download; later runs are offline
 
-Single-voice is the default. Multi-voice runs use
-`openrouter/deepseek/deepseek-v4-flash` unless `model=` supplies a different LiteLLM
-provider/model identifier. Multi-voice runs perform character inference and
-quote attribution, which can make provider requests.
+    book = kk.book("book.epub")
+    for chapter in book.inspect().chapters:
+        print(chapter.id, chapter.title)
 
-### Casting characters
-
-One voice is the degenerate cast. For a full one, add inference and
-attribution, and let the solver assign the rest:
-
-```python
-import os
-
-from kenkui import epub
-
-if __name__ == "__main__":
-    # Provision the narrator and a suitable voice pool beforehand.
-    # Set this to your LiteLLM model identifier; configure credentials through
-    # the provider's environment variables, never pipeline arguments.
-    model = os.environ["KENKUI_ANALYSIS_MODEL"]
     result = (
-        epub("book.epub")
-        .infer_characters(model=model)
-        .attribute_quotes(model=model)
-        .assign_voices(narrator="eponine", method="gendered")
+        book.pronounce(numbers="standard")
+        .pauses(chapter_ms=1500, paragraph_ms=300)
+        .assign_voice("eponine")
+        .tts()
+        .metadata(title="My Book", author="An Author")
+        .write("book.m4b", on_event=print)
+    )
+    print(result.output, result.stats.duration_ms)
+```
+
+Rendering starts worker processes, and each one re-imports your script, so
+keep rendering under `if __name__ == "__main__":`.
+
+### A full cast
+
+Quote attribution uses any [LiteLLM](https://docs.litellm.ai/) model. Set the
+provider's API key in your environment, for example `OPENROUTER_API_KEY`.
+
+```python
+import kenkui as kk
+
+MODEL = "openrouter/deepseek/deepseek-v4-flash"
+
+if __name__ == "__main__":
+    for voice in ("eponine", "paul", "anna", "charles", "jane", "george"):
+        kk.load_voice(voice)
+
+    (
+        kk.book("book.epub")
+        .series("my-series", book=1)  # characters keep their voices in later books
+        .infer_characters("spacy")  # or a LiteLLM model
+        .attribute_quotes(MODEL)
+        .assign_voices(narrator="eponine", unknown="paul", cast={"alice": "anna"})
         .tts()
         .write("book.m4b")
     )
 ```
 
-Casting avoids sharing a voice between characters in the same chapter when the
-configured pool permits it; unavoidable collisions are logged. Attribution also
-casts text-identified unnamed speakers, such as a guard or innkeeper,
-automatically; each is scoped to its chapter. Dialogue that cannot be placed is
-narrated rather than guessed at. Attribution is stored, so re-rendering the
-same book costs no further model calls.
-
-
-### Rendering spawns processes
-
-`write_m4b()` renders in spawned worker processes. The `spawn` start method is
-the default on macOS and the only one on Windows, and it builds each worker by
-re-importing the main module. A script that calls `write_m4b()` at module level
-therefore runs that module again in every worker.
-
-Everything above the call runs again with it -- inspection, character
-inference, and attribution, which can re-issue billable model calls -- and only
-when the re-imported code reaches its own worker start does Python raise. By
-then the duplicated work has happened, the processes are competing for one
-output path and cache, and the failure surfaces as a render error that says
-nothing about recursion.
-
-Put the call under a guard:
+### Correct one line and hear the fix
 
 ```python
-if __name__ == "__main__":
-    epub("book.epub").assign_voice("eponine").tts().write("book.m4b")
+book = kk.book("book.epub").annotations().assign_voice("eponine")
+where = {"chapter": "*", "paragraph": 1}
+
+for row in book.script().at(where):  # what will be said, and why
+    print(row.path, row.character, row.provenance, row.text[:60])
+
+book = book.attribute("irulan", where=where).silence(900, where=where)
+book.select(where).preview("probe.wav")  # renders only those lines
+book.write_annotations()  # saved beside the EPUB for the next render
 ```
 
-Calling rendering from a function invoked by a guarded entry point also works.
-Kenkui explicitly selects `spawn` on every supported platform, so the guard
-applies on Linux as well as macOS. The process invoking Kenkui must also permit
-child processes; a Python multiprocessing daemon cannot render an audiobook.
+## Examples
 
-`write()` is an alias for `write_m4b()`. Output must end in `.m4b` and its parent
-must exist. Existing output is rejected unless `overwrite=True`; publication is
-atomic, and cancellation or failure does not publish a candidate. `workers` is a
-positive integer or `"auto"`. Auto reserves two available CPUs when possible;
-both settings are bounded by selected chapter count and a cap of sixteen.
-Callbacks
-receive immutable ordered events (`Started`, stage events, `Warning`, and
-`Completed`). Any callback failure before publication commit becomes stable
-`callback_failed` and publishes nothing. After commit, publication
-`StageCompleted` and terminal `Completed` are best-effort notifications: callback
-errors cannot revoke the output. Cancellation is cooperative and raises
-`CancelledError` with `cancelled`.
+[`examples/`](https://github.com/D1zzl3D0p/kenkui/tree/main/examples) contains runnable scripts, from inspecting a book to
+batch-rendering a library. Most take the path to an EPUB as their only argument:
 
-See the [documentation](docs/index.md), especially [usage](docs/usage.md),
-[Pocket adapter deployment](docs/pocket-tts-adapter.md), and
-[troubleshooting](docs/troubleshooting.md).
+| Script | Shows |
+| --- | --- |
+| [`01_inspect.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/01_inspect.py) | Metadata, chapter IDs, validation, and the voice catalog, with no downloads |
+| [`02_quickstart.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/02_quickstart.py) | `load_voice()` and `magic_run()` |
+| [`03_explicit_pipeline.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/03_explicit_pipeline.py) | Chapter selection, pronunciation, pauses, cover art, progress events, cancellation, error codes |
+| [`04_multi_voice.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/04_multi_voice.py) | Character inference, attribution, casting, and inspecting the cast before rendering |
+| [`05_review_characters.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/05_review_characters.py) | Correcting the discovered roster before attribution |
+| [`06_series_and_style.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/06_series_and_style.py) | Series voice continuity, lexicons, and a reusable `house_style` with `.pipe()` |
+| [`07_dial_in.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/07_dial_in.py) | The script → correct → preview → save loop |
+| [`08_library_batch.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/08_library_batch.py) | Rendering a whole library from a table of books |
+| [`09_voices.py`](https://github.com/D1zzl3D0p/kenkui/blob/main/examples/09_voices.py) | Loading, listing, and registering your own voice |
 
-## Development and release gates
+## Documentation
 
-```console
-uv lock --check
-uv sync --frozen --all-groups
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy
-uv run pytest
-uv run mkdocs build --strict
-KENKUI_RUN_NATIVE=1 uv run pytest --no-cov -m native tests/test_native_ffmpeg.py
-uv build
-uv run twine check dist/*
-uv run check-wheel-contents dist/*.whl
-```
+Full documentation is at **<https://d1zzl3d0p.github.io/kenkui/>**:
 
-The committed `uv.lock` is the authority for CI/development dependencies. Exact
-runtime pins protect reviewed parser/adapter semantics; rationale is documented
-in [installation](docs/installation.md). See [CONTRIBUTING.md](CONTRIBUTING.md)
-for the complete workflow and DCO requirement.
+- [Getting started](https://d1zzl3d0p.github.io/kenkui/getting-started/)
+- [Guide](https://d1zzl3d0p.github.io/kenkui/usage/): every feature, in depth
+- [API reference](https://d1zzl3d0p.github.io/kenkui/api/)
+- [Models and voices](https://d1zzl3d0p.github.io/kenkui/models-and-voices/): the catalog, and voice rights
+- [Troubleshooting](https://d1zzl3d0p.github.io/kenkui/troubleshooting/): stable error codes
+
+## Contributing
+
+See [CONTRIBUTING.md](https://github.com/D1zzl3D0p/kenkui/blob/main/CONTRIBUTING.md). Changes are recorded in
+[CHANGELOG.md](https://github.com/D1zzl3D0p/kenkui/blob/main/CHANGELOG.md).
 
 ## License
 
-Kenkui source is licensed under the Apache License, Version 2.0. See
-[LICENSE](LICENSE) and [NOTICE](NOTICE). Model, dataset, and voice rights are
-separate and must be reviewed for the exact local assets used.
+Kenkui is licensed under the [Apache License 2.0](https://github.com/D1zzl3D0p/kenkui/blob/main/LICENSE). Voices and model
+weights are separate works with their own terms, and every built-in voice
+ships marked as not cleared for commercial use. See
+[Models and voices](https://d1zzl3d0p.github.io/kenkui/models-and-voices/).
