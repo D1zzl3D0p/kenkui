@@ -122,11 +122,18 @@ def _render_volume(
 ) -> dict[str, str]:
     """Resolve one volume of a series and return its cast assignments."""
     _stub_resolution(monkeypatch, character_id)
-    path = make_epub(
-        tmp_path / f"volume-{book}.epub",
-        chapters={"one": xhtml(f'<h1>One</h1><p>"Hello," said {character_id}.</p>')},
-        spine=("one",),
-    )
+    path = tmp_path / f"volume-{book}.epub"
+    # Build each volume once. ZIP entries carry the write time, so rebuilding
+    # "the same" volume across a two-second boundary changes its digest and
+    # turns a re-render into a different book.
+    if not path.exists():
+        make_epub(
+            path,
+            chapters={
+                "one": xhtml(f'<h1>One</h1><p>"Hello," said {character_id}.</p>')
+            },
+            spine=("one",),
+        )
     resolved = (
         kk.epub(path)
         .series("s", book=book)
