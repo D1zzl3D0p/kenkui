@@ -16,9 +16,8 @@ venv/
 .env
 .env.*
 
-# Local spike outputs (scripts and textual evidence remain reviewable)
-spikes/**/results/artifacts/
-spikes/examples/runs/
+# Local spikes and experiments: not part of the published repository.
+spikes/
 
 # Builds
 dist/
@@ -38,5 +37,12 @@ site/
 # Local evaluation harness: scratch, not shipped.
 evals/
 
-# Subagent-driven development scratch: ledger, briefs, review packages.
+# Agent planning scratch: unvetted plans, specs, ledgers, and review packages.
+# Kept locally, never versioned.
 .superpowers/
+docs/superpowers/
+
+# Rendered output from running the examples.
+*.m4b
+*.wav
+*.kenkui.json
