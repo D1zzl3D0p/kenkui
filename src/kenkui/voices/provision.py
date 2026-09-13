@@ -438,6 +438,7 @@ def _materialize(record: VoiceRecord, engine: EngineRecord, root: Path) -> Voice
         asset_path=str(destination),
         asset_sha256=_sha256(destination),
         compatible_model_revisions=(engine.model_revision,),
+        perceived_gender=record.perceived_gender,
     )
 
 

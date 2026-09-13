@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -12,6 +13,9 @@ import yaml
 from kenkui import ErrorCode, VoiceError, add_voice, load_voice
 from kenkui.voices import provision
 from kenkui.voices.manifest import EngineRecord, FileRecord, ManifestStore
+
+if TYPE_CHECKING:
+    from kenkui.voices.types import PerceivedGender
 
 _RIGHTS: dict[str, object] = {
     "name": "My Narrator",
@@ -108,6 +112,30 @@ def test_pre_compiled_is_copied_without_a_model(
     assert stub_engine == [False]
     _, voices = ManifestStore(manifest).read()
     assert Path(voices["mine"].asset_path or "").read_bytes() == b"already-compiled"
+
+
+@pytest.mark.usefixtures("stub_engine")
+@pytest.mark.parametrize("gender", ["feminine", "masculine", None])
+def test_pre_compiled_keeps_its_perceived_gender_after_load(
+    tmp_path: Path, gender: PerceivedGender
+) -> None:
+    """Loading must not erase the gender a caller declared; casting reads it."""
+    manifest = tmp_path / "manifest.json"
+    source = tmp_path / "local.safetensors"
+    source.write_bytes(b"already-compiled")
+    add_voice(
+        source,
+        voice_id="local",
+        manifest=manifest,
+        perceived_gender=gender,
+        **_RIGHTS,  # type: ignore[arg-type]
+    )
+
+    voice = load_voice("local", manifest=manifest)
+
+    assert voice.perceived_gender == gender
+    _, voices = ManifestStore(manifest).read()
+    assert voices["local"].perceived_gender == gender
 
 
 @pytest.mark.usefixtures("stub_engine")
