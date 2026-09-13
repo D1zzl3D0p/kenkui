@@ -23,7 +23,10 @@ from kenkui._domain.quotes import extract_spans
 from kenkui.api import book
 from kenkui.errors import SourceError
 
-LIBRARY = FilePath("/Users/dizzler/Projects/Calibre Library")
+# A local Calibre library; the corpus tier skips when it is absent.
+LIBRARY = FilePath(
+    os.environ.get("KENKUI_CORPUS_LIBRARY", "~/Calibre Library")
+).expanduser()
 
 
 def _epubs() -> list[FilePath]:

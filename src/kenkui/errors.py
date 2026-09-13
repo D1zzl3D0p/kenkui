@@ -52,7 +52,6 @@ class ErrorCode(StrEnum):
     INVALID_WORKERS = "invalid_workers"
     INVALID_OUTPUT = "invalid_output"
     OUTPUT_EXISTS = "output_exists"
-    INSPECTION_UNAVAILABLE = "inspection_unavailable"
     MALFORMED_EPUB = "malformed_epub"
     UNSAFE_ARCHIVE_PATH = "unsafe_archive_path"
     ARCHIVE_LIMIT = "archive_limit"
@@ -149,16 +148,17 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_WORKERS: "Workers must be 'auto' or a positive integer.",
     ErrorCode.INVALID_OUTPUT: "The output must be an M4B path.",
     ErrorCode.OUTPUT_EXISTS: "The output already exists.",
-    ErrorCode.INSPECTION_UNAVAILABLE: "EPUB inspection is not available yet.",
     ErrorCode.MALFORMED_EPUB: "The EPUB is malformed or unsupported.",
     ErrorCode.UNSAFE_ARCHIVE_PATH: "The EPUB contains an unsafe archive path.",
     ErrorCode.ARCHIVE_LIMIT: "The EPUB exceeds a safe archive limit.",
     ErrorCode.CHAPTER_NOT_FOUND: "A selected chapter ID was not found.",
     ErrorCode.EMPTY_CHAPTER: "A spine chapter has no visible text.",
     ErrorCode.REVERSED_CHAPTER_RANGE: "The chapter range is reversed.",
-    ErrorCode.RENDERER_UNAVAILABLE: "Audiobook rendering is not available yet.",
+    ErrorCode.RENDERER_UNAVAILABLE: (
+        "No voices are provisioned; call kenkui.load_voice() first."
+    ),
     ErrorCode.POCKET_PACKAGE_MISSING: (
-        "The optional Pocket-TTS package is not installed."
+        "The required Pocket-TTS package is not installed."
     ),
     ErrorCode.POCKET_VERSION_UNSUPPORTED: (
         "The installed Pocket-TTS version is unsupported."

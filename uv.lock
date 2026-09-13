@@ -1188,7 +1188,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7,<4" },
 ]
-provides-extras = ["pocket", "spacy"]
+provides-extras = ["spacy"]
 
 [package.metadata.requires-dev]
 dev = [

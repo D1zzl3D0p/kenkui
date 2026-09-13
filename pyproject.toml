@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "kenkui"
 version = "10.0.0"
-description = "A typed Python toolkit for audiobook production."
+description = "Turn EPUB books into M4B audiobooks with local, multi-voice text-to-speech."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = "Apache-2.0"
 authors = [{ name = "Kenkui contributors" }]
-keywords = ["audiobook", "epub", "m4b", "text-to-speech", "tts"]
+keywords = ["audiobook", "epub", "m4b", "pocket-tts", "text-to-speech", "tts"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: MacOS",
@@ -42,9 +42,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Retained as an empty alias so existing `kenkui[pocket]` installs keep working.
-# See spec section 10: this is the path back if pocket-tts becomes optional again.
-pocket = []
 # Offline character inference: `infer_characters("spacy")`. Optional because the
 # model roster is still the default and spaCy plus a pipeline is a large install
 # for a caller who never selects it. A pipeline is a separate download:
@@ -52,9 +49,11 @@ pocket = []
 spacy = ["spacy>=3.7,<4"]
 
 [project.urls]
-Documentation = "https://kenkui.readthedocs.io"
-Issues = "https://github.com/kenkui/kenkui/issues"
-Source = "https://github.com/kenkui/kenkui"
+Homepage = "https://github.com/D1zzl3D0p/kenkui"
+Documentation = "https://d1zzl3d0p.github.io/kenkui/"
+Source = "https://github.com/D1zzl3D0p/kenkui"
+Issues = "https://github.com/D1zzl3D0p/kenkui/issues"
+Changelog = "https://github.com/D1zzl3D0p/kenkui/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -84,7 +83,9 @@ include = [
   "/LICENSE",
   "/NOTICE",
   "/README.md",
+  "/CHANGELOG.md",
   "/CONTRIBUTING.md",
+  "/examples",
   "/mkdocs.yml",
   "/pyproject.toml",
   "/uv.lock",
@@ -94,8 +95,8 @@ include = [
 target-version = "py311"
 line-length = 88
 src = ["src", "tests"]
-# Local evaluation scratch, git-ignored and not part of the package.
-extend-exclude = ["evals"]
+# Local evaluation and spike scratch, git-ignored and not part of the package.
+extend-exclude = ["evals", "spikes"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -108,9 +109,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
-# Build scripts, not library code: heavy imports stay lazy so --help is
-# instant, and pocket-tts ships no types to annotate its model against.
-"tools/**/*.py" = ["ANN401", "BLE001", "PLC0415", "T201"]
 "tests/test_pocket_tts*.py" = [
   "ANN401", "D107", "E501", "FBT003", "PT012", "PT018", "RUF005",
   "RUF100", "S301", "TRY003",
@@ -121,18 +119,9 @@ ignore = [
 "src/kenkui/__init__.py" = ["A004"]
 "src/kenkui/api.py" = ["PLC0415"]
 "src/kenkui/events.py" = ["A001"]
-# Exploratory probes intentionally report arbitrary third-party failures and JSON trees.
-"spikes/**/*.py" = [
-  "ANN401",
-  "BLE001",
-  "D103",
-  "D105",
-  "D107",
-  "EXE001",
-  "PYI034",
-  "SIM105",
-  "T201",
-]
+# Examples are scripts a reader copies: they print, narrow optionals with assert,
+# show alternatives as commented-out calls, and live outside a package.
+"examples/**/*.py" = ["EM101", "ERA001", "INP001", "S101", "T201", "TRY003"]
 
 [tool.mypy]
 # 3.12 rather than the 3.11 floor: numpy's stubs use PEP-695 `type` statements
@@ -143,7 +132,7 @@ ignore = [
 # keep 3.11 in the pytest CI matrix to cover the floor at runtime.
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
 
 # pocket-tts ships no py.typed marker and no stubs. spaCy is an optional
 # dependency, imported lazily only when callers select the offline roster path.

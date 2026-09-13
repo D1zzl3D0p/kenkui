@@ -1,11 +1,13 @@
 """Package-level smoke tests."""
 
+import importlib.metadata
+
 import kenkui
 
 
 def test_package_exports_version() -> None:
-    """The installed package exposes its distribution version."""
-    assert kenkui.__version__ == "10.0.0"
+    """``__version__`` agrees with the distribution metadata from pyproject."""
+    assert kenkui.__version__ == importlib.metadata.version("kenkui")
 
 
 def test_package_exports_script_types() -> None:

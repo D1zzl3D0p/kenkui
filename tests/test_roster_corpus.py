@@ -26,7 +26,10 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("KENKUI_RUN_CORPUS"), reason="set KENKUI_RUN_CORPUS=1 to run"
 )
 
-LIBRARY = Path("/Users/dizzler/Projects/Calibre Library")
+# A local Calibre library; the corpus tier skips when it is absent.
+LIBRARY = Path(
+    os.environ.get("KENKUI_CORPUS_LIBRARY", "~/Calibre Library")
+).expanduser()
 FIXTURES = Path(__file__).parent / "data" / "roster_identity"
 BOOKS: dict[str, str] = {
     "dune": "Frank Herbert/Dune (466)/Dune - Frank Herbert.epub",
