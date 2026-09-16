@@ -9,15 +9,12 @@ speaker.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 import kenkui as kk
 from kenkui._domain.casting import CharacterProfile, candidates
-
-if TYPE_CHECKING:
-    from pathlib import Path
 from kenkui.voices.manifest import ManifestStore, VoiceRecord
 from kenkui.voices.provision import _with_catalog_gender
 from kenkui.voices.registry import BUILT_IN_CATALOG, CATALOG
@@ -57,15 +54,48 @@ def test_every_catalog_entry_declares_the_trait_explicitly(entry_id: str) -> Non
     assert CATALOG[entry_id].perceived_gender in {"feminine", "masculine", None}
 
 
-def test_built_in_traits_remain_unsourced() -> None:
-    """The kyutai catalog entries carry no trait Kenkui could source.
+def test_built_in_traits_match_the_sourced_catalog() -> None:
+    """Every Pocket TTS preset keeps its reviewed catalog classification."""
+    expected = {
+        "alba": "feminine",
+        "anna": "feminine",
+        "azelma": "feminine",
+        "bill_boerst": "masculine",
+        "caro_davy": "feminine",
+        "charles": "masculine",
+        "cosette": "feminine",
+        "eponine": "feminine",
+        "estelle": "feminine",
+        "eve": "feminine",
+        "fantine": "feminine",
+        "george": "masculine",
+        "giovanni": "masculine",
+        "jane": "feminine",
+        "javert": "masculine",
+        "jean": "masculine",
+        "juergen": "masculine",
+        "lola": "feminine",
+        "marius": "masculine",
+        "mary": "feminine",
+        "michael": "masculine",
+        "paul": "masculine",
+        "peter_yearsley": "masculine",
+        "rafael": "masculine",
+        "stuart_bell": "masculine",
+        "vera": "feminine",
+    }
+    assert {
+        voice_id: entry.perceived_gender for voice_id, entry in BUILT_IN_CATALOG.items()
+    } == expected
 
-    VCTK_Voice_Names.csv covers a different speaker selection than these
-    entries, and speaker-info.txt ships only inside the full corpus download.
-    Sourced traits come from the voice pack instead, which is why the merged
-    catalog does have them and these twenty-six still do not.
-    """
-    assert all(entry.perceived_gender is None for entry in BUILT_IN_CATALOG.values())
+
+def test_built_in_trait_provenance_is_pinned() -> None:
+    """The classification must stay auditable instead of becoming folklore."""
+    payload = json.loads(
+        (Path(__file__).parents[1] / "src/kenkui/voices/builtin.json").read_text()
+    )
+    source = payload["trait_provenance"]["perceived_gender"]
+    assert "/blob/3602bfef412d6398cc518268a7ecc5de255f4991/" in source
 
 
 def test_the_merged_catalog_does_carry_sourced_traits() -> None:
@@ -76,8 +106,9 @@ def test_the_merged_catalog_does_carry_sourced_traits() -> None:
 
 _HEADER = b'{"v":{}}'
 _EMBEDDING_BYTES = len(_HEADER).to_bytes(8, "little") + _HEADER + b"\0" * 16
-# The voice pack supplies 95 sourced traits; allow a little slack for churn.
-_SOURCED_MINIMUM = 90
+# The voice pack supplies 95 sourced traits and the built-ins add 26; allow a
+# little slack for pack churn while ensuring the built-ins remain represented.
+_SOURCED_MINIMUM = 115
 
 
 def test_added_voice_round_trips_its_trait(tmp_path: Path) -> None:

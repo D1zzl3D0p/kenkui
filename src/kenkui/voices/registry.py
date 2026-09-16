@@ -68,11 +68,9 @@ class CatalogEntry:
     # than derived from a kyutai catalog name. None means derive the kyutai
     # embedding URL from the language and ID.
     asset_url: str | None = None
-    # Unsourced for every built-in entry below. kyutai's VCTK_Voice_Names.csv covers a
-    # different speaker selection than these voices, and VCTK's speaker-info.txt
-    # ships only inside the full corpus download. Sourced traits arrive with the
-    # pre-compiled voice pack; guessing from the display names above -- which
-    # Kenkui invented -- would be worse than admitting the gap.
+    # Built-in traits are declared in builtin.json, together with a pinned
+    # provenance URL. None remains the honest default for custom or future
+    # entries whose perceived presentation has not been documented.
     perceived_gender: PerceivedGender = None
 
     @property

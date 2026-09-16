@@ -3,188 +3,191 @@
     "repo_id": "kyutai/pocket-tts-without-voice-cloning",
     "revision": "e041936c75475d350b405bc870bcf7c22da4e9e6"
   },
+  "trait_provenance": {
+    "perceived_gender": "https://github.com/saghul/local-tts/blob/3602bfef412d6398cc518268a7ecc5de255f4991/README.md#pocket-tts-voices"
+  },
   "schema_version": 2,
   "voices": [
     {
       "display_name": "Anna",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p228_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "anna"
     },
     {
       "display_name": "Vera",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p229_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "vera"
     },
     {
       "display_name": "Fantine",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p244_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "fantine"
     },
     {
       "display_name": "Charles",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p254_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "charles"
     },
     {
       "display_name": "Paul",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p259_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "paul"
     },
     {
       "display_name": "Eponine",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p262_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "eponine"
     },
     {
       "display_name": "Azelma",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p303_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "azelma"
     },
     {
       "display_name": "George",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p315_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "george"
     },
     {
       "display_name": "Mary",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p333_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "mary"
     },
     {
       "display_name": "Jane",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p339_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "jane"
     },
     {
       "display_name": "Michael",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p360_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "michael"
     },
     {
       "display_name": "Eve",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/vctk/p361_023_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "eve"
     },
     {
       "display_name": "Bill Boerst",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/bill_boerst.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "bill_boerst"
     },
     {
       "display_name": "Peter Yearsley",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/peter_yearsley.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "peter_yearsley"
     },
     {
       "display_name": "Stuart Bell",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/stuart_bell.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "stuart_bell"
     },
     {
       "display_name": "Caro Davy",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/voice-zero/caro_davy.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "caro_davy"
     },
     {
       "display_name": "Marius",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/voice-donations/Selfie.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "marius"
     },
     {
       "display_name": "Javert",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/voice-donations/Butter.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "javert"
     },
     {
       "display_name": "Cosette",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/expresso/ex04-ex02_confused_001_channel1_499s.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "cosette"
     },
     {
       "display_name": "Jean",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/ears/p010/freeform_speech_01_enhanced.wav",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "jean"
     },
     {
       "display_name": "Alba",
       "language": "english",
       "origin_url": "hf://kyutai/tts-voices/alba-mackenna/casual.wav",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "alba"
     },
     {
       "display_name": "Giovanni",
       "language": "italian",
       "origin_url": "hf://kyutai/pocket-tts/common_voice_it_36520747-enhanced-v2.mp3@64ab7d24c479d736a83b8cc666c4a776fca30fda",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "giovanni"
     },
     {
       "display_name": "Lola",
       "language": "spanish",
       "origin_url": "hf://kyutai/pocket-tts/common_voice_es_19762977-enhanced-v2.mp3@64ab7d24c479d736a83b8cc666c4a776fca30fda",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "lola"
     },
     {
       "display_name": "Juergen",
       "language": "german",
       "origin_url": "hf://kyutai/pocket-tts/de-DE-juergen.mp3@64ab7d24c479d736a83b8cc666c4a776fca30fda",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "juergen"
     },
     {
       "display_name": "Rafael",
       "language": "portuguese",
       "origin_url": "hf://kyutai/pocket-tts/g-Vi8PgmSY0-enhanced-v2.wav@64ab7d24c479d736a83b8cc666c4a776fca30fda",
-      "perceived_gender": null,
+      "perceived_gender": "masculine",
       "voice_id": "rafael"
     },
     {
       "display_name": "Estelle",
       "language": "french_24l",
       "origin_url": "hf://kyutai/tts-voices/unmute-prod-website/developpeuse-3.wav@1fc7395b7e012e2bbebfca14b942a4ef62ccc899",
-      "perceived_gender": null,
+      "perceived_gender": "feminine",
       "voice_id": "estelle"
     }
   ]
