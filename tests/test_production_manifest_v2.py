@@ -206,3 +206,29 @@ def test_activation_resolves_the_voice_and_attaches_a_private_cache(
     assert bindings.engine_specification.kind == "pocket"
     assert isinstance(bindings.cache_store, CacheStore)
     assert cache.stat().st_mode & 0o777 == OWNER_ONLY_DIRECTORY
+
+
+def test_activation_accepts_and_preserves_perceived_gender(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _payload(tmp_path)
+    payload["voices"]["eponine"]["perceived_gender"] = "feminine"
+    monkeypatch.setenv("KENKUI_POCKET_MANIFEST", str(_write(tmp_path, payload)))
+    monkeypatch.setattr(production, "preflight_pocket", lambda *_: None)
+
+    bindings = production.production_bindings_from_environment("eponine")
+
+    assert bindings.voice.perceived_gender == "feminine"
+
+
+def test_activation_rejects_invalid_perceived_gender(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _payload(tmp_path)
+    payload["voices"]["eponine"]["perceived_gender"] = "unknown"
+    monkeypatch.setattr(production, "preflight_pocket", lambda *_: None)
+
+    with pytest.raises(VoiceError) as excinfo:
+        _activate(tmp_path, monkeypatch, payload)
+
+    assert excinfo.value.code is ErrorCode.VOICE_PROVENANCE_REQUIRED

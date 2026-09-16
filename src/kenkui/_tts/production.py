@@ -21,7 +21,7 @@ from kenkui._tts.pocket import (
     preflight_pocket,
 )
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
-from kenkui.voices.types import Voice, VoiceVariety
+from kenkui.voices.types import PerceivedGender, Voice, VoiceVariety
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -42,6 +42,7 @@ _VOICE_BASE_KEYS: Final = {
     "commercial_use_allowed",
     "voice_rights",
 }
+_VOICE_TRAIT_KEYS: Final = {"perceived_gender"}
 _LOADED_KEYS: Final = {"asset_path", "asset_sha256", "compatible_model_revisions"}
 _SOURCE_KEYS: Final = {"source_path", "source_sha256"}
 _ENGINE_KEYS: Final = {
@@ -129,6 +130,7 @@ def production_bindings_from_environment(
         compatible_model_revisions=compatible,
         variety=cast("VoiceVariety", variety),
         state="loaded",
+        perceived_gender=_perceived_gender(voice_data.get("perceived_gender")),
     )
     if revision not in compatible:
         raise VoiceError(ErrorCode.VOICE_INCOMPATIBLE)
@@ -235,6 +237,7 @@ def _cast_voices(
                     "VoiceVariety", _string(voice_data["variety"], voice=True)
                 ),
                 state="loaded",
+                perceived_gender=_perceived_gender(voice_data.get("perceived_gender")),
             )
         )
     return tuple(resolved)
@@ -275,7 +278,8 @@ def _select_voice(root: dict[str, object], voice_id: str) -> dict[str, object]:
         # Both local varieties retain the reviewed original alongside the
         # compiled asset; only built-ins have no local source.
         expected = expected | _SOURCE_KEYS
-    return _object(entry, expected, voice=True)
+    present_traits = _VOICE_TRAIT_KEYS & set(entry)
+    return _object(entry, expected | present_traits, voice=True)
 
 
 def _select_engine(root: dict[str, object], engine_id: object) -> dict[str, object]:
@@ -420,6 +424,14 @@ def _boolean(value: object, *, voice: bool = False) -> bool:
             raise VoiceError(ErrorCode.VOICE_PROVENANCE_REQUIRED)
         raise ModelError(ErrorCode.POCKET_MODEL_INVALID)
     return value
+
+
+def _perceived_gender(value: object) -> PerceivedGender:
+    if value is None:
+        return None
+    if value not in {"feminine", "masculine"}:
+        raise VoiceError(ErrorCode.VOICE_PROVENANCE_REQUIRED)
+    return cast("PerceivedGender", value)
 
 
 def _integer(value: object) -> int:
