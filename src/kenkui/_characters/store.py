@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS attributions(
     book_id TEXT NOT NULL REFERENCES books(book_id) ON DELETE CASCADE,
     model_id TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
-    params_json TEXT NOT NULL);
+    params_json TEXT NOT NULL,
+    gender_evidence_json TEXT NOT NULL DEFAULT '[]');
 
 CREATE TABLE IF NOT EXISTS characters(
     attribution_id TEXT NOT NULL
@@ -285,6 +286,14 @@ def _migrate(connection: sqlite3.Connection) -> None:
     store written by an earlier version readable and writable rather than
     making the operator discard their attributions.
     """
+    attribution_columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(attributions)")
+    }
+    if "gender_evidence_json" not in attribution_columns:
+        connection.execute(
+            "ALTER TABLE attributions ADD COLUMN "
+            "gender_evidence_json TEXT NOT NULL DEFAULT '[]'"
+        )
     existing = {
         row["name"] for row in connection.execute("PRAGMA table_info(characters)")
     }
@@ -435,13 +444,14 @@ def write_attribution(record: AttributionRecord, path: Path | None = None) -> No
             )
             connection.execute(
                 "INSERT INTO attributions(attribution_id,book_id,model_id,"
-                "prompt_version,params_json) VALUES(?,?,?,?,?)",
+                "prompt_version,params_json,gender_evidence_json) VALUES(?,?,?,?,?,?)",
                 (
                     record.attribution_id,
                     record.book_id,
                     record.model_id,
                     record.prompt_version,
                     _canonical(dict(record.params)),
+                    _canonical(record.gender_evidence),
                 ),
             )
             for ordinal, character in enumerate(record.characters):
@@ -540,6 +550,10 @@ def read_attribution(
             params=json.loads(row["params_json"]),
             characters=characters,
             spans=spans,
+            gender_evidence=tuple(
+                (character_id, gender)
+                for character_id, gender in json.loads(row["gender_evidence_json"])
+            ),
         )
 
 

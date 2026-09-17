@@ -7,12 +7,13 @@ reused silently under the new one.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-PROMPT_VERSION = "characters-v6"
+PROMPT_VERSION = "characters-v8"
 
 IDENTITY_PROMPT = """\
 Below is the cast list extracted from a novel. Each numbered entry is one
@@ -66,6 +67,25 @@ ROLE_GENDERS: Mapping[str, str] = {
     "third-man": "masculine",
 }
 
+_QUALIFIED_ROLE = re.compile(
+    r"(?:(?:first|second|third|old|young)-)?(male|female)-([a-z]+)"
+)
+
+
+def role_gender(role: str) -> str | None:
+    """Read explicit role gender, without guessing from occupations or names.
+
+    The compact qualified form is requested by attribution. Restricting its
+    grammar avoids treating a female proctor's assistant as necessarily female.
+    """
+    if role in ROLE_GENDERS:
+        return ROLE_GENDERS[role]
+    match = _QUALIFIED_ROLE.fullmatch(role)
+    if match is None or match[2] in {"male", "female"}:
+        return None
+    return "masculine" if match[1] == "male" else "feminine"
+
+
 ROSTER_PROMPT = """\
 List the speaking characters in this passage from a novel.
 
@@ -77,7 +97,12 @@ Return ONLY JSON:
   not "lizzy".
 - "name": the character's name as it appears in the text.
 - "gender": "feminine", "masculine", or null when the text does not say.
-  Do not guess from a name alone.
+  Use explicit descriptions and pronouns referring to this person, including
+  action beats and possessives ("he gestured", "his booklet"). Do not borrow
+  the gender of someone they address or mention. Do not guess from a name alone.
+- Keep different people separate even when they share an occupation or title.
+  For unnamed speakers use stable distinguishing roles, such as "male-proctor"
+  and "female-proctor", instead of merging both into "proctor".
 - Include only characters who speak or are addressed. Omit places, objects,
   and groups.
 - Never return a pronoun as a name.
@@ -96,7 +121,8 @@ ATTRIBUTION_PROMPT = """\
 Identify who speaks each numbered quote in this passage from a novel.
 
 Return ONLY JSON:
-{{"attributions": [{{"quote_id": 0, "speaker": "..."}}]}}
+{{"attributions": [{{"quote_id": 0, "speaker": "..."}}],
+  "speaker_genders": {{"speaker-id": null}}}}
 
 CHARACTERS
 Return the id exactly as written here, never the display name.
@@ -127,6 +153,24 @@ RULES
   phrase for them, words joined by hyphens: "lookout", "first-man",
   "innkeeper", "old-woman". Prefer this over "unknown" whenever the text says
   who is speaking at all.
+- Distinguish different people sharing a role within this passage. A male
+  proctor and a female proctor are separate speakers: use "male-proctor" and
+  "female-proctor" consistently, including where the text later shortens either
+  to "the proctor". For multiple people of the same gender and role, use
+  "first-male-guard", "second-male-guard", and so on. Do not merge them into a
+  generic roster entry that conflates different people.
+- For an unnamed speaker whose gender is explicit, preserve it in the role:
+  "male-<occupation>" or "female-<occupation>" (a short single-word occupation).
+  Read actions and possessives as well as dialogue tags: "he gestured" and
+  "his booklet" can identify the speaker even without "he said". Check who
+  each pronoun refers to; another person mentioned nearby is not the speaker.
+  Keep the same qualified role for all that person's lines in the passage.
+  Never infer gender from an occupation, name, or stereotype; omit the qualifier
+  when the text does not establish it.
 - When the text names a speaker who is not in the list above, answer with their
   name. A speaker the list missed is still a speaker.
+
+- Also return speaker_genders: each speaking character's gender once, keyed by
+  the exact speaker id used above. Use "masculine", "feminine", or null when the
+  passage does not establish it.
 """

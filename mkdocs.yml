@@ -36,6 +36,7 @@ nav:
       - Security boundaries: security.md
       - Pocket-TTS adapter: pocket-tts-adapter.md
   - Project:
+      - Gender attribution evaluation: evaluations/gender-attribution.md
       - Development and releases: development.md
       - Changelog: changelog.md
 

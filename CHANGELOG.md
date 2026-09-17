@@ -6,6 +6,20 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Quote attribution now returns gender directly in a separate per-speaker table.
+  Valid, consistent evidence survives storage and offline roster refreshes;
+  conflicting evidence is flagged and reviewed genders retain precedence.
+  A controlled four-book passage evaluation found no attribution regression
+  when this field was added to the role-aware prompt; see the evaluation report
+  for sample limits and provider-routing anomalies.
+- Character attribution now requests distinct, gender-qualified identities for
+  unnamed people sharing a role, using pronouns and actions in context. Casting
+  recognizes those qualifiers; sparse unopposed dialogue tags fill unknown
+  genders, inverted tags and common adverbs are recognized, and ambiguous tag
+  evidence is logged. The prompt version advances to avoid reusing old merges.
+
 ## [10.0.0] - Unreleased
 
 Kenkui 10 is a ground-up rewrite. It shares no code with the 2.x series, and

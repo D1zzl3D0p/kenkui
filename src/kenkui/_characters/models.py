@@ -36,6 +36,9 @@ class AttributionRecord:
     params: Mapping[str, Any]
     characters: tuple[CharacterProfile, ...]
     spans: tuple[SpeakerSpan, ...]
+    # Retained separately so an offline roster refresh cannot erase evidence
+    # obtained from the model's full passage context.
+    gender_evidence: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

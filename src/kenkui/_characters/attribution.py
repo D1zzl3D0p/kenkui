@@ -145,7 +145,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
     narrator_id: str | None = None,
     include_aliases: bool = False,
     cancel: CancellationToken | None = None,
-) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage]:
+) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage, tuple[tuple[str, str], ...]]:
     """Return one chapter's speaker spans and how its quotes were accounted for.
 
     Chapters are independent: nothing is carried between them, so they can be
@@ -163,6 +163,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         return (
             _speaker_spans(chapter, dialogue, (None,) * len(dialogue)),
             AttributionCoverage(len(dialogue), 0, 0, 0),
+            (),
         )
 
     quotes = [
@@ -185,10 +186,11 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         known,
         narrator_id,
         chapter_id=chapter.id,
+        quote_count=len(dialogue),
         aliases=aliases,
         cancel=cancel,
     )
-    answers = response if response is not None else {}
+    answers, genders = response if response is not None else ({}, ())
 
     # A quote's id is its position among the dialogue spans, so pairing them
     # back up is a zip. A model that skipped an id leaves None, which is
@@ -211,7 +213,7 @@ def attribute_chapter(  # noqa: PLR0913 - one call site, all inputs explicit.
         dialogue,
         tuple(by_start.get(span.start) for span in dialogue),
     )
-    return resolved, coverage
+    return resolved, coverage, genders
 
 
 def _speaker_spans(
@@ -239,10 +241,11 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     known: frozenset[str],
     narrator_id: str | None = None,
     *,
+    quote_count: int,
     chapter_id: str | None = None,
     aliases: Mapping[str, str] | None = None,
     cancel: CancellationToken | None = None,
-) -> dict[int, str | None] | None:
+) -> tuple[dict[int, str | None], tuple[tuple[str, str], ...]] | None:
     """Return quote index to resolved speaker, or None if no usable answer came.
 
     A model that fails or answers unusably leaves every quote unknown rather
@@ -261,7 +264,11 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
         if not isinstance(item, dict):
             continue
         quote_id = item.get("quote_id")
-        if isinstance(quote_id, int) and not isinstance(quote_id, bool):
+        if (
+            isinstance(quote_id, int)
+            and not isinstance(quote_id, bool)
+            and 0 <= quote_id < quote_count
+        ):
             answers[quote_id] = _resolve(
                 item.get("speaker"),
                 known,
@@ -269,7 +276,19 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
                 chapter_id=chapter_id,
                 aliases=aliases,
             )
-    return answers
+    genders = payload.get("speaker_genders")
+    evidence: list[tuple[str, str]] = []
+    if isinstance(genders, dict):
+        placed = set(answers.values()) - {None}
+        for speaker, gender in genders.items():
+            if not isinstance(gender, str) or gender not in {"masculine", "feminine"}:
+                continue
+            character_id = _resolve(
+                speaker, known, narrator_id, chapter_id=chapter_id, aliases=aliases
+            )
+            if character_id is not None and character_id in placed:
+                evidence.append((character_id, gender))
+    return answers, tuple(sorted(set(evidence)))
 
 
 def _alias_ids(characters: Sequence[CharacterProfile]) -> dict[str, str]:

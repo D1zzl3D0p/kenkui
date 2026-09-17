@@ -21,7 +21,7 @@ from dataclasses import asdict, replace
 from itertools import islice
 from typing import TYPE_CHECKING
 
-from kenkui._characters import dialogue_tags, spacy_roster, store
+from kenkui._characters import dialogue_tags, gender_evidence, spacy_roster, store
 from kenkui._characters.attribution import (
     AttributionCoverage,
     attribute_chapter,
@@ -38,8 +38,8 @@ from kenkui._characters.models import CharacterRoster
 from kenkui._characters.narration import is_first_person
 from kenkui._characters.prompts import (
     PROMPT_VERSION,
-    ROLE_GENDERS,
     ROSTER_PROMPT,
+    role_gender,
 )
 from kenkui._characters.store import AttributionRecord
 from kenkui._domain.casting import (
@@ -212,7 +212,7 @@ def _measured(
         CharacterProfile(
             id=role,
             display_name=role.removeprefix(ROLE_PREFIX).split("@")[0].replace("-", " "),
-            gender=ROLE_GENDERS.get(role.removeprefix(ROLE_PREFIX).split("@")[0]),
+            gender=role_gender(role.removeprefix(ROLE_PREFIX).split("@")[0]),
             spoken_characters=volume.get(role, 0),
             chapter_ids=tuple(chapters.get(role, ())),
             # A role is minted with one surface form -- its display name --
@@ -411,7 +411,7 @@ def _with_current_roster(
     refreshed = replace(
         record,
         characters=dialogue_tags.apply(
-            characters,
+            gender_evidence.apply(characters, record.gender_evidence),
             dialogue_tags.tag_genders(inspection.chapters, record.spans),
         ),
     )
@@ -542,7 +542,12 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
     for chapter in inspection.chapters:
         spans.extend(attributed[chapter.id][0])
     failed = roster_failed + sum(
-        1 for _, coverage in attributed.values() if coverage.failed
+        1 for _, coverage, _ in attributed.values() if coverage.failed
+    )
+    evidence = gender_evidence.merge(
+        item
+        for _, _, chapter_evidence in attributed.values()
+        for item in chapter_evidence
     )
 
     record = AttributionRecord(
@@ -555,10 +560,11 @@ def resolve_attribution(  # noqa: PLR0913 - one call site, all inputs explicit.
         # said` now genders a character we can name. Applied here rather than
         # in the roster because the roster runs before any speaker is known.
         characters=dialogue_tags.apply(
-            _measured(characters, spans),
+            gender_evidence.apply(_measured(characters, spans), evidence),
             dialogue_tags.tag_genders(inspection.chapters, spans),
         ),
         spans=tuple(spans),
+        gender_evidence=evidence,
     )
     if reviewed:
         genders = {
@@ -606,18 +612,28 @@ def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
     cancel: CancellationToken | None,
     on_progress: Callable[[str, int, int, str | None], None] | None,
     include_aliases: bool,
-) -> dict[str, tuple[tuple[SpeakerSpan, ...], AttributionCoverage]]:
+) -> dict[
+    str,
+    tuple[tuple[SpeakerSpan, ...], AttributionCoverage, tuple[tuple[str, str], ...]],
+]:
     """Bound in-flight work and collect chapter results on the calling thread."""
     total = len(inspection.chapters)
     _progress(on_progress, cancel, "attribution", 0, total)
-    attributed: dict[str, tuple[tuple[SpeakerSpan, ...], AttributionCoverage]] = {}
+    attributed: dict[
+        str,
+        tuple[
+            tuple[SpeakerSpan, ...], AttributionCoverage, tuple[tuple[str, str], ...]
+        ],
+    ] = {}
     workers = min(_ATTRIBUTION_CONCURRENCY, total)
     if workers == 0:
         return attributed
 
     def attribute(
         chapter: ChapterInspection,
-    ) -> tuple[tuple[SpeakerSpan, ...], AttributionCoverage]:
+    ) -> tuple[
+        tuple[SpeakerSpan, ...], AttributionCoverage, tuple[tuple[str, str], ...]
+    ]:
         # A future may be picked up between cancellation and pool shutdown.
         # Check here as well as before submission, immediately before work.
         if cancel is not None:

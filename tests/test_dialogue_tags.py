@@ -3,15 +3,59 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING
+
+import pytest
 
 import kenkui as kk
 from kenkui._characters import dialogue_tags
+from kenkui._characters.dialogue_tags import _tag_gender
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
 
-if TYPE_CHECKING:
-    import pytest
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        ("", " said he.", "masculine"),
+        ("Said she, ", "", "feminine"),
+        ("", " he quietly asked.", "masculine"),
+        ("She softly replied: ", "", "feminine"),
+        ("", " He gestured toward her.", None),
+        ("", " he heard her say.", None),
+        ("", " said Henry.", None),
+    ],
+)
+def test_tag_forms(before: str, after: str, expected: str | None) -> None:
+    """Read grammatical dialogue tags without borrowing another person's gender."""
+    assert _tag_gender(before, after) == expected
+
+
+def test_conflicting_sparse_tags_are_reported(caplog: pytest.LogCaptureFixture) -> None:
+    """A potentially merged speaker is visible even below the override threshold."""
+    character = CharacterProfile("proctor", "Proctor", None, 10, ("ch-1",))
+    with caplog.at_level("WARNING"):
+        (result,) = dialogue_tags.apply(
+            (character,), {"proctor": Counter({"masculine": 1, "feminine": 1})}
+        )
+    assert result.gender is None
+    assert "dialogue_tag_gender_ambiguous" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("votes", "expected"),
+    [
+        ({"masculine": 1}, "masculine"),
+        ({"feminine": 2}, "feminine"),
+        ({"masculine": 2, "feminine": 1}, None),
+    ],
+)
+def test_sparse_tags_fill_only_unopposed_unknowns(
+    votes: dict[str, int], expected: str | None
+) -> None:
+    """A walk-on need not speak three times to receive a matching voice."""
+    character = CharacterProfile("guard", "Guard", None, 10, ("ch-1",))
+    (result,) = dialogue_tags.apply((character,), {"guard": Counter(votes)})
+    assert result.gender == expected
 
 
 def _chapter(text: str) -> kk.ChapterInspection:

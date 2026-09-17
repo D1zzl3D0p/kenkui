@@ -40,9 +40,9 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger(__name__)
 
-# Votes required before a tag-sourced gender is claimed, and the margin the
-# winner must hold. The same thresholds the roster uses: this signal is cleaner
-# but sparser, and a handful of mis-attributed quotes must not decide a voice.
+# Votes required to overturn a known gender, and the margin the winner must
+# hold. An unknown can use a single unopposed tag: minor speakers may only
+# have one line, and the alternative is selecting from the entire voice pool.
 _TAG_MINIMUM = 3
 _TAG_MARGIN = 2
 # How much narration either side of a quote can hold its tag. A tag sits
@@ -53,12 +53,15 @@ _TAG_WINDOW = 120
 # the quote edge so only an adjacent tag matches: `_AFTER` allows nothing but
 # whitespace and a comma before the pronoun, and `_BEFORE` nothing but
 # whitespace and punctuation after the verb.
+_ADVERB = r"(?:(?:quietly|softly|loudly|sharply|gently|firmly|finally)\s+)?"
+_SUBJECT = r"(?:she|he)"
+_TAG = rf"(?:{_SUBJECT}\s+{_ADVERB}(?:{_VERBS})|(?:{_VERBS})\s+{_SUBJECT})"
 _AFTER = re.compile(
-    rf"^[\s,]*(?:(?P<f>she)|(?P<m>he))\s+(?:{_VERBS})\b",
+    rf"^[\s,]*(?P<tag>{_TAG})\b",
     re.IGNORECASE,
 )
 _BEFORE = re.compile(
-    rf"\b(?:(?P<f>she)|(?P<m>he))\s+(?:{_VERBS})\b[\s,:]*$",
+    rf"\b(?P<tag>{_TAG})\b[\s,:]*$",
     re.IGNORECASE,
 )
 
@@ -73,7 +76,11 @@ def _tag_gender(before: str, after: str) -> str | None:
     for pattern, text in ((_AFTER, after), (_BEFORE, before)):
         match = pattern.search(text)
         if match is not None:
-            return "feminine" if match.group("f") else "masculine"
+            return (
+                "feminine"
+                if "she" in match.group("tag").lower().split()
+                else "masculine"
+            )
     return None
 
 
@@ -130,6 +137,20 @@ def apply(
         gender = character.gender
         tally = votes.get(character.id) or Counter()
         answer = _confident(tally)
+        if answer is None and tally["masculine"] and tally["feminine"]:
+            log_event(
+                _LOGGER,
+                "dialogue_tag_gender_ambiguous",
+                level=logging.WARNING,
+                context={
+                    "boundary": "characters",
+                    "character": character.id,
+                    "feminine_votes": tally["feminine"],
+                    "masculine_votes": tally["masculine"],
+                },
+            )
+        if gender is None and len(+tally) == 1:
+            answer = tally.most_common(1)[0][0]
         if answer is not None:
             if gender is not None and gender != answer:
                 log_event(

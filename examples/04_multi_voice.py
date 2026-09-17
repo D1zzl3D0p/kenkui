@@ -10,6 +10,14 @@ Three stages, each chosen independently:
 3. ``assign_voices`` casts characters onto loaded voices. It is free and
    deterministic: same book, same pool, same cast.
 
+Unnamed speakers are distinguished by role during attribution. Explicit
+qualifiers such as male-proctor and female-proctor constrain gendered casting.
+Attribution also returns gender separately for each speaker, so matching does
+not depend on the role's spelling. An unopposed dialogue tag can establish a
+minor speaker's unknown gender too.
+Supply loaded voices of both genders in addition to the narrator and unknown
+voices. Ambiguous dialogue-tag evidence is reported through warning logs.
+
 Credentials come from the provider's own environment variable, never from
 pipeline arguments. For the default OpenRouter model::
 

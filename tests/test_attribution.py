@@ -283,7 +283,7 @@ def test_adjacent_quotes_remain_separate_attribution_inputs(text: str) -> None:
             )
 
     chapter = _inspection(text).chapters[0]
-    resolved, coverage = attribute_chapter(
+    resolved, coverage, _ = attribute_chapter(
         chapter,
         (CharacterProfile("javert", "Javert", None, 0, ()),),
         "fake/model",
@@ -449,7 +449,7 @@ def test_coverage_separates_unknown_from_dropped() -> None:
     assert len(dialogue) == _FIXTURE_QUOTES
 
     # ScriptedClient answers quote_id 0 only, so every later quote is dropped.
-    _, coverage = attribute_chapter(
+    _, coverage, _ = attribute_chapter(
         chapter,
         (CharacterProfile("dhatt", "Dhatt", None, 0, ()),),
         "fake/model",

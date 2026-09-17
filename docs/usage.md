@@ -450,6 +450,43 @@ chapter is treated as another speaker. When the text
 does not identify the speaker, the dialogue remains `unknown` and uses the
 fallback described above.
 
+When the passage distinguishes people sharing a role, attribution is instructed
+to keep separate identifiers, such as `male-proctor` and `female-proctor`, and
+to follow each person through later shortened references. Explicit gender
+qualifiers are retained for casting; occupations alone do not imply gender.
+The model considers dialogue tags, actions, and possessives in context rather
+than assigning the gender of another person mentioned nearby. This still
+depends on the model correctly identifying the speakers.
+
+Attribution also returns a separate `speaker_genders` table, keyed by the exact
+speaker identifiers in its quote assignments. Gender is recorded once per
+speaker as `masculine`, `feminine`, or `null`; it does not have to be encoded in
+a role name. This can recover evidence such as an unnamed speaker's actions or
+possessives even when the role is simply `proctor` or `orator`.
+
+Only valid gender values for speakers actually attributed dialogue are used.
+Conflicting values across aliases or chapters produce
+`attribution_gender_ambiguous` and leave that identity to the existing roster
+and dialogue-tag checks. Consistent direct evidence precedes those tag checks;
+reviewed known genders remain authoritative. Direct evidence is stored
+separately so refreshing an offline roster cannot erase it.
+
+After attribution, adjacent pronoun dialogue tags provide an additional check.
+A single unopposed tag can fill an unknown gender for a minor speaker. Changing
+an existing inference requires at least three votes and a two-to-one margin.
+Both `he said` and `said he` forms are recognized, along with common intervening
+adverbs. Conflicting tags without that margin emit
+`dialogue_tag_gender_ambiguous`; an inferred gender overturned by tags emits
+`dialogue_tag_gender_conflict`. These warnings can indicate merged people or
+incorrectly attributed lines. Reviewed known genders still take precedence.
+
+The updated attribution instructions use a new prompt version. Resolving a book
+again obtains fresh attribution rather than reusing old speaker merges; this
+can incur model calls. Existing audio files are unchanged until rendered again.
+
+See the [book-passage evaluation](evaluations/gender-attribution.md) for the
+measured accuracy, output overhead, and limitations of direct gender encoding.
+
 ### Methods
 
 A method decides which voices a character is eligible for. The shared solver

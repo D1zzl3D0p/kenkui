@@ -206,6 +206,25 @@ different voices, while a guard in a later chapter may reuse one. A role that
 cannot be identified remains unattributed rather than becoming a guessed
 character.
 
+Attribution prompts preserve explicit gender in unnamed role identifiers and
+ask for distinct identifiers when several people share a role. The pure
+`role_gender` parser accepts compact qualified roles without inferring gender
+from occupations. Post-attribution dialogue tags fill unknown genders from
+unopposed evidence; overriding a known inference still requires three votes
+and a two-to-one margin. Ambiguous evidence is logged for operators. Prompt
+changes advance `PROMPT_VERSION`, preventing cached merged identities from
+surviving a new resolution. No public schema or render-worker behavior changes.
+
+The model also returns a `speaker_genders` map alongside the quote assignments.
+Only supported values for attributed speakers survive decoding. The
+`gender_evidence` module merges this evidence conservatively across aliases and
+chapters, retaining only unanimous values, then applies it before dialogue-tag
+checks and reviewed overrides. `AttributionRecord.gender_evidence` persists in
+an additively migrated SQLite JSON column. A later spaCy roster refresh reapplies
+this evidence rather than replacing a contextual correction with proximity
+votes. Old records migrate with empty evidence; the updated prompt version
+causes fresh resolution to obtain the new model response.
+
 Roster identity is deliberately conservative. Clear aliases fold into one
 character, but ambiguous short names and conflicting honorifics do not. A
 duplicate voice is locally audible; assigning two distinct people one voice is
