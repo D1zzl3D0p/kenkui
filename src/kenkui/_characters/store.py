@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from contextlib import closing, contextmanager, suppress
+from contextlib import closing, contextmanager, nullcontext, suppress
 from typing import TYPE_CHECKING, Any
 
 from kenkui._characters.models import (
@@ -30,6 +30,7 @@ from kenkui._characters.models import (
 from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.planning import SpeakerSpan
 from kenkui._tts import production
+from kenkui.checkpoints import current_session
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -170,7 +171,12 @@ def default_store_path() -> Path:
     binding the function at import time would send every test's writes to the
     developer's real cache.
     """
-    return production.default_cache_root() / STORE_NAME
+    session = current_session()
+    return (
+        session.casting_path
+        if session
+        else production.default_cache_root() / STORE_NAME
+    )
 
 
 def _canonical(value: object) -> str:
@@ -320,19 +326,32 @@ def _widen_series_alias_key(connection: sqlite3.Connection) -> None:
 @contextmanager
 def _connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open the store, creating it and its private directory if absent."""
-    location = path or default_store_path()
-    location.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with closing(sqlite3.connect(location)) as connection:
-        connection.row_factory = sqlite3.Row
-        # Required for the delete cascades below; SQLite leaves it off.
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.executescript(_SCHEMA)
-        _migrate(connection)
-        # Private like the voice manifest; a filesystem without chmod is not
-        # a reason to refuse the store.
-        with suppress(OSError):
-            location.chmod(0o600)
-        yield connection
+    session = current_session() if path is None else None
+    try:
+        location = path or default_store_path()
+        location.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with (
+            session.lock if session else nullcontext(),
+            closing(sqlite3.connect(location)) as connection,
+        ):
+            connection.row_factory = sqlite3.Row
+            # Required for the delete cascades below; SQLite leaves it off.
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.executescript(_SCHEMA)
+            _migrate(connection)
+            # Private like the voice manifest; a filesystem without chmod is not
+            # a reason to refuse the store.
+            with suppress(OSError):
+                location.chmod(0o600)
+            before = connection.total_changes
+            yield connection
+            if session is not None and connection.total_changes != before:
+                session.save_casting()
+    except (sqlite3.Error, OSError) as error:
+        if session is not None:
+            message = "Durable attribution checkpoint database is unavailable."
+            raise RuntimeError(message) from error
+        raise
 
 
 @contextmanager

@@ -23,6 +23,7 @@ from kenkui._audio.m4b import (
     chapter_frame_boundaries_ms,
 )
 from kenkui._domain.planning import ExecutionPlan, compile_execution_plan
+from kenkui._execution.checkpoints import restore_chapters, save_chapter
 from kenkui._execution.process_pool import (
     EngineSpecification,
     render_spawned,
@@ -304,7 +305,7 @@ def _cache_lookup(
     return cached, miss_indices, cache_keys
 
 
-def _render(  # noqa: PLR0913
+def _render(  # noqa: PLR0913, PLR0915, C901 - ordered synthesis and durable chapter commit.
     plan: ExecutionPlan,
     engine_specification: EngineSpecification,
     worker_count: int,
@@ -356,7 +357,17 @@ def _render(  # noqa: PLR0913
         )
         for chapter_id in chapter_ids
     }
+    restored = restore_chapters(
+        plan,
+        tasks,
+        spill_directory,
+        max_chapter_bytes=MAX_CHAPTER_PCM_BYTES,
+        engine=engine_specification,
+        cancel=cancel,
+    )
+    miss_indices = [i for i in miss_indices if tasks[i].chapter_id not in restored]
     completed_chapters = 0
+    chapter_start = 0
     missing_tasks = tuple(tasks[index] for index in miss_indices)
     records: Iterator[WorkerRecord] = iter(())
     if missing_tasks:
@@ -369,6 +380,20 @@ def _render(  # noqa: PLR0913
         )
     for index, (segment, task) in enumerate(zip(plan.segments, tasks, strict=True)):
         _check_cancel(cancel)
+        if segment.chapter_id in restored:
+            if last_segment[segment.chapter_id] == index:
+                part, entries = restored[segment.chapter_id]
+                total_bytes += sum(entry.byte_count for entry in entries)
+                if total_bytes > MAX_TOTAL_PCM_BYTES:
+                    raise RenderError(ErrorCode.INVALID_AUDIO)
+                rendered.extend(entries)
+                parts.append(part)
+                chapter_start = len(rendered)
+                completed_chapters += 1
+                emitter.emit_progress(
+                    "render", completed_chapters, len(chapter_ids), segment.chapter_id
+                )
+            continue
         item = cached.get(index)
         if item is None:
             item = next(records).audio
@@ -391,6 +416,14 @@ def _render(  # noqa: PLR0913
         if last_segment[segment.chapter_id] == index:
             # The chapter is complete, so its samples leave memory for good.
             parts.append(_spill_chapter(spill_directory, len(parts), tuple(pending)))
+            save_chapter(
+                plan,
+                segment.chapter_id,
+                parts[-1],
+                tuple(rendered[chapter_start:]),
+                engine_specification,
+            )
+            chapter_start = len(rendered)
             pending.clear()
             chapter_bytes = 0
             completed_chapters += 1

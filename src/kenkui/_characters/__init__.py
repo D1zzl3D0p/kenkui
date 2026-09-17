@@ -16,6 +16,7 @@ import json
 import logging
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import asdict, replace
 from itertools import islice
 from typing import TYPE_CHECKING
@@ -635,7 +636,7 @@ def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
     chapters = iter(inspection.chapters)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         pending = {
-            pool.submit(attribute, chapter): chapter
+            pool.submit(copy_context().run, attribute, chapter): chapter
             for chapter in islice(chapters, workers)
         }
         try:
@@ -660,7 +661,9 @@ def _attribute_chapters(  # noqa: PLR0913 - explicit execution inputs.
                 for chapter in islice(chapters, workers - len(pending)):
                     if cancel is not None:
                         cancel.raise_if_cancelled()
-                    pending[pool.submit(attribute, chapter)] = chapter
+                    pending[pool.submit(copy_context().run, attribute, chapter)] = (
+                        chapter
+                    )
         finally:
             # Exceptions from a provider or progress callback also stop any
             # work that has not started. Running provider calls cannot be
