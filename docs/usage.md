@@ -32,6 +32,12 @@ selection = (
 assert source.operations == ()
 ```
 
+Chapter titles prefer the EPUB 3 table of contents, then the EPUB 2 NCX,
+then visible headings and document titles. Filename-only document titles fall
+back to `Chapter N`. Calibre split files keep separate chapter IDs and text;
+continuations use the original TOC label plus a part number, such as
+`Chapter 1 (part 2)`.
+
 Use either `select_chapters(*ids)` or the inclusive
 `select_chapter_range(start_id, end_id)`, before `tts()`. Chapter IDs come from
 `inspect()` -- they look like `ch-v1-2cc5ecca00df5ea4a766ea67` -- and are stable

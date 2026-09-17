@@ -427,6 +427,7 @@ def _spine_chapters(
     members: dict[str, str],
     manifest: dict[str, tuple[str, str, str]],
     spine_element: Element,
+    navigation_titles: dict[tuple[str, str], str],
 ) -> tuple[ChapterInspection, ...]:
     spine_items = [item for item in spine_element if _local(item.tag) == "itemref"]
     if not spine_items:
@@ -466,7 +467,8 @@ def _spine_chapters(
             ChapterInspection(
                 chapter_id(member, occurrence, fragment),
                 index,
-                title or f"Chapter {index + 1}",
+                _navigation_title(navigation_titles, member, fragment)
+                or _fallback_title(member, title, headings, index),
                 len(text),
                 text,
                 headings,
@@ -477,6 +479,95 @@ def _spine_chapters(
     if not chapters:
         raise SourceError(ErrorCode.EMPTY_CHAPTER)
     return tuple(chapters)
+
+
+def _fallback_title(
+    member: str, title: str, headings: tuple[str, ...], index: int
+) -> str:
+    """Keep meaningful headings and titles, otherwise number the spine entry."""
+    stem = member.rsplit("/", maxsplit=1)[-1].rsplit(".", maxsplit=1)[0]
+    if not headings and title in {stem, re.sub(r"_split_\d+$", "", stem)}:
+        title = ""
+    return title or f"Chapter {index + 1}"
+
+
+def _navigation_title(
+    titles: dict[tuple[str, str], str], member: str, fragment: str
+) -> str:
+    """Use TOC labels, including explicitly named Calibre split continuations."""
+    title = titles.get((member, fragment), "")
+    if title or fragment:
+        return title
+    split = re.fullmatch(r"(.+_split_)(\d+)(\.[^./]+)", member)
+    if split and int(split[2]):
+        first = f"{split[1]}{'0' * len(split[2])}{split[3]}"
+        title = titles.get((first, ""), "")
+        if title:
+            return f"{title} (part {int(split[2]) + 1})"
+    return ""
+
+
+def _navigation_links(root: Element) -> list[tuple[str, str]]:
+    """Extract TOC links in order from EPUB 3 navigation or EPUB 2 NCX."""
+    links: list[tuple[str, str]] = []
+    for element in root.iter():
+        tag = _local(element.tag)
+        if (
+            tag == "nav"
+            and "toc"
+            in element.attrib.get("{http://www.idpf.org/2007/ops}type", "").split()
+        ):
+            for anchor in element.iter():
+                if _local(anchor.tag) == "a":
+                    emitter = _TextEmitter()
+                    _emit_element(anchor, emitter)
+                    links.append((anchor.attrib.get("href", ""), emitter.value()))
+        elif tag == "navpoint":
+            label = next(
+                (child for child in element if _local(child.tag) == "navlabel"),
+                None,
+            )
+            content = next(
+                (child for child in element if _local(child.tag) == "content"), None
+            )
+            if label is not None and content is not None:
+                links.append((content.attrib.get("src", ""), "".join(label.itertext())))
+    return links
+
+
+def _navigation_titles(
+    archive: TypedZipFile,
+    members: dict[str, str],
+    manifest: dict[str, tuple[str, str, str]],
+    spine: Element,
+) -> dict[tuple[str, str], str]:
+    """Prefer EPUB 3 TOC labels, then fill gaps from the spine's NCX."""
+    documents = [
+        member
+        for member, _fragment, properties in manifest.values()
+        if "nav" in properties.split()
+    ]
+    ncx = manifest.get(spine.attrib.get("toc", ""))
+    if ncx is not None:
+        documents.append(ncx[0])
+    titles: dict[tuple[str, str], str] = {}
+    for member in dict.fromkeys(documents):
+        root = _xhtml(_read(archive, members, member))
+        for href, label in _navigation_links(root):
+            title = " ".join(label.split())
+            if not href or not title:
+                continue
+            try:
+                target, fragment = resolve_member(member, href)
+            except SourceError:
+                # Navigation may include external links. Never fetch them.
+                continue
+            if target in members:
+                titles.setdefault((target, fragment), title)
+                # A whole spine document uses its first TOC entry. Exact
+                # fragment entries remain available for fragment-scoped spine items.
+                titles.setdefault((target, ""), title)
+    return titles
 
 
 def _parse(archive: TypedZipFile) -> BookInspection:
@@ -507,7 +598,8 @@ def _parse(archive: TypedZipFile) -> BookInspection:
         path, fragment = resolve_member(package_path, href)
         manifest[item_id] = (path, fragment, item.attrib.get("properties", ""))
 
-    chapters = _spine_chapters(archive, members, manifest, spine_element)
+    titles = _navigation_titles(archive, members, manifest, spine_element)
+    chapters = _spine_chapters(archive, members, manifest, spine_element, titles)
     return BookInspection(_metadata(package, manifest, set(members)), chapters)
 
 

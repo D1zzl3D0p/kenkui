@@ -19,6 +19,9 @@ All notable changes to Kenkui are recorded here. The format follows
   recognizes those qualifiers; sparse unopposed dialogue tags fill unknown
   genders, inverted tags and common adverbs are recognized, and ambiguous tag
   evidence is logged. The prompt version advances to avoid reusing old merges.
+- Chapter names now prefer EPUB table-of-contents labels over epigraph headings
+  and internal document titles. Calibre split continuations inherit the label
+  with a part number; filename-only titles use the numbered fallback.
 
 ## [10.0.0] - Unreleased
 

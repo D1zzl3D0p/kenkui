@@ -22,6 +22,8 @@ def main(epub: Path) -> None:
 
     # inspect() parses the EPUB (with archive and XML safety limits) and
     # returns frozen metadata plus one entry per chapter with visible text.
+    # Titles prefer the EPUB table of contents. Calibre split files retain
+    # separate entries, with continuation labels such as "Chapter 1 (part 2)".
     inspection = book.inspect()
     print(f"{inspection.metadata.title} by {inspection.metadata.author}")
     print(f"cover in source: {inspection.metadata.cover_available}")
