@@ -5,14 +5,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from helpers import make_epub, xhtml
+from kenkui._domain.text import normalize_text
 from kenkui._epub.parser import inspect_epub
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
     from kenkui.inspection import ChapterInspection
 
 EXPECTED_REPEATED_PHRASE_RANGES = 2
+# One emphasised run per paragraph, each separated by unemphasised filler.
+EMPHASIS_HEAVY_PARAGRAPHS = 400
+# Resolution reads the chapter a small number of times, never once per run.
+MAX_NORMALIZED_PASSES = 4
 
 
 def only_chapter(tmp_path: Path, body: str) -> ChapterInspection:
@@ -88,3 +95,32 @@ def test_whitespace_only_emphasis_is_discarded(tmp_path: Path) -> None:
     chapter = only_chapter(tmp_path, "<p>Plain <em>   </em> text.</p>")
     assert chapter.text == "Plain text."
     assert chapter.emphasis == ()
+
+
+def test_emphasis_resolution_reads_each_chapter_character_a_bounded_number_of_times(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolving many runs stays linear in chapter length, not quadratic.
+
+    A long book with an emphasised run in every paragraph used to re-normalize
+    the whole preceding chapter once per run, which made inspection of a
+    non-fiction title take tens of seconds.
+    """
+    normalized = 0
+
+    def counting_normalize_text(text: str) -> str:
+        nonlocal normalized
+        normalized += len(text)
+        return normalize_text(text)
+
+    monkeypatch.setattr("kenkui._epub.parser.normalize_text", counting_normalize_text)
+    body = "".join(
+        f"<p>Paragraph {index} opens with <em>an emphasised run {index}</em> "
+        f"and then continues with ordinary narration for a while.</p>"
+        for index in range(EMPHASIS_HEAVY_PARAGRAPHS)
+    )
+    chapter = only_chapter(tmp_path, body)
+    assert len(chapter.emphasis) == EMPHASIS_HEAVY_PARAGRAPHS
+    for index, (start, end) in enumerate(chapter.emphasis):
+        assert chapter.text[start:end] == f"an emphasised run {index}"
+    assert normalized <= MAX_NORMALIZED_PASSES * len(chapter.text)
