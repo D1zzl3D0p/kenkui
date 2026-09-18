@@ -302,25 +302,33 @@ def _resolve_ranges(
     Emphasis and heading boundaries are recorded against the emitter's raw, pre-
     normalization output, but ``normalize_text`` then collapses whitespace
     and strips leading and trailing runs -- so a raw offset does not address
-    the same character in canonical text. Every step of normalization only
-    removes or merges characters, so re-normalizing the raw text that
-    precedes a range gives a search anchor that never lands past the range's
-    true canonical start. Re-normalizing the run itself, then searching for
-    that snippet from the anchor onward, recovers the exact canonical
-    offsets without duplicating normalize_text's collapsing rules.
+    the same character in canonical text. Normalizing the text from the end of
+    the previous run through the end of this one gives a search string whose
+    own tail is exactly this run: normalization is local except at the ends of
+    the string it is given, so only where that stretch begins stays uncertain,
+    and searching for the whole stretch from the previous run's end recovers
+    it. Ranges arrive in emission order and each stretch begins where the last
+    one ended, so every raw character is normalized once per chapter.
     """
     resolved: list[tuple[int, int]] = []
     cursor = 0
+    raw_cursor = 0
     for start, end in ranges:
         snippet = normalize_text(raw[start:end])
         if not snippet:
             continue
-        anchor = max(cursor, len(normalize_text(raw[:start])))
+        stretch = snippet if start < raw_cursor else normalize_text(raw[raw_cursor:end])
+        if not stretch.endswith(snippet):
+            # Only a composition straddling the stretch's start can break the
+            # tail; the run alone still resolves, if less distinctively.
+            stretch = snippet
         try:
-            canonical_start = text.index(snippet, anchor)
+            found = text.index(stretch, cursor)
         except ValueError:
             continue
+        canonical_start = found + len(stretch) - len(snippet)
         cursor = canonical_start + len(snippet)
+        raw_cursor = end
         resolved.append((canonical_start, cursor))
     return tuple(resolved)
 
