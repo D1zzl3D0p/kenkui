@@ -75,11 +75,20 @@ results/events strictly in plan order.
 
 Worker audio never crosses a multiprocessing pipe. A worker writes one
 versioned, bounded header and raw PCM to a private result path using sibling-temp
-plus atomic rename, then waits for the parent to remove that file as an
-acknowledgement before advancing. The parent validates containment, type,
-no-follow/link/identity state, size, primitive-only metadata, task identity, and
-audio invariants before bounded reads and immediate removal, while the reusable
-worker may remain alive. Final results are withheld until workers have exited and
+plus atomic rename, then waits for the parent to take that file away as an
+acknowledgement before advancing. The parent renames it into the same workspace
+under a staged name, which both acknowledges the worker and takes ownership, then
+validates containment, type, no-follow/link/identity state, size, primitive-only
+metadata, task identity, and audio invariants -- everything the result declares
+about itself except its samples, while the reusable worker may remain alive.
+
+The samples stay in that file until plan order reaches them. Workers finish out
+of order and results leave in order, so something must hold the difference; a
+file holds it instead of the parent, which is what keeps peak memory a function
+of one segment rather than of how far ahead of the plan the fastest worker has
+run. On emission the parent reopens the staged file, requires its identity to be
+unchanged across the wait and across the read, reads the samples with a bounded
+read, and removes the file. Final results are withheld until workers have exited and
 cleaned their engines. Startup, timeout, malformed result, provider, callback,
 and cancellation paths use bounded terminate grace, kill escalation, and final
 join; no unbounded join is allowed.
