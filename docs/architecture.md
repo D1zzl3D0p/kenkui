@@ -68,7 +68,11 @@ a regular file whose size matches its chapter's metadata exactly.
 
 `workers="auto"` reserves two CPUs for the rest of the system and is bounded by
 chapter count and a hard cap of sixteen; the ceiling is memory, because each
-worker copies a private model snapshot and holds its own model instance. The
+worker copies a private model snapshot and holds its own model instance. Batches
+are static but divided by total text length rather than by task count -- longest
+segment first, each to the lightest batch -- because a run lasts as long as its
+heaviest batch, and equal counts of unequal segments leave workers idle waiting
+on one. Each batch stays in plan order. The
 scheduler bounds combined live and completed-but-not-emitted work, validates
 per-segment and whole-run PCM budgets, accepts completion out of order, and emits
 results/events strictly in plan order.

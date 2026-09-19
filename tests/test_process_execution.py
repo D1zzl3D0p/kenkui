@@ -362,3 +362,36 @@ def test_completed_work_waits_on_disk_until_the_plan_reaches_it(
     assert len(sized_at_read) == len(tasks)
     assert all(size >= pcm > 0 for size, pcm in sized_at_read)
     assert not left_behind, "a result that has been read leaves no file behind"
+
+
+def test_batches_are_balanced_by_length_rather_than_by_count() -> None:
+    """A run lasts as long as its heaviest batch, so counts are the wrong thing."""
+    lengths = (900, 800, 50, 40, 30, 20, 10, 10)
+    tasks = tuple(
+        SynthesisTask(f"s-{index}", "c-0", "x" * length, 16_000, 1, 1_000_000)
+        for index, length in enumerate(lengths)
+    )
+
+    batches = process_pool._balanced_batches(tasks, 2)  # noqa: SLF001
+
+    assert sorted(index for batch in batches for index, _task in batch) == list(
+        range(len(lengths))
+    )
+    assert all(batch for batch in batches)
+    assert all(
+        [index for index, _task in batch] == sorted(index for index, _task in batch)
+        for batch in batches
+    ), "a batch is still rendered in plan order"
+    weights = [sum(len(task.text) for _index, task in batch) for batch in batches]
+    # Dividing these eight segments by count gives 1,790 against 70; the run
+    # would be the longer of the two either way.
+    assert max(weights) - min(weights) <= max(lengths)
+
+
+def test_every_worker_receives_work_when_tasks_are_scarce() -> None:
+    """The pool spawns one process per batch, so an empty batch is wasted spawn."""
+    tasks = _tasks(4)
+
+    batches = process_pool._balanced_batches(tasks, 4)  # noqa: SLF001
+
+    assert [len(batch) for batch in batches] == [1, 1, 1, 1]

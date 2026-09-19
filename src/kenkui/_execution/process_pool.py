@@ -621,6 +621,34 @@ def _read_staged(staged: _StagedResult, workspace: Path) -> WorkerRecord:
     )
 
 
+def _balanced_batches(
+    tasks: tuple[SynthesisTask, ...], worker_count: int
+) -> list[tuple[tuple[int, SynthesisTask], ...]]:
+    """Divide the plan into static batches of similar total length.
+
+    Batches are static so the engine specification is serialized once per worker
+    and each task once, rather than a corpus per worker. But a worker renders its
+    whole batch before the pool finishes, so a run lasts as long as its heaviest
+    batch, and dividing by task count left that to luck: equal counts of unequal
+    segments means idle workers waiting on a long one.
+
+    Longest task first, each to the lightest batch so far. Text length is the
+    cost proxy because synthesis time tracks the audio a segment becomes. Every
+    batch keeps plan order, and none is empty: there are never more workers than
+    tasks, and the first tasks go to distinct empty batches.
+    """
+    loads = [0] * worker_count
+    assigned: list[list[tuple[int, SynthesisTask]]] = [[] for _ in range(worker_count)]
+    longest_first = sorted(
+        enumerate(tasks), key=lambda pair: (-len(pair[1].text), pair[0])
+    )
+    for index, task in longest_first:
+        lightest = min(range(worker_count), key=lambda worker: (loads[worker], worker))
+        assigned[lightest].append((index, task))
+        loads[lightest] += len(task.text)
+    return [tuple(sorted(batch, key=lambda pair: pair[0])) for batch in assigned]
+
+
 def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
     tasks: tuple[SynthesisTask, ...],
     specification: EngineSpecification,
@@ -670,17 +698,7 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
     ):
         raise RenderError(ErrorCode.SYNTHESIS_FAILED)
 
-    # Contiguous static partitions serialize the engine specification once per
-    # worker and each task once, instead of duplicating the corpus per worker.
-    batches: list[tuple[tuple[int, SynthesisTask], ...]] = []
-    start = 0
-    for worker_index in range(worker_count):
-        size = (len(tasks) - start + worker_count - worker_index - 1) // (
-            worker_count - worker_index
-        )
-        stop = start + size
-        batches.append(tuple(enumerate(tasks[start:stop], start)))
-        start = stop
+    batches = _balanced_batches(tasks, worker_count)
 
     context = multiprocessing.get_context("spawn")
     thread_limit = resolve_thread_limit(worker_count)
