@@ -585,9 +585,7 @@ def _stage_result(item: _ResultItem, workspace: Path) -> _StagedResult:
 
 def _read_staged(staged: _StagedResult, workspace: Path) -> WorkerRecord:
     """Read one staged result's samples at the moment the plan reaches them."""
-    descriptor, opened = _open_result(
-        staged.path, workspace, staged.max_output_bytes
-    )
+    descriptor, opened = _open_result(staged.path, workspace, staged.max_output_bytes)
     try:
         if _identity(opened) != staged.identity:
             raise _InvalidResultError
