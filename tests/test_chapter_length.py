@@ -94,10 +94,9 @@ def test_a_chapter_reaches_disk_as_it_renders_rather_than_at_its_end(
     """Streaming is why length is free: the part exists while it is being filled."""
     pipeline = _book(tmp_path, sentences=200)
     _bind(monkeypatch, DeterministicFakeEngine(), FakeArtifactAssembler())
-    spill = coordinator._ChapterSpill  # noqa: SLF001
     writes: list[tuple[str, bool]] = []
 
-    class Recording(spill):
+    class Recording(coordinator._ChapterSpill):  # noqa: SLF001
         def write(self, payload: bytes) -> None:
             super().write(payload)
             writes.append((self.chapter_id, self.path.exists()))
