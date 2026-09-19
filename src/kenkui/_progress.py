@@ -15,6 +15,7 @@ from .events import (
     StageStarted,
     Started,
 )
+from .events import Warning as WarningEvent
 from .observability import get_logger, log_event
 
 if TYPE_CHECKING:
@@ -60,6 +61,12 @@ class EventEmitter:
                 tuple(sorted(plan.cast.assignments.items())),
             )
         )
+
+    def emit_warning(
+        self, stage: str, code: str, message: str, chapter_id: str | None = None
+    ) -> None:
+        """Report a condition worth knowing about that stops nothing."""
+        self._emit(WarningEvent(self._next(), stage, code, message, chapter_id))
 
     def emit_stage_started(self, stage: str) -> None:
         log_event(

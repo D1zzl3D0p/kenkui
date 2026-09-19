@@ -50,9 +50,17 @@ constructs one engine, and reuses it serially for that batch. The parent never
 constructs an engine.
 
 Segments are worker/cache units, but public progress and output metadata remain
-semantic chapter units. As each chapter completes, its ordered segment PCM is
-spilled to a private part file in the run workspace and leaves memory, so a run
-holds at most one chapter of samples rather than a whole book. Only metadata --
+semantic chapter units. Each validated segment's PCM is appended to its chapter's
+private part file in the run workspace as it arrives, so a run holds one segment
+of samples rather than a chapter or a book, and a chapter costs the same memory
+however long it runs. A part is fsynced and offered to assembly and checkpointing
+only once its chapter is complete; an abandoned chapter's part leaves with its
+failed run. Nothing caps a chapter's length: the budgets in `kenkui.limits` bound
+one worker's result and one run's total, which is a bound on untrusted output
+rather than on content. A chapter whose character count estimates past
+`LONG_CHAPTER_HOURS` is reported as a `Warning` during planning and rendered
+regardless, because only the person who chose the chapters can say whether
+fourteen hours of endnotes is a mistake. Only metadata --
 identities, frame counts, durations -- travels on to assembly, which concatenates
 the parts in one linear pass and aggregates exact frames into one M4B marker per
 selected chapter. Parts are untrusted like any other worker output: each must be
@@ -62,8 +70,8 @@ a regular file whose size matches its chapter's metadata exactly.
 chapter count and a hard cap of sixteen; the ceiling is memory, because each
 worker copies a private model snapshot and holds its own model instance. The
 scheduler bounds combined live and completed-but-not-emitted work, validates
-per-segment, per-chapter, and whole-run PCM budgets, accepts completion out of
-order, and emits results/events strictly in plan order.
+per-segment and whole-run PCM budgets, accepts completion out of order, and emits
+results/events strictly in plan order.
 
 Worker audio never crosses a multiprocessing pipe. A worker writes one
 versioned, bounded header and raw PCM to a private result path using sibling-temp

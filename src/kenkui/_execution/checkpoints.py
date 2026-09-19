@@ -48,7 +48,7 @@ def restore_chapters(  # noqa: PLR0913 - explicit validation inputs.
     tasks: tuple[SynthesisTask, ...],
     directory: Path,
     *,
-    max_chapter_bytes: int,
+    max_bytes: int,
     engine: EngineSpecification,
     cancel: CancellationToken | None,
 ) -> dict[str, tuple[Path, tuple[SegmentAudio, ...]]]:
@@ -80,9 +80,7 @@ def restore_chapters(  # noqa: PLR0913 - explicit validation inputs.
                     == item.frame_count * 1000 // item.sample_rate_hz
                 )
             size = sum(item.byte_count for item in audio)
-            valid = (
-                valid and 0 < size <= max_chapter_bytes and path.stat().st_size == size
-            )
+            valid = valid and 0 < size <= max_bytes and path.stat().st_size == size
         except (KeyError, TypeError, ValueError, OSError, ZeroDivisionError):
             valid = False
         if valid:
