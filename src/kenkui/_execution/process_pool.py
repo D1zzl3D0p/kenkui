@@ -48,6 +48,7 @@ _MAX_WORKER_TIMEOUT_SECONDS = 3600.0
 _MAX_TASK_COUNT = 100_000
 _MAX_TASK_INPUT_BYTES = 256 * 1024 * 1024
 _FAILURE_PREFIX = "failure-"
+_STAGED_PREFIX = "staged-"
 _MAX_FAILURE_BYTES = 128
 
 _LOGGER = get_logger(__name__)
@@ -119,6 +120,38 @@ class _ResultItem:
     task: SynthesisTask
     index: int
     result_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class _ResultHeader:
+    """Everything a validated result declares about itself but its samples."""
+
+    segment_id: str
+    chapter_id: str
+    sample_rate_hz: int
+    channels: int
+    frame_count: int
+    duration_ms: int
+    pcm_bytes: int
+    worker_pid: int
+    start_method: str
+    engine_initializations: int
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedResult:
+    """A validated result whose samples wait on disk until the plan wants them.
+
+    Results arrive in whatever order workers finish, but leave in plan order.
+    Holding the wait on disk rather than in memory is what keeps a run's memory
+    independent of how far ahead of the plan the fastest worker has run.
+    """
+
+    path: Path
+    header: _ResultHeader
+    identity: tuple[int, int, int, int, int]
+    pcm_offset: int
+    max_output_bytes: int
 
 
 class _InvalidResultError(Exception):
@@ -419,70 +452,56 @@ def _exact_str(value: object) -> str:
     return value
 
 
-def _parse_result(item: _ResultItem, workspace: Path) -> WorkerRecord:
-    descriptor, before = _open_result(
-        item.result_path, workspace, item.task.max_output_bytes
+def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Identify one file precisely enough to notice it being swapped or rewritten."""
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
     )
+
+
+def _validated_header(  # noqa: C901, PLR0912 - one contract, checked field by field.
+    descriptor: int, item: _ResultItem, opened: os.stat_result
+) -> _ResultHeader:
+    """Validate a result's declared contract against the task that asked for it."""
+    prefix = _read_exact(descriptor, _WIRE_PREFIX.size)
+    magic, version, header_size = _WIRE_PREFIX.unpack(prefix)
+    if (
+        magic != _WIRE_MAGIC
+        or version != _WIRE_VERSION
+        or not 0 < header_size <= _MAX_HEADER_BYTES
+    ):
+        raise _InvalidResultError
+    header_bytes = _read_exact(descriptor, header_size)
     try:
-        prefix = _read_exact(descriptor, _WIRE_PREFIX.size)
-        magic, version, header_size = _WIRE_PREFIX.unpack(prefix)
-        if (
-            magic != _WIRE_MAGIC
-            or version != _WIRE_VERSION
-            or not 0 < header_size <= _MAX_HEADER_BYTES
-        ):
-            raise _InvalidResultError
-        header_bytes = _read_exact(descriptor, header_size)
-        try:
-            metadata = json.loads(header_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            raise _InvalidResultError from None
-        if type(metadata) is not dict:
-            raise _InvalidResultError
-        expected_keys = {
-            "channels",
-            "chapter_id",
-            "duration_ms",
-            "engine_initializations",
-            "frame_count",
-            "index",
-            "pcm_bytes",
-            "pcm_type",
-            "sample_rate_hz",
-            "segment_id",
-            "start_method",
-            "worker_pid",
-        }
-        if set(metadata) != expected_keys:
-            raise _InvalidResultError
-        pcm_size = _exact_int(metadata["pcm_bytes"])
-        if pcm_size < 0 or pcm_size > item.task.max_output_bytes:
-            raise _InvalidResultError(ErrorCode.INVALID_AUDIO)
-        if before.st_size != _WIRE_PREFIX.size + header_size + pcm_size:
-            raise _InvalidResultError
-        pcm = _read_exact(descriptor, pcm_size)
-        if os.read(descriptor, 1):
-            raise _InvalidResultError
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-        with suppress(OSError):
-            item.result_path.unlink()
-    identity_before = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    identity_after = (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    )
-    if identity_before != identity_after:
+        metadata = json.loads(header_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _InvalidResultError from None
+    if type(metadata) is not dict:
+        raise _InvalidResultError
+    expected_keys = {
+        "channels",
+        "chapter_id",
+        "duration_ms",
+        "engine_initializations",
+        "frame_count",
+        "index",
+        "pcm_bytes",
+        "pcm_type",
+        "sample_rate_hz",
+        "segment_id",
+        "start_method",
+        "worker_pid",
+    }
+    if set(metadata) != expected_keys:
+        raise _InvalidResultError
+    pcm_size = _exact_int(metadata["pcm_bytes"])
+    if pcm_size < 0 or pcm_size > item.task.max_output_bytes:
+        raise _InvalidResultError(ErrorCode.INVALID_AUDIO)
+    if opened.st_size != _WIRE_PREFIX.size + header_size + pcm_size:
         raise _InvalidResultError
 
     index = _exact_int(metadata["index"])
@@ -516,10 +535,116 @@ def _parse_result(item: _ResultItem, workspace: Path) -> WorkerRecord:
         or expected_duration != duration_ms
     ):
         raise _InvalidResultError(ErrorCode.INVALID_AUDIO)
-    audio = SynthesizedAudio(
-        segment_id, chapter_id, pcm, sample_rate_hz, channels, frame_count, duration_ms
+    return _ResultHeader(
+        segment_id,
+        chapter_id,
+        sample_rate_hz,
+        channels,
+        frame_count,
+        duration_ms,
+        pcm_size,
+        worker_pid,
+        start_method,
+        engine_initializations,
     )
-    return WorkerRecord(audio, worker_pid, start_method, engine_initializations)
+
+
+def _stage_result(item: _ResultItem, workspace: Path) -> _StagedResult:
+    """Take ownership of one finished result and validate all but its samples.
+
+    Renaming is the parent's acknowledgement: the worker sees its result path
+    gone and starts the next segment, while these samples wait in the file
+    rather than in this process.
+    """
+    staged_path = workspace / f"{_STAGED_PREFIX}{item.index}.wire"
+    try:
+        item.result_path.rename(staged_path)
+    except OSError:
+        raise _InvalidResultError from None
+    # Identity is captured after the rename, which is itself a change to the
+    # file's metadata, so later reads compare against a settled file.
+    descriptor, opened = _open_result(
+        staged_path, workspace, item.task.max_output_bytes
+    )
+    try:
+        header = _validated_header(descriptor, item, opened)
+    except BaseException:
+        with suppress(OSError):
+            staged_path.unlink()
+        raise
+    finally:
+        os.close(descriptor)
+    return _StagedResult(
+        staged_path,
+        header,
+        _identity(opened),
+        opened.st_size - header.pcm_bytes,
+        item.task.max_output_bytes,
+    )
+
+
+def _read_staged(staged: _StagedResult, workspace: Path) -> WorkerRecord:
+    """Read one staged result's samples at the moment the plan reaches them."""
+    descriptor, opened = _open_result(staged.path, workspace, staged.max_output_bytes)
+    try:
+        if _identity(opened) != staged.identity:
+            raise _InvalidResultError
+        try:
+            os.lseek(descriptor, staged.pcm_offset, os.SEEK_SET)
+        except OSError:
+            raise _InvalidResultError from None
+        pcm = _read_exact(descriptor, staged.header.pcm_bytes)
+        if os.read(descriptor, 1):
+            raise _InvalidResultError
+        # The file must not have moved under the read, exactly as when samples
+        # were read the instant they arrived.
+        if _identity(os.fstat(descriptor)) != staged.identity:
+            raise _InvalidResultError
+    finally:
+        os.close(descriptor)
+        with suppress(OSError):
+            staged.path.unlink()
+    header = staged.header
+    audio = SynthesizedAudio(
+        header.segment_id,
+        header.chapter_id,
+        pcm,
+        header.sample_rate_hz,
+        header.channels,
+        header.frame_count,
+        header.duration_ms,
+    )
+    return WorkerRecord(
+        audio, header.worker_pid, header.start_method, header.engine_initializations
+    )
+
+
+def _balanced_batches(
+    tasks: tuple[SynthesisTask, ...], worker_count: int
+) -> list[tuple[tuple[int, SynthesisTask], ...]]:
+    """Divide the plan into static batches of similar total length.
+
+    Batches are static so the engine specification is serialized once per worker
+    and each task once, rather than a corpus per worker. But a worker renders its
+    whole batch before the pool finishes, so a run lasts as long as its heaviest
+    batch, and dividing by task count left that to luck: equal counts of unequal
+    segments means idle workers waiting on a long one.
+
+    Longest task first, each to the lightest batch so far. Text length is the
+    cost proxy because synthesis time tracks the audio a segment becomes. Every
+    batch keeps plan order, and none is empty: there are never more workers than
+    tasks, and the first tasks go to distinct empty batches.
+    """
+    loads = [0] * worker_count
+    assigned: list[list[tuple[int, SynthesisTask]]] = [[] for _ in range(worker_count)]
+    longest_first = sorted(
+        enumerate(tasks), key=lambda pair: (-len(pair[1].text), pair[0])
+    )
+    for index, task in longest_first:
+        lightest = min(range(worker_count), key=lambda worker: (loads[worker], worker))
+        assigned[lightest].append((index, task))
+        loads[lightest] += len(task.text)
+    return [tuple(sorted(batch, key=lambda pair: pair[0])) for batch in assigned]
 
 
 def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
@@ -571,22 +696,14 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
     ):
         raise RenderError(ErrorCode.SYNTHESIS_FAILED)
 
-    # Contiguous static partitions serialize the engine specification once per
-    # worker and each task once, instead of duplicating the corpus per worker.
-    batches: list[tuple[tuple[int, SynthesisTask], ...]] = []
-    start = 0
-    for worker_index in range(worker_count):
-        size = (len(tasks) - start + worker_count - worker_index - 1) // (
-            worker_count - worker_index
-        )
-        stop = start + size
-        batches.append(tuple(enumerate(tasks[start:stop], start)))
-        start = stop
+    batches = _balanced_batches(tasks, worker_count)
 
     context = multiprocessing.get_context("spawn")
     thread_limit = resolve_thread_limit(worker_count)
     active: dict[int, _Active] = {}
-    ready: dict[int, WorkerRecord] = {}
+    # Results wait here by index, as paths rather than samples, until the plan
+    # order reaches them.
+    ready: dict[int, _StagedResult] = {}
     next_emit = 0
     total_bytes = 0
     with tempfile.TemporaryDirectory(prefix="kenkui-render-") as workspace_name:
@@ -630,17 +747,17 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
                             continue
                         item = _ResultItem(state.process, task, index, result_path)
                         try:
-                            record = _parse_result(item, workspace)
+                            staged = _stage_result(item, workspace)
                         except _InvalidResultError as invalid:
                             _fail(active, invalid.code)
                         state.pending.remove(index)
                         # A deadline is a per-worker no-progress deadline. Only a
                         # fully validated result earns an extension.
                         state.deadline = time.monotonic() + float(timeout)
-                        total_bytes += len(record.audio.pcm_s16le)
+                        total_bytes += staged.header.pcm_bytes
                         if total_bytes > max_total_bytes:
                             _fail(active, ErrorCode.INVALID_AUDIO)
-                        ready[index] = record
+                        ready[index] = staged
                         made_progress = True
                         break  # backpressure permits at most one file per worker
 
@@ -679,7 +796,10 @@ def render_spawned(  # noqa: C901, PLC0415, PLR0912, PLR0915
                             _poll_wait(_WAIT_SLICE_SECONDS)
 
                 while next_emit in ready:
-                    record = ready.pop(next_emit)
+                    try:
+                        record = _read_staged(ready.pop(next_emit), workspace)
+                    except _InvalidResultError as invalid:
+                        _fail(active, invalid.code)
                     next_emit += 1
                     yield record
                     _check_cancel(cancel)

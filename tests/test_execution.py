@@ -19,7 +19,7 @@ from kenkui._audio.m4b import (
 )
 from kenkui._domain.planning import MAX_TTS_SEGMENT_CHARACTERS
 from kenkui._execution.cache import CacheStore
-from kenkui._execution.coordinator import MAX_SEGMENT_PCM_BYTES, ExecutionBindings
+from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import (
     EngineSpecification,
     FakeEngineConfig,
@@ -27,6 +27,7 @@ from kenkui._execution.process_pool import (
 )
 from kenkui._tts.fake import DeterministicFakeEngine
 from kenkui._tts.protocols import SynthesisEngine, SynthesisTask, SynthesizedAudio
+from kenkui.limits import MAX_SEGMENT_PCM_BYTES
 from test_epub import make_epub, xhtml
 
 

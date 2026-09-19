@@ -72,6 +72,7 @@ class ErrorCode(StrEnum):
     FFPROBE_UNSUPPORTED = "ffprobe_unsupported"
     SYNTHESIS_FAILED = "synthesis_failed"
     INVALID_AUDIO = "invalid_audio"
+    BOOK_TOO_LONG = "book_too_long"
     ASSEMBLY_FAILED = "assembly_failed"
     ENCODING_FAILED = "encoding_failed"
     COVER_FAILED = "cover_failed"
@@ -176,6 +177,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.FFPROBE_UNSUPPORTED: "ffprobe lacks a required media capability.",
     ErrorCode.SYNTHESIS_FAILED: "Speech synthesis failed.",
     ErrorCode.INVALID_AUDIO: "Synthesized audio is invalid or inconsistent.",
+    ErrorCode.BOOK_TOO_LONG: "The book renders to more audio than one run may hold.",
     ErrorCode.ASSEMBLY_FAILED: "Audiobook assembly failed.",
     ErrorCode.ENCODING_FAILED: "FFmpeg could not encode the audiobook.",
     ErrorCode.COVER_INVALID: ("The cover image is unreadable or unsupported."),

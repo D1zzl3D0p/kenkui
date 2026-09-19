@@ -117,6 +117,18 @@ KENKUI_RUN_NATIVE=1 uv run pytest --no-cov -m native tests/test_native_ffmpeg.py
   `voice_unresolved`: correct the explicit voice registry material.
 - Pocket model/voice load and inference codes, `synthesis_failed`, and
   `invalid_audio`: provider/worker output failed a sanitized execution boundary.
+- `book_too_long`: one run's PCM exceeded `kenkui.limits.MAX_TOTAL_PCM_BYTES`,
+  about 370 hours of audio. The bound exists to stop a misbehaving worker, not a
+  long book; reaching it with real chapters means something upstream is wrong.
+
+No chapter is too long to render. A chapter's samples stream to its part file as
+they arrive, so its length costs disk and time rather than memory. A chapter that
+estimates past `kenkui.limits.LONG_CHAPTER_HOURS` is reported as a `Warning`
+event during planning -- before any worker starts, naming the chapter and its
+estimated hours -- and then rendered. Watch for `code == "long_chapter"` on the
+event stream to decide whether an endnotes section is worth the wait, or call
+`kenkui.limits.estimated_audio_hours()` on a `ChapterInspection.speech_characters`
+before selecting chapters at all.
 
 Model and voice assets are provisioned separately. Default tests skip real
 Pocket inference; the [Pocket adapter page](pocket-tts-adapter.md) describes the

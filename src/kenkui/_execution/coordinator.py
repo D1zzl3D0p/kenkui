@@ -46,6 +46,15 @@ from kenkui.errors import (
     RenderError,
     SourceError,
 )
+
+# The bounds and estimates are public, so a caller can describe a run before
+# starting it against the same numbers execution uses.
+from kenkui.limits import (
+    MAX_SEGMENT_PCM_BYTES,
+    MAX_TOTAL_PCM_BYTES,
+    estimated_audio_hours,
+    is_long_chapter,
+)
 from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
@@ -63,14 +72,6 @@ if TYPE_CHECKING:
 _READ_CHUNK_BYTES = 64 * 1024
 _SHA256_HEX_LENGTH = 64
 _PRIVATE_DIRECTORY_MODE = 0o700
-MAX_SEGMENT_PCM_BYTES = 64 * 1024 * 1024
-# Rendered PCM is spilled per chapter, so the memory a run needs is bounded by
-# its largest chapter rather than by the whole book. 512 MiB is about three
-# hours of 24 kHz mono audio, far past any real chapter.
-MAX_CHAPTER_PCM_BYTES = 512 * 1024 * 1024
-# The whole-run bound is now a disk bound rather than a memory one, so it is
-# sized to stop a runaway instead of to fit in RAM.
-MAX_TOTAL_PCM_BYTES = 64 * 1024 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024 * 1024
 _LOGGER = get_logger(__name__)
 
@@ -156,6 +157,10 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
             spans=spans,
             cover_content_hash=cover_content_hash,
         )
+        # An unusually long chapter is remarked on here, from the plan's own
+        # character counts, while the run is still cheap to abandon. It is a
+        # report, not a refusal: the chapter renders either way.
+        _warn_about_long_chapters(plan, emitter)
         emitter.emit_cast_resolved(plan)
         # Emitted before the worker pool exists, so cancelling from the
         # callback costs the attribution already paid for and no rendering.
@@ -305,7 +310,7 @@ def _cache_lookup(
     return cached, miss_indices, cache_keys
 
 
-def _render(  # noqa: PLR0913, PLR0915, C901 - ordered synthesis and durable chapter commit.
+def _render(  # noqa: PLR0912, PLR0913, PLR0915, C901 - ordered synthesis and durable chapter commit.
     plan: ExecutionPlan,
     engine_specification: EngineSpecification,
     worker_count: int,
@@ -318,18 +323,14 @@ def _render(  # noqa: PLR0913, PLR0915, C901 - ordered synthesis and durable cha
 ) -> tuple[tuple[SegmentAudio, ...], tuple[Path, ...]]:
     emitter.emit_stage_started("render")
     _check_cancel(cancel)
+    sample_rate_hz, channels = _audio_shape(engine_specification)
     tasks = tuple(
         SynthesisTask(
             segment.id,
             segment.chapter_id,
             segment.text,
-            (
-                engine_specification.pocket_config.sample_rate_hz
-                if engine_specification.kind == "pocket"
-                and engine_specification.pocket_config is not None
-                else FAKE_SAMPLE_RATE_HZ
-            ),
-            1 if engine_specification.kind == "pocket" else FAKE_CHANNELS,
+            sample_rate_hz,
+            channels,
             MAX_SEGMENT_PCM_BYTES,
             # VoicePlan.content_fingerprint is the asset digest the worker
             # routes its conditioning state by, so this bridge is a lookup
@@ -344,8 +345,7 @@ def _render(  # noqa: PLR0913, PLR0915, C901 - ordered synthesis and durable cha
     silence = plan.trailing_silence_ms or (0,) * len(plan.segments)
     rendered: list[SegmentAudio] = []
     parts: list[Path] = []
-    pending: list[bytes] = []
-    chapter_bytes = 0
+    spill: _ChapterSpill | None = None
     total_bytes = 0
     spill_directory = _fresh_spill_directory(workspace)
     chapter_ids = tuple(chapter.id for chapter in plan.output.chapters)
@@ -361,7 +361,7 @@ def _render(  # noqa: PLR0913, PLR0915, C901 - ordered synthesis and durable cha
         plan,
         tasks,
         spill_directory,
-        max_chapter_bytes=MAX_CHAPTER_PCM_BYTES,
+        max_bytes=MAX_TOTAL_PCM_BYTES,
         engine=engine_specification,
         cancel=cancel,
     )
@@ -378,61 +378,77 @@ def _render(  # noqa: PLR0913, PLR0915, C901 - ordered synthesis and durable cha
             cancel,
             max_total_bytes=MAX_TOTAL_PCM_BYTES,
         )
-    for index, (segment, task) in enumerate(zip(plan.segments, tasks, strict=True)):
-        _check_cancel(cancel)
-        if segment.chapter_id in restored:
+    try:
+        for index, (segment, task) in enumerate(zip(plan.segments, tasks, strict=True)):
+            _check_cancel(cancel)
+            if segment.chapter_id in restored:
+                if last_segment[segment.chapter_id] == index:
+                    part, entries = restored[segment.chapter_id]
+                    total_bytes += sum(entry.byte_count for entry in entries)
+                    if total_bytes > MAX_TOTAL_PCM_BYTES:
+                        raise RenderError(ErrorCode.BOOK_TOO_LONG)
+                    rendered.extend(entries)
+                    parts.append(part)
+                    chapter_start = len(rendered)
+                    completed_chapters += 1
+                    emitter.emit_progress(
+                        "render",
+                        completed_chapters,
+                        len(chapter_ids),
+                        segment.chapter_id,
+                    )
+                continue
+            item = cached.get(index)
+            if item is None:
+                item = next(records).audio
+            item_bytes = _validate_audio(task, item)
+            # Padding is applied only after the raw worker output has been
+            # validated, so every existing audio invariant still governs what the
+            # worker actually sent.
+            entry, padding = _padded(segment_audio(item), silence[index])
+            item_bytes += len(padding)
+            total_bytes += item_bytes
+            # A chapter has no length of its own to exceed: its samples stream
+            # to disk. Only the run's bound on untrusted worker output remains.
+            if total_bytes > MAX_TOTAL_PCM_BYTES:
+                raise RenderError(ErrorCode.BOOK_TOO_LONG)
+            rendered.append(entry)
+            if spill is None:
+                spill = _ChapterSpill(spill_directory, len(parts), segment.chapter_id)
+            elif spill.chapter_id != segment.chapter_id:
+                # A plan orders every chapter's segments together. Interleaving
+                # would write two chapters' samples into one part.
+                raise RenderError(ErrorCode.SYNTHESIS_FAILED)
+            # Samples reach the chapter's part as they arrive, so the run holds
+            # one segment rather than a whole chapter however long it runs.
+            spill.write(item.pcm_s16le)
+            if padding:
+                spill.write(padding)
+            if cache_store is not None and index in cache_keys and index not in cached:
+                cache_store.store(cache_keys[index], segment, task, item, cache_context)
             if last_segment[segment.chapter_id] == index:
-                part, entries = restored[segment.chapter_id]
-                total_bytes += sum(entry.byte_count for entry in entries)
-                if total_bytes > MAX_TOTAL_PCM_BYTES:
-                    raise RenderError(ErrorCode.INVALID_AUDIO)
-                rendered.extend(entries)
-                parts.append(part)
+                parts.append(spill.commit())
+                spill = None
+                save_chapter(
+                    plan,
+                    segment.chapter_id,
+                    parts[-1],
+                    tuple(rendered[chapter_start:]),
+                    engine_specification,
+                )
                 chapter_start = len(rendered)
                 completed_chapters += 1
                 emitter.emit_progress(
                     "render", completed_chapters, len(chapter_ids), segment.chapter_id
                 )
-            continue
-        item = cached.get(index)
-        if item is None:
-            item = next(records).audio
-        item_bytes = _validate_audio(task, item)
-        # Padding is applied only after the raw worker output has been
-        # validated, so every existing audio invariant still governs what the
-        # worker actually sent.
-        entry, padding = _padded(segment_audio(item), silence[index])
-        item_bytes += len(padding)
-        chapter_bytes += item_bytes
-        total_bytes += item_bytes
-        if chapter_bytes > MAX_CHAPTER_PCM_BYTES or total_bytes > MAX_TOTAL_PCM_BYTES:
-            raise RenderError(ErrorCode.INVALID_AUDIO)
-        rendered.append(entry)
-        pending.append(item.pcm_s16le)
-        if padding:
-            pending.append(padding)
-        if cache_store is not None and index in cache_keys and index not in cached:
-            cache_store.store(cache_keys[index], segment, task, item, cache_context)
-        if last_segment[segment.chapter_id] == index:
-            # The chapter is complete, so its samples leave memory for good.
-            parts.append(_spill_chapter(spill_directory, len(parts), tuple(pending)))
-            save_chapter(
-                plan,
-                segment.chapter_id,
-                parts[-1],
-                tuple(rendered[chapter_start:]),
-                engine_specification,
-            )
-            chapter_start = len(rendered)
-            pending.clear()
-            chapter_bytes = 0
-            completed_chapters += 1
-            emitter.emit_progress(
-                "render", completed_chapters, len(chapter_ids), segment.chapter_id
-            )
-        _check_cancel(cancel)
-    if pending or len(parts) != len(chapter_ids):
-        raise RenderError(ErrorCode.SYNTHESIS_FAILED)
+            _check_cancel(cancel)
+        if spill is not None or len(parts) != len(chapter_ids):
+            raise RenderError(ErrorCode.SYNTHESIS_FAILED)
+    finally:
+        # An abandoned chapter's part is never assembled or checkpointed, so it
+        # leaves with the run that failed rather than filling the workspace.
+        if spill is not None:
+            spill.discard()
     emitter.emit_stage_completed("render")
     _check_cancel(cancel)
     return tuple(rendered), tuple(parts)
@@ -469,25 +485,95 @@ def _padded(item: SegmentAudio, silence_ms: int) -> tuple[SegmentAudio, bytes]:
     return extended, bytes(frames * item.channels * 2)
 
 
-def _spill_chapter(directory: Path, index: int, payloads: tuple[bytes, ...]) -> Path:
-    """Write one chapter's ordered segment PCM to its own part, then fsync it."""
-    path = directory / f"chapter-{index:05d}.pcm"
-    descriptor = -1
-    try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-        descriptor = os.open(path, flags, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            # Ownership passed to the stream, which closes it on every path.
-            descriptor = -1
-            for payload in payloads:
-                stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except OSError:
-        if descriptor >= 0:
-            os.close(descriptor)
-        raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
-    return path
+class _ChapterSpill:
+    """One chapter's part, written as its segments arrive rather than at its end.
+
+    Streaming is what lets a chapter be any length: the samples a chapter has
+    already produced live in its part file, so only the segment in hand is in
+    memory. A part is offered to assembly and checkpointing only once committed.
+    """
+
+    __slots__ = ("_stream", "chapter_id", "path")
+
+    def __init__(self, directory: Path, index: int, chapter_id: str) -> None:
+        """Create this chapter's private part, failing if one already exists."""
+        self.chapter_id = chapter_id
+        self.path = directory / f"chapter-{index:05d}.pcm"
+        descriptor = -1
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+            descriptor = os.open(self.path, flags, 0o600)
+            # Ownership passes to the stream, which closes it on every path.
+            self._stream = os.fdopen(descriptor, "wb")
+        except OSError:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
+
+    def write(self, payload: bytes) -> None:
+        """Append one validated segment's samples, or its trailing silence."""
+        try:
+            self._stream.write(payload)
+        except OSError:
+            raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
+
+    def commit(self) -> Path:
+        """Fsync and close, so the chapter is durable before it is reported."""
+        try:
+            self._stream.flush()
+            os.fsync(self._stream.fileno())
+            self._stream.close()
+        except OSError:
+            raise RenderError(ErrorCode.SYNTHESIS_FAILED) from None
+        return self.path
+
+    def discard(self) -> None:
+        """Drop an unfinished chapter's bytes; its run is already failing."""
+        with suppress(OSError):
+            self._stream.close()
+        with suppress(OSError):
+            self.path.unlink(missing_ok=True)
+
+
+def _audio_shape(engine_specification: EngineSpecification) -> tuple[int, int]:
+    """Return the sample rate and channel count this engine renders at."""
+    if (
+        engine_specification.kind == "pocket"
+        and engine_specification.pocket_config is not None
+    ):
+        return engine_specification.pocket_config.sample_rate_hz, 1
+    return FAKE_SAMPLE_RATE_HZ, FAKE_CHANNELS
+
+
+def _warn_about_long_chapters(plan: ExecutionPlan, emitter: EventEmitter) -> None:
+    """Report each unusually long chapter without standing in its way.
+
+    A caller that watches events can stop while stopping is still free; one that
+    does not gets the same observation in the log and its audiobook regardless.
+    """
+    for chapter in plan.output.chapters:
+        if not is_long_chapter(chapter.speech_characters):
+            continue
+        hours = estimated_audio_hours(chapter.speech_characters)
+        log_event(
+            _LOGGER,
+            "long_chapter",
+            level=logging.WARNING,
+            context={
+                "boundary": "planning",
+                "chapter_id": chapter.id,
+                "speech_characters": chapter.speech_characters,
+                "estimated_hours": f"{hours:.1f}",
+            },
+        )
+        emitter.emit_warning(
+            "planning",
+            "long_chapter",
+            f"The chapter {chapter.title!r} is about {hours:.0f} hours of "
+            f"audio ({chapter.speech_characters:,} speech characters). It will "
+            "render; deselect or split it if that is not what you meant.",
+            chapter.id,
+        )
 
 
 def _preflight_assembler(assembler: ArtifactAssembler, *, expect_cover: bool) -> None:

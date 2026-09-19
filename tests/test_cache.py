@@ -32,7 +32,7 @@ from kenkui._execution.cache import (
     CACHE_SCHEMA_VERSION,
     CacheStore,
 )
-from kenkui._execution.coordinator import MAX_SEGMENT_PCM_BYTES, ExecutionBindings
+from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import (
     EngineSpecification,
     FakeEngineConfig,
@@ -40,6 +40,7 @@ from kenkui._execution.process_pool import (
 )
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ, DeterministicFakeEngine
 from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
+from kenkui.limits import MAX_SEGMENT_PCM_BYTES
 from test_execution import _pipeline, _voice
 
 
