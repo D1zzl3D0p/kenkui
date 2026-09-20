@@ -41,6 +41,11 @@ class ChapterInspection:
     # order. Structure comes from the element, not its words: a paragraph
     # repeating a heading's text is still a paragraph.
     heading_ranges: tuple[tuple[int, int], ...] = ()
+    # Canonical (start, end) offsets of blocks that open a scene after a
+    # detected break marker, in document order. The marker is often zero-width
+    # -- an <hr/> leaves no text at all -- so the block it introduces is what
+    # carries the annotation.
+    scene_ranges: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
