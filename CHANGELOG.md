@@ -6,24 +6,7 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
-### Fixed
-
-- Quote attribution now returns gender directly in a separate per-speaker table.
-  Valid, consistent evidence survives storage and offline roster refreshes;
-  conflicting evidence is flagged and reviewed genders retain precedence.
-  A controlled four-book passage evaluation found no attribution regression
-  when this field was added to the role-aware prompt; see the evaluation report
-  for sample limits and provider-routing anomalies.
-- Character attribution now requests distinct, gender-qualified identities for
-  unnamed people sharing a role, using pronouns and actions in context. Casting
-  recognizes those qualifiers; sparse unopposed dialogue tags fill unknown
-  genders, inverted tags and common adverbs are recognized, and ambiguous tag
-  evidence is logged. The prompt version advances to avoid reusing old merges.
-- Chapter names now prefer EPUB table-of-contents labels over epigraph headings
-  and internal document titles. Calibre split continuations inherit the label
-  with a part number; filename-only titles use the numbered fallback.
-
-## [10.0.0] - Unreleased
+## [10.0.0] - 2026-09-20
 
 Kenkui 10 is a ground-up rewrite. It shares no code with the 2.x series, and
 none of the 2.x API carries over. The version is `10` in binary: the second
@@ -55,6 +38,23 @@ generation.
 - Progress events, cooperative cancellation, and stable `ErrorCode` values on
   every failure.
 - Runnable examples in `examples/`.
+
+### Fixed
+
+- Quote attribution now returns gender directly in a separate per-speaker table.
+  Valid, consistent evidence survives storage and offline roster refreshes;
+  conflicting evidence is flagged and reviewed genders retain precedence.
+  A controlled four-book passage evaluation found no attribution regression
+  when this field was added to the role-aware prompt; see the evaluation report
+  for sample limits and provider-routing anomalies.
+- Character attribution now requests distinct, gender-qualified identities for
+  unnamed people sharing a role, using pronouns and actions in context. Casting
+  recognizes those qualifiers; sparse unopposed dialogue tags fill unknown
+  genders, inverted tags and common adverbs are recognized, and ambiguous tag
+  evidence is logged. The prompt version advances to avoid reusing old merges.
+- Chapter names now prefer EPUB table-of-contents labels over epigraph headings
+  and internal document titles. Calibre split continuations inherit the label
+  with a part number; filename-only titles use the numbered fallback.
 
 [Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...HEAD
 [10.0.0]: https://github.com/D1zzl3D0p/kenkui/releases/tag/v10.0.0
