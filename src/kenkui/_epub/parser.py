@@ -70,10 +70,38 @@ _BLOCK_ELEMENTS = frozenset(
 )
 _IGNORED_ELEMENTS = frozenset({"script", "style", "noscript", "template"})
 _EMPHASIS_ELEMENTS = frozenset({"em", "i", "cite", "dfn", "var"})
+# Publisher-authored scene-break labels. A closed vocabulary, not a substring
+# match: "break" alone would catch page-break and line-break layout classes.
+_SCENE_CLASSES = frozenset(
+    {
+        "transition",
+        "scenebreak",
+        "scene-break",
+        "sbreak",
+        "separator",
+        "ornament",
+        "fleuron",
+        "dinkus",
+        "asterism",
+        "section-break",
+        "tb",
+    }
+)
+# Glyphs a typographic scene ornament is built from. A closed set rather than a
+# punctuation category: a one-word paragraph or a lone em-dash of dialogue must
+# never read as an ornament.
+_ORNAMENT_GLYPHS = frozenset("*#~•◆❖⁂—–·‡§❦✦✧∗_")  # noqa: RUF001
+_MAX_ORNAMENT_CHARACTERS = 24
 _HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
-# title, canonical text, heading strings, emphasis ranges, heading ranges.
+# title, canonical text, heading strings, emphasis ranges, heading ranges,
+# scene ranges.
 _ChapterMaterial: TypeAlias = tuple[
-    str, str, tuple[str, ...], tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]
+    str,
+    str,
+    tuple[str, ...],
+    tuple[tuple[int, int], ...],
+    tuple[tuple[int, int], ...],
+    tuple[tuple[int, int], ...],
 ]
 
 # Parsing and speech-materialization work limits supplement the ZIP byte limits.
@@ -92,6 +120,8 @@ class _TextEmitter:
         self.parts: list[str] = []
         self.emphasis_ranges: list[tuple[int, int]] = []
         self.heading_ranges: list[tuple[int, int]] = []
+        self.scene_ranges: list[tuple[int, int]] = []
+        self._scene_pending = False
         self._length = 0
         self._emphasis_depth = 0
         self._emphasis_start = 0
@@ -135,6 +165,26 @@ class _TextEmitter:
         """Record a heading element that emitted text from ``start`` onward."""
         if self._length > start:
             self.heading_ranges.append((start, self._length))
+
+    def scene_break(self) -> None:
+        """Note that the next block emitting text opens a new scene."""
+        self._scene_pending = True
+
+    def scene_body(self, start: int) -> None:
+        """Record the block that opens a scene, if a break is pending.
+
+        The marker itself is usually zero-width, and ``_resolve_ranges`` drops
+        an empty range, so the block the marker introduces carries the
+        annotation instead. A pending break that never meets text is dropped,
+        which is what keeps a chapter from ending on a scene pause.
+        """
+        if self._scene_pending and self._length > start:
+            self.scene_ranges.append((start, self._length))
+            self._scene_pending = False
+
+    def emitted_since(self, start: int) -> str:
+        """Return the raw text a block contributed, for marker classification."""
+        return "".join(self.parts)[start:]
 
     def value(self) -> str:
         return "".join(self.parts)
@@ -229,9 +279,63 @@ def _hidden(element: Element) -> bool:
     return "display:none" in style or "visibility:hidden" in style
 
 
+def _has_scene_class(element: Element) -> bool:
+    """Whether the publisher labelled this element as a scene break."""
+    for key, value in element.attrib.items():
+        if _local(key) not in {"class", "type"}:
+            continue
+        # An epub:type may be prefixed ("se:scene-break"); take the last part.
+        tokens = {token.rsplit(":", maxsplit=1)[-1].lower() for token in value.split()}
+        if tokens & _SCENE_CLASSES:
+            return True
+    return False
+
+
+def _is_ornament(text: str) -> bool:
+    """Whether a block's text is only separator glyphs, and short enough."""
+    stripped = text.strip()
+    return (
+        bool(stripped)
+        and len(stripped) <= _MAX_ORNAMENT_CHARACTERS
+        and all(char in _ORNAMENT_GLYPHS or char.isspace() for char in stripped)
+    )
+
+
+def _is_scene_marker(element: Element, tag: str, emitted: str) -> bool:
+    """Whether a block separates two scenes rather than carrying one.
+
+    A labelled block only counts when it holds no prose. Some publishers put a
+    scene class on the opening paragraph itself, and treating that as the
+    separator would push the break onto the paragraph after it.
+    """
+    if tag == "hr":
+        return True
+    return _has_scene_class(element) and (not emitted.strip() or _is_ornament(emitted))
+
+
+def _emit_skipped(element: Element, tag: str, emitter: _TextEmitter) -> None:
+    """Honour a labelled scene break in content that emits no text.
+
+    A publisher-labelled break is intent, not presentation, so an ornament
+    hidden from assistive technology still separates two scenes. Ignored
+    elements stay wholly inert, whatever class they carry.
+    """
+    if tag not in _IGNORED_ELEMENTS and _has_scene_class(element):
+        emitter.scene_break()
+
+
+def _close_block(element: Element, tag: str, emitter: _TextEmitter, start: int) -> None:
+    """Classify a finished block as a scene marker or as a scene body."""
+    if _is_scene_marker(element, tag, emitter.emitted_since(start)):
+        emitter.scene_break()
+    else:
+        emitter.scene_body(start)
+
+
 def _emit_element(element: Element, emitter: _TextEmitter) -> None:
     tag = _local(element.tag)
     if tag in _IGNORED_ELEMENTS or _hidden(element):
+        _emit_skipped(element, tag, emitter)
         return
     if tag == "br":
         emitter.boundary(1)
@@ -252,6 +356,7 @@ def _emit_element(element: Element, emitter: _TextEmitter) -> None:
     if emphasis:
         emitter.close_emphasis()
     if block:
+        _close_block(element, tag, emitter, start)
         emitter.boundary(2)
 
 
@@ -345,7 +450,7 @@ def _chapter_text(
     raw = emitter.value()
     text = normalize_text(raw)
     if not text:
-        return "", "", (), (), ()
+        return "", "", (), (), (), ()
     headings = _visible_headings(scope)
     title = headings[0] if headings else ""
     if not title:
@@ -359,7 +464,8 @@ def _chapter_text(
         )
     emphasis = _resolve_ranges(raw, text, emitter.emphasis_ranges)
     heading_ranges = _resolve_ranges(raw, text, emitter.heading_ranges)
-    return title, text, tuple(headings), emphasis, heading_ranges
+    scene_ranges = _resolve_ranges(raw, text, emitter.scene_ranges)
+    return title, text, tuple(headings), emphasis, heading_ranges, scene_ranges
 
 
 def _member_map(archive: TypedZipFile) -> dict[str, str]:
@@ -463,7 +569,7 @@ def _spine_chapters(
             document = _document(archive, members, member, document_cache)
             material = _chapter_text(*document, fragment)
             material_cache[identity] = material
-        title, text, headings, emphasis, heading_ranges = material
+        title, text, headings, emphasis, heading_ranges, scene_ranges = material
         if not text:
             # Image-only pages (covers, title pages, plates) carry no speech.
             continue
@@ -482,6 +588,7 @@ def _spine_chapters(
                 headings,
                 emphasis,
                 heading_ranges,
+                scene_ranges,
             )
         )
     if not chapters:

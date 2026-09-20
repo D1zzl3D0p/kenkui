@@ -421,7 +421,7 @@ class Pipeline:
             raise ValidationError(ErrorCode.INVALID_PAUSE)
         return self._add_rule(Silences, duration_ms, where)
 
-    def pauses(
+    def pauses(  # noqa: PLR0913 - one keyword per structural pause tier.
         self,
         *,
         chapter_ms: int = 0,
@@ -429,12 +429,17 @@ class Pipeline:
         heading_after_ms: int = 0,
         paragraph_ms: int = 0,
         line_ms: int = 0,
+        scene_ms: int = 0,
     ) -> Pipeline:
         """Return a branch requesting silence at structural boundaries.
 
         Off unless called. Durations are retunable without re-synthesis: only
         turning a tier on or off changes segment identity, because only that
         changes where a segment ends.
+
+        ``scene_ms`` covers a mid-chapter scene break -- the ``* * *`` or
+        ``<hr/>`` between two scenes. It derives no default from ``chapter_ms``:
+        every tier here stays independent of every other.
         """
         requested = (
             chapter_ms,
@@ -442,6 +447,7 @@ class Pipeline:
             heading_after_ms,
             paragraph_ms,
             line_ms,
+            scene_ms,
         )
         for duration in requested:
             if (

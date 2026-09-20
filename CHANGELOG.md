@@ -6,6 +6,19 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-09-20
+
+### Added
+
+- `pauses(scene_ms=...)` gives mid-chapter scene breaks their own duration.
+  A scene break is detected at parse time from an `<hr/>` or a block the
+  publisher labelled as one (`class`/`epub:type`, including an ornament hidden
+  from assistive technology); normalization erases the distinction later, so it
+  cannot be recovered afterwards. The tier is off unless set, so no existing
+  render changes. `ChapterInspection.scene_ranges` reports the detected blocks
+  and `ScriptRow.is_scene_start` marks the row that opens a scene, while the
+  silence it implies falls on the row before it.
+
 ## [10.0.0] - 2026-09-20
 
 Kenkui 10 is a ground-up rewrite. It shares no code with the 2.x series, and
@@ -56,5 +69,6 @@ generation.
   and internal document titles. Calibre split continuations inherit the label
   with a part number; filename-only titles use the numbered fallback.
 
-[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...HEAD
+[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.0...HEAD
+[10.1.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...v10.1.0
 [10.0.0]: https://github.com/D1zzl3D0p/kenkui/releases/tag/v10.0.0

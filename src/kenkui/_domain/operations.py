@@ -105,6 +105,8 @@ class Pauses:
     heading_after_ms: int = 0
     paragraph_ms: int = 0
     line_ms: int = 0
+    # Appended last: pipeline.pauses() constructs this positionally.
+    scene_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

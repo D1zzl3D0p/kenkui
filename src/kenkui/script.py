@@ -57,6 +57,10 @@ class ScriptRow:
 
     Whitespace-only units retain their text and path but carry zero silence;
     their gaps settle onto the preceding speech-bearing row, as in planning.
+
+    ``is_scene_start`` marks the row that *opens* a scene, while the silence
+    that break implies lands on the row before it, because a gap always closes
+    the leaf preceding it. The two sit on different rows by design.
     """
 
     path: Path
@@ -67,6 +71,7 @@ class ScriptRow:
     silence_after_ms: int
     is_dialogue: bool
     is_emphasised: bool
+    is_scene_start: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +194,7 @@ class Script:
                     silences.get(index, 0),
                     unit.is_dialogue,
                     unit.is_emphasised,
+                    unit.is_scene_start,
                 )
             )
         return tuple(rows)

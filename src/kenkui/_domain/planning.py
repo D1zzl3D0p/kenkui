@@ -99,6 +99,8 @@ def _gap_ms(reasons: GapReason, pauses: Pauses) -> int:
             durations.append(pauses.heading_before_ms)
         if GapReason.HEADING_AFTER in reasons:
             durations.append(pauses.heading_after_ms)
+        if GapReason.SCENE in reasons:
+            durations.append(pauses.scene_ms)
     elif GapReason.LINE in reasons:
         durations.append(pauses.line_ms)
     return max(durations, default=0)
@@ -111,6 +113,7 @@ def _gap_enabled(reasons: GapReason, pauses: Pauses) -> bool:
             pauses.paragraph_ms
             or (GapReason.HEADING_BEFORE in reasons and pauses.heading_before_ms)
             or (GapReason.HEADING_AFTER in reasons and pauses.heading_after_ms)
+            or (GapReason.SCENE in reasons and pauses.scene_ms)
         )
     return GapReason.LINE in reasons and bool(pauses.line_ms)
 

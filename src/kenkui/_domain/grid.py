@@ -96,6 +96,10 @@ class Unit:
     # Parser-provided heading identity is structural input, like emphasis. It
     # lets the derived gaps carry heading reasons without rescanning text.
     is_heading: bool = False
+    # Parser-provided scene identity, on the leaf that opens the scene. The
+    # marker itself is often zero-width, so the opening block is what can be
+    # addressed; the gap it implies closes the leaf before this one.
+    is_scene_start: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +130,9 @@ class GapReason(IntFlag):
     HEADING_BEFORE = auto()
     HEADING_AFTER = auto()
     CHAPTER = auto()
+    # Appended rather than placed in structural order: IntFlag renumbers every
+    # member after an insertion point, and nothing may silently change bits.
+    SCENE = auto()
 
 
 @dataclass(frozen=True, slots=True, init=False, eq=False)
@@ -311,6 +318,8 @@ def _gap_reasons(units: tuple[Unit, ...]) -> tuple[GapReason, ...]:
                     reasons |= GapReason.HEADING_AFTER
                 if following.is_heading:
                     reasons |= GapReason.HEADING_BEFORE
+                if following.is_scene_start:
+                    reasons |= GapReason.SCENE
         gaps.append(reasons)
     return tuple(gaps)
 
@@ -426,6 +435,10 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
             start < block.body_end and block.start < end
             for start, end in chapter.heading_ranges
         )
+        is_scene_start = any(
+            start < block.body_end and block.start < end
+            for start, end in chapter.scene_ranges
+        )
         for l_index, line_range in enumerate(line_ranges(text, block), start=1):
             line = text[line_range.start : line_range.end]
             for s_index, sentence in enumerate(split_sentences(line), start=1):
@@ -449,6 +462,7 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
                                 ),
                                 dialogue_run=dialogue_run,
                                 is_heading=is_heading,
+                                is_scene_start=is_scene_start,
                             )
                         )
                         offset += len(piece)

@@ -265,6 +265,7 @@ def _format_pauses(operation: Pauses) -> str:
         ("heading_after_ms", operation.heading_after_ms),
         ("paragraph_ms", operation.paragraph_ms),
         ("line_ms", operation.line_ms),
+        ("scene_ms", operation.scene_ms),
     )
     parts = [f"{name}={value}ms" for name, value in fields if value]
     return f"pauses({', '.join(parts)})" if parts else "pauses(off)"
