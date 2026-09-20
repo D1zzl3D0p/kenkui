@@ -22,6 +22,7 @@ from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from kenkui._domain.ornaments import is_ornament
 from kenkui._domain.paths import Path
 from kenkui._domain.quotes import extract_spans
 from kenkui._domain.structure import block_ranges, line_ranges
@@ -100,6 +101,10 @@ class Unit:
     # marker itself is often zero-width, so the opening block is what can be
     # addressed; the gap it implies closes the leaf before this one.
     is_scene_start: bool = False
+    # A separator glyph run standing in for a scene boundary. It is decoration
+    # that survived normalization as text, so it is addressable and billable
+    # like any other leaf, but planning must not hand it to an engine.
+    is_ornament: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,6 +433,7 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
     dialogue = tuple((span.start, span.end) for span in spans if span.is_dialogue)
     units: list[Unit] = []
     offset = 0
+    previous_was_ornament = False
     for p_index, block in enumerate(block_ranges(text), start=1):
         # Position, not wording: a paragraph repeating a heading's text is
         # still a paragraph.
@@ -435,10 +441,15 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
             start < block.body_end and block.start < end
             for start, end in chapter.heading_ranges
         )
-        is_scene_start = any(
+        ornament = is_ornament(text[block.start : block.body_end])
+        # A visible ornament needs no parser record: the glyph run is still in
+        # the canonical text, so the block after one opens a scene by the same
+        # reasoning a recorded marker does.
+        is_scene_start = previous_was_ornament or any(
             start < block.body_end and block.start < end
             for start, end in chapter.scene_ranges
         )
+        previous_was_ornament = ornament
         for l_index, line_range in enumerate(line_ranges(text, block), start=1):
             line = text[line_range.start : line_range.end]
             for s_index, sentence in enumerate(split_sentences(line), start=1):
@@ -463,6 +474,7 @@ def build_grid(chapter: ChapterInspection) -> tuple[Unit, ...]:
                                 dialogue_run=dialogue_run,
                                 is_heading=is_heading,
                                 is_scene_start=is_scene_start,
+                                is_ornament=ornament,
                             )
                         )
                         offset += len(piece)

@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING
 
 import kenkui as kk
 from helpers import make_epub, xhtml
-from kenkui._domain.grid import GapReason, build_grid, build_structure_index
+from kenkui._domain.grid import (
+    GapReason,
+    build_grid,
+    build_structure_index,
+    unit_text,
+)
 from kenkui._domain.planning import ExecutionPlan, compile_execution_plan
 
 if TYPE_CHECKING:
@@ -111,11 +116,16 @@ def test_labelled_prose_paragraph_is_not_a_marker(tmp_path: Path) -> None:
     assert chapter.scene_ranges == ()
 
 
-def test_unlabelled_ornament_is_not_yet_a_marker(tmp_path: Path) -> None:
-    """Bare ornament detection ships with suppression, so its pause lands right."""
+def test_unlabelled_ornament_is_derived_by_the_grid(tmp_path: Path) -> None:
+    """A visible ornament needs no parser record: the glyphs are still there."""
     chapter = _chapter(tmp_path, f"{_FIRST}<p>* * *</p>{_SECOND}")
+    units = build_grid(chapter)
 
+    # Nothing recorded at parse time -- the canonical text carries it instead.
     assert chapter.scene_ranges == ()
+    assert any(unit.is_ornament for unit in units)
+    opener = next(unit for unit in units if unit.is_scene_start)
+    assert unit_text(opener, chapter.text).startswith("Morning")
 
 
 def test_scene_reason_closes_the_leaf_before_the_opener(tmp_path: Path) -> None:
@@ -246,3 +256,60 @@ def test_scene_tier_moves_a_cut_when_paragraphs_are_silent(tmp_path: Path) -> No
     assert len(off.segments) == 1
     assert len(on.segments) == 2  # noqa: PLR2004 - the break became a boundary
     assert [s.id for s in off.segments] != [s.id for s in on.segments]
+
+
+_ORNAMENT = "<p>* * *</p>"
+
+
+def _spoken(book: kk.Pipeline) -> list[str]:
+    return [segment.text for segment in _plan(book).segments]
+
+
+def test_an_ornament_never_reaches_the_engine(tmp_path: Path) -> None:
+    """It is decoration standing in for a boundary, not something to read."""
+    book = _book(tmp_path, f"{_FIRST}{_ORNAMENT}{_SECOND}")
+
+    assert not any("*" in text for text in _spoken(book))
+
+
+def test_suppression_does_not_need_a_spoken_form(tmp_path: Path) -> None:
+    """A pipeline that never called pronounce() is the one reading it aloud."""
+    book = _book(tmp_path, f"{_FIRST}{_ORNAMENT}{_SECOND}")
+    plan = _plan(book)
+
+    assert not any("*" in segment.text for segment in plan.segments)
+    assert plan.schema_versions.spoken_form is None
+
+
+def test_suppression_leaves_canonical_text_alone(tmp_path: Path) -> None:
+    """Canonical text is the authority for billing and offsets, not for speech."""
+    chapter = _chapter(tmp_path, f"{_FIRST}{_ORNAMENT}{_SECOND}")
+
+    assert "* * *" in chapter.text
+    assert chapter.speech_characters == len(chapter.text)
+
+
+def test_the_pause_lands_before_a_suppressed_ornament(tmp_path: Path) -> None:
+    """With the ornament gone the gap settles onto the outgoing scene."""
+    book = _book(tmp_path, f"{_FIRST}{_ORNAMENT}{_SECOND}").pauses(scene_ms=SCENE_MS)
+    plan = _plan(book)
+
+    assert plan.trailing_silence_ms == (SCENE_MS, 0)
+    assert plan.segments[0].text.startswith("She shut the door")
+
+
+def test_a_chapter_of_nothing_but_ornament_is_left_alone(tmp_path: Path) -> None:
+    """A separator page is not a scene break, and must still produce speech."""
+    book = _book(tmp_path, _ORNAMENT)
+
+    assert _spoken(book) == ["* * *"]
+
+
+def test_prose_starting_with_a_separator_glyph_is_not_an_ornament(
+    tmp_path: Path,
+) -> None:
+    """Every character must match, so a dash of dialogue stays speech."""
+    book = _book(tmp_path, f"{_FIRST}<p>\u2014 he said, quietly, and then went on.</p>")
+    spoken = _spoken(book)
+
+    assert any("he said" in text for text in spoken)

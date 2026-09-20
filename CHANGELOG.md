@@ -6,6 +6,25 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+## [10.1.1] - 2026-09-20
+
+### Fixed
+
+- A scene ornament is no longer read aloud. A book that divides its scenes
+  with `* * *`, `#`, or a similar glyph run on a line of its own was handing
+  that run to the engine, which said it however it saw fit. Such a line is now
+  recognized from the canonical text and speaks as nothing, and the block after
+  one opens a scene, so `pauses(scene_ms=...)` covers these books too without
+  the publisher having labelled anything. Suppression does not depend on
+  `pronounce()`: a pipeline that never asked for a spoken form is exactly the
+  one affected.
+
+  Canonical text is untouched, so billing, chapter identity, offsets and
+  sidecar anchors are unchanged. The segments that held an ornament do change
+  text, so those -- and only those -- re-synthesize once. A chapter containing
+  nothing but an ornament is a separator page rather than a scene break and is
+  left exactly as it was.
+
 ## [10.1.0] - 2026-09-20
 
 ### Added
@@ -69,6 +88,7 @@ generation.
   and internal document titles. Calibre split continuations inherit the label
   with a part number; filename-only titles use the numbered fallback.
 
-[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.0...HEAD
+[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.1...HEAD
+[10.1.1]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.0...v10.1.1
 [10.1.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...v10.1.0
 [10.0.0]: https://github.com/D1zzl3D0p/kenkui/releases/tag/v10.0.0
