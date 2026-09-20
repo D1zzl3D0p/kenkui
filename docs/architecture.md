@@ -265,6 +265,13 @@ single `grid-v1` chunking input. Pause tier names and structure schema do not
 enter segment identity; silence never reaches synthesis, and a duration-only
 retune reuses unchanged PCM.
 
+Scene breaks are the one gap reason the grid cannot derive from text: an
+`<hr/>`, a blank paragraph, and a paragraph boundary all normalize to the same
+two newlines. They are recorded while parsing, exactly as heading ranges are,
+and reach the grid as ordinary input. A scene break is always also a paragraph
+boundary, so enabling `scene_ms` moves a cut only when `paragraph_ms` is zero;
+otherwise the boundary already exists and only the duration changes.
+
 ## Canonical text and the spoken form
 
 Normalized chapter text stays the single authority for billing, inspection,

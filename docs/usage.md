@@ -818,6 +818,29 @@ skipping forward lands on speech rather than silence, and a book never ends on
 dead air. Where several reasons meet — a chapter ending immediately before a
 chapter title — the longest one wins rather than all of them adding up.
 
+`scene_ms` covers the break *inside* a chapter: the `<hr/>` or ornament
+separating two scenes, which is usually where the point of view changes. It is
+found while parsing, because normalization reduces an `<hr/>`, a blank
+paragraph, and an ordinary paragraph break to the same two newlines — after
+that, nothing can tell them apart. A break is taken from an `<hr/>`, or from a
+block the publisher labelled as one, and a labelled block only counts when it
+holds no prose, so a scene class on the opening paragraph does not shift the
+pause onto the next one.
+
+Like every other tier it is off unless you set it, and it derives nothing from
+`chapter_ms`. Because a scene break is always also a paragraph boundary, giving
+it a duration while `paragraph_ms` is non-zero is a pure retune: the segment
+boundary is already there and every cached segment stays valid.
+
+```python
+book.pauses(chapter_ms=1500, paragraph_ms=250, scene_ms=900)
+```
+
+Mid-chapter headings already pause through `heading_before_ms`, so a book that
+titles its sections needs no scene tier. `script()` reports detected breaks as
+`row.is_scene_start`, which is the only way to tell a scene pause apart from a
+`silence()` rule of the same length.
+
 ### Cover art
 
 `metadata(cover=...)` accepts `"source"` (the default), `None`, or a path to a
