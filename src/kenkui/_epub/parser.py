@@ -12,6 +12,7 @@ from zipfile import BadZipFile, LargeZipFile, ZipFile
 from defusedxml import DefusedXmlException
 from defusedxml.ElementTree import iterparse as safe_iterparse
 
+from kenkui._domain.ornaments import is_ornament
 from kenkui._domain.text import normalize_text
 from kenkui.errors import ErrorCode, SourceError
 from kenkui.inspection import BookInspection, BookMetadata, ChapterInspection
@@ -87,11 +88,6 @@ _SCENE_CLASSES = frozenset(
         "tb",
     }
 )
-# Glyphs a typographic scene ornament is built from. A closed set rather than a
-# punctuation category: a one-word paragraph or a lone em-dash of dialogue must
-# never read as an ornament.
-_ORNAMENT_GLYPHS = frozenset("*#~•◆❖⁂—–·‡§❦✦✧∗_")  # noqa: RUF001
-_MAX_ORNAMENT_CHARACTERS = 24
 _HEADING_ELEMENTS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 # title, canonical text, heading strings, emphasis ranges, heading ranges,
 # scene ranges.
@@ -291,16 +287,6 @@ def _has_scene_class(element: Element) -> bool:
     return False
 
 
-def _is_ornament(text: str) -> bool:
-    """Whether a block's text is only separator glyphs, and short enough."""
-    stripped = text.strip()
-    return (
-        bool(stripped)
-        and len(stripped) <= _MAX_ORNAMENT_CHARACTERS
-        and all(char in _ORNAMENT_GLYPHS or char.isspace() for char in stripped)
-    )
-
-
 def _is_scene_marker(element: Element, tag: str, emitted: str) -> bool:
     """Whether a block separates two scenes rather than carrying one.
 
@@ -310,7 +296,7 @@ def _is_scene_marker(element: Element, tag: str, emitted: str) -> bool:
     """
     if tag == "hr":
         return True
-    return _has_scene_class(element) and (not emitted.strip() or _is_ornament(emitted))
+    return _has_scene_class(element) and (not emitted.strip() or is_ornament(emitted))
 
 
 def _emit_skipped(element: Element, tag: str, emitter: _TextEmitter) -> None:

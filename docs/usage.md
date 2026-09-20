@@ -822,10 +822,17 @@ chapter title — the longest one wins rather than all of them adding up.
 separating two scenes, which is usually where the point of view changes. It is
 found while parsing, because normalization reduces an `<hr/>`, a blank
 paragraph, and an ordinary paragraph break to the same two newlines — after
-that, nothing can tell them apart. A break is taken from an `<hr/>`, or from a
-block the publisher labelled as one, and a labelled block only counts when it
-holds no prose, so a scene class on the opening paragraph does not shift the
-pause onto the next one.
+that, nothing can tell them apart. A break is taken from an `<hr/>`, from a
+block the publisher labelled as one, or from a short run of separator glyphs on
+a line of its own — `* * *`, `#`, a lone em dash. A labelled block only counts
+when it holds no prose, so a scene class on the opening paragraph does not
+shift the pause onto the next one.
+
+A glyph ornament is decoration standing in for a boundary, so it is never
+spoken, whether or not you called `pronounce()`. It stays in the canonical
+text — billing, offsets and sidecar anchors do not move — and only the string
+the engine receives loses it. A chapter holding nothing but an ornament is a
+separator page rather than a scene break, and is read as it always was.
 
 Like every other tier it is off unless you set it, and it derives nothing from
 `chapter_ms`. Because a scene break is always also a paragraph boundary, giving

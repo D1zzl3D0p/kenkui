@@ -899,8 +899,16 @@ def _spoken_regions(  # noqa: PLR0913 - complete transformation boundary.
     *,
     lower: int = 0,
     upper: int | None = None,
+    ornaments: frozenset[tuple[int, int]] = frozenset(),
 ) -> tuple[SpokenRegion, ...]:
-    """Transform each semantic interval and retain exact canonical mappings."""
+    """Transform each semantic interval and retain exact canonical mappings.
+
+    An ornament speaks as nothing, whether or not a spoken form was asked for.
+    Suppression cannot sit behind that setting: a pipeline that never called
+    ``pronounce()`` is precisely the one handing ``* * *`` to an engine today.
+    The canonical range is untouched, so offsets, billing and selection are
+    unaffected -- only the string the engine receives loses it.
+    """
     last = len(chapter.text) if upper is None else upper
     boundaries = (
         lower,
@@ -911,11 +919,15 @@ def _spoken_regions(  # noqa: PLR0913 - complete transformation boundary.
     for start, end in pairwise(boundaries):
         canonical = chapter.text[start:end]
         offsets: list[tuple[int, int, int, int]] = []
-        rendered = (
-            canonical
-            if spoken is None
-            else _speak(canonical, start, spoken, lexicon_regions, offsets)
-        )
+        if (start, end) in ornaments:
+            # One mapping stating the whole range speaks as nothing: the
+            # packer requires every divergence to be accounted for.
+            rendered = ""
+            offsets.append((0, end - start, 0, 0))
+        elif spoken is None:
+            rendered = canonical
+        else:
+            rendered = _speak(canonical, start, spoken, lexicon_regions, offsets)
         mappings = tuple(
             SpokenMapping(
                 start + source_start, start + source_end, spoken_start, spoken_end
@@ -983,12 +995,36 @@ def _absorb_unspeakable_spans(
     return tuple(result)
 
 
+def _ornament_edges(
+    grid: tuple[Unit, ...], canonical: str
+) -> frozenset[tuple[int, int]]:
+    """Return the canonical span of every ornament leaf worth suppressing.
+
+    A chapter holding nothing but ornaments would be left with no spoken text
+    at all, which the packer rejects outright. Such a chapter is a separator
+    page rather than a scene break, so leave it exactly as it was.
+    """
+    ornaments = frozenset((unit.start, unit.end) for unit in grid if unit.is_ornament)
+    speakable = any(
+        canonical[unit.start : unit.end].strip()
+        for unit in grid
+        if not unit.is_ornament
+    )
+    return ornaments if speakable else frozenset()
+
+
 def _unspeakable_ranges(
     canonical: str,
     spans: tuple[SpeakerSpan, ...],
     grid: tuple[Unit, ...],
 ) -> tuple[tuple[int, int], ...]:
-    """Return coalesced canonical runs that cannot produce speech."""
+    """Return coalesced canonical runs that cannot produce speech.
+
+    Whitespace is the obvious case. An ornament leaf is the other: it holds
+    real characters, and therefore real offsets, but it stands in for a scene
+    boundary rather than for anything a voice should say.
+    """
+    ornaments = {(unit.start, unit.end) for unit in grid if unit.is_ornament}
     candidates = sorted(
         {
             (start, end)
@@ -996,7 +1032,7 @@ def _unspeakable_ranges(
                 *((span.start, span.end) for span in spans),
                 *((unit.start, unit.end) for unit in grid),
             )
-            if not canonical[start:end].strip()
+            if not canonical[start:end].strip() or (start, end) in ornaments
         }
     )
     result: list[tuple[int, int]] = []
@@ -1139,7 +1175,17 @@ def _append_chapter(  # noqa: PLR0913 - one call site, all state explicit.
     reasons_by_offset = _settle_unspeakable_reasons(unspeakable, grid, structure)
     spans = _absorb_unspeakable_spans(chapter.text, spans)
     cuts = _semantic_cuts(grid, spans, pauses, gaps, reasons_by_offset, regions)
-    spoken_regions = _spoken_regions(chapter, spoken, regions, cuts)
+    ornaments = _ornament_edges(grid, chapter.text)
+    # Region boundaries, not packing boundaries. An ornament has to be a region
+    # of its own to be suppressed as one, but it must never become a mandatory
+    # interval: those are required to hold spoken text, and this one holds none.
+    spoken_regions = _spoken_regions(
+        chapter,
+        spoken,
+        regions,
+        cuts.union(edge for span in ornaments for edge in span),
+        ornaments=ornaments,
+    )
     spoken_text = "".join(region.text for region in spoken_regions)
     packed = pack_grid(
         PackingInput(
