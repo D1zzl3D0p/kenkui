@@ -6,6 +6,8 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-09-20
+
 ### Added
 
 - `pauses(scene_ms=...)` gives mid-chapter scene breaks their own duration.
@@ -67,5 +69,6 @@ generation.
   and internal document titles. Calibre split continuations inherit the label
   with a part number; filename-only titles use the numbered fallback.
 
-[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...HEAD
+[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.0...HEAD
+[10.1.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...v10.1.0
 [10.0.0]: https://github.com/D1zzl3D0p/kenkui/releases/tag/v10.0.0

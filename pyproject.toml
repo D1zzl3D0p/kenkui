@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kenkui"
-version = "10.0.0"
+version = "10.1.0"
 description = "Turn EPUB books into M4B audiobooks with local, multi-voice text-to-speech."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
