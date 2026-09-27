@@ -6,6 +6,15 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- EPUB table-of-contents targets now define logical chapters, joining internal
+  file splits and preserving unlisted content in reading order. Fragment targets
+  can delimit multiple chapters in one file. Without usable navigation, use
+  opening headings, meaningful titles, or sequential `Untitled section N` labels.
+  Internal epigraph credits no longer name whole sections. Re-inspect sources and
+  refresh chapter selections after upgrading: regrouped chapters have new IDs.
+
 ## [10.1.1] - 2026-09-20
 
 ### Fixed

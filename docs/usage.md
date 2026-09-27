@@ -32,16 +32,30 @@ selection = (
 assert source.operations == ()
 ```
 
-Chapter titles prefer the EPUB 3 table of contents, then the EPUB 2 NCX,
-then visible headings and document titles. Filename-only document titles fall
-back to `Chapter N`. Calibre split files keep separate chapter IDs and text;
-continuations use the original TOC label plus a part number, such as
-`Chapter 1 (part 2)`.
+Chapter boundaries and titles follow the EPUB table of contents (EPUB 3 first,
+then EPUB 2 NCX), in spine reading order. Each valid TOC target starts a chapter;
+unlisted content through the next target stays in that chapter. This joins
+Calibre split files and preserves omitted interludes and closing material.
+Fragment links can define multiple chapters inside one file. Duplicate titles
+and numbering restarts are preserved, never automatically renumbered.
+
+Missing, malformed, external, hidden, ambiguous, or broken navigation targets
+fall back safely without discarding readable text. Before the first valid TOC
+entry, or when no TOC is usable, chapters use opening headings, meaningful
+document titles, or `Untitled section N`. Internal epigraph credits do not name
+an entire section. Consecutive Calibre split files are joined even without a TOC.
+Image-only entries have no audio chapter. Inspect the resulting chapter list
+before selecting or rendering: unlisted content follows the preceding TOC entry.
 
 Use either `select_chapters(*ids)` or the inclusive
 `select_chapter_range(start_id, end_id)`, before `tts()`. Chapter IDs come from
 `inspect()` -- they look like `ch-v1-2cc5ecca00df5ea4a766ea67` -- and are stable
-functions of canonical EPUB member/fragment identity and occurrence. Duplicate operations and invalid ordering fail immediately.
+functions of canonical EPUB member/fragment identity and occurrence. Merged
+chapters use `ch-v2-…` IDs derived from their constituent sections; splitting or
+merging changes IDs so cached attribution offsets are not reused incorrectly.
+Re-inspect sources and rebuild saved chapter selections when upgrading from
+file-based chapters. Previously generated audiobook files are not rewritten.
+Duplicate operations and invalid ordering fail immediately.
 
 ## Compose ordinary functions
 
