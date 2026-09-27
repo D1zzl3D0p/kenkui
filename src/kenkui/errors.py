@@ -9,6 +9,18 @@ from enum import StrEnum
 class ErrorCode(StrEnum):
     """Machine-readable public failure codes."""
 
+    INVALID_PDF_RECIPE = "invalid_pdf_recipe"
+    INVALID_PDF_OUTPUT = "invalid_pdf_output"
+    PDF_PACKAGE_MISSING = "pdf_package_missing"
+    PDF_LAYOUT_UNAVAILABLE = "pdf_layout_unavailable"
+    PDF_PREPARATION_REQUIRED = "pdf_preparation_required"
+    MALFORMED_PDF = "malformed_pdf"
+    PDF_ENCRYPTED = "pdf_encrypted"
+    PDF_EXTRACTION_INCOMPLETE = "pdf_extraction_incomplete"
+    PDF_LIMIT = "pdf_limit"
+    PDF_TIMEOUT = "pdf_timeout"
+    PDF_WORKER_FAILED = "pdf_worker_failed"
+    PDF_ASSETS_MISSING = "pdf_assets_missing"
     UNSUPPORTED_FORMAT = "unsupported_format"
     SOURCE_NOT_FOUND = "source_not_found"
     SOURCE_NOT_READABLE = "source_not_readable"
@@ -94,6 +106,29 @@ class ErrorCode(StrEnum):
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
+    ErrorCode.PDF_LIMIT: "The PDF exceeds the configured extraction limits.",
+    ErrorCode.PDF_EXTRACTION_INCOMPLETE: (
+        "PDF pages could not be extracted; narration is blocked."
+    ),
+    ErrorCode.PDF_ENCRYPTED: "Encrypted PDFs are not supported.",
+    ErrorCode.MALFORMED_PDF: "The PDF could not be read.",
+    ErrorCode.PDF_PREPARATION_REQUIRED: (
+        "Prepare the PDF before inspecting its text or script."
+    ),
+    ErrorCode.PDF_LAYOUT_UNAVAILABLE: (
+        "Install kenkui[pdf-layout] to use automatic PDF layout and OCR."
+    ),
+    ErrorCode.PDF_PACKAGE_MISSING: "Install kenkui[pdf] to prepare native PDF sources.",
+    ErrorCode.PDF_TIMEOUT: "PDF extraction exceeded its time limit.",
+    ErrorCode.PDF_WORKER_FAILED: "The PDF extraction process failed.",
+    ErrorCode.PDF_ASSETS_MISSING: (
+        "Provision local Docling layout and RapidOCR assets, "
+        "then configure PdfLayoutOptions.artifacts_path."
+    ),
+    ErrorCode.INVALID_PDF_RECIPE: "The PDF recipe has invalid steps or prerequisites.",
+    ErrorCode.INVALID_PDF_OUTPUT: (
+        "A PDF transform changed source evidence or omitted its audit trail."
+    ),
     ErrorCode.UNSUPPORTED_FORMAT: "The source format is not supported.",
     ErrorCode.SOURCE_NOT_FOUND: "The source does not exist.",
     ErrorCode.INVALID_ROSTER: "The reviewed character roster is invalid.",

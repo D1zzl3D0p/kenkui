@@ -305,6 +305,7 @@ class _PlanMaterial:
     output: OutputMetadata
     total: int
     trailing_silence: tuple[int, ...] = ()
+    preparation_identity: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,7 +424,11 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
             ),
         )
     schemas = SchemaVersions(
-        parser=PARSER_SCHEMA_VERSION,
+        parser=(
+            "pdf-prepared-v1"
+            if inspection._preparation_identity  # noqa: SLF001
+            else PARSER_SCHEMA_VERSION
+        ),
         normalization=NORMALIZATION_SCHEMA_VERSION,
         planning=PLANNING_SCHEMA_VERSION,
         render=RENDER_SCHEMA_VERSION,
@@ -438,6 +443,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         metadata,
         total,
         trailing_silence,
+        inspection._preparation_identity,  # noqa: SLF001
     )
     return ExecutionPlan(
         schema_versions=schemas,
@@ -1749,6 +1755,8 @@ def _fingerprint(material: _PlanMaterial) -> str:
         },
         "total_speech_characters": material.total,
     }
+    if material.preparation_identity is not None:
+        payload["preparation_identity"] = material.preparation_identity
     if any(material.trailing_silence):
         payload["trailing_silence_ms"] = list(material.trailing_silence)
     if output.cover_content_hash is not None:

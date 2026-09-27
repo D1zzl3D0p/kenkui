@@ -68,7 +68,7 @@ def test_introspection_does_not_parse(
 ) -> None:
     """These are properties, so they must not reach the filesystem.
 
-    The real symbol lives at ``kenkui.pipeline.inspect_epub`` (imported by
+    The real symbol lives at ``kenkui.pipeline.inspect_document`` (imported by
     name into that module), not at ``kenkui._epub.inspect_epub`` -- the
     ``_epub`` package re-exports nothing, so patching that path would raise
     ``AttributeError`` before the pipeline code ever ran.
@@ -77,7 +77,7 @@ def test_introspection_does_not_parse(
     def forbidden(*_args: object, **_kwargs: object) -> None:
         pytest.fail("parsed")
 
-    monkeypatch.setattr("kenkui.pipeline.inspect_epub", forbidden)
+    monkeypatch.setattr("kenkui.pipeline.inspect_document", forbidden)
     repr(kk.book(epub_path).attribute("a").tuning)
 
 

@@ -64,7 +64,7 @@ def test_select_is_lazy_immutable_and_preserves_checkpoint(
     def forbidden(*_args: object, **_kwargs: object) -> None:
         pytest.fail("selection declaration performed I/O or resolution")
 
-    monkeypatch.setattr("kenkui.pipeline.inspect_epub", forbidden)
+    monkeypatch.setattr("kenkui.pipeline.inspect_document", forbidden)
     monkeypatch.setattr("kenkui.pipeline.resolve_inputs", forbidden)
     selected = resolved_book.select(pattern)
     pattern["paragraph"] = 1

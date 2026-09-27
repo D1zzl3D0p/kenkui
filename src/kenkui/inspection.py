@@ -79,3 +79,6 @@ class BookInspection:
     _planning_chapters: tuple[ChapterInspection, ...] = field(
         default=(), repr=False, compare=False
     )
+
+    # PDF preparation is additional identity, never a replacement for raw bytes.
+    _preparation_identity: str | None = field(default=None, repr=False)

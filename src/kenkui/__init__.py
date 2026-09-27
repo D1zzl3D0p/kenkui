@@ -20,6 +20,7 @@ from .api import (
     builtin_lexicon,
     epub,
     magic_run,
+    pdf,
     read_lexicon,
 )
 from .cancellation import CancellationToken
@@ -113,6 +114,7 @@ __all__ = [
     "list_voices",
     "load_voice",
     "magic_run",
+    "pdf",
     "read_lexicon",
     "remove_attribution",
     "remove_casting",

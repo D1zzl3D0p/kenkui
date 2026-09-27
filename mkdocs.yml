@@ -33,6 +33,10 @@ nav:
       - Troubleshooting: troubleshooting.md
   - Internals:
       - Architecture: architecture.md
+      - Native PDF preparation: pdf-processing.md
+      - PDF cleanup validation: pdf-cleanup-validation.md
+      - PDF preprocessing design: pdf-preprocessing-design.md
+      - PDF implementation plan: pdf-implementation-plan.md
       - Security boundaries: security.md
       - Pocket-TTS adapter: pocket-tts-adapter.md
   - Project:

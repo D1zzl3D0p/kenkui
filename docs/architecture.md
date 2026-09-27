@@ -6,6 +6,11 @@ normalization, selection, and semantic planning are kept separate from
 filesystem, process, provider, cache, FFmpeg, callback, and publication effects.
 Internal plans and binding factories are deliberately not public APIs.
 
+PDF sources use a shared source adapter with composable cleanup functions and
+optional isolated layout/OCR. See [PDF preparation](pdf-processing.md) for the
+supported API and [the preprocessing design](pdf-preprocessing-design.md) for
+the target architecture and remaining work.
+
 ## Deterministic source and planning core
 
 EPUB spine order is authoritative. Visible text extraction excludes active and

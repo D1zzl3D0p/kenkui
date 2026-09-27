@@ -21,9 +21,18 @@ def epub(path: str | os.PathLike[str]) -> Pipeline:
     return Pipeline(Source(Path(path), "epub"))
 
 
+def pdf(path: str | os.PathLike[str]) -> Pipeline:
+    """Record PDF source intent without reading it; configure native mode to prepare."""
+    from .pipeline import Pipeline, Source
+
+    return Pipeline(Source(Path(path), "pdf"))
+
+
 def book(path: str | os.PathLike[str]) -> Pipeline:
     """Dispatch a supported source by its format marker without reading it."""
     source_path = Path(path)
+    if source_path.suffix.lower() == ".pdf":
+        return pdf(source_path)
     if source_path.suffix.lower() != ".epub":
         raise SourceError(ErrorCode.UNSUPPORTED_FORMAT)
     return epub(source_path)

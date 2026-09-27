@@ -6,6 +6,29 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Initial native PDF source support via `pdf()` or `book()`, with explicit
+  `pdf_processing(mode="native")`, immutable `prepare()` checkpoints and
+  `pdf_report()` evidence. Install the optional `pdf` extra. Preparation runs
+  automatically before PDF resolution/rendering; inspection requires preparation.
+- Independently callable header/footer removal and paragraph reconstruction in
+  `kenkui.pdf_processing`, versioned recipes, edit logs, source-change guards and
+  preparation-aware plan/attribution identities. Empty recipes disable cleanup.
+  Persistent caches are not yet available.
+- Extend the native PDF recipe with source-attested line-break word repair and
+  conservative same-page footnote/reference removal. Unknown spellings remain
+  unchanged and are reported; word repair preserves all letters.
+- Recognize corroborated top-of-page folios and numbered running titles, including
+  facing-page layouts. Years and numbers inside prose are retained.
+- Add optional `pdf-layout` extraction through an isolated, bounded CPU worker,
+  with provisioned local Docling/RapidOCR assets, selective OCR, native-text
+  completeness checks, progress stages and strict result validation.
+- Add independently callable numbered note-section and visual-material removal,
+  verified footnotes within layout paragraphs, and repeated OCR furniture removal.
+- Validate PDF recipe prerequisites before extraction, reject invalid resource
+  limit types, and honor cancellation before cleanup callbacks run.
+
 ## [10.1.1] - 2026-09-20
 
 ### Fixed

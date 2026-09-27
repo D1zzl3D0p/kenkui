@@ -252,9 +252,9 @@ def test_metadata_choices_are_semantic_and_immutable() -> None:
 def test_book_rejects_unsupported_formats_with_public_error() -> None:
     """Generic format dispatch rejects unsupported suffixes without touching source."""
     with pytest.raises(kk.SourceError) as caught:
-        kk.book("book.pdf")
+        kk.book("book.txt")
     assert caught.value.code == kk.ErrorCode.UNSUPPORTED_FORMAT
-    assert "book.pdf" not in str(caught.value)
+    assert "book.txt" not in str(caught.value)
 
 
 def test_validate_is_inexpensive_and_reports_stable_issues(tmp_path: Path) -> None:
@@ -415,6 +415,7 @@ def test_public_exports_are_intentional() -> None:
         "book",
         "builtin_lexicon",
         "epub",
+        "pdf",
         "Pipeline",
         "Source",
         "MetadataIntent",

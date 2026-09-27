@@ -30,7 +30,7 @@ from kenkui._execution.process_pool import (
     resolve_workers,
 )
 from kenkui._progress import EventEmitter
-from kenkui._source import snapshot_source
+from kenkui._source_adapter import snapshot_document
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ
 from kenkui._tts.protocols import (
     SegmentAudio,
@@ -132,8 +132,15 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
 
         emitter.emit_stage_started("planning")
         _check_cancel(cancel)
-        snapshot = workspace / "source.epub"
-        source_hash = snapshot_source(pipeline.source.path, snapshot, cancel)
+        copied = snapshot_document(
+            pipeline.source.path, pipeline.source.format, workspace, cancel
+        )
+        snapshot, source_hash = copied.path, copied.source_hash
+        if (
+            pipeline._prepared is not None  # noqa: SLF001
+            and pipeline._prepared.source_hash != source_hash  # noqa: SLF001
+        ):
+            raise SourceError(ErrorCode.SOURCE_CHANGED)
         if resolved_source_hash is not None and source_hash != resolved_source_hash:
             raise SourceError(ErrorCode.SOURCE_CHANGED)
         _check_cancel(cancel)
