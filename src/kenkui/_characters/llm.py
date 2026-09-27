@@ -167,6 +167,23 @@ def _validated(payload: object, schema: Mapping[str, type]) -> dict[str, Any]:
     return payload
 
 
+def _failure_context(
+    error: Exception, model: str, attempt: int, started: float
+) -> dict[str, LogContext]:
+    """Keep useful provider diagnostics without its response or book content."""
+    context: dict[str, LogContext] = {
+        "boundary": "characters",
+        "model": model,
+        "attempt": attempt,
+        "error": type(error).__name__,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        context["status_code"] = status
+    return context
+
+
 def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
     model: str,
     prompt: str,
@@ -192,6 +209,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
     transport: Exception | None = None
     for attempt in range(1, attempts + 1):
         _check_cancel(cancel)
+        started = time.monotonic()
         try:
             raw = caller.complete(model, prompt)
         except _NEVER_RETRY:
@@ -201,11 +219,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
             log_event(
                 _LOGGER,
                 "model_call_failed",
-                context={
-                    "boundary": "characters",
-                    "attempt": attempt,
-                    "error": type(error).__name__,
-                },
+                context=_failure_context(error, model, attempt, started),
             )
         else:
             try:
@@ -215,7 +229,12 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
                 log_event(
                     _LOGGER,
                     "model_response_invalid",
-                    context={"boundary": "characters", "attempt": attempt},
+                    context={
+                        "boundary": "characters",
+                        "model": model,
+                        "attempt": attempt,
+                        "elapsed_ms": int((time.monotonic() - started) * 1000),
+                    },
                 )
             else:
                 if cancel is not None:

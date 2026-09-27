@@ -98,6 +98,30 @@ def test_valid_json_is_returned() -> None:
     assert complete_json("fake/model", "p", SCHEMA, client=client) == {"items": [1, 2]}
 
 
+def test_failed_call_logs_status_without_request_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class ProviderUnavailableError(Exception):
+        status_code = 503
+
+    with caplog.at_level(logging.INFO, logger="kenkui"), pytest.raises(ModelError):
+        complete_json(
+            "fake/model",
+            "private book passage",
+            SCHEMA,
+            client=FakeClient(ProviderUnavailableError("private provider response")),
+            attempts=1,
+        )
+    event = next(
+        record for record in caplog.records if record.msg == "model_call_failed"
+    )
+    assert log_field(event, "status_code") == ProviderUnavailableError.status_code
+    assert log_field(event, "model") == "fake/model"
+    assert log_field(event, "error") == "ProviderUnavailableError"
+    assert isinstance(log_field(event, "elapsed_ms"), int)
+    assert "private" not in str(event.__dict__)
+
+
 def test_prose_around_the_json_is_tolerated() -> None:
     """Models wrap JSON in explanation despite being told not to."""
     client = FakeClient('Sure!\n```json\n{"items": []}\n```\nHope that helps.')
