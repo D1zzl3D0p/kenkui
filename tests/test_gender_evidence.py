@@ -164,8 +164,11 @@ def test_offline_roster_refresh_retains_direct_evidence(
     assert refreshed.gender_evidence == record.gender_evidence
 
 
-def test_nonexistent_quote_cannot_introduce_gender_evidence() -> None:
+def test_nonexistent_quote_cannot_introduce_gender_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Only IDs belonging to this chapter can establish an attributed speaker."""
+    monkeypatch.setattr("kenkui._characters.llm.time.sleep", lambda _: None)
 
     class ExtraneousClient:
         def complete(self, model: str, prompt: str) -> str:
@@ -181,10 +184,8 @@ def test_nonexistent_quote_cannot_introduce_gender_evidence() -> None:
 
     text = '"Next applicant."'
     chapter = kk.ChapterInspection("ch1", 0, "One", len(text), text)
-    spans, coverage, evidence = attribute_chapter(
-        chapter, (_character(),), "fake/model", client=ExtraneousClient()
-    )
-    assert evidence == ()
-    assert coverage.answered == 0
-    assert coverage.dropped == 1
-    assert all(span.character_id is None for span in spans)
+    with pytest.raises(kk.ModelError) as caught:
+        attribute_chapter(
+            chapter, (_character(),), "fake/model", client=ExtraneousClient()
+        )
+    assert caught.value.code == kk.ErrorCode.MODEL_RESPONSE_INVALID

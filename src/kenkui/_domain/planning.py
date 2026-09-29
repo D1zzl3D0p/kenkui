@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import pairwise
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from kenkui._domain.grid import (
     GapReason,
@@ -30,6 +30,7 @@ from kenkui._domain.grid_packing import (
 from kenkui._domain.operations import (
     AssignVoices,
     Attributions,
+    ChapterTitles,
     MetadataIntent,
     Operation,
     Pauses,
@@ -47,12 +48,14 @@ from kenkui._domain.spoken import (
 )
 from kenkui._domain.text import NORMALIZATION_VERSION
 from kenkui._domain.tuning import layered_rules, resolve_rules
+from kenkui.announcements import ChapterAnnouncement, resolve_chapter_titles
 from kenkui.errors import (
     ErrorCode,
     ModelError,
     ValidationError,
     VoiceError,
 )
+from kenkui.inspection import BookInspection, BookMetadata, ChapterInspection
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
@@ -61,7 +64,6 @@ if TYPE_CHECKING:
     from kenkui._domain.paths import Pattern, SiblingCounts
     from kenkui._domain.spoken.numbers import NumberTier
     from kenkui._domain.tuning import Rule
-    from kenkui.inspection import BookInspection, ChapterInspection
     from kenkui.voices import Voice
 
 PARSER_SCHEMA_VERSION = "epub-visible-text-v1"
@@ -246,6 +248,7 @@ class SpeechSegment:
     content_hash: str
     speaker_id: str | None = None
     voice_id: str = ""
+    source_kind: Literal["source", "chapter_title"] = "source"
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +309,7 @@ class _PlanMaterial:
     total: int
     trailing_silence: tuple[int, ...] = ()
     preparation_identity: str | None = None
+    announcements: tuple[ChapterAnnouncement, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,8 +402,38 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         )
     if not segments:
         raise ValidationError(ErrorCode.EMPTY_SPEECH)
-    # Canonical characters, not spoken characters: this is the bill, and it
-    # must describe the book the caller supplied.
+    titles = _one_operation(pipeline.operations, ChapterTitles)
+    announcements = resolve_chapter_titles(
+        inspection,
+        enabled=bool(titles and titles.enabled),
+        overrides=dict(titles.overrides) if titles else None,
+    )
+    # Partial source selections announce only when they include the chapter opening.
+    announcements = tuple(
+        a
+        for a in announcements
+        if any(
+            start == 0
+            for start, _ in selected_ranges(
+                next(c for c in inspection.chapters if c.id == a.chapter_id),
+                patterns,
+                grid=grids[a.chapter_id],
+            )
+        )
+    )
+    if titles and titles.enabled:
+        segments, trailing_silence = _insert_announcements(
+            segments,
+            trailing_silence,
+            announcements,
+            titles,
+            cast,
+            spoken,
+            pauses,
+            chapters=inspection.chapters,
+        )
+    # Count canonical source plus generated announcement characters once,
+    # before language-aware spoken-form expansion, matching preflight billing.
     counts = {
         chapter.id: sum(
             end - start
@@ -407,13 +441,15 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         )
         for chapter in inspection.chapters
     }
+    for announcement in announcements:
+        counts[announcement.chapter_id] += announcement.added_characters
     total = sum(counts.values())
     metadata = _output_metadata(
         inspection,
         _one_operation(pipeline.operations, MetadataIntent),
         cover_content_hash,
     )
-    if patterns:
+    if patterns or any(a.added_characters for a in announcements):
         rendered_ids = {segment.chapter_id for segment in segments}
         metadata = replace(
             metadata,
@@ -430,7 +466,9 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
             else PARSER_SCHEMA_VERSION
         ),
         normalization=NORMALIZATION_SCHEMA_VERSION,
-        planning=PLANNING_SCHEMA_VERSION,
+        planning="execution-plan-v3-titles"
+        if any(a.kind != "omitted" for a in announcements)
+        else PLANNING_SCHEMA_VERSION,
         render=RENDER_SCHEMA_VERSION,
         spoken_form=SPOKEN_FORM_VERSION if spoken is not None else None,
     )
@@ -444,6 +482,7 @@ def compile_execution_plan(  # noqa: PLR0913 - explicit compilation boundary.
         total,
         trailing_silence,
         inspection._preparation_identity,  # noqa: SLF001
+        tuple(a for a in announcements if a.kind != "omitted"),
     )
     return ExecutionPlan(
         schema_versions=schemas,
@@ -837,10 +876,44 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
         structure = build_structure_index(grid)
         if structures is not None:
             structures[chapter.id] = structure
-        manual = _manual_offsets(grid, operations)
+        manual = dict(_manual_offsets(grid, operations))
+        chapter_manual = manual.get(grid[-1].end) if grid else None
+        chapter_spans = effective_spans(chapter, spans, operations, grid=grid)
+        title_policy = _one_operation(operations, ChapterTitles)
+        if title_policy and title_policy.enabled:
+            announcement = resolve_chapter_titles(
+                BookInspection(BookMetadata(), (chapter,)),
+                overrides=dict(title_policy.overrides),
+            )[0]
+            if announcement.kind == "existing":
+                end = next(
+                    unit.end for unit in grid if unit.end >= announcement.heading_end
+                )
+                # A declared source silence overrides automatic title pacing.
+                manual.setdefault(
+                    end,
+                    max(
+                        title_policy.pause_ms,
+                        pauses.heading_after_ms,
+                        pauses.paragraph_ms,
+                        *(
+                            _gap_ms(reason, pauses)
+                            for unit, reason in zip(grid, structure.gaps, strict=True)
+                            if unit.end == end
+                        ),
+                    ),
+                )
+                chapter_spans = (
+                    SpeakerSpan(chapter.id, 0, end, None),
+                    *(
+                        replace(span, start=max(span.start, end))
+                        for span in _spans_for(chapter, chapter_spans)
+                        if span.end > end
+                    ),
+                )
         _append_chapter(
             chapter,
-            _spans_for(chapter, effective_spans(chapter, spans, operations, grid=grid)),
+            _spans_for(chapter, chapter_spans),
             cast_plan,
             grid=grid,
             structure=structure,
@@ -855,13 +928,77 @@ def _compile_segments(  # noqa: PLR0913 - one call site, all state explicit.
         # The inter-chapter gap folds into this chapter's last segment, so
         # chapter N+1 begins exactly on its first spoken word. Max, not sum:
         # a chapter end meeting a heading-before pause is one gap.
-        if silence and chapter_index + 1 < len(chapters):
-            chapter_manual = manual.get(grid[-1].end) if grid else None
-            if chapter_manual is None:
-                silence[-1] = max(silence[-1], _gap_ms(GapReason.CHAPTER, pauses))
+        if silence and chapter_index + 1 < len(chapters) and chapter_manual is None:
+            silence[-1] = max(silence[-1], _gap_ms(GapReason.CHAPTER, pauses))
     if silence:
         silence[-1] = 0  # A book must not end on dead air.
     return tuple(result), tuple(silence)
+
+
+def _insert_announcements(  # noqa: PLR0913, PLR0917 - explicit assembly inputs.
+    segments: tuple[SpeechSegment, ...],
+    silences: tuple[int, ...],
+    announcements: tuple[ChapterAnnouncement, ...],
+    policy: ChapterTitles,
+    cast_plan: CastPlan,
+    spoken: SpokenForm | None,
+    pauses: Pauses,
+    *,
+    chapters: tuple[ChapterInspection, ...],
+) -> tuple[tuple[SpeechSegment, ...], tuple[int, ...]]:
+    """Insert generated speech after source selection, outside canonical offsets.
+
+    Final ordinals can change when announcements are toggled; cache reuse is
+    guaranteed for pause-only edits, not for changing the speech sequence.
+    """
+    by_id = {a.chapter_id: a for a in announcements if a.kind == "inserted"}
+    if not by_id:
+        return segments, silences
+    result: list[SpeechSegment] = []
+    gaps: list[int] = []
+    seen: set[str] = set()
+    source = {chapter.id: chapter for chapter in chapters}
+    for segment, silence in zip(segments, silences, strict=True):
+        announcement = by_id.get(segment.chapter_id)
+        if announcement and segment.chapter_id not in seen:
+            # A separate identity namespace prevents collisions with source chunks.
+            title = ChapterInspection(
+                "announcement-v1:" + segment.chapter_id,
+                0,
+                announcement.text,
+                len(announcement.text),
+                announcement.text,
+            )
+            title_segments, title_gaps = _compile_segments(
+                (title,), (), cast_plan, spoken
+            )
+            for item, gap in zip(title_segments, title_gaps, strict=True):
+                result.append(
+                    replace(
+                        item,
+                        chapter_id=segment.chapter_id,
+                        ordinal=len(result),
+                        source_kind="chapter_title",
+                    )
+                )
+                gaps.append(gap)
+            body = source[segment.chapter_id]
+            gaps[-1] = max(
+                policy.pause_ms,
+                pauses.heading_after_ms,
+                pauses.paragraph_ms,
+                pauses.heading_before_ms
+                if any(start == 0 for start, _ in body.heading_ranges)
+                else 0,
+                pauses.scene_ms
+                if any(start == 0 for start, _ in body.scene_ranges)
+                else 0,
+            )
+        seen.add(segment.chapter_id)
+        result.append(replace(segment, ordinal=len(result)))
+        gaps.append(silence)
+    gaps[-1] = 0
+    return tuple(result), tuple(gaps)
 
 
 def _semantic_cuts(  # noqa: PLR0913, PLR0917 - complete semantic boundary set.
@@ -1281,6 +1418,23 @@ def grid_silences(
         unspeakable,
         {units[index].end: manual[index] for index in selected if index in manual},
     )
+    title_policy = _one_operation(operations, ChapterTitles)
+    if title_policy and title_policy.enabled:
+        announcement = resolve_chapter_titles(
+            BookInspection(BookMetadata(), (chapter,)),
+            overrides=dict(title_policy.overrides),
+        )[0]
+        if announcement.kind == "existing":
+            end = next(
+                unit.end for unit in units if unit.end >= announcement.heading_end
+            )
+            gaps.setdefault(
+                end,
+                max(
+                    title_policy.pause_ms,
+                    _gap_ms(reasons_by_offset.get(end, GapReason.NONE), pauses),
+                ),
+            )
     indices: list[int] = []
     silence: list[int] = []
     for index in selected:
@@ -1735,6 +1889,11 @@ def _fingerprint(material: _PlanMaterial) -> str:
                 "ordinal": segment.ordinal,
                 "content_hash": segment.content_hash,
                 "character_count": segment.character_count,
+                **(
+                    {"source_kind": segment.source_kind}
+                    if segment.source_kind != "source"
+                    else {}
+                ),
             }
             for segment in segments
         ],
@@ -1755,6 +1914,11 @@ def _fingerprint(material: _PlanMaterial) -> str:
         },
         "total_speech_characters": material.total,
     }
+    if material.announcements:
+        payload["chapter_announcements"] = [
+            (a.chapter_id, a.text, a.kind, a.heading_end)
+            for a in material.announcements
+        ]
     if material.preparation_identity is not None:
         payload["preparation_identity"] = material.preparation_identity
     if any(material.trailing_silence):

@@ -54,7 +54,9 @@ def _pipeline(tmp_path: Path) -> tuple[kk.Pipeline, Path, tuple[str, ...]]:
         },
         spine=("one", "two"),
     )
-    pipeline = kk.epub(source).assign_voice("narrator").tts()
+    pipeline = (
+        kk.epub(source).assign_voice("narrator").chapter_titles(enabled=False).tts()
+    )
     texts = tuple(chapter.text for chapter in pipeline.inspect().chapters)
     return pipeline, source, texts
 
@@ -150,7 +152,9 @@ def test_a_multisegment_chapter_is_one_chapter_for_events_and_assembly(
         chapters={"one": xhtml(f"<h1>One</h1><p>{speech}</p>")},
         spine=("one",),
     )
-    pipeline = kk.epub(source).assign_voice("narrator").tts()
+    pipeline = (
+        kk.epub(source).assign_voice("narrator").chapter_titles(enabled=False).tts()
+    )
     _bind(monkeypatch, EngineSpecification.fake(), FakeArtifactAssembler())
     events: list[kk.ExecutionEvent] = []
 

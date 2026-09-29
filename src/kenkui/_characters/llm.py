@@ -20,7 +20,7 @@ from kenkui.errors import CancelledError, ErrorCode, ModelError
 from kenkui.observability import LogContext, get_logger, log_event
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from kenkui.cancellation import CancellationToken
 
@@ -147,7 +147,11 @@ def _extract_json(raw: str) -> object:
     return json.loads(candidate[start : end + 1])
 
 
-def _validated(payload: object, schema: Mapping[str, type]) -> dict[str, Any]:
+def _validated(
+    payload: object,
+    schema: Mapping[str, type],
+    validate: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Check exact key presence and type. No coercion: wrong shape is wrong.
 
     Raises ValueError rather than TypeError even for type mismatches: every
@@ -164,6 +168,8 @@ def _validated(payload: object, schema: Mapping[str, type]) -> dict[str, Any]:
         if not isinstance(payload[key], kind):
             message = f"response {key!r} is not {kind.__name__}"
             raise ValueError(message)  # noqa: TRY004 - see docstring
+    if validate is not None:
+        validate(payload)
     return payload
 
 
@@ -193,6 +199,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
     attempts: int = DEFAULT_ATTEMPTS,
     backoff_base: float = DEFAULT_BACKOFF_BASE,
     cancel: CancellationToken | None = None,
+    validate: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Return one validated JSON response, retrying transient failures.
 
@@ -223,7 +230,7 @@ def complete_json(  # noqa: PLR0913 - the tuning surface of one entry point.
             )
         else:
             try:
-                validated = _validated(_extract_json(raw), schema)
+                validated = _validated(_extract_json(raw), schema, validate)
             except ValueError as error:
                 invalid = error
                 log_event(

@@ -15,6 +15,7 @@ from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.operations import (
     AssignVoices,
     AttributeQuotes,
+    ChapterTitles,
     InferCharacters,
     Pauses,
     Pronunciations,
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from typing import Any
 
-EXPECTED_OPERATION_COUNT = 4
+EXPECTED_OPERATION_COUNT = 5
 IO_ERROR_MESSAGE = "pipeline construction performed I/O"
 PAUSE_CHAPTER_MS = 1500
 
@@ -144,6 +145,7 @@ def test_magic_run_writes_a_single_voice_book_beside_the_source(
                     cast=(),
                     method="gendered",
                 ),
+                ChapterTitles(),
                 SynthesizeSpeech(),
             ),
         )
@@ -178,6 +180,7 @@ def test_magic_run_uses_the_default_openrouter_model_for_multi_voice(
                     cast=(),
                     method="gendered",
                 ),
+                ChapterTitles(),
                 SynthesizeSpeech(),
             ),
         )
@@ -422,6 +425,8 @@ def test_public_exports_are_intentional() -> None:
         "BookMetadata",
         "ChapterInspection",
         "BookInspection",
+        "ChapterAnnouncement",
+        "resolve_chapter_titles",
         "Voice",
         "ValidationIssue",
         "ValidationResult",

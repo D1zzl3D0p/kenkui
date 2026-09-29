@@ -18,6 +18,7 @@ _TIERS: dict[type[ops.Operation], Tier] = {
     ops.Annotations: "tuning",
     ops.SpokenForm: "style",
     ops.Pauses: "style",
+    ops.ChapterTitles: "style",
     ops.InferCharacters: "style",
     ops.AttributeQuotes: "style",
     ops.AssignVoices: "style",

@@ -38,7 +38,7 @@ def _plan(book: kk.Pipeline) -> ExecutionPlan:
     checkpoint = book._resolved  # noqa: SLF001
     assert checkpoint is not None
     return compile_execution_plan(
-        book.tts(),
+        book.chapter_titles(enabled=False).tts(),
         book.inspect(),
         source_bytes_hash=checkpoint.source_hash,
         resolved_voice=checkpoint.bindings.voice,
@@ -52,7 +52,11 @@ def _plan(book: kk.Pipeline) -> ExecutionPlan:
 @pytest.fixture
 def renderable_book(resolved_book: kk.Pipeline) -> kk.Pipeline:
     """Complete the shared review fixture's missing character-discovery intent."""
-    return resolved_book.infer_characters("fake/model").resolve()
+    return (
+        resolved_book.infer_characters("fake/model")
+        .resolve()
+        .chapter_titles(enabled=False)
+    )
 
 
 def test_select_is_lazy_immutable_and_preserves_checkpoint(
@@ -160,7 +164,9 @@ def test_select_applies_before_resolution_and_preserves_source_snapshot(
     source.write_bytes(b"source changed")
     assert [row.path.chapter for row in selected.script()] == [CH09_ID]
     with pytest.raises(kk.SourceError) as caught:
-        selected.tts().preview(source.with_suffix(".wav"), workers=1)
+        selected.chapter_titles(enabled=False).tts().preview(
+            source.with_suffix(".wav"), workers=1
+        )
     assert caught.value.code == kk.ErrorCode.SOURCE_CHANGED
 
 
@@ -190,7 +196,7 @@ def test_selected_inspection_hides_planning_basis_from_repr_and_equality(
 def test_select_respects_tts_order(renderable_book: kk.Pipeline) -> None:
     """Selection follows the established pre-TTS order of the chapter modes."""
     with pytest.raises(ValidationError) as caught:
-        renderable_book.tts().select({"paragraph": 1})
+        renderable_book.chapter_titles(enabled=False).tts().select({"paragraph": 1})
     assert caught.value.code == kk.ErrorCode.INVALID_OPERATION_ORDER
 
 
@@ -312,7 +318,7 @@ def test_selected_planning_reuses_each_chapter_grid(
     checkpoint = selected._resolved  # noqa: SLF001
     assert checkpoint is not None
     compile_execution_plan(
-        selected.tts(),
+        selected.chapter_titles(enabled=False).tts(),
         inspection,
         source_bytes_hash=checkpoint.source_hash,
         resolved_voice=checkpoint.bindings.voice,
@@ -448,7 +454,9 @@ def test_preview_is_real_wav_and_retains_cache_for_full_render(
     monkeypatch.setattr(
         CacheStore, "lookup", lambda _self, *args, **kwargs: tracked(*args, **kwargs)
     )
-    book.tts().write_m4b(tmp_path / "whole.m4b", workers=1)
+    book.chapter_titles(enabled=False).tts().write_m4b(
+        tmp_path / "whole.m4b", workers=1
+    )
     assert recorded == selected_ids
 
 
@@ -458,7 +466,9 @@ def test_preview_rejects_non_wav_outputs(
 ) -> None:
     """A probe cannot be mistaken for an M4B or silently mislabeled."""
     with pytest.raises(ValidationError) as caught:
-        renderable_book.tts().preview(tmp_path / f"probe{suffix}")
+        renderable_book.chapter_titles(enabled=False).tts().preview(
+            tmp_path / f"probe{suffix}"
+        )
     assert caught.value.code == kk.ErrorCode.INVALID_OUTPUT
 
 
@@ -470,15 +480,19 @@ def test_preview_reuses_validation_and_overwrite_controls(
         kk.book(renderable_book.source.path).preview(tmp_path / "probe.wav")
     assert caught.value.code == kk.ErrorCode.VOICE_REQUIRED
     with pytest.raises(ValidationError) as caught:
-        renderable_book.tts().preview(tmp_path / "probe.wav", workers=0)
+        renderable_book.chapter_titles(enabled=False).tts().preview(
+            tmp_path / "probe.wav", workers=0
+        )
     assert caught.value.code == kk.ErrorCode.INVALID_WORKERS
     target = tmp_path / "probe.wav"
     target.write_bytes(b"original")
     with pytest.raises(EncodingError) as encoding:
-        renderable_book.tts().preview(target)
+        renderable_book.chapter_titles(enabled=False).tts().preview(target)
     assert encoding.value.code == kk.ErrorCode.OUTPUT_EXISTS
     assert target.read_bytes() == b"original"
-    renderable_book.tts().preview(target, workers=1, overwrite=True)
+    renderable_book.chapter_titles(enabled=False).tts().preview(
+        target, workers=1, overwrite=True
+    )
     assert target.read_bytes().startswith(b"RIFF")
 
 
@@ -494,7 +508,7 @@ def test_preview_skips_metadata_cover_reads(
     target = tmp_path / "probe.WAV"
     renderable_book.metadata(
         title="Private title", author="Private author", cover=tmp_path / "missing.jpg"
-    ).tts().preview(target, workers=1)
+    ).chapter_titles(enabled=False).tts().preview(target, workers=1)
     content = target.read_bytes()
     assert content.startswith(b"RIFF")
     assert b"Private title" not in content

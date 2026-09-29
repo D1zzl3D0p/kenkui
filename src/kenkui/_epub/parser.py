@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import replace
 from io import BytesIO
 from typing import TYPE_CHECKING, TypeAlias, cast
 from xml.etree import ElementTree as ET
@@ -18,6 +19,7 @@ from kenkui.errors import ErrorCode, SourceError
 from kenkui.inspection import BookInspection, BookMetadata, ChapterInspection
 
 from .archive import validate_archive
+from .chapters import ChapterBuilder, slice_chapter
 from .identifiers import chapter_id
 from .paths import canonical_member, resolve_member
 
@@ -121,6 +123,8 @@ class _TextEmitter:
         self._length = 0
         self._emphasis_depth = 0
         self._emphasis_start = 0
+        self.anchor_targets: frozenset[str] = frozenset()
+        self.anchors: dict[str, int] = {}
 
     def text(self, value: str | None) -> None:
         if not value:
@@ -333,6 +337,9 @@ def _emit_element(element: Element, emitter: _TextEmitter) -> None:
     if emphasis:
         emitter.open_emphasis()
     start = emitter.length
+    fragment = element.attrib.get("id", "")
+    if fragment in emitter.anchor_targets:
+        emitter.anchors[fragment] = start
     emitter.text(element.text)
     for child in element:
         _emit_element(child, emitter)
@@ -429,16 +436,47 @@ def _chapter_text(
     body: Element,
     fragments: dict[str, Element | None],
     fragment: str,
+    anchors: dict[str, int] | None = None,
 ) -> _ChapterMaterial:
     scope = _body_scope(body, fragments, fragment)
     emitter = _TextEmitter()
+    if anchors is not None:
+        emitter.anchor_targets = frozenset(anchors)
     _emit_element(scope, emitter)
     raw = emitter.value()
     text = normalize_text(raw)
+    if anchors is not None and emitter.anchors:
+        anchors.clear()
+        # Resolve successive spans, not repeated text searches for each anchor.
+        points = sorted({0, *emitter.anchors.values()})
+        spans = list(zip(points, [*points[1:], len(raw)], strict=True))
+        resolved = _resolve_ranges(raw, text, spans)
+        nonempty = [a for a, b in spans if normalize_text(raw[a:b])]
+        offsets = (
+            dict(zip(nonempty, (a for a, _ in resolved), strict=True))
+            if len(nonempty) == len(resolved)
+            else {}
+        )
+        next_offset: int | None = None
+        for position in reversed(points):
+            next_offset = offsets.get(position, next_offset)
+            if next_offset is not None:
+                offsets[position] = next_offset
+        anchors.update(
+            (name, offsets[position])
+            for name, position in emitter.anchors.items()
+            if position in offsets
+        )
+    elif anchors is not None:
+        anchors.clear()
     if not text:
         return "", "", (), (), (), ()
     headings = _visible_headings(scope)
-    title = headings[0] if headings else ""
+    # An epigraph credit or later subsection heading is not a document title.
+    heading_ranges = _resolve_ranges(raw, text, emitter.heading_ranges)
+    title = (
+        headings[0] if headings and heading_ranges and heading_ranges[0][0] == 0 else ""
+    )
     if not title:
         document_titles = [
             element for element in root.iter() if _local(element.tag) == "title"
@@ -449,7 +487,6 @@ def _chapter_text(
             else ""
         )
     emphasis = _resolve_ranges(raw, text, emitter.emphasis_ranges)
-    heading_ranges = _resolve_ranges(raw, text, emitter.heading_ranges)
     scene_ranges = _resolve_ranges(raw, text, emitter.scene_ranges)
     return title, text, tuple(headings), emphasis, heading_ranges, scene_ranges
 
@@ -522,6 +559,27 @@ def _document(
     return document
 
 
+def _spine_identity(
+    itemref: Element,
+    manifest: dict[str, tuple[str, str, str]],
+    members: dict[str, str],
+) -> tuple[str, str]:
+    try:
+        member, fragment, _properties = manifest[itemref.attrib.get("idref", "")]
+    except KeyError as error:
+        raise SourceError(ErrorCode.MALFORMED_EPUB) from error
+    if member not in members:
+        raise SourceError(ErrorCode.MALFORMED_EPUB)
+    return member, fragment
+
+
+def _index_navigation(titles: dict[tuple[str, str], str]) -> dict[str, dict[str, str]]:
+    by_member: dict[str, dict[str, str]] = {}
+    for (path, target), label in titles.items():
+        by_member.setdefault(path, {})[target] = label
+    return by_member
+
+
 def _spine_chapters(
     archive: TypedZipFile,
     members: dict[str, str],
@@ -534,26 +592,30 @@ def _spine_chapters(
         raise SourceError(ErrorCode.EMPTY_SELECTION)
     if len(spine_items) > MAX_SPINE_CHAPTERS:
         raise SourceError(ErrorCode.ARCHIVE_LIMIT)
+    navigation_by_member = _index_navigation(navigation_titles)
     occurrences: Counter[tuple[str, str]] = Counter()
     material_cache: dict[tuple[str, str], _ChapterMaterial] = {}
+    anchor_cache: dict[tuple[str, str], dict[str, int]] = {}
     document_cache: dict[str, tuple[Element, Element, dict[str, Element | None]]] = {}
     speech_characters = 0
-    chapters: list[ChapterInspection] = []
+    builder = ChapterBuilder(MAX_SPINE_CHAPTERS)
+    previous_member = ""
     for itemref in spine_items:
-        idref = itemref.attrib.get("idref", "")
-        try:
-            member, fragment, _properties = manifest[idref]
-        except KeyError as error:
-            raise SourceError(ErrorCode.MALFORMED_EPUB) from error
-        if member not in members:
-            raise SourceError(ErrorCode.MALFORMED_EPUB)
+        member, fragment = _spine_identity(itemref, manifest, members)
+        titles = navigation_by_member.get(member, {})
         identity = (member, fragment)
         occurrence = occurrences[identity]
         occurrences[identity] += 1
         material = material_cache.get(identity)
         if material is None:
             document = _document(archive, members, member, document_cache)
-            material = _chapter_text(*document, fragment)
+            anchors = {
+                target: 0
+                for target in titles
+                if target and document[2].get(target) is not None
+            }
+            material = _chapter_text(*document, fragment, anchors)
+            anchor_cache[identity] = anchors
             material_cache[identity] = material
         title, text, headings, emphasis, heading_ranges, scene_ranges = material
         if not text:
@@ -562,50 +624,86 @@ def _spine_chapters(
         speech_characters += len(text)
         if speech_characters > MAX_SPEECH_CHARACTERS:
             raise SourceError(ErrorCode.ARCHIVE_LIMIT)
-        index = len(chapters)
-        chapters.append(
-            ChapterInspection(
-                chapter_id(member, occurrence, fragment),
-                index,
-                _navigation_title(navigation_titles, member, fragment)
-                or _fallback_title(member, title, headings, index),
-                len(text),
-                text,
-                headings,
-                emphasis,
-                heading_ranges,
-                scene_ranges,
-            )
+        index = len(builder.chapters)
+        chapter = ChapterInspection(
+            chapter_id(member, occurrence, fragment),
+            index,
+            _fallback_title(member, title, headings),
+            len(text),
+            text,
+            headings,
+            emphasis,
+            heading_ranges,
+            scene_ranges,
+            "heading" if heading_ranges and heading_ranges[0][0] == 0 else "document",
         )
+        for part, boundary in _toc_parts(
+            chapter, fragment, titles, anchor_cache[identity]
+        ):
+            builder.add(
+                part,
+                boundary=boundary,
+                continuation=_split_continuation(previous_member, member),
+            )
+        previous_member = member
+    chapters = builder.finish()
     if not chapters:
         raise SourceError(ErrorCode.EMPTY_CHAPTER)
-    return tuple(chapters)
+    if (
+        len(chapters) > MAX_SPINE_CHAPTERS
+        or sum(len(chapter.text) for chapter in chapters) > MAX_SPEECH_CHARACTERS
+    ):
+        raise SourceError(ErrorCode.ARCHIVE_LIMIT)
+    return chapters
 
 
-def _fallback_title(
-    member: str, title: str, headings: tuple[str, ...], index: int
-) -> str:
-    """Keep meaningful headings and titles, otherwise number the spine entry."""
+def _toc_parts(
+    chapter: ChapterInspection,
+    fragment: str,
+    titles: dict[str, str],
+    anchors: dict[str, int],
+) -> list[tuple[ChapterInspection, bool]]:
+    boundaries: dict[int, tuple[str, str]] = {}
+    for target, label in titles.items():
+        offset = 0 if target == fragment else anchors.get(target)
+        if offset is not None:
+            boundaries.setdefault(offset, (target, label))
+    starts = sorted({0, *boundaries})
+    parts: list[tuple[ChapterInspection, bool]] = []
+    for start, end in zip(starts, [*starts[1:], len(chapter.text)], strict=True):
+        part_id = chapter.id
+        if len(starts) > 1:
+            start_target = boundaries.get(start, ("", ""))[0]
+            end_target = boundaries.get(end, ("", ""))[0]
+            part_id = chapter_id(chapter.id, 0, f"toc-v2:{start_target}\0{end_target}")
+        label = boundaries.get(start, ("", chapter.title))[1]
+        part = slice_chapter(chapter, start, end, part_id, label)
+        if start in boundaries:
+            part = replace(part, title_source="navigation")
+        if part.text:
+            parts.append((part, start in boundaries))
+    return parts
+
+
+def _split_continuation(previous: str, member: str) -> bool:
+    """Only join consecutive, explicitly numbered Calibre file splits."""
+    pattern = r"(.+_split_)(\d+)(\.[^./]+)"
+    before, after = re.fullmatch(pattern, previous), re.fullmatch(pattern, member)
+    return bool(
+        before
+        and after
+        and before[1] == after[1]
+        and before[3] == after[3]
+        and int(after[2]) == int(before[2]) + 1
+    )
+
+
+def _fallback_title(member: str, title: str, headings: tuple[str, ...]) -> str:
+    """Keep credible titles; the chapter builder labels untitled sections."""
     stem = member.rsplit("/", maxsplit=1)[-1].rsplit(".", maxsplit=1)[0]
-    if not headings and title in {stem, re.sub(r"_split_\d+$", "", stem)}:
+    if title not in headings and title in {stem, re.sub(r"_split_\d+$", "", stem)}:
         title = ""
-    return title or f"Chapter {index + 1}"
-
-
-def _navigation_title(
-    titles: dict[tuple[str, str], str], member: str, fragment: str
-) -> str:
-    """Use TOC labels, including explicitly named Calibre split continuations."""
-    title = titles.get((member, fragment), "")
-    if title or fragment:
-        return title
-    split = re.fullmatch(r"(.+_split_)(\d+)(\.[^./]+)", member)
-    if split and int(split[2]):
-        first = f"{split[1]}{'0' * len(split[2])}{split[3]}"
-        title = titles.get((first, ""), "")
-        if title:
-            return f"{title} (part {int(split[2]) + 1})"
-    return ""
+    return " ".join(title.split())
 
 
 def _navigation_links(root: Element) -> list[tuple[str, str]]:
@@ -636,6 +734,19 @@ def _navigation_links(root: Element) -> list[tuple[str, str]]:
     return links
 
 
+def _optional_navigation_links(
+    archive: TypedZipFile, members: dict[str, str], member: str
+) -> list[tuple[str, str]]:
+    if member not in members:
+        return []
+    try:
+        return _navigation_links(_xhtml(_read(archive, members, member)))
+    except SourceError as error:
+        if error.code == ErrorCode.ARCHIVE_LIMIT:
+            raise
+        return []
+
+
 def _navigation_titles(
     archive: TypedZipFile,
     members: dict[str, str],
@@ -653,8 +764,7 @@ def _navigation_titles(
         documents.append(ncx[0])
     titles: dict[tuple[str, str], str] = {}
     for member in dict.fromkeys(documents):
-        root = _xhtml(_read(archive, members, member))
-        for href, label in _navigation_links(root):
+        for href, label in _optional_navigation_links(archive, members, member):
             title = " ".join(label.split())
             if not href or not title:
                 continue
@@ -665,9 +775,8 @@ def _navigation_titles(
                 continue
             if target in members:
                 titles.setdefault((target, fragment), title)
-                # A whole spine document uses its first TOC entry. Exact
-                # fragment entries remain available for fragment-scoped spine items.
-                titles.setdefault((target, ""), title)
+                if len(titles) > MAX_SPINE_CHAPTERS:
+                    raise SourceError(ErrorCode.ARCHIVE_LIMIT)
     return titles
 
 

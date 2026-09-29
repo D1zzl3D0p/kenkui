@@ -145,7 +145,7 @@ def test_changed_plan_does_not_reuse_chapters(
     with checkpointing(files):
         kk.epub(pipeline.source.path).assign_voice("narrator").pauses(
             chapter_ms=2000
-        ).tts().write(tmp_path / "changed.m4b")
+        ).chapter_titles(enabled=False).tts().write(tmp_path / "changed.m4b")
     assert len(submitted) == 2
 
 

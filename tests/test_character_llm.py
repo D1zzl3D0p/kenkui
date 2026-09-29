@@ -11,7 +11,8 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import log_field
-from kenkui._characters import llm
+from kenkui._characters import llm, store
+from kenkui._characters.checkpoint import complete_json_checkpointed
 from kenkui._characters.llm import _LiteLLMClient, complete_json
 from kenkui.cancellation import CancellationToken
 from kenkui.errors import CancelledError, ErrorCode, ModelError
@@ -292,3 +293,29 @@ def test_litellm_reported_cost_is_the_fallback(
 
     record = next(r for r in caplog.records if r.getMessage() == "model_call_completed")
     assert log_field(record, "cost_usd") == "0.5"
+
+
+@pytest.mark.parametrize("cancel_before_read", [True, False])
+def test_cached_response_honors_cancellation(*, cancel_before_read: bool) -> None:
+    """Cache hits obey the same cancellation contract as provider responses."""
+    token = CancellationToken()
+    schema = {"answer": str}
+    key = store.response_key("fake/model", "cached", schema)
+    store.write_response(key, "fake/model", {"answer": "cached"})
+    if cancel_before_read:
+        token.cancel()
+
+    def validate(_payload: dict[str, object]) -> None:
+        token.cancel()
+
+    client = FakeClient()
+    with pytest.raises(CancelledError):
+        complete_json_checkpointed(
+            "fake/model",
+            "cached",
+            schema,
+            client=client,
+            cancel=token,
+            validate=validate,
+        )
+    assert client.calls == []

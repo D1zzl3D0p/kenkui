@@ -20,6 +20,7 @@ from ._domain.operations import (
     AssignVoices,
     AttributeQuotes,
     Attributions,
+    ChapterTitles,
     InferCharacters,
     MetadataIntent,
     Operation,
@@ -89,6 +90,7 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger(__name__)
 _NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
+_MAX_TITLE_CHARACTERS = 500
 _MAX_PAUSE_MS = 60_000
 _PipeArgs = ParamSpec("_PipeArgs")
 _PipeResult = TypeVar("_PipeResult")
@@ -622,11 +624,51 @@ class Pipeline:
             ),
         )
 
+    def chapter_titles(
+        self,
+        *,
+        enabled: bool = True,
+        pause_ms: int = 750,
+        overrides: Mapping[str, str | None] | None = None,
+    ) -> Pipeline:
+        """Configure chapter announcements; None excludes an overridden chapter.
+
+        New synthesis pipelines announce authored titles by default. Source text
+        and its attribution offsets remain unchanged.
+        """
+        if type(enabled) is not bool:
+            raise ValidationError(ErrorCode.INVALID_METADATA)
+        if type(pause_ms) is not int or not 0 <= pause_ms <= _MAX_PAUSE_MS:
+            raise ValidationError(ErrorCode.INVALID_PAUSE)
+        values = dict(overrides or {})
+        for key, value in values.items():
+            if (
+                not isinstance(key, str)
+                or not key.strip()
+                or (
+                    value is not None
+                    and (
+                        not isinstance(value, str)
+                        or not value.strip()
+                        or len(value) > _MAX_TITLE_CHARACTERS
+                    )
+                )
+            ):
+                raise ValidationError(ErrorCode.INVALID_METADATA)
+        return self._replace(
+            ChapterTitles(enabled, pause_ms, tuple(sorted(values.items())))
+        )
+
     def tts(self) -> Pipeline:
         """Return a branch with explicit synthesis intent."""
         if not has_operation(self.operations, AssignVoices):
             raise ValidationError(ErrorCode.VOICE_REQUIRED)
-        return self._replace(SynthesizeSpeech())
+        pipeline = (
+            self
+            if has_operation(self.operations, ChapterTitles)
+            else self.chapter_titles()
+        )
+        return pipeline._replace(SynthesizeSpeech())
 
     def metadata(
         self,
@@ -1080,6 +1122,7 @@ class Pipeline:
                     SpokenForm,
                     Pauses,
                     Attributions,
+                    ChapterTitles,
                     Silences,
                     Pronunciations,
                     Annotations,
