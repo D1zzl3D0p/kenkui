@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from typing import TYPE_CHECKING
 
@@ -122,6 +123,14 @@ def test_curly_apostrophe_contraction_after_the_verb_is_counted() -> None:
     assert first_person_tags(text, _ends(text)) == 1
 
 
+def _narrator_reply(prompt: str) -> str:
+    """Answer every numbered quote in the attribution prompt."""
+    ids = sorted({int(value) for value in re.findall(r'"quote_id": (\d+)', prompt)})
+    return json.dumps(
+        {"attributions": [{"quote_id": index, "speaker": "narrator"} for index in ids]}
+    )
+
+
 class NarratedClient:
     """A model that names a narrator when asked, and attributes to them."""
 
@@ -142,7 +151,7 @@ class NarratedClient:
                     "narrator": "nieshka",
                 }
             )
-        return json.dumps({"attributions": [{"quote_id": 0, "speaker": "narrator"}]})
+        return _narrator_reply(prompt)
 
 
 def test_roster_prompt_asks_for_a_narrator_when_first_person(tmp_path: Path) -> None:
@@ -255,9 +264,7 @@ def test_narrator_orphaned_by_roster_merge_is_never_attributed() -> None:
                         ]
                     }
                 )
-            return json.dumps(
-                {"attributions": [{"quote_id": 0, "speaker": "narrator"}]}
-            )
+            return _narrator_reply(prompt)
 
     chapter1 = kk.ChapterInspection("ch1", 0, "One", len(ch1), ch1)
     chapter2 = kk.ChapterInspection("ch2", 1, "Two", len(ch2), ch2)

@@ -93,6 +93,15 @@ class SpokenForm:
 
 
 @dataclass(frozen=True, slots=True)
+class ChapterTitles:
+    """Narrator announcements independent of canonical source offsets."""
+
+    enabled: bool = True
+    pause_ms: int = 750
+    overrides: tuple[tuple[str, str | None], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Pauses:
     """Silence durations for each structural boundary, in milliseconds.
 
@@ -175,6 +184,7 @@ Operation: TypeAlias = (
     | SelectChapterRange
     | SpokenForm
     | Pauses
+    | ChapterTitles
     | InferCharacters
     | AttributeQuotes
     | AssignVoices

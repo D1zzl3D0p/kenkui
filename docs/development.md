@@ -141,3 +141,21 @@ The trailer must use your real name and an email address you control. By
 contributing, you agree that your contribution is licensed under Apache-2.0.
 Model/voice materials are not accepted without separate provenance and rights
 review.
+
+
+## PDF validation tiers
+
+The development group includes `pdfplumber` and `psutil`, so ordinary offline CI
+runs native PDF extraction and real subprocess-isolation tests. It does not
+install Docling or provision any layout/OCR assets. Fake backend fixtures cover
+routing, bounded batches and extraction failures without model inference.
+
+To run the additional real-backend acceptance tests, install `kenkui[pdf-layout]`
+and provision the assets described in [PDF preparation](pdf-processing.md):
+
+```console
+KENKUI_RUN_PDF_LAYOUT=1 KENKUI_PDF_MODELS=/models/pdf uv run --extra pdf-layout pytest --no-cov -m pdf_layout tests/test_pdf_layout_real.py
+```
+
+These generated digital, scanned and mixed-page fixtures check extraction through
+the public API. They do not measure whole-book prose error rates or audio quality.

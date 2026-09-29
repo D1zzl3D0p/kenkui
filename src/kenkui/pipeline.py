@@ -8,6 +8,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Concatenate, Literal, ParamSpec, TypeAlias, TypeVar
 
 from ._characters.continuity import eligible_series_voice_ids
@@ -19,6 +20,7 @@ from ._domain.operations import (
     AssignVoices,
     AttributeQuotes,
     Attributions,
+    ChapterTitles,
     InferCharacters,
     MetadataIntent,
     Operation,
@@ -46,11 +48,17 @@ from ._domain.sidecar import (
 )
 from ._domain.summary import summarize_identity, summarize_style, summarize_tuning
 from ._domain.tuning import Rule, overlap_warnings
-from ._epub.parser import inspect_epub
 from ._execution.coordinator import execute_sequential
+from ._pdf.options import PdfLayoutOptions, PdfOptions
 from ._progress import EventEmitter
 from ._resolution import log_collisions, resolve_characters, resolve_inputs
 from ._source import source_digest
+from ._source_adapter import (
+    PreparedSource,
+    inspect_document,
+    prepare_document,
+    snapshot_document,
+)
 from .api import Result, ValidationIssue, ValidationResult
 from .errors import (
     EncodingError,
@@ -72,6 +80,8 @@ if TYPE_CHECKING:
 
     from ._characters.models import CharacterRoster, SeriesRecord
     from ._domain.summary import TierSummary, TuningSummary
+    from ._pdf.models import PdfDocument
+    from ._pdf.recipe import PdfRecipeStep
     from ._resolution import Resolved, RosterCheckpoint
     from .cancellation import CancellationToken
     from .events import ExecutionEvent
@@ -80,6 +90,7 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger(__name__)
 _NUMBER_TIERS = frozenset({"off", "conservative", "standard", "aggressive"})
+_MAX_TITLE_CHARACTERS = 500
 _MAX_PAUSE_MS = 60_000
 _PipeArgs = ParamSpec("_PipeArgs")
 _PipeResult = TypeVar("_PipeResult")
@@ -94,7 +105,8 @@ class Source:
     """A lazily recorded readable source."""
 
     path: Path
-    format: Literal["epub"]
+    format: Literal["epub", "pdf"]
+    pdf_options: PdfOptions | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +119,93 @@ class Pipeline:
     # parks finished values here so write() can skip re-deriving them.
     _resolved: Resolved | None = None
     _roster: RosterCheckpoint | None = None
+    _prepared: PreparedSource | None = None
+
+    def pdf_processing(
+        self,
+        *,
+        mode: Literal["auto", "native"] = "auto",
+        steps: tuple[PdfRecipeStep, ...] | None = None,
+        language: str = "en",
+        layout: PdfLayoutOptions | None = None,
+    ) -> Pipeline:
+        """Record a PDF recipe and invalidate text-dependent checkpoints.
+
+        Native mode uses embedded text without rendering or model inference.
+        Auto mode uses an isolated Docling worker with provisioned local assets.
+        An empty steps tuple disables optional cleanup.
+        """
+        if self.source.format != "pdf":
+            raise ValidationError(ErrorCode.INVALID_PDF_RECIPE)
+        options = PdfOptions(
+            mode=mode,
+            steps=steps,
+            language=language,
+            layout=layout or PdfLayoutOptions(),
+        )
+        return replace(
+            self,
+            source=replace(self.source, pdf_options=options),
+            _prepared=None,
+            _resolved=None,
+            _roster=None,
+        )
+
+    def prepare(
+        self,
+        *,
+        cancel: CancellationToken | None = None,
+        on_event: Callable[[ExecutionEvent], None] | None = None,
+    ) -> Pipeline:
+        """Snapshot and prepare source text without casting or TTS.
+
+        Returns a new immutable checkpoint. Explicit preparation refreshes changed
+        source bytes; rendering a stale PDF checkpoint raises source_changed.
+        """
+        emitter = EventEmitter(on_event)
+        emitter.emit_started()
+        prepared = self._prepare_source(cancel, emitter)
+        emitter.emit_completed()
+        return prepared
+
+    def pdf_report(self) -> PdfDocument:
+        """Return prepared PDF evidence, edits and issues without extraction."""
+        if self._prepared is None or self._prepared.pdf_document is None:
+            raise SourceError(ErrorCode.PDF_PREPARATION_REQUIRED)
+        return self._prepared.pdf_document
+
+    def _prepare_source(
+        self, cancel: CancellationToken | None, emitter: EventEmitter
+    ) -> Pipeline:
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        source_error = source_validation_error(self.source.path)
+        if source_error is not None:
+            raise SourceError(source_error)
+        stage = "pdf.prepare" if self.source.format == "pdf" else "source.prepare"
+        emitter.emit_stage_started(stage)
+        with TemporaryDirectory(prefix="kenkui-prepare-") as workspace:
+            snapshot = snapshot_document(
+                self.source.path, self.source.format, Path(workspace), cancel
+            )
+            prepared = prepare_document(
+                snapshot, self.source.pdf_options, cancel, emitter
+            )
+        emitter.emit_stage_completed(stage)
+        if cancel is not None:
+            cancel.raise_if_cancelled()
+        return replace(self, _prepared=prepared, _resolved=None, _roster=None)
+
+    def _prepared_for_execution(
+        self, cancel: CancellationToken | None, emitter: EventEmitter
+    ) -> Pipeline:
+        if self.source.format != "pdf":
+            return self
+        if self._prepared is None:
+            return self._prepare_source(cancel, emitter)
+        if source_digest(self.source.path) != self._prepared.source_hash:
+            raise SourceError(ErrorCode.SOURCE_CHANGED)
+        return self
 
     def pipe(
         self,
@@ -400,7 +499,15 @@ class Pipeline:
         except OSError:
             raise ValidationError(ErrorCode.INVALID_SIDECAR) from None
         tuning = deserialize(serialize(self.operations))
-        chapters = inspect_epub(self.source.path).chapters if tuning else ()
+        chapters = (
+            (
+                self._prepared.inspection
+                if self._prepared is not None
+                else inspect_document(self.source.path, self.source.format)
+            ).chapters
+            if tuning
+            else ()
+        )
         payload = serialize(authoring_snapshot(tuning, chapters))
         write_sidecar(target, payload)
         return target
@@ -517,11 +624,51 @@ class Pipeline:
             ),
         )
 
+    def chapter_titles(
+        self,
+        *,
+        enabled: bool = True,
+        pause_ms: int = 750,
+        overrides: Mapping[str, str | None] | None = None,
+    ) -> Pipeline:
+        """Configure chapter announcements; None excludes an overridden chapter.
+
+        New synthesis pipelines announce authored titles by default. Source text
+        and its attribution offsets remain unchanged.
+        """
+        if type(enabled) is not bool:
+            raise ValidationError(ErrorCode.INVALID_METADATA)
+        if type(pause_ms) is not int or not 0 <= pause_ms <= _MAX_PAUSE_MS:
+            raise ValidationError(ErrorCode.INVALID_PAUSE)
+        values = dict(overrides or {})
+        for key, value in values.items():
+            if (
+                not isinstance(key, str)
+                or not key.strip()
+                or (
+                    value is not None
+                    and (
+                        not isinstance(value, str)
+                        or not value.strip()
+                        or len(value) > _MAX_TITLE_CHARACTERS
+                    )
+                )
+            ):
+                raise ValidationError(ErrorCode.INVALID_METADATA)
+        return self._replace(
+            ChapterTitles(enabled, pause_ms, tuple(sorted(values.items())))
+        )
+
     def tts(self) -> Pipeline:
         """Return a branch with explicit synthesis intent."""
         if not has_operation(self.operations, AssignVoices):
             raise ValidationError(ErrorCode.VOICE_REQUIRED)
-        return self._replace(SynthesizeSpeech())
+        pipeline = (
+            self
+            if has_operation(self.operations, ChapterTitles)
+            else self.chapter_titles()
+        )
+        return pipeline._replace(SynthesizeSpeech())
 
     def metadata(
         self,
@@ -616,17 +763,20 @@ class Pipeline:
         emitter.emit_started()
         if cancel is not None:
             cancel.raise_if_cancelled()
+        branch = self._prepared_for_execution(cancel, emitter)
         if until == "characters":
             result = replace(
-                self, _resolved=None, _roster=resolve_characters(self, cancel, emitter)
+                branch,
+                _resolved=None,
+                _roster=resolve_characters(branch, cancel, emitter),
             )
         elif (
-            self._resolved is not None
-            and source_digest(self.source.path) == self._resolved.source_hash
+            branch._resolved is not None  # noqa: SLF001
+            and source_digest(self.source.path) == branch._resolved.source_hash  # noqa: SLF001
         ):
-            result = self
+            result = branch
         else:
-            unresolved = replace(self, _resolved=None)
+            unresolved = replace(branch, _resolved=None)
             result = replace(
                 unresolved, _resolved=resolve_inputs(unresolved, cancel, emitter)
             )
@@ -736,11 +886,13 @@ class Pipeline:
             inspection = self._resolved.inspection
         elif self._roster is not None:
             inspection = self._roster.inspection
+        elif self._prepared is not None:
+            inspection = self._prepared.inspection
         else:
             source_error = source_validation_error(self.source.path)
             if source_error is not None:
                 raise SourceError(source_error)
-            inspection = inspect_epub(self.source.path)
+            inspection = inspect_document(self.source.path, self.source.format)
         selection = next((op for op in self.operations if isinstance(op, Select)), None)
         if selection is not None:
             chapters = tuple(
@@ -772,7 +924,7 @@ class Pipeline:
             )
         else:
             chapters = inspection.chapters
-        selected = type(inspection)(inspection.metadata, chapters)
+        selected = replace(inspection, chapters=chapters)
         log_event(
             _LOGGER,
             "inspection_completed",
@@ -894,10 +1046,11 @@ class Pipeline:
         emitter.emit_started()
         if cancel is not None:
             cancel.raise_if_cancelled()
+        branch = self._prepared_for_execution(cancel, emitter)
         resolved = (
-            self._resolved
-            if self._resolved is not None
-            else resolve_inputs(self, cancel, emitter, validate_series=True)
+            branch._resolved  # noqa: SLF001
+            if branch._resolved is not None  # noqa: SLF001
+            else resolve_inputs(branch, cancel, emitter, validate_series=True)
         )
         log_collisions(resolved.collisions)
         bindings = resolved.bindings
@@ -906,7 +1059,7 @@ class Pipeline:
 
             bindings = replace(bindings, assembler=WavArtifactAssembler())
         return execute_sequential(
-            self,
+            branch,
             output_path,
             bindings=bindings,
             on_event=on_event,
@@ -969,6 +1122,7 @@ class Pipeline:
                     SpokenForm,
                     Pauses,
                     Attributions,
+                    ChapterTitles,
                     Silences,
                     Pronunciations,
                     Annotations,
@@ -981,6 +1135,7 @@ class Pipeline:
                 operation, (SelectChapters, SelectChapterRange, InferCharacters)
             )
             else None,
+            self._prepared,
         )
 
     def _casting(self) -> AssignVoices:

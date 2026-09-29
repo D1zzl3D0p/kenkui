@@ -70,6 +70,7 @@ def join_chapters(parts: list[ChapterInspection], index: int) -> ChapterInspecti
         tuple(emphasis),
         tuple(headings),
         tuple(scenes),
+        parts[0].title_source,
     )
 
 
@@ -99,7 +100,11 @@ class ChapterBuilder:
         elif not self._toc_started and not continuation:
             self._flush()
         if not part.title:
-            part = replace(part, title=f"Untitled section {len(self.chapters) + 1}")
+            part = replace(
+                part,
+                title=f"Untitled section {len(self.chapters) + 1}",
+                title_source="generated",
+            )
         self._pending.append(part)
 
     def finish(self) -> tuple[ChapterInspection, ...]:

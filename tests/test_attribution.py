@@ -433,14 +433,11 @@ def test_no_roster_call_for_a_chapter_without_speech() -> None:
     assert len(rosters) == 1
 
 
-def test_coverage_separates_unknown_from_dropped() -> None:
-    """Two different failures that produced one indistinguishable value.
-
-    A model that answers "unknown" has considered the quote and declined; a
-    model that never returns the id has dropped it, which is a defect. Both
-    became None, so a truncated or malformed response was indistinguishable
-    from ordinary model caution and could only be found by reading the text.
-    """
+def test_coverage_retries_dropped_quotes_but_accepts_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing answer needs another request; an explicit unknown does not."""
+    monkeypatch.setattr("kenkui._characters.llm.time.sleep", lambda _: None)
     inspection = _inspection(
         'Chapter One\n\n"One," he said. "Two," she said. "Three," they said.'
     )
@@ -448,17 +445,32 @@ def test_coverage_separates_unknown_from_dropped() -> None:
     dialogue = dialogue_ranges(build_grid(chapter))
     assert len(dialogue) == _FIXTURE_QUOTES
 
-    # ScriptedClient answers quote_id 0 only, so every later quote is dropped.
+    class RecoveringClient(ScriptedClient):
+        def complete(self, model: str, prompt: str) -> str:
+            if not self.calls:
+                return super().complete(model, prompt)
+            self.calls.append(prompt)
+            return json.dumps(
+                {
+                    "attributions": [
+                        {"quote_id": index, "speaker": "unknown"}
+                        for index in range(len(dialogue))
+                    ]
+                }
+            )
+
+    client = RecoveringClient("unknown")
     _, coverage, _ = attribute_chapter(
         chapter,
         (CharacterProfile("dhatt", "Dhatt", None, 0, ()),),
         "fake/model",
-        client=ScriptedClient("unknown"),
+        client=client,
         dialogue=dialogue,
     )
     assert coverage.quotes == len(dialogue)
-    assert coverage.unknown == 1
-    assert coverage.dropped == len(dialogue) - 1
+    assert client.calls == [client.calls[0]] * 2
+    assert coverage.unknown == len(dialogue)
+    assert coverage.dropped == 0
     assert coverage.answered == 0
 
 

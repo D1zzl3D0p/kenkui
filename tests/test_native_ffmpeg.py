@@ -311,9 +311,12 @@ def test_public_write_is_real_mp4_aac_with_chapters_metadata_and_optional_cover(
     _decode_with_host_ffmpeg(output)
 
 
+@pytest.mark.parametrize("announce_titles", [False, True])
 def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    announce_titles: bool,
 ) -> None:
     """Prove cached PCM produces the same native AAC decode across worker counts."""
     source = make_epub(
@@ -326,6 +329,7 @@ def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
     )
     pipeline = (
         kk.epub(source)
+        .chapter_titles(enabled=announce_titles)
         .assign_voice("narrator")
         .tts()
         .metadata(title=_TITLE, author=_AUTHOR, cover=None)
@@ -354,7 +358,10 @@ def test_native_cold_and_warm_cache_outputs_are_decode_equivalent(
     assert warm.output == warm_output
     assert cold.stats == warm.stats
     assert cold.stats.rendered_chapters == _EXPECTED_CHAPTERS
-    _assert_valid_cache_rows(cache_directory, expected_rows=_EXPECTED_CHAPTERS)
+    # Title announcements split each opening heading from its body so the title
+    # pause can be retuned independently. Both segments must survive cache reuse.
+    expected_segments = _EXPECTED_CHAPTERS * (2 if announce_titles else 1)
+    _assert_valid_cache_rows(cache_directory, expected_rows=expected_segments)
 
     cold_probe = _probe_with_host_ffprobe(cold_output)
     warm_probe = _probe_with_host_ffprobe(warm_output)

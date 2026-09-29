@@ -11,6 +11,7 @@ from ._characters.store import (
 from ._domain.casting import CharacterProfile, Collision
 from ._domain.operations import MetadataIntent
 from ._domain.planning import SpeakerSpan
+from .announcements import ChapterAnnouncement, resolve_chapter_titles
 from .api import (
     ExecutionStats,
     Result,
@@ -20,6 +21,7 @@ from .api import (
     builtin_lexicon,
     epub,
     magic_run,
+    pdf,
     read_lexicon,
 )
 from .cancellation import CancellationToken
@@ -61,7 +63,7 @@ from .voices.provision import (
     unload_voice,
 )
 
-__version__ = "10.1.1"
+__version__ = "10.2.0"
 
 __all__ = [
     "BookInspection",
@@ -70,6 +72,7 @@ __all__ = [
     "CancelledError",
     "CastResolved",
     "CastingInspection",
+    "ChapterAnnouncement",
     "ChapterInspection",
     "CharacterProfile",
     "CharacterRoster",
@@ -113,10 +116,12 @@ __all__ = [
     "list_voices",
     "load_voice",
     "magic_run",
+    "pdf",
     "read_lexicon",
     "remove_attribution",
     "remove_casting",
     "remove_series",
     "remove_voice",
+    "resolve_chapter_titles",
     "unload_voice",
 ]

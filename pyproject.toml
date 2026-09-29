@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kenkui"
-version = "10.1.1"
+version = "10.2.0"
 description = "Turn EPUB books into M4B audiobooks with local, multi-voice text-to-speech."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -47,6 +47,15 @@ dependencies = [
 # for a caller who never selects it. A pipeline is a separate download:
 #   python -m spacy download en_core_web_lg
 spacy = ["spacy>=3.7,<4"]
+pdf = [
+    "pdfplumber==0.11.10",
+]
+pdf-layout = [
+    "docling==2.128.0",
+    "onnxruntime>=1.20,<2",
+    "pdfplumber==0.11.10",
+    "psutil>=7,<8",
+]
 
 [project.urls]
 Homepage = "https://github.com/D1zzl3D0p/kenkui"
@@ -59,6 +68,10 @@ Changelog = "https://github.com/D1zzl3D0p/kenkui/blob/main/CHANGELOG.md"
 dev = [
   "check-wheel-contents>=0.6.2",
   "mypy>=1.15",
+  # Exercise optional native extraction and worker isolation in ordinary CI.
+  # Layout models remain an explicit, separately provisioned acceptance tier.
+  "pdfplumber==0.11.10",
+  "psutil>=7,<8",
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "ruff>=0.11",
@@ -137,7 +150,7 @@ files = ["src", "tests", "examples"]
 # pocket-tts ships no py.typed marker and no stubs. spaCy is an optional
 # dependency, imported lazily only when callers select the offline roster path.
 [[tool.mypy.overrides]]
-module = ["pocket_tts.*", "spacy"]
+module = ["pocket_tts.*", "spacy", "docling.*", "psutil"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -148,9 +161,10 @@ addopts = [
   "--cov-branch",
   "--cov-report=term-missing",
   "--cov-fail-under=90",
-  "-m=not native and not spacy",
+  "-m=not native and not spacy and not pdf_layout",
 ]
 markers = [
+  "pdf_layout: opt-in local Docling and OCR assets (KENKUI_RUN_PDF_LAYOUT=1)",
   "corpus: opt-in property test over the local Calibre library",
   "native: opt-in tests that execute host FFmpeg/ffprobe (requires KENKUI_RUN_NATIVE=1)",
   "pocket_real: opt-in strictly local Pocket-TTS test",

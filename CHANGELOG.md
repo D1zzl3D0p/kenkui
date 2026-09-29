@@ -6,7 +6,14 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-09-29
+
 ### Changed
+
+- New synthesis pipelines announce authored chapter titles by default. Use
+  `chapter_titles(enabled=False)` to opt out, or configure title pauses and
+  spoken-only overrides. Matching opening headings are reused; source text
+  and character offsets remain intact.
 
 - EPUB table-of-contents targets now define logical chapters, joining internal
   file splits and preserving unlisted content in reading order. Fragment targets
@@ -14,6 +21,37 @@ All notable changes to Kenkui are recorded here. The format follows
   opening headings, meaningful titles, or sequential `Untitled section N` labels.
   Internal epigraph credits no longer name whole sections. Re-inspect sources and
   refresh chapter selections after upgrading: regrouped chapters have new IDs.
+
+
+### Added
+
+- Initial native PDF source support via `pdf()` or `book()`, with explicit
+  `pdf_processing(mode="native")`, immutable `prepare()` checkpoints and
+  `pdf_report()` evidence. Install the optional `pdf` extra. Preparation runs
+  automatically before PDF resolution/rendering; inspection requires preparation.
+- Independently callable header/footer removal and paragraph reconstruction in
+  `kenkui.pdf_processing`, versioned recipes, edit logs, source-change guards and
+  preparation-aware plan/attribution identities. Empty recipes disable cleanup.
+  Persistent caches are not yet available.
+- Extend the native PDF recipe with source-attested line-break word repair and
+  conservative same-page footnote/reference removal. Unknown spellings remain
+  unchanged and are reported; word repair preserves all letters.
+- Recognize corroborated top-of-page folios and numbered running titles, including
+  facing-page layouts. Years and numbers inside prose are retained.
+- Add optional `pdf-layout` extraction through an isolated, bounded CPU worker,
+  with provisioned local Docling/RapidOCR assets, selective OCR, native-text
+  completeness checks, progress stages and strict result validation.
+- Add independently callable numbered note-section and visual-material removal,
+  verified footnotes within layout paragraphs, and repeated OCR furniture removal.
+- Validate PDF recipe prerequisites before extraction, reject invalid resource
+  limit types, and honor cancellation before cleanup callbacks run.
+
+### Fixed
+
+- Incomplete quote-attribution responses are retried and rejected before caching;
+  old response and attribution caches are revalidated for full quote coverage.
+- Cached model responses now honor cancellation before reading and after validation.
+- Failed model calls report bounded diagnostics without exposing book text.
 
 ## [10.1.1] - 2026-09-20
 
@@ -97,7 +135,8 @@ generation.
   and internal document titles. Calibre split continuations inherit the label
   with a part number; filename-only titles use the numbered fallback.
 
-[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.1...HEAD
+[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.2.0...HEAD
+[10.2.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.1...v10.2.0
 [10.1.1]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.0...v10.1.1
 [10.1.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...v10.1.0
 [10.0.0]: https://github.com/D1zzl3D0p/kenkui/releases/tag/v10.0.0

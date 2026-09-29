@@ -447,7 +447,7 @@ def test_whitespace_gaps_match_compiled_spoken_gaps(
         compatible_model_revisions=("fake-v1",),
     )
     plan = compile_execution_plan(
-        book.tts(),
+        book.chapter_titles(enabled=False).tts(),
         inspection,
         source_bytes_hash="b" * 64,
         resolved_voice=voice,

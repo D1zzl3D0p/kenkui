@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from functools import partial
+from typing import TYPE_CHECKING, Any
 
 from kenkui._characters.checkpoint import complete_json_checkpointed
 from kenkui._characters.infer import PRONOUNS, ROLE_PREFIX, UNKNOWN, slugify
 from kenkui._characters.prompts import ATTRIBUTION_PROMPT
 from kenkui._domain.grid import DialogueRange, build_grid, dialogue_ranges
 from kenkui._domain.planning import SpeakerSpan
-from kenkui.errors import ModelError
+from kenkui.errors import ErrorCode, ModelError
+from kenkui.observability import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -31,6 +33,7 @@ if TYPE_CHECKING:
     from kenkui.inspection import ChapterInspection
 
 _SCHEMA: Mapping[str, type] = {"attributions": list}
+_LOGGER = get_logger(__name__)
 
 NARRATOR = "narrator"
 
@@ -234,6 +237,36 @@ def _speaker_spans(
     return tuple(spans)
 
 
+def _validate_coverage(
+    payload: dict[str, Any], *, quote_count: int, chapter_id: str | None
+) -> None:
+    """Require one usable answer per requested ID, including explicit unknowns."""
+    entries = payload["attributions"]
+    ids = [
+        item["quote_id"]
+        for item in entries
+        if isinstance(item, dict)
+        and type(item.get("quote_id")) is int
+        and isinstance(item.get("speaker"), str)
+        and item["speaker"].strip()
+    ]
+    expected = set(range(quote_count))
+    if len(entries) == quote_count and len(ids) == quote_count and set(ids) == expected:
+        return
+    log_event(
+        _LOGGER,
+        "attribution_response_incomplete",
+        context={
+            "chapter_id": chapter_id or "",
+            "expected": quote_count,
+            "returned": len(entries),
+            "missing": len(expected - set(ids)),
+        },
+    )
+    message = "Attribution must answer every requested quote exactly once."
+    raise ValueError(message)
+
+
 def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
     model_id: str,
     prompt: str,
@@ -248,16 +281,26 @@ def _answers(  # noqa: PLR0913 - one call site, all inputs explicit.
 ) -> tuple[dict[int, str | None], tuple[tuple[str, str], ...]] | None:
     """Return quote index to resolved speaker, or None if no usable answer came.
 
-    A model that fails or answers unusably leaves every quote unknown rather
-    than stopping the render: the book still reads, in one voice for the lines
-    it could not place. None, rather than an empty mapping, tells the caller
-    this chapter is unfinished and must not be stored as if it were.
+    Transport failures retain the existing unknown-voice fallback. Invalid or
+    incomplete answers are retried and then raised, so casting cannot persist
+    a result whose requested quotes were never answered.
     """
     try:
         payload = complete_json_checkpointed(
-            model_id, prompt, _SCHEMA, client=client, cancel=cancel
+            model_id,
+            prompt,
+            _SCHEMA,
+            client=client,
+            cancel=cancel,
+            validate=partial(
+                _validate_coverage, quote_count=quote_count, chapter_id=chapter_id
+            ),
         )
-    except ModelError:
+    except ModelError as error:
+        if error.code is ErrorCode.MODEL_RESPONSE_INVALID:
+            # Exhausted invalid answers must not reach casting as an unsaved
+            # attribution, or be silently rendered and cached as complete.
+            raise
         return None
     answers: dict[int, str | None] = {}
     for item in payload["attributions"]:

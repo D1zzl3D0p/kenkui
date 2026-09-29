@@ -68,7 +68,12 @@ __all__ = ["AttributionRecord", "resolve_attribution", "store"]
 
 # Fixed, and part of the store key: a different temperature is a different
 # derivation, not a cache hit.
-PARAMS: Mapping[str, object] = {"temperature": 0.0}
+PARAMS: Mapping[str, object] = {
+    "temperature": 0.0,
+    # Rebuild aggregate records accepted before quote coverage was enforced.
+    # Per-request checkpoints are independently validated and still reusable.
+    "quote_coverage": "complete-v1",
+}
 
 _LOGGER = get_logger(__name__)
 

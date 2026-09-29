@@ -46,6 +46,7 @@ class ChapterInspection:
     # -- an <hr/> leaves no text at all -- so the block it introduces is what
     # carries the annotation.
     scene_ranges: tuple[tuple[int, int], ...] = ()
+    title_source: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,3 +80,6 @@ class BookInspection:
     _planning_chapters: tuple[ChapterInspection, ...] = field(
         default=(), repr=False, compare=False
     )
+
+    # PDF preparation is additional identity, never a replacement for raw bytes.
+    _preparation_identity: str | None = field(default=None, repr=False)

@@ -18,6 +18,7 @@ from kenkui._domain.operations import (
     AssignVoices,
     AttributeQuotes,
     Attributions,
+    ChapterTitles,
     InferCharacters,
     MetadataIntent,
     Pauses,
@@ -203,7 +204,7 @@ def _render_selector(level: str, selector: Selector) -> str:
     return f"{_LEVEL_PREFIXES[level]}{value}"
 
 
-def _format_operation(operation: Operation) -> str:  # noqa: C901, PLR0911
+def _format_operation(operation: Operation) -> str:  # noqa: C901, PLR0911, PLR0912
     if isinstance(operation, MetadataIntent):
         return _format_metadata(operation)
     if isinstance(operation, Series):
@@ -215,6 +216,11 @@ def _format_operation(operation: Operation) -> str:  # noqa: C901, PLR0911
     if isinstance(operation, Select):
         patterns = ", ".join(render_pattern(p) for p in operation.patterns)
         return f"select({patterns})"
+    if isinstance(operation, ChapterTitles):
+        return (
+            f"chapter_titles(enabled={operation.enabled}, "
+            f"pause_ms={operation.pause_ms}, overrides={dict(operation.overrides)!r})"
+        )
     if isinstance(operation, Pauses):
         return _format_pauses(operation)
     if isinstance(operation, SpokenForm):

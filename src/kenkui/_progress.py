@@ -135,6 +135,13 @@ def _stage_boundary(stage: str) -> str:
     """Map internal execution stages to their public logging boundaries."""
     return {
         "planning": "planning",
+        "pdf.prepare": "parsing",
+        "pdf.extract": "parsing",
+        "pdf.layout": "parsing",
+        "pdf.ocr": "parsing",
+        "pdf.cleanup": "parsing",
+        "pdf.validation": "parsing",
+        "source.prepare": "parsing",
         "render": "rendering",
         "assembly": "encoding",
         "publication": "publication",

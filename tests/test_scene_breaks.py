@@ -203,7 +203,7 @@ def _voice() -> kk.Voice:
 
 
 def _plan(book: kk.Pipeline) -> ExecutionPlan:
-    rendered = book.assign_voice("fixture").tts()
+    rendered = book.assign_voice("fixture").chapter_titles(enabled=False).tts()
     return compile_execution_plan(
         rendered,
         rendered.inspect(),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import replace
 from io import BytesIO
 from typing import TYPE_CHECKING, TypeAlias, cast
 from xml.etree import ElementTree as ET
@@ -634,6 +635,7 @@ def _spine_chapters(
             emphasis,
             heading_ranges,
             scene_ranges,
+            "heading" if heading_ranges and heading_ranges[0][0] == 0 else "document",
         )
         for part, boundary in _toc_parts(
             chapter, fragment, titles, anchor_cache[identity]
@@ -676,6 +678,8 @@ def _toc_parts(
             part_id = chapter_id(chapter.id, 0, f"toc-v2:{start_target}\0{end_target}")
         label = boundaries.get(start, ("", chapter.title))[1]
         part = slice_chapter(chapter, start, end, part_id, label)
+        if start in boundaries:
+            part = replace(part, title_source="navigation")
         if part.text:
             parts.append((part, start in boundaries))
     return parts

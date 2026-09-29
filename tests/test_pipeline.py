@@ -15,6 +15,7 @@ from kenkui._domain.casting import CharacterProfile
 from kenkui._domain.operations import (
     AssignVoices,
     AttributeQuotes,
+    ChapterTitles,
     InferCharacters,
     Pauses,
     Pronunciations,
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from typing import Any
 
-EXPECTED_OPERATION_COUNT = 4
+EXPECTED_OPERATION_COUNT = 5
 IO_ERROR_MESSAGE = "pipeline construction performed I/O"
 PAUSE_CHAPTER_MS = 1500
 
@@ -144,6 +145,7 @@ def test_magic_run_writes_a_single_voice_book_beside_the_source(
                     cast=(),
                     method="gendered",
                 ),
+                ChapterTitles(),
                 SynthesizeSpeech(),
             ),
         )
@@ -178,6 +180,7 @@ def test_magic_run_uses_the_default_openrouter_model_for_multi_voice(
                     cast=(),
                     method="gendered",
                 ),
+                ChapterTitles(),
                 SynthesizeSpeech(),
             ),
         )
@@ -252,9 +255,9 @@ def test_metadata_choices_are_semantic_and_immutable() -> None:
 def test_book_rejects_unsupported_formats_with_public_error() -> None:
     """Generic format dispatch rejects unsupported suffixes without touching source."""
     with pytest.raises(kk.SourceError) as caught:
-        kk.book("book.pdf")
+        kk.book("book.txt")
     assert caught.value.code == kk.ErrorCode.UNSUPPORTED_FORMAT
-    assert "book.pdf" not in str(caught.value)
+    assert "book.txt" not in str(caught.value)
 
 
 def test_validate_is_inexpensive_and_reports_stable_issues(tmp_path: Path) -> None:
@@ -415,12 +418,15 @@ def test_public_exports_are_intentional() -> None:
         "book",
         "builtin_lexicon",
         "epub",
+        "pdf",
         "Pipeline",
         "Source",
         "MetadataIntent",
         "BookMetadata",
         "ChapterInspection",
         "BookInspection",
+        "ChapterAnnouncement",
+        "resolve_chapter_titles",
         "Voice",
         "ValidationIssue",
         "ValidationResult",

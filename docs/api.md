@@ -197,3 +197,18 @@ member. Human-readable messages are not a stable matching interface. See
 
 ::: kenkui.CancelledError
 
+
+## Chapter announcements
+
+`Pipeline.chapter_titles(*, enabled=True, pause_ms=750, overrides=None) -> Pipeline`
+configures narrator announcements. New `tts()` pipelines enable them unless this
+operation explicitly disables them. `overrides` maps stable chapter IDs to spoken
+text (up to 500 characters) or `None` to exclude a chapter. Pauses accept integer
+milliseconds from 0 to 60,000.
+
+`resolve_chapter_titles(inspection, *, enabled=True, overrides=None)` returns an
+immutable tuple of `ChapterAnnouncement` values with `chapter_id`, `text`, `kind`
+(`inserted`, `existing`, or `omitted`), `heading_end`, and `added_characters`. This
+pure resolver supplies a pre-synthesis preview and the additional canonical
+character count. `ChapterInspection.title_source` records navigation, opening
+heading, document, generated, or unknown provenance.

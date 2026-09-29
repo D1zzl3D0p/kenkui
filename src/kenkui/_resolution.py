@@ -24,7 +24,8 @@ from ._domain.operations import (
     Series,
 )
 from ._domain.planning import SpeakerSpan  # noqa: TC001 - dataclass field
-from ._source import snapshot_source, source_digest
+from ._source import source_digest
+from ._source_adapter import snapshot_document
 from .errors import ErrorCode, SourceError, ValidationError
 from .inspection import BookInspection, CastingInspection
 from .observability import get_logger, log_event
@@ -139,7 +140,7 @@ def resolve_inputs(
     )
     record = resolve_attribution(
         inspection,
-        digest,
+        inspection._preparation_identity or digest,  # noqa: SLF001
         attributing.model_id,
         roster_model_id=inferring.model_id if inferring is not None else None,
         identity_model_id=(
@@ -300,7 +301,9 @@ def _with_roster_checkpoint(
     """Attach reviewed input only to the exact source for which it was prepared."""
     if checkpoint is None:
         return inspection
-    if checkpoint.source_hash != digest:
+    if checkpoint.source_hash != digest or (
+        checkpoint.inspection._preparation_identity != inspection._preparation_identity  # noqa: SLF001
+    ):
         raise SourceError(ErrorCode.SOURCE_CHANGED)
     return replace(inspection, roster=checkpoint.inspection.roster)
 
@@ -310,8 +313,12 @@ def inspect_source(
 ) -> tuple[BookInspection, str]:
     """Read source information and its identity from the same private copy."""
     with TemporaryDirectory(prefix="kenkui-resolution-") as workspace:
-        snapshot = Path(workspace) / "source.epub"
-        digest = snapshot_source(pipeline.source.path, snapshot, cancel)
+        copied = snapshot_document(
+            pipeline.source.path, pipeline.source.format, Path(workspace), cancel
+        )
+        snapshot, digest = copied.path, copied.source_hash
+        if pipeline._prepared is not None and pipeline._prepared.source_hash != digest:  # noqa: SLF001
+            raise SourceError(ErrorCode.SOURCE_CHANGED)
         snapshot_pipeline = replace(
             pipeline,
             source=replace(pipeline.source, path=snapshot),

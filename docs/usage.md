@@ -975,3 +975,33 @@ book.tts().write("dune.m4b", overwrite=True)
 
 A rule scoped elsewhere never moves a segment identity, so retuning one line
 does not re-render a library.
+
+## Spoken chapter titles
+
+New `.tts()` pipelines announce authored chapter titles in the narrator voice by default.
+An opening heading matching the title is spoken once. Generated `Untitled section N`
+labels and labels of unknown provenance are skipped unless overridden. The original
+source text, character attribution offsets, and navigation labels remain unchanged.
+
+```python
+# Turn off added announcements. Existing headings remain part of the source text.
+book = kk.book("novel.epub").chapter_titles(enabled=False)
+
+# Or adjust the pause and provide spoken-only labels/exclusions by chapter ID.
+book = kk.book("novel.epub").chapter_titles(
+    pause_ms=750,
+    overrides={"chapter-id": "Chapter twelve", "front-matter-id": None},
+)
+preview = kk.resolve_chapter_titles(
+    book.inspect(), overrides={"chapter-id": "Chapter twelve"}
+)
+```
+
+The existing inter-chapter gap precedes the announcement. The title pause follows it;
+overlapping automatic heading/paragraph/scene pauses use the longest value. Explicit
+source silence rules take precedence for reused headings. No silence is added at the
+end of the book. Timestamps include the new speech and gaps. Changing only `pause_ms`
+reuses speech audio; adding or removing announcements can change segment ordinals.
+Quotes count added title characters once, before pronunciation expansion. The source
+`inspect()` and `script()` views retain canonical text; use the announcement resolver
+for the generated-speech preview.
