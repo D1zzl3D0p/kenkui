@@ -38,17 +38,37 @@ def test_assets_require_complete_local_model_and_track_changes(tmp_path: Path) -
     assert before != asset_identity(tmp_path)
 
 
-@pytest.mark.parametrize("failure", [None, "partial", "errors", "limit", "assets"])
 @pytest.mark.parametrize("ocr_use_cls", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "real_ocr_options"),
+    [
+        (None, False),
+        ("partial", False),
+        ("errors", False),
+        ("limit", False),
+        ("assets", False),
+        (None, True),
+    ],
+)
+
 def test_backend_routes_batches_and_rejects_incomplete_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str | None,
     *,
     ocr_use_cls: bool,
+    real_ocr_options: bool,
 ) -> None:
     """Native and scanned routes use offline CPU policies and account for pages."""
     _assets(tmp_path)
+    ocr_api = (
+        pytest.importorskip("docling.datamodel.pipeline_options")
+        if real_ocr_options
+        else SimpleNamespace(
+            RapidOcrOptions=SimpleNamespace,
+            OcrMode=SimpleNamespace(FULL_PAGE="full_page"),
+        )
+    )
     pages = tuple(
         replace(_page(i, ()), disposition="unresolved", image_coverage=1)
         if i == 3
@@ -82,7 +102,8 @@ def test_backend_routes_batches_and_rejects_incomplete_results(
         "docling.datamodel.base_models": {"InputFormat": SimpleNamespace(PDF="pdf")},
         "docling.datamodel.pipeline_options": {
             "PdfPipelineOptions": SimpleNamespace,
-            "RapidOcrOptions": SimpleNamespace,
+            "RapidOcrOptions": ocr_api.RapidOcrOptions,
+            "OcrMode": ocr_api.OcrMode,
         },
         "docling.document_converter": {
             "DocumentConverter": converter,
@@ -135,7 +156,7 @@ def test_backend_routes_batches_and_rejects_incomplete_results(
     assert [policy.do_ocr for policy in policies] == [False, True]
     assert all(not policy.enable_remote_services for policy in policies)
     assert all(policy.accelerator_options.device == "cpu" for policy in policies)
-    assert policies[1].ocr_options.force_full_page_ocr
     assert policies[1].ocr_options.use_cls is ocr_use_cls
+    assert policies[1].ocr_options.mode == ocr_api.OcrMode.FULL_PAGE
     assert len(result.narration) == 3
     assert "pdf.ocr" in stages
