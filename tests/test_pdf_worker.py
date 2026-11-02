@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
 import sys
 from dataclasses import asdict
 from typing import TYPE_CHECKING
@@ -148,6 +151,49 @@ def test_worker_memory_and_output_failures(
             None,
         )
     assert failure.value.code == expected
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process group lifecycle")
+@pytest.mark.parametrize("deny_after_reap", [False, True])
+def test_exit_race_retries_group_signal_without_ignoring_persistent_denial(
+    monkeypatch: pytest.MonkeyPatch, *, deny_after_reap: bool
+) -> None:
+    """An exited leader must not prevent shutdown of remaining group members."""
+    from kenkui._pdf import worker
+
+    leader = subprocess.Popen(
+        [sys.executable, "-c", "import time;time.sleep(30)"], process_group=0
+    )
+    member = subprocess.Popen(
+        [sys.executable, "-c", "import time;time.sleep(30)"],
+        process_group=leader.pid,
+    )
+    original = os.killpg
+    denied = False
+
+    def signal_group(pid: int, number: int) -> None:
+        nonlocal denied
+        if not denied or deny_after_reap:
+            if not denied:
+                leader.terminate()
+            denied = True
+            raise PermissionError
+        original(pid, number)
+
+    try:
+        monkeypatch.setattr(os, "killpg", signal_group)
+        if deny_after_reap:
+            with pytest.raises(PermissionError):
+                worker._stop(leader)  # noqa: SLF001 - process shutdown regression
+        else:
+            worker._stop(leader)  # noqa: SLF001 - process shutdown regression
+            assert member.wait(timeout=5) in (-signal.SIGTERM, -signal.SIGKILL)
+        assert leader.returncode == -signal.SIGTERM
+    finally:
+        for process in (leader, member):
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
 
 
 def test_running_worker_is_reaped_when_cancelled(tmp_path: Path) -> None:

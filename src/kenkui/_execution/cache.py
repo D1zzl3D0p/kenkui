@@ -98,6 +98,33 @@ class CacheStore:
         self._database = self._directory / _DB_NAME
         self._enabled = self._initialize()
 
+    def can_retain_audio(self) -> bool:
+        """Probe the real metadata and payload write paths before synthesis."""
+        if not self._enabled:
+            return False
+        payload = secrets.token_bytes(32)
+        digest = hashlib.sha256(payload).hexdigest()
+        try:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.rollback()
+            with self._payload_fd() as payload_fd:
+                with self._digest_lock(payload_fd, digest) as locked:
+                    if not locked:
+                        return False
+                    publication = self._publish_payload_locked(
+                        payload_fd, digest, payload
+                    )
+                    if publication is None:
+                        return False
+                    if publication.newly_created:
+                        self._unlink_publication_locked(
+                            payload_fd, digest, payload, publication.identity
+                        )
+            return True
+        except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError):
+            return False
+
     def prepare_run(self, plan: ExecutionPlan) -> _RunContext | None:
         """Record private book/voice/run metadata, failing open on any fault."""
         if not self._enabled:
@@ -213,21 +240,21 @@ class CacheStore:
         task: SynthesisTask,
         audio: SynthesizedAudio,
         context: _RunContext | None,
-    ) -> None:
-        """Publish payload and metadata under one digest lock, then maintain quotas."""
+    ) -> bool:
+        """Acknowledge durable payload and metadata publication under one lock."""
         if not self._enabled or not _safe_hex(key) or not _audio_matches(audio, task):
-            return
+            return False
         digest = hashlib.sha256(audio.pcm_s16le).hexdigest()
         try:
             with self._payload_fd() as payload_fd:
                 with self._digest_lock(payload_fd, digest) as locked:
                     if not locked:
-                        return
+                        return False
                     publication = self._publish_payload_locked(
                         payload_fd, digest, audio.pcm_s16le
                     )
                     if publication is None:
-                        return
+                        return False
                     try:
                         now = time.time_ns()
                         with self._connection() as connection:
@@ -300,10 +327,11 @@ class CacheStore:
                                 audio.pcm_s16le,
                                 publication.identity,
                             )
-                        return
+                        return False
             self._maintenance()
         except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError):
-            return
+            return False
+        return True
 
     def clear_book(self, book_id: str) -> None:
         """Delete one book's segments and relational rows, then reclaim payloads.

@@ -109,7 +109,9 @@ fingerprints. Checkpoints currently live in memory only.
 ## Optional layout and OCR
 
 Install `pip install 'kenkui[pdf-layout]'` and provision models separately using
-Docling's `docling-tools models download` command. The selected layout model is
+Docling's `docling-tools models download` command. The extra pins RapidOCR 3.9.2
+because Docling 2.128.0 requires a language-table API removed in RapidOCR 3.10;
+keep the extra's dependency versions together when upgrading. The selected layout model is
 `docling-project/docling-layout-heron`; the OCR backend is RapidOCR with
 ONNX Runtime. Use `docling-tools models download --help` for the installed
 version's model selectors. English OCR assets can be provisioned with:

@@ -143,6 +143,16 @@ book stops holding its rendered PCM on disk. Pass ``keep_audio_cache=True`` to
 keep the segments and re-render the book without paying for synthesis again
 (for example while retuning pauses or voices).
 
+Requested retention is required: `keep_audio_cache=True` and `preview()` raise
+`audio_cache_unavailable` if the audio cache cannot be written, before synthesis
+starts when detected during preflight. A later cache write failure also prevents
+publication. Without requested retention, rendering may proceed without caching.
+Set `KENKUI_AUDIO_CACHE_DIR` to an absolute writable private directory to override
+the platform default audio cache, for example
+`KENKUI_AUDIO_CACHE_DIR=/absolute/path/to/audio-cache`. This does not move model,
+voice, or casting assets. Retention supports reuse of raw synthesis segments;
+it is not an export of the assembled audiobook.
+
 ```python
 from kenkui import CancellationToken, CastResolved, StageProgress
 

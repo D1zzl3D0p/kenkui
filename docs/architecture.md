@@ -105,9 +105,10 @@ join; no unbounded join is allowed.
 ## Private cache semantics and ownership
 
 Segment PCM caching is a private execution optimization, never a public pipeline
-parameter or source of semantic truth. Only internal `ExecutionBindings` can own
-a cache directory. Public callers cannot choose its location, issue SQL, select
-a schema, or trust it instead of parsing/planning current input. No cache object
+parameter or source of semantic truth. Internal `ExecutionBindings` own the
+cache directory; operators may override its root with `KENKUI_AUDIO_CACHE_DIR`.
+Public callers cannot issue SQL, select a schema, or trust the cache instead of
+parsing/planning current input. No cache object
 or SQLite connection is retained or sent to a child.
 
 The owner-only root contains `cache.sqlite3` and content-addressed PCM sidecars
@@ -130,11 +131,17 @@ segment identity, so legacy PCM entries are clean misses. The migration neither
 deletes nor rewrites those rows or payloads. Cache pruning remains an explicit
 operator/publication choice; check free space before a large library rerender.
 
-Caching is offline and **fail-open for rendering**: missing/corrupt/truncated or
+Caching is offline and **fail-open when retention is optional**: missing/corrupt/truncated or
 hash-mismatched payloads, malformed metadata, unknown schema, lock timeout,
 unwritable storage, or SQLite failure become misses. Such failures cannot turn an
 otherwise correct uncached render into failure. This does not mean unsafe data is
 accepted; it means the cache is bypassed.
+
+Explicit `keep_audio_cache=True` and previews require retention: metadata and
+payload writes are probed before synthesis, and each new segment must be saved
+before publication. Unavailable storage raises `audio_cache_unavailable`.
+Chapter checkpoints are not restored in this mode because they do not contain
+the individual raw segment payloads required for reuse.
 
 Retention is per-book and explicit. A successful publication clears the
 published book's rows, runs, book, and unreferenced payloads, so a finished

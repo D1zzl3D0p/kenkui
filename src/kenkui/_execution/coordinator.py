@@ -109,6 +109,10 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
 ) -> Result:
     """Execute one immutable plan in order and transactionally publish its artifact."""
     metadata_intent = pipeline.metadata_intent
+    if keep_audio_cache and (
+        bindings.cache_store is None or not bindings.cache_store.can_retain_audio()
+    ):
+        raise RenderError(ErrorCode.AUDIO_CACHE_UNAVAILABLE)
     cover_file, cover_content_hash = (
         (None, None) if preview else _resolve_cover(metadata_intent)
     )
@@ -184,6 +188,8 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
             if bindings.cache_store is not None
             else None
         )
+        if keep_audio_cache and cache_context is None:
+            raise RenderError(ErrorCode.AUDIO_CACHE_UNAVAILABLE)
         emitter.emit_progress("planning", 1, 1)
         _check_cancel(cancel)
         emitter.emit_stage_completed("planning")
@@ -198,6 +204,7 @@ def execute_sequential(  # noqa: PLR0913, PLR0915 - explicit orchestration bound
             workspace=workspace,
             cache_store=bindings.cache_store,
             cache_context=cache_context,
+            require_audio_cache=keep_audio_cache,
         )
         assembled = _assemble(
             plan,
@@ -327,6 +334,7 @@ def _render(  # noqa: PLR0912, PLR0913, PLR0915, C901 - ordered synthesis and du
     workspace: Path,
     cache_store: CacheStore | None = None,
     cache_context: _RunContext | None = None,
+    require_audio_cache: bool = False,
 ) -> tuple[tuple[SegmentAudio, ...], tuple[Path, ...]]:
     emitter.emit_stage_started("render")
     _check_cancel(cancel)
@@ -364,13 +372,17 @@ def _render(  # noqa: PLR0912, PLR0913, PLR0915, C901 - ordered synthesis and du
         )
         for chapter_id in chapter_ids
     }
-    restored = restore_chapters(
-        plan,
-        tasks,
-        spill_directory,
-        max_bytes=MAX_TOTAL_PCM_BYTES,
-        engine=engine_specification,
-        cancel=cancel,
+    restored = (
+        {}
+        if require_audio_cache
+        else restore_chapters(
+            plan,
+            tasks,
+            spill_directory,
+            max_bytes=MAX_TOTAL_PCM_BYTES,
+            engine=engine_specification,
+            cancel=cancel,
+        )
     )
     miss_indices = [i for i in miss_indices if tasks[i].chapter_id not in restored]
     completed_chapters = 0
@@ -432,7 +444,11 @@ def _render(  # noqa: PLR0912, PLR0913, PLR0915, C901 - ordered synthesis and du
             if padding:
                 spill.write(padding)
             if cache_store is not None and index in cache_keys and index not in cached:
-                cache_store.store(cache_keys[index], segment, task, item, cache_context)
+                stored = cache_store.store(
+                    cache_keys[index], segment, task, item, cache_context
+                )
+                if require_audio_cache and not stored:
+                    raise RenderError(ErrorCode.AUDIO_CACHE_UNAVAILABLE)
             if last_segment[segment.chapter_id] == index:
                 parts.append(spill.commit())
                 spill = None
