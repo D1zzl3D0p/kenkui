@@ -38,6 +38,7 @@ def test_assets_require_complete_local_model_and_track_changes(tmp_path: Path) -
     assert before != asset_identity(tmp_path)
 
 
+@pytest.mark.parametrize("ocr_use_cls", [False, True])
 @pytest.mark.parametrize(
     ("failure", "real_ocr_options"),
     [
@@ -54,6 +55,7 @@ def test_backend_routes_batches_and_rejects_incomplete_results(
     monkeypatch: pytest.MonkeyPatch,
     failure: str | None,
     *,
+    ocr_use_cls: bool,
     real_ocr_options: bool,
 ) -> None:
     """Native and scanned routes use offline CPU policies and account for pages."""
@@ -128,7 +130,9 @@ def test_backend_routes_batches_and_rejects_incomplete_results(
     )
     options = PdfOptions(
         max_characters=1 if failure == "limit" else 1000,
-        layout=PdfLayoutOptions(artifacts_path=str(tmp_path), batch_pages=1),
+        layout=PdfLayoutOptions(
+            artifacts_path=str(tmp_path), batch_pages=1, ocr_use_cls=ocr_use_cls
+        ),
     )
     if failure == "assets":
         (tmp_path / "RapidOcr").rmdir()
@@ -151,6 +155,7 @@ def test_backend_routes_batches_and_rejects_incomplete_results(
     assert [policy.do_ocr for policy in policies] == [False, True]
     assert all(not policy.enable_remote_services for policy in policies)
     assert all(policy.accelerator_options.device == "cpu" for policy in policies)
+    assert policies[1].ocr_options.use_cls is ocr_use_cls
     assert policies[1].ocr_options.mode == ocr_api.OcrMode.FULL_PAGE
     assert len(result.narration) == 3
     assert "pdf.ocr" in stages
