@@ -52,6 +52,9 @@ pdf = [
 ]
 pdf-layout = [
     "docling==2.128.0",
+    # Docling imports PP_OCRV6_LANGS, removed by RapidOCR 3.10. Keep the
+    # lockfile-tested release until Docling supports the replacement API.
+    "rapidocr==3.9.2",
     "onnxruntime>=1.20,<2",
     "pdfplumber==0.11.10",
     "psutil>=7,<8",

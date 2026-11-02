@@ -19,6 +19,7 @@ from kenkui._audio.m4b import FakeArtifactAssembler
 from kenkui._domain.grid import Unit
 from kenkui._domain.planning import SpeakerSpan
 from kenkui._epub.identifiers import chapter_id
+from kenkui._execution.cache import CacheStore
 from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import EngineSpecification
 from kenkui._tts import production
@@ -139,7 +140,7 @@ class _NoCharactersClient:
 
 @pytest.fixture
 def resolved_book(
-    unresolved_book: kk.Pipeline, monkeypatch: pytest.MonkeyPatch
+    unresolved_book: kk.Pipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> kk.Pipeline:
     """``unresolved_book`` with quotes attributed and cast resolved, no network.
 
@@ -163,7 +164,11 @@ def resolved_book(
         compatible_model_revisions=("fake-v1",),
     )
     bindings = ExecutionBindings(
-        EngineSpecification.fake(), FakeArtifactAssembler(), narrator, "fake-v1"
+        EngineSpecification.fake(),
+        FakeArtifactAssembler(),
+        narrator,
+        "fake-v1",
+        CacheStore(tmp_path / "audio-cache"),
     )
     monkeypatch.setattr(
         "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings

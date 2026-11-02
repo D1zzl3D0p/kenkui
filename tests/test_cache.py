@@ -39,6 +39,7 @@ from kenkui._execution.process_pool import (
     WorkerTestMode,
 )
 from kenkui._tts.fake import FAKE_CHANNELS, FAKE_SAMPLE_RATE_HZ, DeterministicFakeEngine
+from kenkui._tts.production import audio_cache_root, default_cache_root
 from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
 from kenkui.limits import MAX_SEGMENT_PCM_BYTES
 from test_execution import _pipeline, _voice
@@ -87,6 +88,143 @@ def _legacy_plain_segment_id(segment: SpeechSegment) -> str:
     identity = json.dumps(material, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return f"seg-{NORMALIZATION_SCHEMA_VERSION}-v2-{digest}"
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_unavailable_cache_obeys_explicit_retention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, keep: bool
+) -> None:
+    pipeline, _, _ = _pipeline(tmp_path)
+
+    def denied(_self: CacheStore) -> NoReturn:
+        raise PermissionError("cache storage denied")
+
+    monkeypatch.setattr(CacheStore, "_create_or_validate_root", denied)
+    cache = CacheStore(tmp_path / "denied-cache")
+    bindings = ExecutionBindings(
+        EngineSpecification.fake(), FakeArtifactAssembler(), _voice(), "fake-v1", cache
+    )
+    monkeypatch.setattr(
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
+    output = tmp_path / "book.m4b"
+    if keep:
+
+        def forbidden(*args: object, **kwargs: object) -> NoReturn:
+            raise AssertionError("retention failure must precede synthesis")
+
+        monkeypatch.setattr("kenkui._execution.coordinator.render_spawned", forbidden)
+        with pytest.raises(kk.RenderError) as error:
+            pipeline.write_m4b(output, keep_audio_cache=True, workers=1)
+        assert error.value.code == "audio_cache_unavailable"
+        assert not output.exists()
+    else:
+        pipeline.write_m4b(output, keep_audio_cache=False, workers=1)
+        assert output.exists()
+
+
+def test_retention_probe_checks_payload_storage_without_leaving_files(
+    tmp_path: Path,
+) -> None:
+    cache = CacheStore(tmp_path / "cache")
+    assert cache.can_retain_audio()
+    assert list((tmp_path / "cache" / "payloads").iterdir()) == []
+
+
+def test_required_cache_store_failure_prevents_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, _, _ = _pipeline(tmp_path)
+    cache = CacheStore(tmp_path / "cache")
+    bindings = ExecutionBindings(
+        EngineSpecification.fake(), FakeArtifactAssembler(), _voice(), "fake-v1", cache
+    )
+    monkeypatch.setattr(
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
+    monkeypatch.setattr(CacheStore, "store", lambda *_args: False)
+    output = tmp_path / "book.m4b"
+    with pytest.raises(kk.RenderError) as error:
+        pipeline.write_m4b(output, keep_audio_cache=True, workers=1)
+    assert error.value.code == "audio_cache_unavailable"
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("override", ["relative/cache", ""])
+def test_audio_cache_override_must_be_absolute(
+    monkeypatch: pytest.MonkeyPatch, override: str
+) -> None:
+    monkeypatch.setenv("KENKUI_AUDIO_CACHE_DIR", override)
+    with pytest.raises(kk.RenderError) as error:
+        audio_cache_root()
+    assert error.value.code == "audio_cache_unavailable"
+
+
+def test_audio_cache_override_does_not_move_model_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = default_cache_root()
+    monkeypatch.setenv("KENKUI_AUDIO_CACHE_DIR", str(tmp_path / "audio"))
+    assert audio_cache_root() == tmp_path / "audio"
+    assert default_cache_root() == original
+    assert CacheStore(audio_cache_root()).can_retain_audio()
+
+
+def test_retention_checks_payload_write_failure_before_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = CacheStore(tmp_path / "cache")
+    monkeypatch.setattr(CacheStore, "_publish_payload_locked", lambda *_args: None)
+    assert not cache.can_retain_audio()
+
+
+def test_required_retention_rejects_missing_run_metadata_before_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, _, _ = _pipeline(tmp_path)
+    bindings = ExecutionBindings(
+        EngineSpecification.fake(),
+        FakeArtifactAssembler(),
+        _voice(),
+        "fake-v1",
+        CacheStore(tmp_path / "cache"),
+    )
+    monkeypatch.setattr(
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
+    monkeypatch.setattr(CacheStore, "prepare_run", lambda *_args: None)
+
+    def forbidden(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("metadata failure must precede synthesis")
+
+    monkeypatch.setattr("kenkui._execution.coordinator.render_spawned", forbidden)
+    with pytest.raises(kk.RenderError) as error:
+        pipeline.write_m4b(tmp_path / "book.m4b", keep_audio_cache=True, workers=1)
+    assert error.value.code == "audio_cache_unavailable"
+    assert not (tmp_path / "book.m4b").exists()
+
+
+def test_retention_cannot_substitute_chapter_checkpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pipeline, _, _ = _pipeline(tmp_path)
+    cache = CacheStore(tmp_path / "cache")
+    bindings = ExecutionBindings(
+        EngineSpecification.fake(), FakeArtifactAssembler(), _voice(), "fake-v1", cache
+    )
+    monkeypatch.setattr(
+        "kenkui._resolution._execution_bindings", lambda _voice_id, **_cast: bindings
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("chapter checkpoint lacks raw segment retention")
+
+    monkeypatch.setattr("kenkui._execution.coordinator.restore_chapters", forbidden)
+    pipeline.write_m4b(tmp_path / "book.m4b", keep_audio_cache=True, workers=1)
+    with sqlite3.connect(tmp_path / "cache" / "cache.sqlite3") as connection:
+        assert (
+            connection.execute("SELECT count(*) FROM segment_cache").fetchone()[0] == 2
+        )
 
 
 def test_cache_cold_warm_public_equivalence_and_no_warm_spawn(
