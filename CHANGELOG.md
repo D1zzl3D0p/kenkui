@@ -6,6 +6,8 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+## [10.2.1] - 2026-11-02
+
 ### Fixed
 
 - Preserve leading-dot decimal quantities during pronunciation: `.085` is read
@@ -22,6 +24,19 @@ All notable changes to Kenkui are recorded here. The format follows
   language-table API that this Docling release requires.
 - Configure full-page OCR through Docling's typed `OcrMode.FULL_PAGE` API instead
   of its legacy `force_full_page_ocr` compatibility keyword.
+
+- Normalize word-internal curly apostrophes immediately before Pocket inference
+  so contractions use the tokenizer's trained apostrophe token. Canonical text
+  stays unchanged, and earlier cached audio is regenerated.
+- Expose `PdfLayoutOptions(ocr_use_cls=False)` for verified upright scans whose
+  lines the OCR orientation classifier incorrectly rotates. The default remains
+  enabled for mixed-orientation documents.
+- Preserve PDF worker errors when an exiting process group rejects a shutdown
+  signal, while still requiring surviving OCR processes to terminate.
+- Require writable segment storage when `keep_audio_cache=True` or previews
+  request retention. Unavailable storage raises `audio_cache_unavailable`
+  instead of silently discarding reusable audio. Operators can set an absolute
+  private cache directory with `KENKUI_AUDIO_CACHE_DIR`.
 
 ## [10.2.0] - 2026-09-29
 
@@ -152,7 +167,8 @@ generation.
   and internal document titles. Calibre split continuations inherit the label
   with a part number; filename-only titles use the numbered fallback.
 
-[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.2.0...HEAD
+[Unreleased]: https://github.com/D1zzl3D0p/kenkui/compare/v10.2.1...HEAD
+[10.2.1]: https://github.com/D1zzl3D0p/kenkui/compare/v10.2.0...v10.2.1
 [10.2.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.1...v10.2.0
 [10.1.1]: https://github.com/D1zzl3D0p/kenkui/compare/v10.1.0...v10.1.1
 [10.1.0]: https://github.com/D1zzl3D0p/kenkui/compare/v10.0.0...v10.1.0
