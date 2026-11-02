@@ -29,8 +29,7 @@ if TYPE_CHECKING:
 def _stop(process: subprocess.Popen[bytes]) -> None:
     """Terminate the entire process group, including any OCR subprocess."""
     if os.name == "posix":
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
+        _signal_process_group(process, signal.SIGTERM)
     elif process.poll() is None:
         process.terminate()
     try:
@@ -39,9 +38,54 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         process.kill()
     finally:
         if os.name == "posix":
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+            _signal_process_group(process, signal.SIGKILL)
         process.wait()
+
+
+def _signal_process_group(
+    process: subprocess.Popen[bytes], number: signal.Signals
+) -> None:
+    """Retry a macOS zombie-group race after reaping the exited leader."""
+    with contextlib.suppress(ProcessLookupError):
+        try:
+            os.killpg(process.pid, number)
+        except PermissionError as error:
+            # macOS can report EPERM while an exiting group leader is becoming
+            # a zombie, just before waitpid can reap it. Allow the same bounded
+            # grace as normal shutdown, then still signal surviving OCR children.
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                raise error from None
+            try:
+                os.killpg(process.pid, number)
+            except PermissionError:
+                # A group containing only zombies also returns EPERM on macOS.
+                # Never mistake a live or unreadable group for successful cleanup.
+                if not _group_is_terminated(process.pid):
+                    raise
+
+
+def _group_is_terminated(group_id: int) -> bool:
+    """Require positive evidence that no process-group member can execute."""
+    import psutil  # noqa: PLC0415 - required only by the layout worker
+
+    for pid in psutil.pids():
+        if pid < 1:
+            continue
+        try:
+            if os.getpgid(pid) != group_id:
+                continue
+            if psutil.Process(pid).status() not in (
+                psutil.STATUS_ZOMBIE,
+                psutil.STATUS_DEAD,
+            ):
+                return False
+        except (ProcessLookupError, psutil.NoSuchProcess):
+            continue
+        except (PermissionError, psutil.AccessDenied):
+            return False
+    return True
 
 
 def _stage(
