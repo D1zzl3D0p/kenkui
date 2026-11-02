@@ -135,6 +135,7 @@ prepared = (
             max_memory_mb=4096,
             timeout_seconds=1800,
             batch_pages=16,
+            ocr_use_cls=True,
         ),
     )
     .prepare()
@@ -148,6 +149,14 @@ leave headroom for the parent process and any already loaded speech model.
 Cancellation and failures terminate the worker process group. Missing packages,
 missing assets, incomplete extraction, timeouts and invalid output have distinct
 error codes. Auto mode does not silently downgrade to native mode.
+
+`ocr_use_cls` controls RapidOCR's line-orientation classifier and defaults to
+`True`. For scans you have verified are upright, set `ocr_use_cls=False` if the
+classifier incorrectly rotates individual lines and produces garbled text.
+Keep it enabled for mixed-orientation scans; disabling it does not rotate
+upside-down text into the correct orientation. Inspect the prepared text before
+narration. This setting crosses the worker boundary and is recorded in the PDF
+preparation resources.
 
 Digital pages retain original text. Model layout is accepted only if every native
 line is covered exactly once and the projected words agree; otherwise the page

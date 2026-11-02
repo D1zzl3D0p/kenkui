@@ -212,6 +212,15 @@ def test_pdf_options_reject_invalid_runtime_limits(field: str, value: object) ->
         replace(PdfOptions(), **{field: value})  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("value", [None, 0, 1, "false", [], {}])
+def test_pdf_orientation_option_rejects_non_boolean_values(value: object) -> None:
+    """A false-like value must not silently disable orientation detection."""
+    from kenkui._pdf.options import PdfLayoutOptions  # noqa: PLC0415
+
+    with pytest.raises(ValidationError):
+        replace(PdfLayoutOptions(), ocr_use_cls=value)  # type: ignore[arg-type]
+
+
 def test_step_requires_an_executable_function() -> None:
     """A callable descriptor must not hide a missing implementation."""
     with pytest.raises(ValidationError):

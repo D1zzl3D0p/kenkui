@@ -250,6 +250,7 @@ def extract_layout(  # noqa: C901 - explicit offline setup and bounded page rout
                     lang=[options.layout.ocr_language],
                     force_full_page_ocr=True,
                     backend="onnxruntime",
+                    use_cls=options.layout.ocr_use_cls,
                 )
             converters[needs_ocr] = DocumentConverter(
                 format_options={
@@ -284,6 +285,7 @@ def extract_layout(  # noqa: C901 - explicit offline setup and bounded page rout
             ("pdfplumber", importlib.metadata.version("pdfplumber")),
             ("layout_model", identity),
             ("ocr_language", options.layout.ocr_language),
+            ("ocr_use_cls", str(options.layout.ocr_use_cls).lower()),
             ("adapter", "layout-v1"),
         ),
     )

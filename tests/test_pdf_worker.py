@@ -240,11 +240,13 @@ def test_worker_reports_validated_stages_before_returning(tmp_path: Path) -> Non
             _stage(path, None, stages.append)
 
 
+@pytest.mark.parametrize("ocr_use_cls", [False, True])
 def test_child_success_and_sanitized_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, ocr_use_cls: bool
 ) -> None:
     """The entrypoint serializes evidence and never exposes exception details."""
     from kenkui._pdf import child
+    from kenkui._pdf.options import PdfOptions
 
     request = tmp_path / "request.json"
     result = tmp_path / "result.json"
@@ -252,7 +254,7 @@ def test_child_success_and_sanitized_failures(
     request.write_text(
         json.dumps(
             {
-                "layout": asdict(PdfLayoutOptions()),
+                "layout": asdict(PdfLayoutOptions(ocr_use_cls=ocr_use_cls)),
                 "language": "en",
                 "max_pages": 100,
                 "max_characters": 10000,
@@ -265,6 +267,9 @@ def test_child_success_and_sanitized_failures(
     monkeypatch.setattr(sys, "argv", ["child", str(request), str(result)])
 
     def extract(*args: object) -> PdfDocument:
+        options = args[2]
+        assert isinstance(options, PdfOptions)
+        assert options.layout.ocr_use_cls is ocr_use_cls
         callback = args[-1]
         assert callable(callback)
         callback("pdf.ocr")
