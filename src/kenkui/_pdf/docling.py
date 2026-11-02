@@ -202,6 +202,7 @@ def extract_layout(  # noqa: C901 - explicit offline setup and bounded page rout
         )
         from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
         from docling.datamodel.pipeline_options import (  # noqa: PLC0415
+            OcrMode,
             PdfPipelineOptions,
             RapidOcrOptions,
         )
@@ -248,7 +249,7 @@ def extract_layout(  # noqa: C901 - explicit offline setup and bounded page rout
             if needs_ocr:
                 policy.ocr_options = RapidOcrOptions(
                     lang=[options.layout.ocr_language],
-                    force_full_page_ocr=True,
+                    mode=OcrMode.FULL_PAGE,
                     backend="onnxruntime",
                 )
             converters[needs_ocr] = DocumentConverter(
