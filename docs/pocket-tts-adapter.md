@@ -64,6 +64,15 @@ in the parent, workers do not share model state, and each worker removes its
 snapshot when it exits. Provider exceptions are sanitized as stable load, voice,
 inference, or invalid-audio errors.
 
+Immediately before inference, the adapter replaces U+2018 and U+2019 with the
+ASCII apostrophe only when the mark occurs between alphabetic characters.
+The pinned tokenizer represents these curly apostrophes as byte fallbacks;
+normalizing word-internal marks gives contractions and possessives the trained
+apostrophe token. Canonical source text, inspection, and speech scripts retain
+their original typography. Other characters, quotation delimiters, and math
+primes are unchanged. This model-prompt recipe has its own semantic identity,
+so segment and chapter audio cached before normalization are not reused.
+
 ## Package inspection basis
 
 The adapter targets these inspected 2.1.0 interfaces:

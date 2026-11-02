@@ -19,6 +19,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
 
+from kenkui._tts.prompt_normalization import (
+    PROMPT_NORMALIZATION_RECIPE,
+    normalize_prompt_apostrophes,
+)
 from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
 
@@ -113,6 +117,7 @@ class PocketEngineConfig:
             ),
             "model_revision": self.model_revision,
             "package_version": self.package_version,
+            "prompt_normalization": PROMPT_NORMALIZATION_RECIPE,
             "sample_rate_hz": self.sample_rate_hz,
             # Sorted by digest so cast ordering cannot change the cache key.
             "voices": tuple(
@@ -838,7 +843,9 @@ class PocketTTSEngine:
             task.voice_asset_sha256 or self._config.voices[0].sha256
         )
         try:
-            output = self._model.generate_audio(state, task.text)
+            output = self._model.generate_audio(
+                state, normalize_prompt_apostrophes(task.text)
+            )
             audio = tensor_to_pcm(
                 output, self._tensor_type, task, self._config.sample_rate_hz
             )
