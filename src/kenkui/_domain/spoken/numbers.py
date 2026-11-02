@@ -195,11 +195,13 @@ NumberTier = Literal["off", "conservative", "standard", "aggressive"]
 
 # A number may neither begin nor end inside a word: "COVID19" and "3D" are
 # tokens, not quantities, and reading them aloud is worse than leaving them.
-# The left guard also stops an over-long digit run from being re-matched one
-# character in, which would otherwise read its 15-digit tail aloud.
-_LB = r"(?<![0-9A-Za-z])"
-_RB = r"(?![0-9A-Za-z])"
+# The guards also prevent partial matching inside decimals: a declined `.085`
+# must not become `.eighty-five`, nor may a year rule take the head of `1991.5`.
+# An over-long digit run cannot be re-matched one character in either.
+_LB = r"(?<![0-9A-Za-z.])"
+_RB = r"(?![0-9A-Za-z]|\.\d)"
 _INT = r"(?:\d{1,3}(?:,\d{3})+|\d+)"
+_WHOLE = rf"(?:{_INT}|(?=\.\d))"
 _MAX_DIGITS = 15
 
 _CURRENCY = {
@@ -246,43 +248,45 @@ def _ordinal_suffix(value: int) -> str:
 def _currency(match: re.Match[str]) -> str | None:
     """Read a leading currency symbol with optional cents, decimal, or scale.
 
-    The symbol precedes its amount in writing but follows it in speech, so a
-    scale word has to be pulled inside the match: bound to the integer alone,
-    "$3 million" reads as "three dollars million".
+    An omitted whole part is an explicit zero in speech. Keep the existing cents
+    convention for amounts that supplied a whole part.
     """
     singular, plural = _CURRENCY[match.group(1)]
-    whole = _plain(match.group(2))
+    digits = match.group(2)
+    whole = _plain(digits or "0")
     if whole is None:
         return None
+    sign = "minus " if match.group(0).startswith("-") else ""
     fraction, scale = match.group(3), match.group(4)
     if scale is not None:
         head = (
             decimal_words(str(whole), fraction) if fraction else cardinal_words(whole)
         )
-        return f"{head} {scale} {plural}"
+        return f"{sign}{head} {scale} {plural}"
     if fraction is None:
-        return f"{cardinal_words(whole)} {singular if whole == 1 else plural}"
-    if len(fraction) != _CENTS_DIGITS:
-        return f"{decimal_words(str(whole), fraction)} {plural}"
+        return f"{sign}{cardinal_words(whole)} {singular if whole == 1 else plural}"
+    if not digits or len(fraction) != _CENTS_DIGITS:
+        return f"{sign}{decimal_words(str(whole), fraction)} {plural}"
     unit = singular if whole == 1 else plural
     cents = int(fraction)
     if cents == 0:
-        return f"{cardinal_words(whole)} {unit}"
-    return f"{cardinal_words(whole)} {unit} {cardinal_words(cents)}"
+        return f"{sign}{cardinal_words(whole)} {unit}"
+    return f"{sign}{cardinal_words(whole)} {unit} {cardinal_words(cents)}"
 
 
 def _percent(match: re.Match[str]) -> str | None:
     """Read a percentage, whole or fractional."""
-    whole = _plain(match.group(1))
+    whole = _plain(match.group(1) or "0")
     if whole is None:
         return None
     fraction = match.group(2)
+    sign = "minus " if match.group(0).startswith("-") else ""
     head = (
         cardinal_words(whole)
         if fraction is None
         else decimal_words(str(whole), fraction)
     )
-    return f"{head} percent"
+    return f"{sign}{head} percent"
 
 
 def _ordinal(match: re.Match[str]) -> str | None:
@@ -295,7 +299,7 @@ def _ordinal(match: re.Match[str]) -> str | None:
 
 def _unit(match: re.Match[str]) -> str | None:
     """Read a number followed by a recognized unit abbreviation."""
-    whole = _plain(match.group(2))
+    whole = _plain(match.group(2) or "0")
     if whole is None:
         return None
     singular, plural = _UNITS[match.group(4)]
@@ -312,7 +316,7 @@ def _unit(match: re.Match[str]) -> str | None:
 
 def _decimal(match: re.Match[str]) -> str | None:
     """Read a decimal number."""
-    whole = _plain(match.group(2))
+    whole = _plain(match.group(2) or "0")
     if whole is None:
         return None
     sign = "minus " if match.group(1) else ""
@@ -340,17 +344,19 @@ def conservative_rules() -> tuple[NamedRule, ...]:
     return (
         (
             "currency",
-            re.compile(rf"{_LB}([$£€])({_INT})(?:\.(\d+))?(?:[ ]({scales}))?{_RB}"),
+            re.compile(
+                rf"{_LB}(?:-)?([$£€])({_WHOLE})(?:\.(\d+))?(?:[ ]({scales}))?{_RB}"
+            ),
             _currency,
         ),
-        ("percent", re.compile(rf"{_LB}({_INT})(?:\.(\d+))?%"), _percent),
+        ("percent", re.compile(rf"{_LB}(?:-)?({_WHOLE})(?:\.(\d+))?%"), _percent),
         ("ordinals", re.compile(rf"{_LB}({_INT})(st|nd|rd|th){_RB}"), _ordinal),
         (
             "units",
-            re.compile(rf"{_LB}(-)?({_INT})(?:\.(\d+))?[  ]?({units}){_RB}"),
+            re.compile(rf"{_LB}(-)?({_WHOLE})(?:\.(\d+))?[  ]?({units}){_RB}"),
             _unit,
         ),
-        ("decimals", re.compile(rf"{_LB}(-)?({_INT})\.(\d+){_RB}"), _decimal),
+        ("decimals", re.compile(rf"{_LB}(-)?({_WHOLE})\.(\d+){_RB}"), _decimal),
         ("integers", re.compile(rf"{_LB}(-)?({_INT}){_RB}"), _integer),
     )
 

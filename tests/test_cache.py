@@ -18,6 +18,8 @@ from typing import NoReturn
 import pytest
 
 import kenkui as kk
+import kenkui._domain.planning as planning_module
+import kenkui._domain.spoken as spoken_module
 import kenkui._execution.cache as cache_module
 from kenkui._audio.m4b import FakeArtifactAssembler
 from kenkui._domain.planning import (
@@ -32,6 +34,7 @@ from kenkui._execution.cache import (
     CACHE_SCHEMA_VERSION,
     CacheStore,
 )
+from kenkui._execution.checkpoints import chapter_key
 from kenkui._execution.coordinator import ExecutionBindings
 from kenkui._execution.process_pool import (
     EngineSpecification,
@@ -179,6 +182,53 @@ def test_semantic_key_sensitivity_and_shell_insensitivity(tmp_path: Path) -> Non
     )
     assert store.key_for(plan, segment, task, bad_spec) != baseline
     assert CACHE_SCHEMA_VERSION and AUDIO_CONTRACT_VERSION
+
+
+def test_spoken_recipe_upgrade_invalidates_segment_and_chapter_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new number recipe must not serve cached pre-fix pronunciation audio."""
+    _, source, _ = _pipeline(tmp_path)
+    pipeline = (
+        kk.epub(source)
+        .assign_voice("narrator")
+        .chapter_titles(enabled=False)
+        .pronounce(numbers="standard")
+        .tts()
+    )
+
+    def compile_plan() -> ExecutionPlan:
+        return compile_execution_plan(
+            pipeline,
+            pipeline.inspect(),
+            source_bytes_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+            resolved_voice=_voice(),
+            model_revision="fake-v1",
+        )
+
+    current = compile_plan()
+    monkeypatch.setattr(planning_module, "SPOKEN_FORM_VERSION", "spoken-form-v1")
+    monkeypatch.setattr(spoken_module, "SPOKEN_FORM_VERSION", "spoken-form-v1")
+    legacy = compile_plan()
+    store = CacheStore(tmp_path / "cache")
+    engine = EngineSpecification.fake()
+
+    def segment_key(plan: ExecutionPlan) -> str:
+        segment = plan.segments[0]
+        task = SynthesisTask(
+            segment.id,
+            segment.chapter_id,
+            segment.text,
+            FAKE_SAMPLE_RATE_HZ,
+            FAKE_CHANNELS,
+            MAX_SEGMENT_PCM_BYTES,
+        )
+        return store.key_for(plan, segment, task, engine)
+
+    assert segment_key(current) != segment_key(legacy)
+    assert chapter_key(current, current.segments[0].chapter_id, engine) != chapter_key(
+        legacy, legacy.segments[0].chapter_id, engine
+    )
 
 
 def test_grid_v1_misses_but_preserves_a_legacy_cache_entry(tmp_path: Path) -> None:
