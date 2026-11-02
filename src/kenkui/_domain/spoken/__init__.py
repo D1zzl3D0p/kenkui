@@ -18,7 +18,7 @@ from kenkui._domain.spoken.lexicon import LEXICON_VERSION, lexicon_rules
 from kenkui._domain.spoken.numbers import NumberTier, Rule, number_rules
 from kenkui._domain.spoken.vocalise import VOCALISE_FEATURES, vocalise_rules
 
-SPOKEN_FORM_VERSION = "spoken-form-v1"
+SPOKEN_FORM_VERSION = "spoken-form-v2"
 
 
 def _routed(

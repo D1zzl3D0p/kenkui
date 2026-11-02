@@ -13,6 +13,20 @@ def test_numbers_and_lexicon_apply_in_one_pass() -> None:
     assert result == "one hundred thousand chellos"
 
 
+def test_leading_decimal_prompts_preserve_financial_amounts() -> None:
+    """The book's requested pronunciation configuration keeps every decimal."""
+    assert to_spoken(
+        "$.01 per share; .085 shares; .255 warrants",
+        numbers="standard",
+        lexicon=(),
+        builtin=False,
+        features={"fractions": True, "roman": False},
+    ) == (
+        "zero point zero one dollars per share; zero point zero eight five shares; "
+        "zero point two five five warrants"
+    )
+
+
 def test_caller_lexicon_outranks_numbers() -> None:
     """A caller entry matching at a position beats a number rule there."""
     result = to_spoken(

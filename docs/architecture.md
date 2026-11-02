@@ -288,7 +288,7 @@ otherwise the boundary already exists and only the duration changes.
 
 Normalized chapter text stays the single authority for billing, inspection,
 chapter identity, and attribution offsets. When a caller asks for it, a
-separate versioned `spoken-form-v1` stage derives the string the engine
+separate versioned `spoken-form-v2` stage derives the string the engine
 actually speaks, and nothing else consumes that string. This is what lets
 `normalized_speech_characters` keep describing the book the caller supplied
 while `synthesized_characters` follows the expansion.

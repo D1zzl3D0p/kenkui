@@ -267,3 +267,82 @@ def test_currency_reads_scale_words_and_short_decimals(
     decimal falls out of the match entirely ("one dollar.five billion").
     """
     assert apply_rules(number_rules("conservative"), source) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (".085", "zero point zero eight five"),
+        (".255", "zero point two five five"),
+        ("-.085", "minus zero point zero eight five"),
+        ("$.01", "zero point zero one dollars"),
+        ("-$.01", "minus zero point zero one dollars"),
+        ("£.50", "zero point five zero pounds"),
+        ("€.25", "zero point two five euros"),
+        (".5%", "zero point five percent"),
+        ("-.5%", "minus zero point five percent"),
+        (".5kg", "zero point five kilograms"),
+        ("$5.02", "five dollars two"),
+        ("0.085", "zero point zero eight five"),
+    ],
+)
+def test_leading_decimal_quantities_preserve_the_implicit_zero(
+    source: str, expected: str
+) -> None:
+    """Fractional digits must never fall through to the whole-integer rule."""
+    assert apply_rules(number_rules("standard"), source) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "feature", "expected"),
+    [
+        (".085", "decimals", ".085"),
+        ("0.085", "decimals", "0.085"),
+        ("-.085", "decimals", "-.085"),
+        (".1991", "decimals", ".1991"),
+        ("$.01", "currency", "$zero point zero one"),
+        ("$0.01", "currency", "$zero point zero one"),
+        (".5%", "percent", "zero point five%"),
+        ("0.5%", "percent", "zero point five%"),
+        (".5kg", "units", ".5kg"),
+    ],
+)
+def test_disabled_numeric_features_do_not_rewrite_partial_quantities(
+    source: str, feature: str, expected: str
+) -> None:
+    """Generic fallbacks may compose, but must never consume fractional tails."""
+    assert apply_rules(number_rules("standard", {feature: False}), source) == expected
+
+
+def test_leading_decimal_is_unchanged_when_numbers_are_off() -> None:
+    """The opt-out and explicit opt-in retain their existing feature contract."""
+    assert apply_rules(number_rules("off"), ".085") == ".085"
+    assert (
+        apply_rules(number_rules("off", {"decimals": True}), ".085")
+        == "zero point zero eight five"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("pp.14-15.", "pp.14-fifteen."),
+        ("p.18", "p.18"),
+        ("v1.2.3", "v1.2.3"),
+        ("code.085", "code.085"),
+        ("..085", "..085"),
+    ],
+)
+def test_leading_decimal_requires_a_standalone_lexical_boundary(
+    source: str, expected: str
+) -> None:
+    """Abbreviation/version periods never become implicit decimal zeros."""
+    assert apply_rules(number_rules("standard"), source) == expected
+
+
+def test_parenthesized_leading_decimal_keeps_its_fractional_value() -> None:
+    """Opening punctuation still permits a genuinely standalone decimal."""
+    assert (
+        apply_rules(number_rules("standard"), "(.085)")
+        == "(zero point zero eight five)"
+    )

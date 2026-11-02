@@ -773,6 +773,16 @@ left verbatim for your own entries to handle.
 | `standard` | years as pairs, clock times, numeric ranges, Roman numerals after Chapter/Part/Act or a regnal name |
 | `aggressive` | bare Roman numerals, `No. 5`, fractions |
 
+Leading-dot amounts retain an explicit zero in speech: `.085` becomes
+“zero point zero eight five,” `$.01` becomes “zero point zero one dollars,”
+and `-.5%` becomes “minus zero point five percent.” Existing whole-part
+currency conventions, such as `$1.50` becoming “one dollar fifty,” are unchanged.
+A disabled decimal feature leaves the complete decimal intact instead of
+rewriting its fractional digits as a whole integer.
+
+The `spoken-form-v2` recipe invalidates earlier pronunciation audio caches;
+pipelines that never call `pronounce()` are unaffected.
+
 A tier is a preset over individually switchable features, not a package. Pass
 any of `currency`, `percent`, `ordinals`, `units`, `decimals`, `integers`,
 `years`, `clock`, `roman`, `fractions`, `numbered` as a keyword to override

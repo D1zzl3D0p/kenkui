@@ -42,6 +42,7 @@ def main(epub: Path) -> None:
         base.select_chapter_range(first, last)
         # Speech shaping is opt-in. pronounce() enables number reading and a
         # small built-in lexicon; your own entries always win over it.
+        # Leading-dot amounts such as .085 keep an explicit spoken zero.
         .pronounce({"Cthulhu": "kuh-THOO-loo"}, numbers="standard")
         # Pause durations are free to retune later: cached audio is reused.
         .pauses(chapter_ms=1500, heading_after_ms=600, paragraph_ms=300)
