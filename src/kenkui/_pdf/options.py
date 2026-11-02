@@ -23,6 +23,7 @@ class PdfLayoutOptions:
     max_output_bytes: int = 128 * 1024 * 1024
     threads: int = 2
     batch_pages: int = 16
+    ocr_use_cls: bool = True
 
     def __post_init__(self) -> None:
         """Reject invalid limits before any worker or model is started."""
@@ -38,6 +39,7 @@ class PdfLayoutOptions:
             or not isinstance(self.timeout_seconds, (int, float))
             or not math.isfinite(self.timeout_seconds)
             or self.timeout_seconds <= 0
+            or type(self.ocr_use_cls) is not bool
             or not isinstance(self.ocr_language, str)
             or not self.ocr_language.isalpha()
             or (
