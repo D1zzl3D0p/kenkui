@@ -6,6 +6,14 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Pin the optional PDF layout backend to RapidOCR 3.9.2 so fresh installs can
+  resolve English OCR models with Docling 2.128.0. RapidOCR 3.10 removed the
+  language-table API that this Docling release requires.
+- Configure full-page OCR through Docling's typed `OcrMode.FULL_PAGE` API instead
+  of its legacy `force_full_page_ocr` compatibility keyword.
+
 ## [10.2.0] - 2026-09-29
 
 ### Changed

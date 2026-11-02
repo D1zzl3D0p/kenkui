@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'win32'",
@@ -1470,6 +1470,7 @@ pdf-layout = [
     { name = "onnxruntime" },
     { name = "pdfplumber" },
     { name = "psutil" },
+    { name = "rapidocr" },
 ]
 spacy = [
     { name = "spacy" },
@@ -1506,6 +1507,7 @@ requires-dist = [
     { name = "pocket-tts", specifier = "==2.1.0" },
     { name = "psutil", marker = "extra == 'pdf-layout'", specifier = ">=7,<8" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rapidocr", marker = "extra == 'pdf-layout'", specifier = "==3.9.2" },
     { name = "spacy", marker = "extra == 'spacy'", specifier = ">=3.7,<4" },
 ]
 provides-extras = ["spacy", "pdf", "pdf-layout"]
