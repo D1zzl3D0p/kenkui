@@ -24,6 +24,7 @@ from kenkui._tts.prompt_normalization import (
     normalize_prompt_apostrophes,
 )
 from kenkui._tts.protocols import SynthesisTask, SynthesizedAudio
+from kenkui._tts.token_budget import PROMPT_CHUNKING_RECIPE, bounded_sentences
 from kenkui.errors import ErrorCode, ModelError, RenderError, VoiceError
 
 if TYPE_CHECKING:
@@ -117,6 +118,7 @@ class PocketEngineConfig:
             ),
             "model_revision": self.model_revision,
             "package_version": self.package_version,
+            "prompt_chunking": PROMPT_CHUNKING_RECIPE,
             "prompt_normalization": PROMPT_NORMALIZATION_RECIPE,
             "sample_rate_hz": self.sample_rate_hz,
             # Sorted by digest so cast ordering cannot change the cache key.
@@ -719,6 +721,7 @@ class PocketTTSEngine:
         self._snapshot: Path | None = None
         self._states: dict[str, Any] = {}
         self._patched: list[tuple[Any, Any]] = []
+        self._splitter_patch: tuple[Any, Any] | None = None
         self._reusable = reusable
         if _worker_marker is not _WORKER_TOKEN:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED)
@@ -734,6 +737,17 @@ class PocketTTSEngine:
             )
             module = importlib.import_module("pocket_tts")
             implementation = importlib.import_module("pocket_tts.models.tts_model")
+            original_splitter = getattr(
+                implementation, "split_into_best_sentences", None
+            )
+            self._splitter_patch = (implementation, original_splitter)
+
+            def split_with_budget(*args: Any, **kwargs: Any) -> list[str]:
+                return bounded_sentences(
+                    *args, **kwargs, prepare=implementation.prepare_text_prompt
+                )
+
+            setattr(implementation, "split_into_best_sentences", split_with_budget)
             # Resolve the root once and build the allowlist from it. The
             # per-component symlink check below compares a candidate against
             # its own resolution, which only means "the final component is not
@@ -790,6 +804,15 @@ class PocketTTSEngine:
             raise ModelError(ErrorCode.POCKET_MODEL_LOAD_FAILED) from None
 
     def close(self) -> None:
+        splitter_patch = getattr(self, "_splitter_patch", None)
+        self._splitter_patch = None
+        if splitter_patch is not None:
+            implementation, original = splitter_patch
+            if original is None:
+                with suppress(AttributeError):
+                    delattr(implementation, "split_into_best_sentences")
+            else:
+                implementation.split_into_best_sentences = original
         # Restore the downloader before dropping the snapshot. The rebinding is
         # process-global, so leaving it in place outlives the engine and, in a
         # single process, would poison provisioning's own fetch.
