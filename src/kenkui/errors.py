@@ -84,6 +84,7 @@ class ErrorCode(StrEnum):
     FFPROBE_UNSUPPORTED = "ffprobe_unsupported"
     SYNTHESIS_FAILED = "synthesis_failed"
     INVALID_AUDIO = "invalid_audio"
+    AUDIO_CACHE_UNAVAILABLE = "audio_cache_unavailable"
     BOOK_TOO_LONG = "book_too_long"
     ASSEMBLY_FAILED = "assembly_failed"
     ENCODING_FAILED = "encoding_failed"
@@ -212,6 +213,10 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.FFPROBE_UNSUPPORTED: "ffprobe lacks a required media capability.",
     ErrorCode.SYNTHESIS_FAILED: "Speech synthesis failed.",
     ErrorCode.INVALID_AUDIO: "Synthesized audio is invalid or inconsistent.",
+    ErrorCode.AUDIO_CACHE_UNAVAILABLE: (
+        "Requested audio retention is unavailable. Set KENKUI_AUDIO_CACHE_DIR "
+        "to an absolute writable private directory, or disable keep_audio_cache."
+    ),
     ErrorCode.BOOK_TOO_LONG: "The book renders to more audio than one run may hold.",
     ErrorCode.ASSEMBLY_FAILED: "Audiobook assembly failed.",
     ErrorCode.ENCODING_FAILED: "FFmpeg could not encode the audiobook.",

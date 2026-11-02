@@ -77,6 +77,17 @@ def default_cache_root() -> Path:
     return base / "kenkui" / "v1"
 
 
+def audio_cache_root() -> Path:
+    """Resolve the audio-only cache override without moving model or voice assets."""
+    override = os.environ.get("KENKUI_AUDIO_CACHE_DIR")
+    if override is None:
+        return default_cache_root()
+    directory = Path(override)
+    if not override or not directory.is_absolute():
+        raise RenderError(ErrorCode.AUDIO_CACHE_UNAVAILABLE)
+    return directory
+
+
 def resolve_manifest_path() -> Path | None:
     """Return the operator override, else the managed default, else None."""
     from kenkui.voices.manifest import default_manifest_path  # noqa: PLC0415
@@ -323,7 +334,7 @@ def pocket_production_bindings(
         FFmpegM4BAssembler(),
         voice,
         config.model_revision,
-        CacheStore(default_cache_root()),
+        CacheStore(audio_cache_root()),
         cast_voices,
     )
 
