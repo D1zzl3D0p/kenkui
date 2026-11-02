@@ -13,6 +13,10 @@ All notable changes to Kenkui are recorded here. The format follows
   retain their fractional value. Declined decimal forms cannot fall through to
   a whole-integer or year rewrite. The spoken-form recipe is now v2 so cached
   audio from the previous number rules is not reused.
+- Pocket-TTS synthesis now enforces its 50-token text budget on both the actual
+  inference input and the prepared prompt. Long clauses fall back to complete
+  word boundaries after sentence/clause boundaries, preserving text order.
+  Audio cached with the previous unbounded splitter is regenerated.
 - Pin the optional PDF layout backend to RapidOCR 3.9.2 so fresh installs can
   resolve English OCR models with Docling 2.128.0. RapidOCR 3.10 removed the
   language-table API that this Docling release requires.

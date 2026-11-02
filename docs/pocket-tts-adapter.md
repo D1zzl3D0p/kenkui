@@ -22,6 +22,26 @@ The path passed to `get_state_for_audio_prompt` is always a `Path`, never a
 `str`. Upstream calls `download_if_necessary` only for `str` input, so a `Path`
 cannot reach the network even before the allowlist intervenes.
 
+## Token budgets
+
+Pocket-TTS 2.1.0's punctuation splitter can leave long clauses above its
+50-token limit and only log a warning that generation may skip words. The
+adapter installs a bounded splitter for the owned worker engine's lifetime and
+restores the original on cleanup, including failed construction.
+
+The splitter uses the loaded engine's actual SentencePiece tokenizer. It bounds
+both the raw chunk consumed by short inference and the prompt produced by
+`prepare_text_prompt`, because capitalization, terminal punctuation and padding
+can change the token count. Sentence and clause edges are preferred; a complete
+word boundary is the fallback. An indivisible word that cannot fit fails with
+the normal sanitized inference error instead of being spoken as fragments.
+Upstream streaming, voice conditioning and audio assembly remain in use.
+
+The chunking recipe is part of the engine's semantic identity, so neither segment
+audio nor chapter checkpoints made by an earlier splitter can bypass the new
+bound. This enforces the model input contract; acoustic accuracy still requires
+checking the generated speech.
+
 ## The local manifest
 
 Every render reads a local manifest. Normally `load_voice()` writes it; an
