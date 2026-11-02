@@ -50,7 +50,6 @@ def test_assets_require_complete_local_model_and_track_changes(tmp_path: Path) -
         (None, True),
     ],
 )
-
 def test_backend_routes_batches_and_rejects_incomplete_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
