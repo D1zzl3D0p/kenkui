@@ -6,6 +6,13 @@ All notable changes to Kenkui are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Pocket-TTS synthesis now enforces its 50-token text budget on both the actual
+  inference input and the prepared prompt. Long clauses fall back to complete
+  word boundaries after sentence/clause boundaries, preserving text order.
+  Audio cached with the previous unbounded splitter is regenerated.
+
 ## [10.2.0] - 2026-09-29
 
 ### Changed
