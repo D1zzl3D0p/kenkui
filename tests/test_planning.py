@@ -752,3 +752,36 @@ def test_planning_reports_grid_edges_and_characterized_emergency_cuts() -> None:
     assert token_origins[0].canonical_end not in {
         unit.end for unit in build_grid(token_inspection.chapters[0])
     }
+
+
+@pytest.mark.parametrize(
+    ("text", "title", "expected"),
+    [
+        (
+            "Exact speech.",
+            None,
+            "446cb1d3c6247ac7a93fc0fb3a9063177dfdba15c964333e44a8052af4c063de",
+        ),
+        (
+            "Éowyn said, “Hello.”\n\nGoodbye.",
+            None,
+            "86c74321543da88d89650bda095301b96d4b1eb853ee533ef8d91347dba5607b",
+        ),
+        (
+            "An ordinary sentence. " * 200,
+            None,
+            "f14e5ece6697948d4e183c6bdb8ad22e88649a989f67071b9462bd5f624d9118",
+        ),
+        (
+            "Exact speech.",
+            "Different",
+            "0bdfa51e90e484799aefeca618b69b1ee914c66ee5903415c99ba8b3277a3a3f",
+        ),
+    ],
+)
+def test_persisted_plan_identity_survives_module_refactors(
+    text: str, title: str | None, expected: str
+) -> None:
+    """Existing cache identities must not change when implementation files move."""
+    plan = _compile(pipeline=_pipeline(title=title), inspection_=_inspection(text=text))
+    assert plan.semantic_fingerprint == expected

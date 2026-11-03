@@ -7,10 +7,8 @@ import json
 import re
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from itertools import pairwise
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeVar, cast
 
 from kenkui._domain.grid import (
     GapReason,
@@ -40,6 +38,19 @@ from kenkui._domain.operations import (
     SynthesizeSpeech,
 )
 from kenkui._domain.paths import LEVELS, matches
+from kenkui._domain.plan_identity import fingerprint
+from kenkui._domain.plan_models import (
+    CastPlan,
+    CoverIntent,
+    ExecutionPlan,
+    OutputChapter,
+    OutputMetadata,
+    SchemaVersions,
+    SpeakerSpan,
+    SpeechSegment,
+    VoicePlan,
+    _PlanMaterial,
+)
 from kenkui._domain.selection import selected_patterns, selected_ranges, selected_unit
 from kenkui._domain.spoken import (
     SPOKEN_FORM_VERSION,
@@ -65,6 +76,19 @@ if TYPE_CHECKING:
     from kenkui._domain.spoken.numbers import NumberTier
     from kenkui._domain.tuning import Rule
     from kenkui.voices import Voice
+
+__all__ = [
+    "CastPlan",
+    "CoverIntent",
+    "ExecutionPlan",
+    "OutputChapter",
+    "OutputMetadata",
+    "SchemaVersions",
+    "SpeakerSpan",
+    "SpeechSegment",
+    "VoicePlan",
+    "_PlanMaterial",
+]
 
 PARSER_SCHEMA_VERSION = "epub-visible-text-v1"
 NORMALIZATION_SCHEMA_VERSION = NORMALIZATION_VERSION
@@ -139,177 +163,6 @@ class _PipelineIntent(Protocol):
     def operations(self) -> tuple[Operation, ...]:
         """Return ordered semantic operations."""
         ...
-
-
-class CoverIntent(StrEnum):
-    """Renderer-neutral choice for source cover inheritance."""
-
-    SOURCE = "source"
-    FILE = "file"
-    NONE = "none"
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaVersions:
-    """Versions of every stage whose semantics can affect an artifact."""
-
-    parser: str
-    normalization: str
-    planning: str
-    render: str
-    spoken_form: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class VoicePlan:
-    """Resolved single-voice content, compatibility, and rights metadata."""
-
-    id: str
-    name: str
-    content_fingerprint: str
-    language: str
-    provenance: str
-    license_id: str
-    commercial_use_allowed: bool
-    compatible_model_revisions: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SpeakerSpan:
-    """One contiguous run of a chapter's normalized text with a single speaker."""
-
-    chapter_id: str
-    start: int
-    end: int
-    character_id: str | None  # None is narration
-
-
-@dataclass(frozen=True, slots=True)
-class CastPlan:
-    """Resolved narrator, unknown, and per-character voices for one run."""
-
-    narrator: VoicePlan
-    unknown: VoicePlan
-    voices: tuple[VoicePlan, ...]
-    assignments: Mapping[str, str]  # character id -> voice id
-
-    def __post_init__(self) -> None:
-        """Snapshot assignments so later caller edits cannot change speech."""
-        object.__setattr__(
-            self, "assignments", MappingProxyType(dict(self.assignments))
-        )
-
-    def __reduce__(
-        self,
-    ) -> tuple[
-        type[CastPlan],
-        tuple[VoicePlan, VoicePlan, tuple[VoicePlan, ...], dict[str, str]],
-    ]:
-        """Reconstruct the immutable snapshot in spawned render processes."""
-        return type(self), (
-            self.narrator,
-            self.unknown,
-            self.voices,
-            dict(self.assignments),
-        )
-
-    @classmethod
-    def single(cls, voice: VoicePlan) -> CastPlan:
-        """Return the degenerate cast: one voice narrates everything."""
-        return cls(narrator=voice, unknown=voice, voices=(voice,), assignments={})
-
-    def voice_for(self, speaker_id: str | None) -> VoicePlan:
-        """Resolve the voice a speaker renders in.
-
-        Narration takes the narrator. A character with no assignment takes the
-        unknown voice, which defaults to the narrator's, so speech never
-        silently vanishes because casting missed someone.
-        """
-        if speaker_id is None:
-            return self.narrator
-        voice_id = self.assignments.get(speaker_id)
-        if voice_id is None:
-            return self.unknown
-        for voice in self.voices:
-            if voice.id == voice_id:
-                return voice
-        return self.unknown
-
-
-@dataclass(frozen=True, slots=True)
-class SpeechSegment:
-    """One exact ordered synthesis input for an M1 spine chapter."""
-
-    id: str
-    chapter_id: str
-    ordinal: int
-    text: str
-    character_count: int
-    content_hash: str
-    speaker_id: str | None = None
-    voice_id: str = ""
-    source_kind: Literal["source", "chapter_title"] = "source"
-
-
-@dataclass(frozen=True, slots=True)
-class OutputChapter:
-    """Semantic chapter marker metadata independent of output destination."""
-
-    id: str
-    source_index: int
-    title: str
-    speech_characters: int
-
-
-@dataclass(frozen=True, slots=True)
-class OutputMetadata:
-    """Resolved bibliographic values and source-cover intent."""
-
-    title: str | None
-    author: str | None
-    chapters: tuple[OutputChapter, ...]
-    cover: CoverIntent
-    source_cover_available: bool
-    # The content digest, never the path: core spec 14 requires that where an
-    # output lives cannot change what it means.
-    cover_content_hash: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionPlan:
-    """Complete renderer-neutral semantic plan safe to pickle for spawned work."""
-
-    schema_versions: SchemaVersions
-    source_bytes_hash: str
-    model_revision: str
-    # No separate singular voice: a lone VoicePlan beside the cast is a second
-    # source of truth that can disagree with it, and disagreement here renders
-    # well-formed audio in the wrong voice. cast.narrator is the authority.
-    cast: CastPlan
-    segments: tuple[SpeechSegment, ...]
-    output: OutputMetadata
-    total_speech_characters: int
-    semantic_fingerprint: str
-    # One entry per segment: the gap AFTER that segment, in milliseconds.
-    # Excluded from segment identity -- silence never reaches a worker or the
-    # cache, so retuning a duration costs no re-synthesis.
-    trailing_silence_ms: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class _PlanMaterial:
-    """Semantic fields canonicalized before attaching their fingerprint."""
-
-    schemas: SchemaVersions
-    source_bytes_hash: str
-    model_revision: str
-    voice: VoicePlan
-    segments: tuple[SpeechSegment, ...]
-    output: OutputMetadata
-    total: int
-    trailing_silence: tuple[int, ...] = ()
-    preparation_identity: str | None = None
-    announcements: tuple[ChapterAnnouncement, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1845,92 +1698,5 @@ def _string_identity(value: str) -> dict[str, int | str]:
     return {"characters": len(value), "sha256": _hash_utf8(value)}
 
 
-def _optional_string_identity(value: str | None) -> dict[str, int | str] | None:
-    return None if value is None else _string_identity(value)
-
-
 def _fingerprint(material: _PlanMaterial) -> str:
-    schemas = material.schemas
-    voice = material.voice
-    segments = material.segments
-    output = material.output
-    schema_versions: dict[str, object] = {
-        "parser": schemas.parser,
-        "normalization": schemas.normalization,
-        "planning": schemas.planning,
-        "render": schemas.render,
-    }
-    if schemas.spoken_form is not None:
-        # Present only when the stage is active. Emitting an explicit null
-        # would change the canonical JSON -- and so the fingerprint -- for
-        # every pipeline that never asked for spoken form.
-        schema_versions["spoken_form"] = schemas.spoken_form
-    payload = {
-        "schema_versions": schema_versions,
-        "source_bytes_hash": material.source_bytes_hash,
-        "model_revision": _string_identity(material.model_revision),
-        "voice": {
-            "id": _string_identity(voice.id),
-            "name": _string_identity(voice.name),
-            "content_fingerprint": voice.content_fingerprint,
-            "language": _string_identity(voice.language),
-            "provenance": _string_identity(voice.provenance),
-            "license_id": _string_identity(voice.license_id),
-            "commercial_use_allowed": voice.commercial_use_allowed,
-            "compatible_model_revisions": [
-                _string_identity(revision)
-                for revision in voice.compatible_model_revisions
-            ],
-        },
-        "segments": [
-            {
-                "id": _string_identity(segment.id),
-                "chapter_id": _string_identity(segment.chapter_id),
-                "ordinal": segment.ordinal,
-                "content_hash": segment.content_hash,
-                "character_count": segment.character_count,
-                **(
-                    {"source_kind": segment.source_kind}
-                    if segment.source_kind != "source"
-                    else {}
-                ),
-            }
-            for segment in segments
-        ],
-        "output": {
-            "title": _optional_string_identity(output.title),
-            "author": _optional_string_identity(output.author),
-            "chapters": [
-                {
-                    "id": _string_identity(chapter.id),
-                    "source_index": chapter.source_index,
-                    "title": _string_identity(chapter.title),
-                    "speech_characters": chapter.speech_characters,
-                }
-                for chapter in output.chapters
-            ],
-            "cover": output.cover.value,
-            "source_cover_available": output.source_cover_available,
-        },
-        "total_speech_characters": material.total,
-    }
-    if material.announcements:
-        payload["chapter_announcements"] = [
-            (a.chapter_id, a.text, a.kind, a.heading_end)
-            for a in material.announcements
-        ]
-    if material.preparation_identity is not None:
-        payload["preparation_identity"] = material.preparation_identity
-    if any(material.trailing_silence):
-        payload["trailing_silence_ms"] = list(material.trailing_silence)
-    if output.cover_content_hash is not None:
-        # Absent rather than null: an explicit null would change the
-        # fingerprint of every pipeline that never supplied a cover file.
-        payload["cover_content_hash"] = output.cover_content_hash
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return _hash_utf8(canonical)
+    return fingerprint(material, _hash_utf8)
