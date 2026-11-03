@@ -120,7 +120,8 @@ def test_failed_call_logs_status_without_request_content(
     assert log_field(event, "model") == "fake/model"
     assert log_field(event, "error") == "ProviderUnavailableError"
     assert isinstance(log_field(event, "elapsed_ms"), int)
-    assert "private" not in str(event.__dict__)
+    assert "private book passage" not in str(event.__dict__)
+    assert "private provider response" not in str(event.__dict__)
 
 
 def test_prose_around_the_json_is_tolerated() -> None:

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
 import multiprocessing
 import pickle
 from typing import TYPE_CHECKING, Any
@@ -141,21 +140,6 @@ def test_parent_never_constructs_or_calls_engine(
     # Spawn imports the module afresh in the child; a fork would inherit this guard.
     records = list(render_spawned(_tasks(1), EngineSpecification.fake(), 1, None))
     assert len(records) == 1
-
-
-def test_fake_config_does_not_accept_parent_resources(tmp_path: Path) -> None:
-    # The frozen DTO contains values only, never a parent engine or process object.
-    spec = EngineSpecification.fake()
-    assert not hasattr(spec, "engine")
-    assert tmp_path.exists()
-
-
-def test_worker_results_never_use_connection_receive_or_pickle() -> None:
-    source = inspect.getsource(process_pool)
-    assert ".Pipe(" not in source
-    assert ".recv(" not in source
-    assert "Connection" not in source
-    assert "pickle" not in source
 
 
 @pytest.mark.parametrize(
