@@ -15,39 +15,17 @@ import pytest
 from kenkui import ErrorCode, ModelError, RenderError, VoiceError
 from kenkui._tts import production
 from kenkui.errors import KenkuiError
+from manifest_helpers import production_manifest_engine
 
 Payload = dict[str, Any]
 
 
 def _payload(tmp_path: Path) -> Payload:
-    root = tmp_path / "model"
-    root.mkdir(mode=0o700)
-    config = root / "config.yaml"
-    config.write_text("model: local\n", encoding="utf-8")
     prompt = tmp_path / "voice.wav"
     prompt.write_bytes(b"fixture")
     return {
         "schema_version": production.MANIFEST_SCHEMA_VERSION,
-        "engines": {
-            "english": {
-                "language": "english",
-                "model_root": str(root),
-                "config_path": str(config),
-                "model_revision": "revision-1",
-                "package_version": "2.1.0",
-                "files": [
-                    {
-                        "relative_path": "config.yaml",
-                        "size": config.stat().st_size,
-                        "sha256": "a" * 64,
-                    }
-                ],
-                "sample_rate_hz": 24000,
-                "device": "cpu",
-                "timeout_seconds": 30.0,
-                "cloning_capable": False,
-            }
-        },
+        "engines": {"english": production_manifest_engine(tmp_path, "config.yaml")},
         "voices": {
             "narrator": {
                 "variety": "built-in",

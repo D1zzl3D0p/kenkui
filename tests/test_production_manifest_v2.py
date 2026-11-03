@@ -13,39 +13,17 @@ from kenkui import ErrorCode, ModelError, RenderError, VoiceError
 from kenkui._execution.cache import CacheStore
 from kenkui._tts import production
 from kenkui.voices import manifest as manifest_module
+from manifest_helpers import production_manifest_engine
 
 OWNER_ONLY_DIRECTORY = 0o700
 
 
 def _payload(tmp_path: Path) -> dict[str, Any]:
-    root = tmp_path / "model"
-    root.mkdir(mode=0o700, exist_ok=True)
-    config = root / "english.yaml"
-    config.write_text("model: local\n", encoding="utf-8")
     asset = tmp_path / "eponine.safetensors"
     asset.write_bytes(b"fixture")
     return {
         "schema_version": "kenkui-pocket-production-v2",
-        "engines": {
-            "english": {
-                "language": "english",
-                "model_root": str(root),
-                "config_path": str(config),
-                "model_revision": "revision-1",
-                "package_version": "2.1.0",
-                "files": [
-                    {
-                        "relative_path": "english.yaml",
-                        "size": config.stat().st_size,
-                        "sha256": "a" * 64,
-                    }
-                ],
-                "sample_rate_hz": 24000,
-                "device": "cpu",
-                "timeout_seconds": 30.0,
-                "cloning_capable": False,
-            }
-        },
+        "engines": {"english": production_manifest_engine(tmp_path, "english.yaml")},
         "voices": {
             "eponine": {
                 "variety": "built-in",
